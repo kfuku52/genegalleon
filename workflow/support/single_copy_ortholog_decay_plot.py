@@ -151,6 +151,11 @@ def load_gene_count_table(path):
     return species_cols, counts
 
 
+def _packed_species_masks(counts, comparison):
+    packed = numpy.packbits(comparison(counts.T, 1, order="C"), axis=1, bitorder="little")
+    return [int.from_bytes(row.tobytes(), "little") for row in packed]
+
+
 def calculate_decay(counts, species_counts, replicates, seed, selected_counts=None):
     if replicates <= 0:
         raise ValueError("--replicates must be a positive integer.")
@@ -162,23 +167,26 @@ def calculate_decay(counts, species_counts, replicates, seed, selected_counts=No
     num_metrics = 4 if selected_counts is not None else 3
     values = numpy.zeros((replicates, len(species_counts), num_metrics), dtype=numpy.float64)
     rng = numpy.random.default_rng(seed)
-    # Cache comparisons only when the requested permutations reuse more
-    # columns than a complete pass; small partial runs avoid full-matrix work.
+    # Pack reused comparisons into exact bitsets. Small partial runs retain
+    # direct bool comparisons rather than processing every species up front.
     cache_masks = replicates * max_species_count > num_species
-    present_by_species = numpy.greater_equal(counts.T, 1, order="C") if cache_masks else None
-    single_by_species = numpy.equal(counts.T, 1, order="C") if cache_masks else None
+    present_by_species = _packed_species_masks(counts, numpy.greater_equal) if cache_masks else None
+    single_by_species = _packed_species_masks(counts, numpy.equal) if cache_masks else None
     selected_by_species = (
-        numpy.greater_equal(selected_counts.T, 1, order="C")
+        _packed_species_masks(selected_counts, numpy.greater_equal)
         if cache_masks and selected_counts is not None else None
     )
+    # Exclude the final byte's padding bits, including the zero-OG case.
+    full_mask = (1 << num_orthogroups) - 1 if cache_masks else None
+    count_mask = int.bit_count if cache_masks else numpy.count_nonzero
 
     for replicate in range(replicates):
         species_order = rng.permutation(num_species)
-        present_seen = numpy.zeros(num_orthogroups, dtype=bool)
-        all_present = numpy.ones(num_orthogroups, dtype=bool)
-        all_single = numpy.ones(num_orthogroups, dtype=bool)
+        present_seen = 0 if cache_masks else numpy.zeros(num_orthogroups, dtype=bool)
+        all_present = full_mask if cache_masks else numpy.ones(num_orthogroups, dtype=bool)
+        all_single = full_mask if cache_masks else numpy.ones(num_orthogroups, dtype=bool)
         if selected_counts is not None:
-            selected_present_seen = numpy.zeros(selected_counts.shape[0], dtype=bool)
+            selected_present_seen = 0 if cache_masks else numpy.zeros(selected_counts.shape[0], dtype=bool)
 
         for position in range(1, max_species_count + 1):
             species = species_order[position - 1]
@@ -193,13 +201,13 @@ def calculate_decay(counts, species_counts, replicates, seed, selected_counts=No
             summary_index = species_count_to_index.get(position)
             if summary_index is None:
                 continue
-            strict_single_copy = int(all_single.sum())
-            non_missing = int(all_present.sum())
-            all_observed = int(present_seen.sum())
+            strict_single_copy = count_mask(all_single)
+            non_missing = count_mask(all_present)
+            all_observed = count_mask(present_seen)
             if selected_counts is None:
                 values[replicate, summary_index, :] = [strict_single_copy, non_missing, all_observed]
             else:
-                selected_observed = int(selected_present_seen.sum())
+                selected_observed = count_mask(selected_present_seen)
                 values[replicate, summary_index, :] = [
                     strict_single_copy,
                     non_missing,

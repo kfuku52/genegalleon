@@ -120,10 +120,12 @@ def test_decay_metrics_are_nested_for_all_species_count(tmp_path):
 @pytest.mark.parametrize("layout", ["C", "F", "sliced"])
 @pytest.mark.parametrize("selected", ["none", "subset", "empty"])
 @pytest.mark.parametrize("replicates,sizes", [(1, [1]), (1, [3, 1, 4]), (7, [3, 1, 4])])
-def test_seeded_decay_matches_direct_species_subset_counts(layout, selected, replicates, sizes):
+@pytest.mark.parametrize("rows", [0, 1, 5, 7, 8, 9, 33])
+def test_seeded_decay_matches_direct_species_subset_counts(layout, selected, replicates, sizes, rows):
     mod = load_module()
     np = mod.numpy
-    original = np.array([[1, 1, 1, 1], [1, 2, 0, 1], [0, 0, 0, 0], [2, 2, 2, 2], [1, 0, 1, 0]])
+    pattern = np.array([[1, 1, 1, 1], [1, 2, 0, 1], [0, 0, 0, 0], [2, 2, 2, 2], [1, 0, 1, 0]])
+    original = np.resize(pattern, (rows, 4))
     if layout == "F":
         counts = np.asfortranarray(original)
     elif layout == "sliced":
@@ -150,6 +152,50 @@ def test_seeded_decay_matches_direct_species_subset_counts(layout, selected, rep
     observed = mod.calculate_decay(counts, sizes, replicates, seed=918, selected_counts=chosen)
     np.testing.assert_array_equal(observed, expected)
     np.testing.assert_array_equal(counts, original)
+
+
+def test_repeated_species_counts_keep_the_existing_last_output_slot():
+    mod = load_module()
+    np = mod.numpy
+    counts = np.ones((9, 4), dtype=np.int64)
+    selected = counts[:3]
+    observed = mod.calculate_decay(counts, [3, 1, 3], 5, seed=918, selected_counts=selected)
+    expected = np.zeros((5, 3, 4))
+    expected[:, 1:, :] = [9, 9, 3, 9]
+    np.testing.assert_array_equal(observed, expected)
+
+
+def test_decay_advances_a_supplied_generator_once_per_replicate():
+    mod = load_module()
+    np = mod.numpy
+    generator = np.random.default_rng(918)
+    expected_generator = np.random.default_rng(918)
+    for _ in range(7):
+        expected_generator.permutation(4)
+    mod.calculate_decay(np.ones((9, 4), dtype=int), [4, 1], 7, seed=generator)
+    assert generator.bit_generator.state == expected_generator.bit_generator.state
+
+
+@pytest.mark.parametrize("replicates", [0, -1])
+def test_decay_rejects_nonpositive_replicates(replicates):
+    mod = load_module()
+    with pytest.raises(ValueError, match="replicates must be a positive integer"):
+        mod.calculate_decay(mod.numpy.ones((9, 4), dtype=int), [1], replicates, seed=1)
+
+
+def test_decay_checks_selected_species_before_creating_the_random_generator():
+    mod = load_module()
+    np = mod.numpy
+    with pytest.raises(ValueError, match="same number of species columns"):
+        mod.calculate_decay(np.ones((9, 4), dtype=int), [4], 2, seed=-1,
+                            selected_counts=np.ones((3, 5), dtype=int))
+
+
+@pytest.mark.parametrize("sizes,seed,error", [([], 1, ValueError), ([4], -1, ValueError), ([5], 1, IndexError)])
+def test_decay_preserves_invalid_direct_call_failures(sizes, seed, error):
+    mod = load_module()
+    with pytest.raises(error):
+        mod.calculate_decay(mod.numpy.ones((9, 4), dtype=int), sizes, 2, seed=seed)
 
 
 def test_run_writes_summary_and_plot(tmp_path):
