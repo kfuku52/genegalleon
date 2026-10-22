@@ -80,6 +80,9 @@ def table_text(rows) -> str:
 
 def atomic_text(path, text):
     path = Path(path)
+    # Reusing an unchanged audit must preserve frozen output identity and mtime.
+    if path.is_file() and not path.is_symlink() and path.read_bytes() == text.encode("utf-8"):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
                                      delete=False) as handle:

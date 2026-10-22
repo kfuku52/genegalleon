@@ -300,6 +300,15 @@ def test_cached_conversion_refreshes_advisory_state_without_rewriting_tree(tmp_p
     sidecar = Path(str(target) + '.convergence.json')
     assert json.loads(sidecar.read_text())['state'] == 'unconverged'
     assert target.read_text() == '(a:1,b:1)root;'
+    __import__('os').utime(sidecar, ns=(1234567890000000000, 1234567890000000000))
+    identity = sidecar.stat().st_ino, sidecar.stat().st_mtime_ns, sidecar.read_bytes()
+    command('copy', '--target', str(target), '--cached')
+    assert (sidecar.stat().st_ino, sidecar.stat().st_mtime_ns, sidecar.read_bytes()) == identity
+    status.write_text('{"state":"passed"}')
+    command('bind')
+    command('copy', '--target', str(target), '--cached')
+    assert json.loads(sidecar.read_text())['state'] == 'passed'
+    assert sidecar.stat().st_mtime_ns != identity[1]
     target.write_text('(x:1,y:1);')
     previous = sidecar.read_bytes()
     command('copy', '--target', str(target), '--cached')

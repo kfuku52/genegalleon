@@ -3,6 +3,7 @@
 import csv
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -40,7 +41,11 @@ def test_legacy_inventory_is_additive_idempotent_and_never_infers_sources(tmp_pa
     tree.write_text(original)
     first = audit.inventory(tree, tmp_path / "audit")
     before = {path.name: path.read_bytes() for path in first.iterdir()}
+    current = tmp_path / "audit/current_status.json"
+    os.utime(current, ns=(1234567890000000000, 1234567890000000000))
+    identity = current.stat().st_ino, current.stat().st_mtime_ns, current.read_bytes()
     assert audit.inventory(tree, tmp_path / "audit") == first
+    assert (current.stat().st_ino, current.stat().st_mtime_ns, current.read_bytes()) == identity
     assert {path.name: path.read_bytes() for path in first.iterdir()} == before
     assert tree.read_text() == original
     status = json.loads((first / "status.json").read_text())

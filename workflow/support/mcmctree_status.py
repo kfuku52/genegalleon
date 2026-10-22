@@ -47,8 +47,12 @@ def main():
             data['schema_version'] = 1
             data['source_tree_sha256'] = tree_hash(args.tree)
             data['tree_sha256'] = tree_hash(args.target)
+            rendered = json.dumps(data, indent=2) + '\n'
+            if (target_status.is_file() and not target_status.is_symlink()
+                    and target_status.read_bytes() == rendered.encode('utf-8')):
+                return
             pending = target_status.with_suffix('.pending')
-            pending.write_text(json.dumps(data, indent=2) + '\n')
+            pending.write_text(rendered)
             pending.replace(target_status)
         elif data.get('state') != 'passed':
             print(f"WARNING: Species dating status={data.get('state', 'legacy_unverified')}. "
