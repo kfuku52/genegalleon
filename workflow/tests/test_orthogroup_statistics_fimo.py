@@ -510,6 +510,94 @@ def test_load_synteny_summary_returns_empty_for_missing_required_columns(tmp_pat
     assert out.empty
 
 
+@pytest.mark.parametrize("size_mode", ["absent", "all_missing", "partial_missing"])
+def test_load_synteny_summary_preserves_order_missing_sizes_and_duplicate_first(tmp_path, size_mode):
+    mod = load_module()
+    infile = tmp_path / "synteny_mixed.tsv"
+    columns = ["node_name", "group_id", "offset", "direction"]
+    # The duplicate rows have large sizes which must not replace the first row.
+    rows = [
+        [" Z ", "P", "3", "?", "bad"],
+        ["A", "S", "-2", " DOWNSTREAM ", "5"],
+        ["Z", "S", "-1", "?", "bad"],
+        ["A", "S", "1", "UPSTREAM", "7"],
+        ["Z", "S", "-1", "upstream", "99"],
+        ["B", "Q", "-2", "", "bad"],
+        ["Z", "P", "3", "downstream", "100"],
+    ]
+    if size_mode == "absent":
+        rows = [row[:4] for row in rows]
+    else:
+        columns.append("group_size")
+        if size_mode == "all_missing":
+            rows = [row[:4] + ["NA"] for row in rows]
+    infile.write_text("\t".join(columns) + "\n" + "\n".join("\t".join(row) for row in rows) + "\n")
+
+    out = mod.load_synteny_summary(str(infile))
+
+    max_sizes = [0.0, 7.0, 0.0] if size_mode == "partial_missing" else [2.0, 2.0, 1.0]
+    expected = pandas.DataFrame({
+        "node_name": ["Z", "A", "B"],
+        "synteny_edge_count": [2, 2, 1],
+        "synteny_group_count": [2, 1, 1],
+        "synteny_shared_group_count": [1, 1, 0],
+        "synteny_shared_edge_count": [1, 2, 0],
+        "synteny_shared_upstream_edge_count": [1, 1, 0],
+        "synteny_shared_downstream_edge_count": [0, 1, 0],
+        "synteny_min_abs_offset_shared": [1.0, 1.0, float("nan")],
+        "synteny_max_group_size": max_sizes,
+        "synteny_max_shared_group_tip_count": [2.0, 2.0, float("nan")],
+        "synteny_support_score": [0.5, 1.0, 0.0],
+    })
+    pandas.testing.assert_frame_equal(out, expected, check_exact=True)
+
+
+def test_load_synteny_summary_preserves_empty_shared_aggregate_types(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "synteny_private.tsv"
+    infile.write_text("node_name\tgroup_id\toffset\nZ\tP\t-2\nA\tQ\t1\n")
+
+    out = mod.load_synteny_summary(str(infile))
+
+    expected = pandas.DataFrame({
+        "node_name": ["Z", "A"],
+        "synteny_edge_count": [1, 1],
+        "synteny_group_count": [1, 1],
+        "synteny_shared_group_count": [0, 0],
+        "synteny_shared_edge_count": [0, 0],
+        "synteny_shared_upstream_edge_count": [0, 0],
+        "synteny_shared_downstream_edge_count": [0, 0],
+        "synteny_min_abs_offset_shared": [float("nan"), float("nan")],
+        "synteny_max_group_size": [1.0, 1.0],
+        "synteny_max_shared_group_tip_count": [float("nan"), float("nan")],
+        "synteny_support_score": [0.0, 0.0],
+    })
+    pandas.testing.assert_frame_equal(out, expected, check_exact=True)
+
+
+def test_load_synteny_summary_preserves_empty_schema_for_only_missing_node_names(tmp_path):
+    mod = load_module()
+    infile = tmp_path / "synteny_missing_names.tsv"
+    infile.write_text("node_name\tgroup_id\toffset\nNA\tG\t-1\nNULL\tG\t2\n")
+
+    out = mod.load_synteny_summary(str(infile))
+
+    expected = pandas.DataFrame(columns=[
+        "node_name",
+        "synteny_edge_count",
+        "synteny_group_count",
+        "synteny_shared_group_count",
+        "synteny_shared_edge_count",
+        "synteny_shared_upstream_edge_count",
+        "synteny_shared_downstream_edge_count",
+        "synteny_min_abs_offset_shared",
+        "synteny_max_group_size",
+        "synteny_max_shared_group_tip_count",
+        "synteny_support_score",
+    ])
+    pandas.testing.assert_frame_equal(out, expected, check_exact=True)
+
+
 @pytest.mark.parametrize("row,column,value,message", [
     (1, "num_intron", "1", "imputation flags"),
     (1, "is_imputed", "True", "imputation flags"),

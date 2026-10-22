@@ -717,37 +717,41 @@ def load_synteny_summary(path):
     df["is_shared_group"] = df["group_tip_count"] >= 2
     df["abs_offset"] = df["offset"].abs()
 
-    def summarize_node(group):
-        edge_count = int(group.shape[0])
-        shared = group.loc[group["is_shared_group"], :]
-        shared_edge_count = int(shared.shape[0]) if not shared.empty else 0
-        return {
-            "synteny_edge_count": edge_count,
-            "synteny_group_count": int(group["group_id"].nunique()),
-            "synteny_shared_group_count": int(shared["group_id"].nunique()) if not shared.empty else 0,
-            "synteny_shared_edge_count": shared_edge_count,
-            "synteny_shared_upstream_edge_count": int((shared["direction"] == "upstream").sum())
-            if not shared.empty
-            else 0,
-            "synteny_shared_downstream_edge_count": int((shared["direction"] == "downstream").sum())
-            if not shared.empty
-            else 0,
-            "synteny_min_abs_offset_shared": float(shared["abs_offset"].min()) if not shared.empty else numpy.nan,
-            "synteny_max_group_size": float(group["group_size_num"].max()) if edge_count > 0 else numpy.nan,
-            "synteny_max_shared_group_tip_count": float(shared["group_tip_count"].max())
-            if not shared.empty
-            else numpy.nan,
-            "synteny_support_score": (shared_edge_count / edge_count) if edge_count > 0 else 0.0,
-        }
-
-    rows = []
-    for node_name, node_df in df.groupby("node_name", sort=False):
-        row = {"node_name": str(node_name)}
-        row.update(summarize_node(node_df))
-        rows.append(row)
-    if len(rows) == 0:
+    grouped = df.groupby("node_name", sort=False)
+    edge_count = grouped.size()
+    if edge_count.empty:
         return pandas.DataFrame(columns=base_cols)
-    out = pandas.DataFrame(rows)
+    out = pandas.DataFrame({
+        "node_name": edge_count.index.tolist(),
+        "synteny_edge_count": edge_count.to_numpy(dtype="int64"),
+        "synteny_group_count": grouped["group_id"].nunique().to_numpy(dtype="int64"),
+        "synteny_max_group_size": grouped["group_size_num"].max().to_numpy(dtype="float64"),
+    })
+    # Select only aggregate inputs; boolean row selection owns the shared rows.
+    shared_columns = ["node_name", "group_id", "direction", "abs_offset", "group_tip_count"]
+    shared = df.loc[df["is_shared_group"], shared_columns]
+    shared["is_upstream"] = shared["direction"].eq("upstream")
+    shared["is_downstream"] = shared["direction"].eq("downstream")
+    shared_grouped = shared.groupby("node_name", sort=False)
+    shared_counts = shared_grouped.agg(
+        synteny_shared_group_count=("group_id", "nunique"),
+        synteny_shared_edge_count=("group_id", "size"),
+        synteny_shared_upstream_edge_count=("is_upstream", "sum"),
+        synteny_shared_downstream_edge_count=("is_downstream", "sum"),
+        synteny_min_abs_offset_shared=("abs_offset", "min"),
+        synteny_max_shared_group_tip_count=("group_tip_count", "max"),
+    ).reindex(edge_count.index)
+    count_columns = [
+        "synteny_shared_group_count",
+        "synteny_shared_edge_count",
+        "synteny_shared_upstream_edge_count",
+        "synteny_shared_downstream_edge_count",
+    ]
+    for col in count_columns:
+        out[col] = shared_counts[col].fillna(0).to_numpy(dtype="int64")
+    for col in ["synteny_min_abs_offset_shared", "synteny_max_shared_group_tip_count"]:
+        out[col] = shared_counts[col].to_numpy(dtype="float64")
+    out["synteny_support_score"] = out["synteny_shared_edge_count"] / out["synteny_edge_count"]
     return out.loc[:, base_cols]
 
 
