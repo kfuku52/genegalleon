@@ -44,7 +44,7 @@ def response(body, calls, content_type="application/octet-stream"):
     return reply
 
 
-@pytest.mark.parametrize("body", [gzip.compress(b"opaque runtime archive body")[:-6], b"plain bytes", b"PK\x03\x04ZIP fragment"])
+@pytest.mark.parametrize("body", [gzip.compress(b"opaque runtime archive body", mtime=0)[:-6], b"plain bytes", b"PK\x03\x04ZIP fragment"])
 def test_exact_declared_bytes_are_fetched_once_reused_and_never_normalized(tmp_path, body):
     calls = []
     target = tmp_path / "runtime.tar.gz"
