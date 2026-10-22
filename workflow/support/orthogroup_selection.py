@@ -496,6 +496,49 @@ def annotate_representative_genes(df_gc_original_quartile, args):
     return _attach_besthits(df_gc_original_quartile, df_hits, cols)
 
 
+def _annotation_cache_member_ids(value):
+    # The shared identifier reader represents an empty cell as NaN, while
+    # preserving literal gene IDs such as "NA" and "nan" as strings.
+    if pandas.isna(value):
+        return []
+    return [gene.strip() for gene in str(value).split(",") if gene.strip()]
+
+
+def _validate_annotation_cache_membership(members, counts, annotated, species, representatives):
+    # Native readers have corresponding RangeIndexes. Only pair rows by
+    # position when their labels and order agree; retain label-based access
+    # for unusual frames so a reordered/duplicate index cannot bypass checks.
+    ordinary = (
+        bool(species) and bool(representatives)
+        and all(frame.columns.is_unique and frame.index.is_unique for frame in (members, counts, annotated))
+        and members.index.equals(counts.index)
+        and members.index.equals(annotated.index)
+        and set(species + ["Total"]).issubset(counts.columns)
+        and set(representatives).issubset(annotated.columns)
+        and (pandas.api.types.is_object_dtype(members["Orthogroup"].dtype)
+             or pandas.api.types.is_string_dtype(members["Orthogroup"].dtype))
+    )
+    if ordinary:
+        member_rows = members[species].itertuples(index=False, name=None)
+        count_rows = counts[species + ["Total"]].itertuples(index=False, name=None)
+        representative_rows = annotated[representatives].itertuples(index=False, name=None)
+        for row, expected, chosen in zip(member_rows, count_rows, representative_rows, strict=True):
+            cells = [_annotation_cache_member_ids(value) for value in row]
+            genes = {gene for cell in cells for gene in cell}
+            if any(len(cell) != count for cell, count in zip(cells, expected[:-1], strict=True)) or len(genes) != expected[-1]:
+                raise ValueError("Native family membership does not match its species counts")
+            if any(pandas.notna(value) and value and value not in genes for value in chosen):
+                raise ValueError("Annotation cache representative lies outside its native family")
+        return
+    for index, row in members.iterrows():
+        cells = [_annotation_cache_member_ids(row[name]) for name in species]
+        genes = {gene for cell in cells for gene in cell}
+        if any(len(cell) != counts.loc[index, name] for name, cell in zip(species, cells, strict=True)) or len(genes) != counts.loc[index, "Total"]:
+            raise ValueError("Native family membership does not match its species counts")
+        if any(pandas.notna(value) and value and value not in genes for value in annotated.loc[index, representatives]):
+            raise ValueError("Annotation cache representative lies outside its native family")
+
+
 def reuse_annotation_cache(args, cache):
     import artifact_provenance as provenance
     from gene_family_output_store import GeneFamilyOutputStore
@@ -540,13 +583,7 @@ def reuse_annotation_cache(args, cache):
     if not set(required).issubset(annotated.columns) or members["Orthogroup"].tolist() != counts["Orthogroup"].tolist():
         raise ValueError("Annotation cache quantiles or native family identities changed")
     species = [name for name in members.columns if name != "Orthogroup"]
-    for index, row in members.iterrows():
-        cells = [[gene.strip() for gene in str(row[name]).split(",") if gene.strip()] for name in species]
-        genes = {gene for cell in cells for gene in cell}
-        if any(len(cell) != counts.loc[index, name] for name, cell in zip(species, cells, strict=True)) or len(genes) != counts.loc[index, "Total"]:
-            raise ValueError("Native family membership does not match its species counts")
-        if any(value and value not in genes for value in annotated.loc[index, representatives]):
-            raise ValueError("Annotation cache representative lies outside its native family")
+    _validate_annotation_cache_membership(members, counts, annotated, species, representatives)
     out = directory / "Orthogroups.GeneCount.annotated.tsv"
     annotated.to_csv(out, sep="\t", index=False)
     return str(out)

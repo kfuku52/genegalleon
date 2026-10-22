@@ -607,6 +607,86 @@ def test_annotation_cache_is_bound_to_complete_native_membership(tmp_path, failu
     assert source.read_bytes() == before
 
 
+@pytest.mark.parametrize("failure", ["", "empty_claimed_present", "literal_nan_claimed_absent", "foreign_rep",
+                                     "literal_na_rep_outside", "numeric_missing_count", "duplicate_gene",
+                                     "stale", "native_source"])
+def test_annotation_cache_reuses_sparse_native_membership_and_literal_na_ids(tmp_path, failure, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    mod = load_module()
+    root = tmp_path / "native"
+    root.mkdir()
+    counts = pandas.DataFrame([
+        {"Orthogroup": "OG1", "A": 2, "B": 0, "Total": 2},
+        {"Orthogroup": "OG2", "A": 0, "B": 1, "Total": 1},
+        {"Orthogroup": "OG3", "A": 1, "B": 1, "Total": 2},
+    ])
+    members = pandas.DataFrame([
+        {"Orthogroup": "OG1", "A": "NA, 001", "B": ""},
+        {"Orthogroup": "OG2", "A": "", "B": "nan"},
+        {"Orthogroup": "OG3", "A": "gene3", "B": "gene4"},
+    ])
+    if failure == "empty_claimed_present":
+        counts.loc[0, ["B", "Total"]] = [1, 3]
+    if failure == "literal_nan_claimed_absent":
+        counts.loc[1, ["B", "Total"]] = [0, 0]
+    if failure == "numeric_missing_count":
+        counts["A"] = counts["A"].astype(float)
+        counts.loc[0, "A"] = numpy.nan
+    if failure == "duplicate_gene":
+        members.loc[0, "A"] = "NA, NA"
+    counts.to_csv(root / "Orthogroups.GeneCount.tsv", sep="\t", index=False)
+    members.to_csv(root / "Orthogroups.tsv", sep="\t", index=False)
+    cached = counts.assign(**{"geneid_0.5": ["NA", "nan", ""], "besthit_0.5": ["protein 1", "protein 2", ""]})
+    if failure == "foreign_rep":
+        cached.loc[0, "geneid_0.5"] = "nan"
+    if failure == "literal_na_rep_outside":
+        cached.loc[1, "geneid_0.5"] = "NA"
+    source = tmp_path / "preserved-annotation.tsv"
+    cached.to_csv(source, sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(root), gene_size_quantiles="0.5", annotation_cache=str(source))
+    _annotation_cache_proof(args, source, tmp_path)
+    if failure == "stale":
+        source.write_text(source.read_text() + "\n")
+    if failure == "native_source":
+        path = root / "Orthogroups.tsv"
+        path.write_text(path.read_text().replace("001", "002"))
+    before = source.read_bytes()
+    target = root / "Orthogroups.GeneCount.annotated.tsv"
+    previous = b"previous catalog output\n"
+    target.write_bytes(previous)
+    if failure:
+        with pytest.raises(ValueError):
+            mod.prepare_annotation(args)
+        assert target.read_bytes() == previous
+    else:
+        assert mod.prepare_annotation(args) == str(target)
+        assert target.read_bytes() == before
+        loaded = mod._load_orthogroup_table(root / "Orthogroups.tsv", gene_membership=True)
+        assert loaded.loc[0, "A"] == "NA, 001"
+        assert loaded.loc[1, "B"] == "nan"
+        assert pandas.isna(loaded.loc[0, "B"])
+        assert pandas.isna(loaded.loc[1, "A"])
+    assert source.read_bytes() == before
+
+
+@pytest.mark.parametrize("layout", ["noncontiguous", "reordered_counts", "reordered_annotations"])
+def test_annotation_cache_membership_checks_follow_row_labels(layout):
+    mod = load_module()
+    members = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": ["NA, 001", numpy.nan],
+                                "B": [numpy.nan, "nan"]}, index=[7, 2])
+    counts = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": [2, 0], "B": [0, 1],
+                               "Total": [2, 1]}, index=[7, 2])
+    annotated = counts.assign(**{"geneid_0.5": ["NA", "nan"]})
+    if layout == "reordered_counts":
+        counts = counts.iloc[::-1]
+    if layout == "reordered_annotations":
+        annotated = annotated.iloc[::-1]
+    mod._validate_annotation_cache_membership(members, counts, annotated, ["A", "B"], ["geneid_0.5"])
+    counts.loc[7, "A"] = 1
+    with pytest.raises(ValueError, match="Native family membership"):
+        mod._validate_annotation_cache_membership(members, counts, annotated, ["A", "B"], ["geneid_0.5"])
+
+
 def test_additional_catalog_leaves_existing_family_provenance_current(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
     mod = load_module()
