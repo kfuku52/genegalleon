@@ -550,7 +550,7 @@ def test_manifest_signature_and_frozen_plan_include_only_explicit_selected_clone
 
 
 @pytest.mark.parametrize("mode", ["single", "array"])
-@pytest.mark.parametrize("curation_mode", ["genomic", "sequence"])
+@pytest.mark.parametrize("curation_mode", ["genomic", "sequence", "experimental"])
 def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode, curation_mode):
     from test_gg_input_generation_end_to_end import (
         CORE_PATH,
@@ -563,6 +563,11 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     )
 
     _task, sequence, paths, row = fixture(tmp_path / "sources")
+    if curation_mode == 'experimental':
+        from test_cloned_cds_projection import change_clone, projected_fixture
+        _task, sequence, paths, row, _ = projected_fixture(tmp_path / 'sources')
+        sequence = sequence[:150] + 'GCT' + sequence[150:]
+        change_clone(_task, paths, row, sequence)
     row.update(
         provider="local",
         id="Arabidopsis_thaliana",
@@ -590,7 +595,7 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     def run(phase, index=None, success=True, force=False):
         env = _core_env(
             workspace, None, fake_bin, phase, index, require_cds=True,
-            require_gff=curation_mode == 'genomic', require_genome=curation_mode == 'genomic'
+            require_gff=curation_mode != 'sequence', require_genome=curation_mode != 'sequence'
         )
         env.update(
             provider="all",

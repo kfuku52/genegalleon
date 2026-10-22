@@ -62,7 +62,7 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
             if (meta.get('cloned_cds_mode') or 'genomic') != (task.get('cloned_cds_mode') or 'genomic'):
                 raise ValueError('Cloned model evidence mode changed')
             evidence = evidence_paths(meta)
-            fields = EVIDENCE_FIELDS if (task.get('cloned_cds_mode') or 'genomic') == 'genomic' else EVIDENCE_FIELDS[:3]
+            fields = EVIDENCE_FIELDS if (task.get('cloned_cds_mode') or 'genomic') in {'genomic', 'experimental'} else EVIDENCE_FIELDS[:3]
             paths.update({key: meta[key] for key in fields})
             for i, path in enumerate(value for value in evidence if value not in paths.values()):
                 paths['cloned_sequence_evidence_' + str(i)] = path

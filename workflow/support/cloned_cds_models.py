@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Curate source models or sequence-only inputs with explicitly supplied cloned CDS.
 
-This is a coupled source curation step before ordinary native formatting. It
-never changes a genome or accepts a CDS-only override of genomic annotation.
+This is a coupled source curation step before ordinary native formatting. The
+explicit experimental mode records a reviewed reference projection and its
+nucleotide differences rather than asserting genome identity. Genomes are unchanged.
 """
 import argparse
 import bisect
@@ -21,21 +22,23 @@ from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 
 FIELDS = ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_cds_mode',
           'cloned_cds_longer_only_ids', 'cloned_cds_min_identity', 'cloned_cds_min_target_coverage',
-          'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases')
+          'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases',
+          'cloned_cds_projection_targets', 'cloned_cds_priority_ids')
 TASK_FIELDS = ('cloned_cds_path', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_model_implementation',
                'cloned_cds_mode', 'cloned_cds_longer_only_ids', 'cloned_cds_min_identity',
                'cloned_cds_min_target_coverage', 'cloned_sequence_implementation', 'cloned_cds_unresolved_policy',
-               'cloned_cds_index_batch_bases', 'cloned_genomic_search_implementation')
+               'cloned_cds_index_batch_bases', 'cloned_genomic_search_implementation',
+               'cloned_cds_projection_targets', 'cloned_cds_priority_ids', 'cloned_projection_implementation')
 EVIDENCE_FIELDS = ('cloned_cds_path', 'cloned_model_audit_path', 'cloned_source_cds_path',
                    'cloned_source_gff_path', 'cloned_source_genome_path')
 
 
 def evidence_paths(record, *, summary=False):
     mode = record.get('cloned_cds_mode') or 'genomic'
-    if mode not in {'genomic', 'sequence'}:
+    if mode not in {'genomic', 'sequence', 'experimental'}:
         raise ValueError('Invalid cloned model evidence mode')
     fields = ('cloned_model_audit_path', 'cds_input_path') if summary else EVIDENCE_FIELDS[:3]
-    if mode == 'genomic':
+    if mode in {'genomic', 'experimental'}:
         fields += ('gff_input_path', 'genome_input_path') if summary else EVIDENCE_FIELDS[3:]
     paths = []
     for field in fields:
@@ -47,7 +50,7 @@ def evidence_paths(record, *, summary=False):
     audit = json.loads(audit_path.read_text())
     if (audit.get('mode') or 'genomic') != mode:
         raise ValueError('Cloned model evidence mode changed')
-    if mode == 'sequence':
+    if mode in {'sequence', 'experimental'}:
         for value in audit['outputs'].values():
             relative = Path(value)
             if relative.is_absolute() or '..' in relative.parts or any(c in value for c in '\r\n'):
@@ -68,11 +71,11 @@ def attach(task, row, parent):
     if not reference or not re.fullmatch(r'[0-9a-f]{64}', expected):
         raise ValueError('Cloned CDS requires cloned_cds_fasta and its exact cloned_cds_sha256')
     mode = str(row.get('cloned_cds_mode') or 'genomic').strip()
-    if mode not in {'genomic', 'sequence'}:
-        raise ValueError('cloned_cds_mode must be genomic or sequence')
-    if mode == 'genomic' and any(row.get(k) for k in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage')):
+    if mode not in {'genomic', 'sequence', 'experimental'}:
+        raise ValueError('cloned_cds_mode must be genomic, sequence or experimental')
+    if mode != 'sequence' and any(row.get(k) for k in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage')):
         raise ValueError('Sequence search thresholds require cloned_cds_mode=sequence')
-    if row.get('paired_curation') or (mode == 'genomic' and str(row.get('cds_input_type') or 'cds').strip().lower() != 'cds'):
+    if row.get('paired_curation') or (mode != 'sequence' and str(row.get('cds_input_type') or 'cds').strip().lower() != 'cds'):
         raise ValueError('Cloned model replacement requires genomic CDS/GFF inputs, without paired_curation')
     if mode == 'sequence' and any(row.get(prefix + role + suffix) for role in ('gff', 'gbff', 'genome')
                                   for prefix, suffix in (('', '_url'), ('', '_path'), ('local_', '_path'))):
@@ -96,6 +99,12 @@ def attach(task, row, parent):
     task.update(cloned_cds_path=path, cloned_cds_sha256=expected, cloned_cds_ids=ids,
                 cloned_model_implementation=digest(Path(__file__)), cloned_cds_mode=mode,
                 cloned_cds_longer_only_ids=longer)
+    from cloned_cds_projection import FIELDS as PROJECTION_FIELDS
+    if mode == 'experimental':
+        from cloned_cds_projection import implementation, options
+        task.update(options(row, ids), cloned_projection_implementation=implementation())
+    elif any(row.get(k) for k in PROJECTION_FIELDS):
+        raise ValueError('Reviewed projection options require cloned_cds_mode=experimental')
     if mode == 'genomic':
         policy = str(row.get('cloned_cds_unresolved_policy') or 'error')
         if policy not in {'error', 'retain_source'}:
@@ -485,6 +494,13 @@ def apply_to_task(task, root, *, dry_run=False):
     if task.get('cloned_cds_mode') == 'sequence':
         from cloned_cds_sequences import apply_sequence_task
         return apply_sequence_task(task, root)
+    if task.get('cloned_cds_mode') == 'experimental':
+        from cloned_cds_projection import apply, implementation
+        if task.get('cloned_projection_implementation') != implementation():
+            raise ValueError('Experimental projection implementation changed; prepare a new native task plan')
+        if not all(task.get(k) for k in ('cds_path', 'gff_path', 'genome_path')):
+            raise ValueError('Experimental cloned CDS requires source CDS, GFF and genome together')
+        return apply(task, root)
     from cloned_cds_search import implementation
     if task.get('cloned_genomic_search_implementation') != implementation():
         raise ValueError('Cloned genomic search implementation changed; prepare a new native task plan')

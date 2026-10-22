@@ -263,6 +263,21 @@ class CdsModelNormaliser:
                   "input_sha256": hashlib.sha256(sequence.encode()).hexdigest(), "genetic_code": code,
                   "transcripts": keys, "evidence": []}
         self.rows.append(record)
+        from experimental_cds_evidence import metadata, verify
+        projections = [(key, metadata(self.models[key])) for key in keys]
+        projected = [(key, value) for key, value in projections if value is not None]
+        if projected:
+            if len(projected) != 1 or len(keys) != 1 or not original:
+                raise ValueError('Experimental CDS must bind one explicit intact projected transcript')
+            key, value = projected[0]
+            blocks = self.models[key]
+            reference = self.fetch(blocks)
+            coordinates = [[r['start'], r['end'], int(r['phase'])] for r in blocks]
+            verify(reference, sequence, coordinates, blocks[0]['strand'], value, blocks[0]['seqid'])
+            record.update(status='unchanged', reason='verified_experimental_cds_projection',
+                          protein_sha256=hashlib.sha256(original.encode()).hexdigest(),
+                          projection=value, reference_genome_identical=(sequence == reference))
+            return original
         # Annotation exceptions are never translated by deleting or masking stops.
         exceptions = [self.exceptional(key) for key in keys]
         exception = next((value for value in exceptions if value), None)

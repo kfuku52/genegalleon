@@ -612,6 +612,10 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                 quality = {"structure_problem": structure, "annotated_partial": partial,
                            "annotated_exception": exception,
                            "sequence_mismatch": False}
+                from experimental_cds_evidence import metadata as projection_metadata
+                projection = projection_metadata(rows)
+                if projection:
+                    quality['annotated_partial'] |= any(projection[k] == 'true' for k in ('partial_5prime', 'partial_3prime'))
                 try:
                     sequence = reconstruct_sequence(blocks, seqid, strand, genome) if not structure else ""
                 except ValueError as error:
@@ -621,6 +625,8 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                              "seqid": seqid, "strand": strand, "cds": sequence, "protein": "",
                              "blocks": blocks, "junctions": [], "quality": quality, "origin": "original",
                              "source_fasta_ids": [], "source_cds_sha256": [], "source_cds": []}
+                if projection:
+                    candidate['experimental_cds_projection'] = projection
                 candidate["source_annotation_sources"] = sorted({row["source"] for row in [*rows, *normaliser.nodes.get(transcript, [])]})
                 # Rescue can establish a locus while compatible isoforms still
                 # have no decisive representative rank. Preserve that evidence
@@ -766,6 +772,10 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                         candidate["quality"] = validate_candidate(candidate, genetic_code)
                 if bound:
                     candidate = candidates[bound[0]]
+                    if candidate.get('experimental_cds_projection'):
+                        from experimental_cds_evidence import verify as verify_projection
+                        verify_projection(candidate['cds'], sequence, candidate['blocks'], candidate['strand'],
+                                          candidate['experimental_cds_projection'], candidate['seqid'])
                     candidate["source_fasta_ids"].append(identifier)
                     candidate["source_cds_sha256"].append(row["source_cds_sha256"])
                     # Keep supplied sequence/header evidence separate from genomic

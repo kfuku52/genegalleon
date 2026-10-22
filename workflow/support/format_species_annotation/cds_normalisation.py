@@ -16,7 +16,7 @@ from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 7
+VERSION = 8
 
 
 def audit_path(cds_path):
@@ -39,6 +39,7 @@ def contract(task):
             "gff_repair_mode": str(task.get("gff_repair_mode", "safe")),
             "implementation": signature(__file__)["sha256"],
             "evidence_implementation": signature(__import__(CdsModelNormaliser.__module__, fromlist=[""]).__file__)["sha256"],
+            "projection_implementation": signature(__import__('experimental_cds_evidence').__file__)["sha256"],
             "inputs": {key: signature(task[key]) for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if task.get(key)}}
 
 

@@ -1085,6 +1085,11 @@ interpretation; input hash verification still covers every declared source.
 For species with only CDS or transcriptome sequences, explicitly set
 `cloned_cds_mode=sequence`. This route rejects paired GFF/GBFF/genome inputs;
 the default `genomic` route retains the strict coordinate checks above.
+For an experimentally preferred CDS that differs from the reference, use
+[`cloned_cds_mode=experimental`](experimental-cloned-cds.md) with explicitly
+reviewed projection targets and gene-level clone priorities. It records nucleotide
+differences and partial ends in the paired GFF/audit without modifying the genome;
+it does not assert a genome-identical CDS or select an approximate best hit.
 `cds_input_type=transcriptome` uses native CDSKIT ORF extraction for the source
 search and for subsequent formatting. Supplied clones still require intact
 CDS, or a declared CDS span. No genomic coordinates or GFF are inferred.

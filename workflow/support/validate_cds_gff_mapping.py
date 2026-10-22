@@ -270,6 +270,13 @@ def validate_single_species(task, missing_limit):
     try:
         if task.get("genome_file") is not None:
             validate_gff_genome_references(gff_file, task["genome_file"])
+        from experimental_cds_evidence import validate_pair
+        projection_count = validate_pair(cds_file, gff_file, task.get('genome_file'), species_prefix)
+        summary = task.get('summary_row', {})
+        if summary.get('cloned_cds_mode') == 'experimental':
+            audit = json.loads(Path(summary['cloned_model_audit_path']).read_text())
+            if audit.get('mode') != 'experimental' or projection_count != len(audit['replacements']):
+                raise ValueError('Published experimental projection count differs from its native curation audit')
         cds_ids = read_fasta_ids(cds_file)
         if len(cds_ids) == 0:
             return {
