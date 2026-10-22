@@ -153,14 +153,29 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         databases.append(body_db)
         body_db.execute('PRAGMA journal_mode=OFF')
         body_db.execute('PRAGMA synchronous=OFF')
-        for ordinal in [*sorted(normalized), *range(count, count + len(appended))]:
-            model = changes[ordinal] if ordinal < count else appended[ordinal - count]
-            body, _ = store._pack(model)
-            store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'])
+        body_cache = store._Bodies(body_db, manifest['body_codec'])
+        for ordinal in sorted(normalized):
+            body, _ = store._pack(changes[ordinal])
+            store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'], body_cache)
+        appended_shard = None
+        if appended:
+            suffix = 'zst' if manifest['codec'] == 'zstd' else 'gz'
+            member = f'models-{len(manifest["shards"]):06d}.jsonl.{suffix}'
+            appended_shard = {'path': member, 'first': count, 'count': len(appended)}
+            with store._writer(temporary / member, manifest['codec'], manifest['compression_level']) as out:
+                for ordinal, model in enumerate(appended, count):
+                    # Validate the final envelope before inserting its body,
+                    # then retain neither serialized object beyond this row.
+                    body, envelope = store._pack(model, _validate_envelope=False)
+                    envelope['ordinal'] = ordinal
+                    encoded = store._json(envelope) + b'\n'
+                    store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'], body_cache)
+                    out.write(encoded)
         output['counts']['bodies'] = body_db.execute('SELECT COUNT(*) FROM bodies').fetchone()[0]
         body_db.commit()
         body_db.close()
         databases.remove(body_db)
+        del body_cache
         _copy(source_store / 'partial.sqlite', temporary / 'partial.sqlite', manifest['files']['partial.sqlite'])
         if new_partials:
             partial_db = store.sqlite3.connect(temporary / 'partial.sqlite')
@@ -179,19 +194,12 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                  *[s['path'] for s in manifest['shards']]}
         for name in manifest['files'].keys() - known:
             _copy(source_store / name, temporary / name, manifest['files'][name])
-        if appended:
-            suffix = 'zst' if manifest['codec'] == 'zstd' else 'gz'
-            member = f'models-{len(manifest["shards"]):06d}.jsonl.{suffix}'
-            with store._writer(temporary / member, manifest['codec'], manifest['compression_level']) as out:
-                for ordinal in range(count, count + len(appended)):
-                    _, envelope = store._pack(appended[ordinal - count])
-                    envelope['ordinal'] = ordinal
-                    out.write(store._json(envelope) + b'\n')
-            output['shards'].append({'path': member, 'first': count, 'count': len(appended)})
+        if appended_shard is not None:
+            output['shards'].append(appended_shard)
             if new_partials:
                 previous = output['scopes']['partial'][1:]
                 output['scopes']['partial'] = ['partial.sqlite', 'bodies.sqlite',
-                    *(name for name in previous if name != 'bodies.sqlite'), member]
+                    *(name for name in previous if name != 'bodies.sqlite'), appended_shard['path']]
         overlay_counts = {}
         for kind, rows in (('accepted', sorted(accepted.items())), ('revision', enumerate(revisions))):
             db = store._overlay(temporary / (kind + '.sqlite'))

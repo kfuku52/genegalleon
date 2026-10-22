@@ -564,6 +564,12 @@ outside the checkout. Repeat with `--change-every 100` for sparse changes, or
 candidate loading; timed wall time covers only the patch. These results measure
 synthetic storage updates, not whole-genome prediction or total cohort runtime.
 
+For an append-heavy update, add `--records 8000 --change-every 8
+--appended-records 20000 --body-group-size 8`. This keeps eight consecutive
+donor-evidence records per distinct coding body and includes the original and
+appended partial-reference streams. All original records and every appended
+candidate remain in the output; the benchmark does not count them as genes.
+
 ## Reference annotation comparisons
 
 For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot

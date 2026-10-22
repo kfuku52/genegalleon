@@ -210,6 +210,34 @@ def test_patch_still_validates_mutable_context_before_publication(tmp_path, rout
 
 
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
+def test_normalized_and_appended_candidates_share_bodies_without_sharing_evidence(tmp_path, monkeypatch, codec):
+    rows = [model(0), model(1, 'accepted')]
+    with monkeypatch.context() as legacy:
+        legacy.setattr(store, 'BODY_FIELDS', store.BODY_FIELDS | {'coverage', 'identity'})
+        source, _ = published(tmp_path, rows, codec=codec)
+    before = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+    changed = {**rows[0], 'status': 'accepted'}
+    extra = [{**model(i, 'accepted'), 'evidence': {'donor': str(i)}, 'identity': .9} for i in range(2, 6)]
+    output = tmp_path / 'output'
+    patch_model_store(source, output, {0: changed}, appended=extra, append_partial_evidence=True)
+    receipt(output)
+    assert store._json(list(store.iter_models(output))) == store._json([changed, rows[1], *extra])
+    assert store._json(list(store.iter_accepted_models(output))) == store._json([changed, rows[1], *extra])
+    assert list(store.iter_partial_models(output)) == [rows[1], extra[1], extra[3]]
+    assert {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()} == before
+
+
+def test_invalid_later_append_never_publishes_a_partial_store(tmp_path):
+    source, _ = published(tmp_path, [model(0)])
+    output = tmp_path / 'output'
+    extra = [model(2), {**model(4), 'unknown': float('nan')}]
+    with pytest.raises(ValueError):
+        patch_model_store(source, output, {}, appended=extra)
+    assert not list(output.iterdir())
+    assert list(store.iter_models(source)) == [model(0)]
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'auto'])
 @pytest.mark.parametrize('explicit_order', [False, True])
 def test_new_partial_candidates_append_without_changing_old_partial_references(tmp_path, codec, explicit_order):
     rows = [model(0), model(1), model(2), model(3)]
