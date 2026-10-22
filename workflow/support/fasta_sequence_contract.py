@@ -83,7 +83,7 @@ def validate_fasta_stream(handle: TextIO, expected: str, *, path: Path = Path("<
         sequence = "".join(line.split()).upper()
         invalid.update(set(sequence) - allowed)
         current_length += len(sequence)
-        current_ungapped += sum(character not in "-?." for character in sequence)
+        current_ungapped += len(sequence) - sequence.count("-") - sequence.count("?") - sequence.count(".")
         residues += len(sequence)
 
     if current_length is not None:

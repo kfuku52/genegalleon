@@ -33,6 +33,22 @@ def test_codon_contract_rejects_protein_artifact(tmp_path):
         MODULE.validate_fasta(alignment, "codon")
 
 
+def test_codon_contract_counts_mixed_gap_symbols_after_normalization(tmp_path):
+    path = tmp_path / "mixed.fa"
+    path.write_text(">description retained\n au g - ? . c c g \n>b\nATG\nCCG\n-?.\n")
+    assert MODULE.validate_fasta(path, "codon") == MODULE.FastaSummary(2, 18, 9)
+    path.write_text(">bad\nA--??.CCG\n")
+    with pytest.raises(MODULE.SequenceContractError, match="ungapped sequence lengths"):
+        MODULE.validate_fasta(path, "codon")
+
+
+def test_contract_consumes_gzip_trailer_before_reporting_invalid_alphabet(tmp_path):
+    path = tmp_path / "truncated.gz"
+    path.write_bytes(gzip.compress(b">bad\nATG!\n")[:-4])
+    with pytest.raises(EOFError):
+        MODULE.validate_fasta(path, "dna")
+
+
 @pytest.mark.parametrize(
     "body, message",
     [
