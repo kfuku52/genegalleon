@@ -438,6 +438,21 @@ def test_recode_codon_alignment_keeps_custom_mapping_lookup_order():
     assert symbols["seen"] == ["M", "-", "-", "M"]
 
 
+def test_recode_codon_alignment_does_not_compare_unused_custom_keys():
+    mod = load_module()
+
+    class AminoAcid(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            raise RuntimeError("custom amino-acid lookup")
+
+    symbols = {"M": "m", AminoAcid("F"): "f"}
+    assert mod.recode_codon_alignment_records([("g", "ATG")], symbols) == [("g", "m")]
+    with pytest.raises(RuntimeError, match="custom amino-acid lookup"):
+        mod.recode_codon_alignment_records([("g", "TTT")], symbols)
+
+
 def test_write_recoded_site_alignment_uses_csubst_state_symbols(tmp_path):
     mod = load_module()
     recoding_table = tmp_path / "csubst_nonsyn_recoding.tsv"

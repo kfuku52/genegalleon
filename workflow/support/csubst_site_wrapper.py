@@ -1347,7 +1347,7 @@ def recode_codon_alignment_records(records, aa_to_symbol):
         seq = str(seq).upper().replace("U", "T")
         if (len(seq) % 3) != 0:
             raise ValueError(f"CDS alignment sequence length is not a multiple of 3: {name}")
-        if type(aa_to_symbol) is dict and seq:
+        if type(aa_to_symbol) is dict and seq and all(type(key) is str for key in aa_to_symbol):
             # Rebuild per record: a caller's iterator or sequence conversion
             # can change the mapping between records. Invalid codons and stops
             # retain the caller's mapping for the translated "-" state.
