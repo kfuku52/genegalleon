@@ -117,3 +117,70 @@ def test_identify_attribute_key_strips_species_prefix(tmp_path, species):
     args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
 
     assert mod.identify_attribute_key(args) == "ID"
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("preceding_attributes", [0, 1, 2, 3, 8, 15, 16, 17, 24, 100])
+def test_identify_attribute_key_keeps_first_matching_key_after_misses(
+    tmp_path, compressed, preceding_attributes,
+):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene:1\nATG\n", compressed)
+    attributes = [f"other{i}=absent{i}" for i in range(preceding_attributes)]
+    attributes.extend(["Name=gene%3A1", "ID=gene%3A1"])
+    gff = tmp_path / "input.gff3"
+    gff.write_text("chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\t" + ";".join(attributes) + "\n", encoding="utf-8")
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    assert mod.identify_attribute_key(args) == "Name"
+
+
+@pytest.mark.parametrize(
+    ("attributes", "features", "expected"),
+    [
+        (["Name=gene1", "ID=gene1"], ["mRNA", "mRNA"], "Name"),
+        (["Name=gene1", "ID=gene1"], ["gene", "mRNA"], "ID"),
+        (["ID=absent;ID=gene1;Name=gene1"], ["mRNA"], "ID"),
+        (["ID=gene1;ID=absent;Name=gene1"], ["mRNA"], "Name"),
+        (["", ".", "ID=absent"] * 10, ["mRNA"] * 30, None),
+        (["ID=gene1"], ["gene"], None),
+    ],
+)
+def test_identify_attribute_key_keeps_row_feature_and_duplicate_key_priority(
+    tmp_path, attributes, features, expected,
+):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    gff = tmp_path / "input.gff3"
+    gff.write_text(
+        "".join(
+            f"chr1\tsrc\t{feature}\t1\t3\t.\t+\t.\t{attrs}\n"
+            for feature, attrs in zip(features, attributes, strict=True)
+        ),
+        encoding="utf-8",
+    )
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    assert mod.identify_attribute_key(args) == expected
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize(
+    ("identifier", "encoded"),
+    [("遺伝子α", "%E9%81%BA%E4%BC%9D%E5%AD%90%CE%B1"), ("NA", "NA")],
+)
+def test_identify_attribute_key_preserves_late_unicode_and_na_identifiers(
+    tmp_path, compressed, identifier, encoded,
+):
+    mod = load_module()
+    payload = f">Arabidopsis_thaliana_{identifier}\nATG\n".encode("utf-8")
+    fasta = write_fasta(tmp_path, payload, compressed)
+    misses = [f"other{i}=absent{i}" for i in range(20)]
+    gff = tmp_path / "input.gff3"
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\t" + ";".join(misses + ["Name=" + encoded]) + "\n",
+        encoding="utf-8",
+    )
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    assert mod.identify_attribute_key(args) == "Name"

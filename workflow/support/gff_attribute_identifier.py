@@ -70,10 +70,22 @@ def identify_attribute_key(args):
     gff = pandas.read_csv(args.gff_file, sep="\t", header=None, comment="#", low_memory=False, quoting=3)
     gff.columns = gff_cols
     gff = gff.loc[(gff["feature"] == args.gff_feature), :].reset_index(drop=True)
-    for i in gff.index:
-        attrs = parse_gff_attributes(gff.loc[i, "attributes"])
+    # Ordinary inputs match immediately. Defer the extra hash table until
+    # repeated misses justify its construction, retaining row/key priority.
+    direct_comparisons = 16
+    candidate_lookup = None
+    for raw_attributes in gff["attributes"]:
+        attrs = parse_gff_attributes(raw_attributes)
         for key, value in attrs.items():
-            if (value == candidate_seq_names).any():
+            if candidate_lookup is not None:
+                matches = value in candidate_lookup
+            elif direct_comparisons:
+                direct_comparisons -= 1
+                matches = (value == candidate_seq_names).any()
+            else:
+                candidate_lookup = set(candidate_seq_names.to_numpy(copy=False))
+                matches = value in candidate_lookup
+            if matches:
                 return key
     return None
 
