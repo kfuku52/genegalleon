@@ -27,6 +27,7 @@ from annevo_model_selection import (
 )
 from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
+from format_species_annotation.common import normalize_gff_attribute_value, parse_gff_attributes
 from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
@@ -78,12 +79,37 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,
     return data
 
 
+def _gff_identities(text):
+    """Decode structural identities without parsing unrelated native metadata."""
+    first = text.lstrip().split(';', 1)[0]
+    first_key = first.split('=', 1)[0]
+    if '=' not in first or first_key != first_key.strip() or len(first_key.split()) != 1:
+        attrs = parse_gff_attributes(text)
+        return attrs.get('ID', ()), attrs.get('Parent', ())
+    ids, parents = [], []
+    for field in text.split(';'):
+        key, separator, value = field.strip().partition('=')
+        if key.strip() in {'ID', 'Parent'} and key != key.strip():
+            attrs = parse_gff_attributes(text)
+            return attrs.get('ID', ()), attrs.get('Parent', ())
+        target = ids if key == 'ID' else parents if key == 'Parent' else None
+        if target is None or not separator:
+            continue
+        for raw in value.split(','):
+            normalized = normalize_gff_attribute_value(raw)
+            if normalized:
+                target.append(normalized)
+    return ids, parents
+
+
 def gff_counts(path):
     counts = {}
     identifiers = set()
     parents = set()
     with Path(path).open() as stream:
         for line in stream:
+            if line.rstrip('\r\n') == '##FASTA':
+                break
             if not line.strip() or line.startswith("#"):
                 continue
             fields = line.rstrip("\n").split("\t")
@@ -91,12 +117,12 @@ def gff_counts(path):
                 raise RuntimeError("ANNEVO emitted invalid GFF coordinates")
             if fields[6] not in {"+", "-"} or (fields[2] == "CDS" and fields[7] not in {"0", "1", "2"}):
                 raise RuntimeError("ANNEVO emitted invalid GFF strand or CDS phase")
-            attrs = dict(item.split("=", 1) for item in fields[8].split(";") if "=" in item)
-            if attrs.get("ID"):
-                if attrs["ID"] in identifiers:
+            ids, row_parents = _gff_identities(fields[8])
+            if ids:
+                if len(ids) != 1 or ids[0] in identifiers:
                     raise RuntimeError("ANNEVO emitted duplicate feature identifiers")
-                identifiers.add(attrs["ID"])
-            parents.update(attrs.get("Parent", "").split(","))
+                identifiers.add(ids[0])
+            parents.update(row_parents)
             counts[fields[2]] = counts.get(fields[2], 0) + 1
     if not counts.get("gene") or not counts.get("CDS") or parents - identifiers - {""}:
         raise RuntimeError("ANNEVO GFF lacks genes/CDS or has unresolved parents")

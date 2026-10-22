@@ -15,6 +15,25 @@ from format_species_writers import open_text
 UTR_FEATURE_TYPES = {'5': 'five_prime_UTR', '3': 'three_prime_UTR'}
 
 
+class TranscriptGroups:
+    """Place generated children before the source GFF group's closing directive."""
+
+    def __init__(self, transcripts):
+        self.transcripts = transcripts
+        self.current, self.closed, self.placements = set(), set(), {}
+
+    def add(self, attrs):
+        self.current.update(tid for key in ('ID', 'Parent') for tid in attrs.get(key, ()) if tid in self.transcripts)
+
+    def close(self, position):
+        if self.current & self.closed:
+            raise ValueError('Transcript spans closed GFF groups')
+        if position is not None:
+            self.placements.update((tid, position) for tid in self.current)
+        self.closed.update(self.current)
+        self.current.clear()
+
+
 def _utr_low_side(model, side):
     if side not in UTR_FEATURE_TYPES or model['strand'] not in {'+', '-'}:
         raise ValueError('UTR coordinates require side 5 or 3 and a resolved strand')
@@ -87,8 +106,14 @@ def _coge_terminal_segments(model, rows):
 
 def read_models(text, *, strict=True):
     """Read explicit GFF3 or GTF transcript relationships, including shared rows."""
+    return read_model_rows(text.splitlines(), strict=strict)
+
+
+def read_model_rows(lines, *, strict=True):
+    """Read a line iterator without retaining the complete annotation text."""
     models, children, genes = {}, defaultdict(list), set()
-    for line in text.splitlines():
+    for line in lines:
+        line = line.rstrip('\r\n')
         if line == '##FASTA':
             break
         if not line or line.startswith('#'):
@@ -117,9 +142,17 @@ def read_models(text, *, strict=True):
                                bounds=(int(f[3])-1, int(f[4])))
         elif kind in {'exon', 'cds', 'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}:
             owners = attrs.get('Parent', ()) or attrs.get('transcript_id', ())
+            # Child IDs and free-form attributes are not model geometry. Keep
+            # only ownership and the CoGe interpreter's explicit source proof.
+            # Original GFF rows are preserved separately by each writer.
+            attrs = {key: attrs[key] for key in ('Parent', 'gene_id', 'coge_fid') if key in attrs}
+            f[8] = ''
             for tid in owners:
                 children[tid].append((kind, f, attrs))
-    for tid, rows in children.items():
+    # Release raw child fields as transcripts are finalized, instead of keeping
+    # both every parsed feature and every completed model alive until return.
+    for tid in list(children):
+        rows = children.pop(tid)
         if not any(kind == 'cds' for kind, _, _ in rows):
             continue
         if tid not in models:
@@ -172,7 +205,7 @@ def read_models(text, *, strict=True):
 
 def load_models(path):
     with open_text(path, 'rt') as stream:
-        return read_models(stream.read())
+        return read_model_rows(stream)
 
 
 def project(donor, selected, side, genome, *, reference_lengths=None):
@@ -355,14 +388,18 @@ def render(text, updates):
     directive = re.search(r'^##FASTA(?:\r?\n|$)', text, flags=re.MULTILINE)
     text, marker, embedded = (text[:directive.start()], '##FASTA', text[directive.start()+7:]) if directive else (text, '', '')
     lines, gene_bounds, retained_features = [], defaultdict(list), set()
+    groups = TranscriptGroups(updates)
     for value in updates.values():
         gene_bounds[value['model']['gene']].extend(value['exons'])
     for line in text.splitlines(keepends=True):
+        if line.rstrip('\r\n') == '###':
+            groups.close(len(lines))
         if not line.strip() or line.startswith('#'):
             lines.append(line)
             continue
         f = line.rstrip('\r\n').split('\t')
         attrs = parse_gff_attributes(f[8])
+        groups.add(attrs)
         tid = next(iter(attrs.get('ID', ())), '')
         parents = attrs.get('Parent', ())
         kind = f[2].lower()
@@ -392,8 +429,10 @@ def render(text, updates):
                 f[3], f[4] = str(value['exons'][0][0]+1), str(value['exons'][-1][1])
             f[8] = ';'.join(p for p in f[8].split(';') if not p.startswith('utr_policy=')) + ';utr_policy=projected_longest_per_side'
         lines.append('\t'.join(f)+'\n')
+    groups.close(None)
     used = {next(iter(parse_gff_attributes(line.split('\t')[8]).get('ID', ())), '')
             for line in lines if line.strip() and not line.startswith('#')}
+    additions = defaultdict(list)
     for tid, value in updates.items():
         model = value['model']
         def emit(kind, block, suffix, extra='', tid=tid, model=model):
@@ -402,7 +441,8 @@ def render(text, updates):
                 identifier += '_'
             used.add(identifier)
             attrs = 'ID='+quote(identifier, safe='._-:')+';Parent='+quote(tid, safe='._-:')+extra
-            lines.append(f"{model['seqid']}\tGeneGalleon\t{kind}\t{block[0]+1}\t{block[1]}\t.\t{model['strand']}\t.\t{attrs}\n")
+            additions[groups.placements.get(tid)].append(
+                f"{model['seqid']}\tGeneGalleon\t{kind}\t{block[0]+1}\t{block[1]}\t.\t{model['strand']}\t.\t{attrs}\n")
         for i, block in enumerate(value['exons']):
             if (tid, 'exon', *block) not in retained_features:
                 emit('exon', block, 'exon'+str(i+1))
@@ -411,4 +451,19 @@ def render(text, updates):
             for i, block in enumerate(choice['blocks']):
                 if (tid, 'utr', *block) not in retained_features:
                     emit(UTR_FEATURE_TYPES[side], block, side+'.'+str(i+1), extra)
-    return ''.join(lines) + (marker + embedded if marker else '')
+    def rendered_rows():
+        last = '\n'
+        for number, line in enumerate(lines):
+            for addition in additions.get(number, ()):
+                if not last.endswith('\n'):
+                    yield '\n'
+                yield addition
+                last = addition
+            yield line
+            last = line
+        for addition in additions.get(None, ()):
+            if not last.endswith('\n'):
+                yield '\n'
+            yield addition
+            last = addition
+    return ''.join(rendered_rows()) + (marker + embedded if marker else '')

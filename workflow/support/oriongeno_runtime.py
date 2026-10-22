@@ -25,6 +25,7 @@ from oriongeno_outputs import (
     artifact_record,
     companion_paths,
     compress_audit_jsonl,
+    exons_within_reference,
     validate_repeat_gff,
     write_explicit_utrs,
 )
@@ -257,7 +258,9 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
             gff_counts(predicted)
             utr_export = write_explicit_utrs(predicted, staged, lengths=contig_lengths) if output_utrs else None
             if not output_utrs:
-                load_models(predicted)
+                if any(not exons_within_reference(model, contig_lengths.get(model['seqid']))
+                       for model in load_models(predicted).values()):
+                    raise ValueError('OrionGeno transcript lies outside the genome')
                 shutil.copyfile(predicted, staged)
             counts = gff_counts(staged)
             companion_sources = {'native_gff': predicted}

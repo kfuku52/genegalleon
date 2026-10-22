@@ -343,6 +343,32 @@ def test_native_output_controls_are_recorded_and_preserve_original_models(local_
     verify_companions(value, output)
 
 
+@pytest.mark.parametrize('utrs', [0, 1])
+def test_genome_bounds_are_required_even_when_utr_export_is_disabled(local_runtime, tmp_path, monkeypatch, utrs):
+    from test_transcript_utrs import model
+
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    original = native.execute
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            write_prediction(argv, model(cds=((3, 12),), exons=((0, 20),)))
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome, output, receipt = [tmp_path/p for p in ['genome.fa', 'genes.gff3', 'prediction.json']]
+    genome.write_text('>chr\nCCCATGAAATAACCC\n')
+    output.write_bytes(b'previous GFF')
+    receipt.write_bytes(b'previous receipt')
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(receipt), threads=1, batch_size=1, output_utrs=utrs, output_repeat=0)
+    with pytest.raises(ValueError, match='outside'):
+        native.run(args)
+    assert output.read_bytes() == b'previous GFF' and receipt.read_bytes() == b'previous receipt'
+
+
 @pytest.mark.parametrize('name', ['hmm_boundaries', 'utr_repairs'])
 @pytest.mark.parametrize('damage', ['missing', 'invalid-json', 'empty'])
 def test_audit_capture_failure_preserves_previous_bundle_and_accepts_empty_logs(local_runtime, tmp_path, monkeypatch, name, damage):

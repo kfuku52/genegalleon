@@ -142,6 +142,35 @@ fills missing UTR intervals; representative completion applies its separately
 declared donor-selection policy. Repeated export/completion does not accumulate
 UTR rows or change CDS coordinates, phases or sequences.
 
+Annotation files are read through a line iterator, and native UTR export streams
+source rows and generated features to a separate output file. Source LF/CRLF/CR
+bytes and embedded FASTA are retained; generated children are inserted before
+their `###` group terminator or `##FASTA`, including in representative GFF views.
+Transcripts spanning closed groups are rejected. Decoded GFF identifiers are
+used for parent/duplicate checks, so equivalent percent-escape spellings do not
+create a false missing parent or conceal a repeated ID. Native export rejects
+input/output aliases and checks that its source generation stays fixed across
+all passes.
+Disabling explicit UTR export retains genome-bound checks for the native models.
+
+A [saved CPU benchmark](benchmarks/oriongeno-output-storage-2026-10-22.json)
+uses 20,000 synthetic genes, six exons and four CDS blocks per gene, alternating
+strands. Fresh sequential Linux ARM64 Docker workers use one warmup and three
+measured trials per version, alternating version order. GFF bytes, export counts
+and complete parsed-model digests agree. Median results are:
+
+| Operation | Before / after wall seconds | Before / after peak RSS MiB |
+| --- | --- | --- |
+| Native UTR export | 2.550 / 2.172 | 438.8 / 279.5 |
+| Model loading | 1.363 / 1.144 | 354.3 / 254.4 |
+| Export plus input/output validation | 3.198 / 3.241 | 442.6 / 282.2 |
+
+The validation-inclusive wall times overlap across trials; this does not show a
+total speed improvement. The memory reduction is about 36% for native export
+and its validated path. These measurements cover annotation handling, not native
+GPU prediction or the complete workflow. Reproduce with
+`workflow/tests/benchmark_oriongeno_outputs.py --baseline-support /path/to/old/support`.
+
 Both controls accept `0` or `1` and use the usual scoped overrides, for example
 `GG_GENOME_ANNOTATION_ORIONGENO_OUTPUT_REPEAT=0`. Disabling UTR export retains
 the native gene annotation unchanged. Only companions declared in the current
@@ -160,6 +189,8 @@ Gene GFF, native GFF, enabled repeat GFF, both audit logs and receipt publish
 together, with the receipt last and restoration of the previous complete set on failure. Missing
 or modified declared companions invalidate reuse and candidate import. Repeat
 files with zero predictions are valid GFF3 files containing their header.
+Companion verification fences the complete file set before and after hashing,
+so a file changed while another companion is read cannot pass verification.
 
 Historical receipts retain their historical scope. Earlier GG predictions did
 not request/save repeats, and did not add explicit UTR rows. Their exon/CDS paths

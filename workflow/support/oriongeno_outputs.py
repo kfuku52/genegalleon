@@ -11,13 +11,27 @@ from pathlib import Path
 from urllib.parse import quote
 
 try:
+    from annevo_model_selection import protect_outputs, stable_signature
     from annevo_runtime_download import file_sha
     from format_species_annotation.common import parse_gff_attributes
-    from transcript_utrs import UTR_FEATURE_TYPES, exons_within_reference, read_models, terminal_utr_blocks
+    from transcript_utrs import (
+        UTR_FEATURE_TYPES,
+        TranscriptGroups,
+        exons_within_reference,
+        read_model_rows,
+        terminal_utr_blocks,
+    )
 except ImportError:
+    from .annevo_model_selection import protect_outputs, stable_signature
     from .annevo_runtime_download import file_sha
     from .format_species_annotation.common import parse_gff_attributes
-    from .transcript_utrs import UTR_FEATURE_TYPES, exons_within_reference, read_models, terminal_utr_blocks
+    from .transcript_utrs import (
+        UTR_FEATURE_TYPES,
+        TranscriptGroups,
+        exons_within_reference,
+        read_model_rows,
+        terminal_utr_blocks,
+    )
 
 UTR_POLICY = 'exon_cds_boundaries_v1'
 UTR_KINDS = {'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}
@@ -71,58 +85,96 @@ def _uncovered(block, covered):
 
 def write_explicit_utrs(source, output, *, lengths=None):
     """Preserve every source row and add only missing terminal exonic UTR rows."""
-    text = Path(source).read_text()
-    directive = re.search(r'^##FASTA(?:\r?\n|$)', text, flags=re.MULTILINE)
-    annotation, separator, embedded = (text[:directive.start()], '##FASTA', text[directive.start()+7:]) if directive else (text, '', '')
-    models = read_models(annotation)
+    source, output = Path(source), Path(output)
+    protect_outputs([output], [source])
+    before = stable_signature(source)
+    with source.open() as stream:
+        models = read_model_rows(stream)
     expected, covered, used, encoded_ids = {}, {}, set(), {}
     for tid, model in models.items():
         if lengths is not None and not exons_within_reference(model, lengths.get(model['seqid'])):
             raise ValueError('OrionGeno transcript lies outside the genome')
         expected[tid] = {kind: terminal_utr_blocks(model, side) for side, kind in UTR_FEATURE_TYPES.items()}
-    for line in annotation.splitlines():
-        if not line or line.startswith('#'):
-            continue
-        row = line.split('\t')
-        attrs = parse_gff_attributes(row[8])
-        used.update(attrs.get('ID', ()))
-        original_attrs = dict(item.split('=', 1) for item in row[8].split(';') if '=' in item)
-        if len(attrs.get('ID', ())) == 1 and original_attrs.get('ID'):
-            encoded_ids[attrs['ID'][0]] = original_attrs['ID']
-        if row[2].lower() not in UTR_KINDS:
-            continue
-        block = int(row[3]) - 1, int(row[4])
-        for tid in attrs.get('Parent', ()):
-            if tid not in models:
+        models[tid] = {'seqid': model['seqid'], 'strand': model['strand']}
+    groups = TranscriptGroups(models)
+    with source.open() as stream:
+        for number, line in enumerate(stream):
+            line = line.rstrip('\r\n')
+            if line in {'###', '##FASTA'}:
+                groups.close(number)
+                if line == '##FASTA':
+                    break
+            if not line or line.startswith('#'):
                 continue
-            kind = next((kind for kind, blocks in expected[tid].items()
-                         if any(a <= block[0] < block[1] <= b for a, b in blocks)), None)
-            declared = {'5utr': 'five_prime_UTR', 'five_prime_utr': 'five_prime_UTR',
-                        '3utr': 'three_prime_UTR', 'three_prime_utr': 'three_prime_UTR'}.get(row[2].lower())
-            if kind is None or declared is not None and kind != declared:
-                raise ValueError('Explicit UTR conflicts with transcript exon/CDS boundaries')
-            covered.setdefault((tid, kind), []).append(block)
-    additions, counts = [], {'five_prime_UTR': 0, 'three_prime_UTR': 0}
-    for tid, model in models.items():
-        for kind, blocks in expected[tid].items():
-            index = 0
-            for block in blocks:
-                for start, end in _uncovered(block, covered.get((tid, kind), ())):
-                    index += 1
-                    identifier = tid + '.ggutr.' + ('5.' if kind == 'five_prime_UTR' else '3.') + str(index)
-                    while identifier in used:
-                        identifier += '_'
-                    used.add(identifier)
-                    attrs = ('ID=' + quote(identifier, safe='._-:') + ';Parent=' + encoded_ids.get(tid, quote(tid, safe='._-:'))
-                             + ';annotation_basis=' + UTR_POLICY)
-                    additions.append('\t'.join([model['seqid'], 'GeneGalleon', kind, str(start + 1),
-                                                str(end), '.', model['strand'], '.', attrs]) + '\n')
-                    counts[kind] += 1
-    rendered = annotation + ('\n' if additions and annotation and not annotation.endswith('\n') else '') + ''.join(additions)
-    if separator:
-        rendered += separator + embedded
-    Path(output).write_text(rendered)
+            row = line.split('\t')
+            attrs = parse_gff_attributes(row[8])
+            used.update(attrs.get('ID', ()))
+            groups.add(attrs)
+            if len(attrs.get('ID', ())) == 1 and attrs['ID'][0] in models:
+                original_attrs = dict(item.split('=', 1) for item in row[8].split(';') if '=' in item)
+                if original_attrs.get('ID'):
+                    encoded_ids[attrs['ID'][0]] = original_attrs['ID']
+            if row[2].lower() not in UTR_KINDS:
+                continue
+            block = int(row[3]) - 1, int(row[4])
+            for tid in attrs.get('Parent', ()):
+                if tid not in models:
+                    continue
+                kind = next((kind for kind, blocks in expected[tid].items()
+                             if any(a <= block[0] < block[1] <= b for a, b in blocks)), None)
+                declared = {'5utr': 'five_prime_UTR', 'five_prime_utr': 'five_prime_UTR',
+                            '3utr': 'three_prime_UTR', 'three_prime_utr': 'three_prime_UTR'}.get(row[2].lower())
+                if kind is None or declared is not None and kind != declared:
+                    raise ValueError('Explicit UTR conflicts with transcript exon/CDS boundaries')
+                covered.setdefault((tid, kind), []).append(block)
+    groups.close(None)
+    emit_at = {}
+    for tid in models:
+        emit_at.setdefault(groups.placements.get(tid), []).append(tid)
+    counts = {'five_prime_UTR': 0, 'three_prime_UTR': 0}
+    if stable_signature(source) != before:
+        raise ValueError('OrionGeno GFF changed during UTR export')
+    with source.open(newline='') as stream, output.open('wb') as target:
+        last = b'\n'
+        def emit(number):
+            nonlocal last
+            for tid in emit_at.get(number, ()):
+                for row in _missing_utr_rows(tid, models[tid], expected[tid], covered, used, encoded_ids, counts):
+                    if last and not last.endswith(b'\n'):
+                        target.write(b'\n')
+                    target.write(row)
+                    last = row
+        for number, text_line in enumerate(stream):
+            line = text_line.encode()
+            emit(number)
+            target.write(line)
+            last = line
+            if line.rstrip(b'\r\n') == b'##FASTA':
+                for block in iter(lambda: stream.read(1024 * 1024), ''):
+                    target.write(block.encode())
+                break
+        else:
+            emit(None)
+    if stable_signature(source) != before:
+        raise ValueError('OrionGeno GFF changed during UTR export')
     return {'policy': UTR_POLICY, 'transcripts': len(models), 'added_features': counts}
+
+
+def _missing_utr_rows(tid, model, expected, covered, used, encoded_ids, counts):
+    for kind, blocks in expected.items():
+        index = 0
+        for block in blocks:
+            for start, end in _uncovered(block, covered.get((tid, kind), ())):
+                index += 1
+                identifier = tid + '.ggutr.' + ('5.' if kind == 'five_prime_UTR' else '3.') + str(index)
+                while identifier in used:
+                    identifier += '_'
+                used.add(identifier)
+                attrs = ('ID=' + quote(identifier, safe='._-:') + ';Parent=' + encoded_ids.get(tid, quote(tid, safe='._-:'))
+                         + ';annotation_basis=' + UTR_POLICY)
+                counts[kind] += 1
+                yield ('\t'.join([model['seqid'], 'GeneGalleon', kind, str(start + 1),
+                                  str(end), '.', model['strand'], '.', attrs]) + '\n').encode()
 
 
 def validate_repeat_gff(path, lengths):
@@ -179,6 +231,12 @@ def verify_companions(value, gff):
         raise ValueError('OrionGeno audit outputs require their versioned contract')
     if not isinstance(outputs.get('files'), dict) or set(outputs['files']) != names:
         raise ValueError('OrionGeno annotation companions are incomplete')
+    generations = {}
+    for name in outputs['files']:
+        path = paths[name]
+        if not path.is_file() or path.is_symlink():
+            raise ValueError('OrionGeno annotation companion changed: ' + name)
+        generations[name] = stable_signature(path)
     for name, record in outputs['files'].items():
         path = paths[name]
         if (not isinstance(record, dict) or record.get('path') != path.name
@@ -190,3 +248,6 @@ def verify_companions(value, gff):
                 or not re.fullmatch('[0-9a-f]{64}', str(record.get('uncompressed_sha256')))
                 or any(type(record.get(key)) is not int or record[key] < 0 for key in ('uncompressed_bytes', 'jsonl_records'))):
             raise ValueError('Invalid OrionGeno audit output metadata: ' + name)
+    for name, before in generations.items():
+        if paths[name].is_symlink() or stable_signature(paths[name]) != before:
+            raise ValueError('OrionGeno annotation companion changed during verification: ' + name)

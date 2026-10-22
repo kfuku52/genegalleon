@@ -1,0 +1,389 @@
+{
+  "genes": 20000,
+  "input_bytes": 15797814,
+  "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+  "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+  "records": [
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 453312,
+      "repetition": 0,
+      "seconds": 2.4386247509996792,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": true
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 286308,
+      "repetition": 0,
+      "seconds": 2.0633289580000564,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": true
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 286100,
+      "repetition": 1,
+      "seconds": 2.144957335000072,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 453260,
+      "repetition": 1,
+      "seconds": 2.482325334000052,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 449312,
+      "repetition": 2,
+      "seconds": 2.549573376999888,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 286232,
+      "repetition": 2,
+      "seconds": 2.396493085000202,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 286192,
+      "repetition": 3,
+      "seconds": 2.1717641260001983,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "export",
+      "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+      "peak_rss_kib": 448388,
+      "repetition": 3,
+      "seconds": 2.763284834999922,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 362868,
+      "repetition": 0,
+      "seconds": 1.4859415419996367,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": true
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 260292,
+      "repetition": 0,
+      "seconds": 1.1217048339999565,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": true
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 260548,
+      "repetition": 1,
+      "seconds": 1.1435030840002582,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 362808,
+      "repetition": 1,
+      "seconds": 1.3632598760000292,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 362900,
+      "repetition": 2,
+      "seconds": 1.4040285420001055,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 260548,
+      "repetition": 2,
+      "seconds": 1.1431142090000321,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 260680,
+      "repetition": 3,
+      "seconds": 1.1687126659999194,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "read",
+      "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+      "peak_rss_kib": 362788,
+      "repetition": 3,
+      "seconds": 1.3365965419998247,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 452856,
+      "repetition": 0,
+      "seconds": 3.0224716259999695,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": true
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 289300,
+      "repetition": 0,
+      "seconds": 3.198293584000112,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": true
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 289272,
+      "repetition": 1,
+      "seconds": 3.2008165010001903,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 453256,
+      "repetition": 1,
+      "seconds": 3.0626694590000625,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 452668,
+      "repetition": 2,
+      "seconds": 3.198492000999977,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 288876,
+      "repetition": 2,
+      "seconds": 3.386434460000146,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 288960,
+      "repetition": 3,
+      "seconds": 3.24064087700026,
+      "sources": {
+        "annevo_runtime.py": "d066cf2afd2932e2546702fee83f61f9cfb34fa970e45b747ad477ee527272ed",
+        "oriongeno_outputs.py": "5795bac8fec47f44fed5c0fdf9d0c72cb457382104ffe0773a3a35a8067bddce",
+        "transcript_utrs.py": "3390bc484b6a742ba62402009cf25ab72f62e5908af80050b993a2c5ff6c50d2"
+      },
+      "version": "current",
+      "warmup": false
+    },
+    {
+      "case": "validated-export",
+      "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+      "peak_rss_kib": 453260,
+      "repetition": 3,
+      "seconds": 3.2701167089999217,
+      "sources": {
+        "annevo_runtime.py": "2d344550fd20f5210d466663b677e137410d2543c5c5e06bbe0114a856e9e608",
+        "oriongeno_outputs.py": "eca3fbab45afd94385c43e4234b0f9e1f6996ce3b7fc8034440ad69d04e8593d",
+        "transcript_utrs.py": "d7bebb3db66b280e48a742aef646cf959a7ccaf0ce6e04a3122672df54e846ac"
+      },
+      "version": "baseline",
+      "warmup": false
+    }
+  ],
+  "repeats": 3,
+  "schema_version": 1,
+  "summary": {
+    "export": {
+      "baseline": {
+        "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+        "peak_rss_kib": 449312,
+        "seconds": 2.549573376999888
+      },
+      "current": {
+        "digest": "252cd68204493862873e8f07bd521759ca2dc38a3a62c931198f731e85bae495",
+        "peak_rss_kib": 286192,
+        "seconds": 2.1717641260001983
+      }
+    },
+    "read": {
+      "baseline": {
+        "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+        "peak_rss_kib": 362808,
+        "seconds": 1.3632598760000292
+      },
+      "current": {
+        "digest": "758536bb279dd340ef37d825948d225eb29be0b66a62476610b6841f4c71ba47",
+        "peak_rss_kib": 260548,
+        "seconds": 1.1435030840002582
+      }
+    },
+    "validated-export": {
+      "baseline": {
+        "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+        "peak_rss_kib": 453256,
+        "seconds": 3.198492000999977
+      },
+      "current": {
+        "digest": "afdcac06e36a4ffa089255d10b4b82e954dd486b591f22bc98f7cfe7e821b0e0",
+        "peak_rss_kib": 288960,
+        "seconds": 3.24064087700026
+      }
+    }
+  },
+  "warmups": 1,
+  "baseline_commit": "42338c02541b60fa1614e552306c2fe31e59cab0",
+  "runtime_image": "sha256:1d40884fed7ab49c9a0a1659602829de9371cefc354f78705f7ace0acfffa1ea",
+  "measurement_scope": "Synthetic GFF CPU processing in fresh sequential Linux ARM64 Docker workers; no GPU prediction",
+  "command": "GG_TEST_RUNTIME=docker GENEGALLEON_DOCKER_EXTRA_BINDS=/absolute/baseline-parent bash workflow/tests/run_in_runtime.sh python -B workflow/tests/benchmark_oriongeno_outputs.py --baseline-support /absolute/baseline-parent/baseline --genes 20000 --repeats 3"
+}
