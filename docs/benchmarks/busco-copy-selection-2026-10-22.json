@@ -9,7 +9,7 @@
     "3",
     "--profile",
     "--output",
-    "workspace/output/benchmarks/busco-copy-selection-review-20261022/comparison.json"
+    "workspace/output/benchmarks/busco-copy-selection-review-20261022/push-comparison.json"
   ],
   "packages": {
     "biopython": "1.88",
@@ -24,7 +24,7 @@
       "collect_common_BUSCO_genes.py": "7200d6fa9ead3ec8bb0ce219a02b06801c3ad9e88410c62f27f728ac12278eb1"
     },
     "current": {
-      "batch_extract_busco_fasta.py": "a6247aeda3604a06c91917c7334bf4b234a021a0518c7b64c9b4a3d8653e7d2b",
+      "batch_extract_busco_fasta.py": "09f5d071cbc1945b050ba288381c5a3216c0673cef787803748a852bacbdf2b5",
       "busco_copy_selection.py": "0db0915ffe1174d3df24f85e2e3956850c06e69e8508e83047a583e070de6889",
       "busco_table_utils.py": "b34ca4e84d682f0bf08e89a6b8ea874c4a657a828e750760a8a0dd103f56c383",
       "collect_common_BUSCO_genes.py": "48042a813d113b8d243febb6289de4a2874cecd8ee6c8d16f4ffd8eac31332b7"
@@ -42,72 +42,72 @@
       "records": 172032,
       "variants": {
         "baseline": {
-          "median_seconds": 5.5585293770000135,
-          "median_peak_rss_bytes": 193437696,
+          "median_seconds": 6.391343754000047,
+          "median_peak_rss_bytes": 194138112,
           "trials": [
             {
-              "seconds": 5.553686752999965,
+              "seconds": 6.251457293999977,
               "phases": {
-                "__init__": 0.7112017920001108,
-                "extract": 4.407557419000113
+                "__init__": 0.7851550420000422,
+                "extract": 4.983131001999993
               },
-              "peak_rss_bytes": 193437696,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 194138112,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             },
             {
-              "seconds": 5.5585293770000135,
+              "seconds": 6.392550211000014,
               "phases": {
-                "__init__": 0.6744682089999969,
-                "extract": 4.471716585000195
+                "__init__": 0.8194090009999968,
+                "extract": 5.129510460999995
               },
-              "peak_rss_bytes": 193409024,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 193327104,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             },
             {
-              "seconds": 5.560102252999968,
+              "seconds": 6.391343754000047,
               "phases": {
-                "__init__": 0.6875333750001573,
-                "extract": 4.449797751999995
+                "__init__": 0.8197756260000233,
+                "extract": 5.133392293999975
               },
-              "peak_rss_bytes": 193478656,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 194138112,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             }
           ],
-          "profile": "         68684491 function calls (68676985 primitive calls) in 16.320 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2279 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001   16.321   16.321 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.001    0.000   15.401    7.700 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.766    0.766   13.688   13.688 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n    98304    0.163    0.000    8.547    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:119(write)\n    98816    0.156    0.000    7.292    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:33(safe_output_path)\n   197632    0.141    0.000    5.115    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    98304    0.192    0.000    3.590    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n   100780    1.657    0.000    3.246    0.000 {built-in method builtins.sum}\n   197634    0.125    0.000    3.221    0.000 <frozen posixpath>:420(realpath)\n197635/197634    0.636    0.000    2.687    0.000 <frozen posixpath>:429(_joinrealpath)\n        1    0.673    0.673    1.712    1.712 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n   298055    0.059    0.000    1.683    0.000 /opt/conda/lib/python3.12/pathlib.py:835(stat)\n   299814    0.367    0.000    1.626    0.000 {built-in method posix.stat}\n 29589504    1.589    0.000    1.589    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n   396361    0.173    0.000    1.373    0.000 /opt/conda/lib/python3.12/pathlib.py:551(drive)\n   595089    0.149    0.000    1.355    0.000 /opt/conda/lib/python3.12/pathlib.py:447(__fspath__)\n   794513    0.311    0.000    1.221    0.000 /opt/conda/lib/python3.12/pathlib.py:437(__str__)\n   296839    0.184    0.000    1.200    0.000 /opt/conda/lib/python3.12/pathlib.py:407(_load_parts)\n   889365    0.668    0.000    1.171    0.000 <frozen posixpath>:71(join)\n    98818    0.073    0.000    1.018    0.000 /opt/conda/lib/python3.12/pathlib.py:731(parent)\n   395970    0.192    0.000    0.941    0.000 /opt/conda/lib/python3.12/pathlib.py:380(with_segments)\n        1    0.001    0.001    0.862    0.862 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:239(write_selection_report)\n        1    0.000    0.000    0.836    0.836 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.378    0.378    0.836    0.836 {method 'writerows' of '_csv.writer' objects}\n   296841    0.410    0.000    0.815    0.000 /opt/conda/lib/python3.12/pathlib.py:387(_parse_path)\n\n\n"
+          "profile": "         68684491 function calls (68676985 primitive calls) in 16.633 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2279 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001   16.634   16.634 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.001    0.000   15.735    7.868 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.724    0.724   13.798   13.798 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n    98304    0.162    0.000    8.718    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:119(write)\n    98816    0.157    0.000    7.495    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:33(safe_output_path)\n   197632    0.156    0.000    5.295    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    98304    0.189    0.000    3.570    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n   197634    0.129    0.000    3.379    0.000 <frozen posixpath>:420(realpath)\n   100780    1.636    0.000    3.222    0.000 {built-in method builtins.sum}\n197635/197634    0.652    0.000    2.820    0.000 <frozen posixpath>:429(_joinrealpath)\n        1    0.786    0.786    1.937    1.937 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n   298055    0.059    0.000    1.674    0.000 /opt/conda/lib/python3.12/pathlib.py:835(stat)\n   299814    0.362    0.000    1.618    0.000 {built-in method posix.stat}\n 29589504    1.587    0.000    1.587    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n   396361    0.174    0.000    1.402    0.000 /opt/conda/lib/python3.12/pathlib.py:551(drive)\n   595089    0.150    0.000    1.351    0.000 /opt/conda/lib/python3.12/pathlib.py:447(__fspath__)\n   889365    0.707    0.000    1.250    0.000 <frozen posixpath>:71(join)\n   296839    0.188    0.000    1.228    0.000 /opt/conda/lib/python3.12/pathlib.py:407(_load_parts)\n   794513    0.307    0.000    1.216    0.000 /opt/conda/lib/python3.12/pathlib.py:437(__str__)\n    98818    0.074    0.000    1.053    0.000 /opt/conda/lib/python3.12/pathlib.py:731(parent)\n   395970    0.198    0.000    0.947    0.000 /opt/conda/lib/python3.12/pathlib.py:380(with_segments)\n        1    0.001    0.001    0.840    0.840 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:239(write_selection_report)\n   296841    0.424    0.000    0.838    0.000 /opt/conda/lib/python3.12/pathlib.py:387(_parse_path)\n        1    0.000    0.000    0.814    0.814 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.374    0.374    0.814    0.814 {method 'writerows' of '_csv.writer' objects}\n\n\n"
         },
         "current": {
-          "median_seconds": 2.0682580840000355,
-          "median_peak_rss_bytes": 138129408,
+          "median_seconds": 2.3204141679999566,
+          "median_peak_rss_bytes": 138170368,
           "trials": [
             {
-              "seconds": 2.0066314169998805,
+              "seconds": 2.377431209000008,
               "phases": {
-                "__init__": 0.415216042000111,
-                "extract": 1.1513188339999942
+                "__init__": 0.5403755410000031,
+                "extract": 1.353679709000005
               },
-              "peak_rss_bytes": 138084352,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 138338304,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             },
             {
-              "seconds": 2.1230855430001156,
+              "seconds": 2.3204141679999566,
               "phases": {
-                "__init__": 0.41269454200005384,
-                "extract": 1.2777795840002
+                "__init__": 0.5034930410000129,
+                "extract": 1.333356708999986
               },
-              "peak_rss_bytes": 138129408,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 138170368,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             },
             {
-              "seconds": 2.0682580840000355,
+              "seconds": 2.2173654180000426,
               "phases": {
-                "__init__": 0.43768650099991646,
-                "extract": 1.1942349179998928
+                "__init__": 0.48148841699998,
+                "extract": 1.2710550420000004
               },
-              "peak_rss_bytes": 138145792,
-              "sha256": "90721cf951ca7dbbb31630a3bdf61e4ac740489f61383c6be76676b6d6d51d92"
+              "peak_rss_bytes": 138170368,
+              "sha256": "62bbbe2fa839218764a77f42b212fe0b55bafa1c2b06887c48398e813bbf692a"
             }
           ],
-          "profile": "         13190271 function calls (13186329 primitive calls) in 4.773 seconds\n\n   Ordered by: cumulative time\n   List reduced from 272 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.002    0.002    4.773    4.773 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:187(run)\n        2    0.001    0.000    3.791    1.895 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.339    0.339    2.671    2.671 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n    98304    0.116    0.000    1.192    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:129(write)\n        1    0.667    0.667    1.119    1.119 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n        1    0.001    0.001    0.832    0.832 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.804    0.804 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.363    0.363    0.804    0.804 {method 'writerows' of '_csv.writer' objects}\n    98304    0.059    0.000    0.652    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:41(open_output_append)\n   172224    0.282    0.000    0.578    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:61(fasta_records)\n    98306    0.063    0.000    0.380    0.000 <frozen os>:1060(fdopen)\n  1867795    0.236    0.000    0.377    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    98304    0.168    0.000    0.371    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    98304    0.307    0.000    0.307    0.000 {method 'close' of '_io.TextIOWrapper' objects}\n    98693    0.286    0.000    0.302    0.000 {built-in method _io.open}\n    98306    0.170    0.000    0.205    0.000 {built-in method posix.open}\n  2114589    0.193    0.000    0.193    0.000 {method 'get' of 'dict' objects}\n   344066    0.097    0.000    0.136    0.000 {built-in method builtins.sorted}\n     1536    0.003    0.000    0.124    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:32(safe_output_path)\n     3977    0.003    0.000    0.113    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    98308    0.024    0.000    0.093    0.000 {built-in method builtins.any}\n1016684/1012762    0.084    0.000    0.085    0.000 {built-in method builtins.len}\n        1    0.001    0.001    0.084    0.084 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:149(validate_output_layout)\n   374741    0.079    0.000    0.079    0.000 {method 'split' of 'str' objects}\n     7296    0.004    0.000    0.074    0.000 /opt/conda/lib/python3.12/gzip.py:340(read1)\n\n\n"
+          "profile": "         13190272 function calls (13186330 primitive calls) in 4.543 seconds\n\n   Ordered by: cumulative time\n   List reduced from 272 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001    4.543    4.543 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:264(run)\n        2    0.001    0.000    3.577    1.788 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.324    0.324    2.597    2.597 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n    98304    0.116    0.000    1.128    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:204(write)\n        1    0.592    0.592    0.979    0.979 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n        1    0.001    0.001    0.829    0.829 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.803    0.803 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.368    0.368    0.803    0.803 {method 'writerows' of '_csv.writer' objects}\n    98304    0.060    0.000    0.624    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:43(open_output_append)\n   172224    0.295    0.000    0.594    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:63(fasta_records)\n  1867795    0.233    0.000    0.372    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    98306    0.064    0.000    0.371    0.000 <frozen os>:1060(fdopen)\n    98304    0.170    0.000    0.369    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    98693    0.274    0.000    0.290    0.000 {built-in method _io.open}\n    98304    0.280    0.000    0.280    0.000 {method 'close' of '_io.TextIOWrapper' objects}\n  2114589    0.186    0.000    0.186    0.000 {method 'get' of 'dict' objects}\n    98306    0.149    0.000    0.183    0.000 {built-in method posix.open}\n   344066    0.092    0.000    0.128    0.000 {built-in method builtins.sorted}\n     1536    0.002    0.000    0.113    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:34(safe_output_path)\n     3977    0.003    0.000    0.105    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n1016684/1012762    0.082    0.000    0.082    0.000 {built-in method builtins.len}\n        1    0.001    0.001    0.079    0.079 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:224(validate_output_layout)\n   374741    0.076    0.000    0.076    0.000 {method 'split' of 'str' objects}\n     7296    0.004    0.000    0.072    0.000 /opt/conda/lib/python3.12/gzip.py:340(read1)\n   542584    0.071    0.000    0.071    0.000 {method 'startswith' of 'str' objects}\n\n\n"
         }
       }
     },
@@ -122,72 +122,72 @@
       "records": 49152,
       "variants": {
         "baseline": {
-          "median_seconds": 2.88355879300002,
-          "median_peak_rss_bytes": 112848896,
+          "median_seconds": 2.927647876999913,
+          "median_peak_rss_bytes": 112861184,
           "trials": [
             {
-              "seconds": 3.1524932929999068,
+              "seconds": 2.927647876999913,
               "phases": {
-                "__init__": 0.3307769579998876,
-                "extract": 2.700908917999868
-              },
-              "peak_rss_bytes": 112754688,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
-            },
-            {
-              "seconds": 2.753092793000178,
-              "phases": {
-                "__init__": 0.29343900000003487,
-                "extract": 2.341952375999881
+                "__init__": 0.2913930419999815,
+                "extract": 2.513943542999982
               },
               "peak_rss_bytes": 112848896,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
             },
             {
-              "seconds": 2.88355879300002,
+              "seconds": 2.943933584999968,
               "phases": {
-                "__init__": 0.30898275000004105,
-                "extract": 2.457339334999915
+                "__init__": 0.3299629159999995,
+                "extract": 2.497948334000057
               },
-              "peak_rss_bytes": 112857088,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
+              "peak_rss_bytes": 112861184,
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
+            },
+            {
+              "seconds": 2.8311260839999477,
+              "phases": {
+                "__init__": 0.29925424999998995,
+                "extract": 2.416427750999901
+              },
+              "peak_rss_bytes": 112861184,
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
             }
           ],
-          "profile": "         35981225 function calls (35973692 primitive calls) in 8.563 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2329 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001    8.571    8.571 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.000    0.000    8.305    4.153 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.181    0.181    7.637    7.637 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n    24576    0.106    0.000    4.211    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n    24576    0.034    0.000    3.154    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:1520(translate)\n    24576    1.726    0.000    3.052    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2733(_translate_str)\n    32768    0.058    0.000    2.951    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:119(write)\n    33280    0.056    0.000    2.515    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:33(safe_output_path)\n    66560    0.049    0.000    1.758    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    66562    0.043    0.000    1.110    0.000 <frozen posixpath>:420(realpath)\n66563/66562    0.222    0.000    0.927    0.000 <frozen posixpath>:429(_joinrealpath)\n    27052    0.416    0.000    0.816    0.000 {built-in method builtins.sum}\n        1    0.182    0.182    0.668    0.668 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n  7698574    0.625    0.000    0.625    0.000 {method 'append' of 'list' objects}\n  7618560    0.614    0.000    0.614    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:413(__getitem__)\n   101063    0.020    0.000    0.578    0.000 /opt/conda/lib/python3.12/pathlib.py:835(stat)\n   102852    0.132    0.000    0.562    0.000 {built-in method posix.stat}\n   133833    0.060    0.000    0.478    0.000 /opt/conda/lib/python3.12/pathlib.py:551(drive)\n   201105    0.051    0.000    0.463    0.000 /opt/conda/lib/python3.12/pathlib.py:447(__fspath__)\n    99975    0.064    0.000    0.418    0.000 /opt/conda/lib/python3.12/pathlib.py:407(_load_parts)\n   268945    0.105    0.000    0.417    0.000 /opt/conda/lib/python3.12/pathlib.py:437(__str__)\n   299542    0.231    0.000    0.403    0.000 <frozen posixpath>:71(join)\n  7397376    0.400    0.000    0.400    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n    33282    0.025    0.000    0.355    0.000 /opt/conda/lib/python3.12/pathlib.py:731(parent)\n   133698    0.067    0.000    0.323    0.000 /opt/conda/lib/python3.12/pathlib.py:380(with_segments)\n\n\n"
+          "profile": "         35981225 function calls (35973692 primitive calls) in 8.275 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2329 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001    8.281    8.281 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.000    0.000    7.993    3.996 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.165    0.165    7.350    7.350 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n    24576    0.100    0.000    4.069    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n    24576    0.032    0.000    3.051    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:1520(translate)\n    24576    1.690    0.000    2.954    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2733(_translate_str)\n    32768    0.053    0.000    2.841    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:119(write)\n    33280    0.052    0.000    2.447    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:33(safe_output_path)\n    66560    0.047    0.000    1.717    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    66562    0.043    0.000    1.083    0.000 <frozen posixpath>:420(realpath)\n66563/66562    0.214    0.000    0.903    0.000 <frozen posixpath>:429(_joinrealpath)\n    27052    0.399    0.000    0.786    0.000 {built-in method builtins.sum}\n        1    0.180    0.180    0.642    0.642 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n  7618560    0.615    0.000    0.615    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:413(__getitem__)\n   101063    0.019    0.000    0.564    0.000 /opt/conda/lib/python3.12/pathlib.py:835(stat)\n  7698574    0.563    0.000    0.563    0.000 {method 'append' of 'list' objects}\n   102852    0.126    0.000    0.547    0.000 {built-in method posix.stat}\n   133833    0.058    0.000    0.464    0.000 /opt/conda/lib/python3.12/pathlib.py:551(drive)\n   201105    0.050    0.000    0.454    0.000 /opt/conda/lib/python3.12/pathlib.py:447(__fspath__)\n   268945    0.104    0.000    0.408    0.000 /opt/conda/lib/python3.12/pathlib.py:437(__str__)\n    99975    0.062    0.000    0.406    0.000 /opt/conda/lib/python3.12/pathlib.py:407(_load_parts)\n   299542    0.223    0.000    0.391    0.000 <frozen posixpath>:71(join)\n  7397376    0.388    0.000    0.388    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n    33282    0.024    0.000    0.345    0.000 /opt/conda/lib/python3.12/pathlib.py:731(parent)\n   133698    0.065    0.000    0.314    0.000 /opt/conda/lib/python3.12/pathlib.py:380(with_segments)\n\n\n"
         },
         "current": {
-          "median_seconds": 1.684125709,
-          "median_peak_rss_bytes": 58507264,
+          "median_seconds": 1.7152602090000073,
+          "median_peak_rss_bytes": 58519552,
           "trials": [
             {
-              "seconds": 1.7691635000001042,
+              "seconds": 1.8029471669999566,
               "phases": {
-                "__init__": 0.12866854100002456,
-                "extract": 1.497199751000153
+                "__init__": 0.14316654200001722,
+                "extract": 1.5225719589999471
               },
-              "peak_rss_bytes": 58499072,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
+              "peak_rss_bytes": 58523648,
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
             },
             {
-              "seconds": 1.6793732920000366,
+              "seconds": 1.7039351669999405,
               "phases": {
-                "__init__": 0.13954791699984526,
-                "extract": 1.4027906680000797
+                "__init__": 0.13410729100007757,
+                "extract": 1.4361446259999866
               },
-              "peak_rss_bytes": 58507264,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
+              "peak_rss_bytes": 58449920,
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
             },
             {
-              "seconds": 1.684125709,
+              "seconds": 1.7152602090000073,
               "phases": {
-                "__init__": 0.13100108399999044,
-                "extract": 1.4212820829998236
+                "__init__": 0.1369692920000034,
+                "extract": 1.4437441260000696
               },
-              "peak_rss_bytes": 58511360,
-              "sha256": "67aba736c64f5dd68d8f78f20862ad14349fb10b0bdf9f921ec557a291aacb81"
+              "peak_rss_bytes": 58519552,
+              "sha256": "5862777f50d14bede9a7e42d7c5b6893f1389a2fa6a80bd2905a70a0718c23f5"
             }
           ],
-          "profile": "         20190175 function calls (20188766 primitive calls) in 5.013 seconds\n\n   Ordered by: cumulative time\n   List reduced from 440 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001    5.013    5.013 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:187(run)\n        2    0.000    0.000    4.661    2.330 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.115    0.115    4.369    4.369 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n    24576    0.093    0.000    3.465    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    24576    0.030    0.000    3.224    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:1520(translate)\n    24576    1.754    0.000    3.129    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2733(_translate_str)\n  7618560    0.650    0.000    0.650    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:413(__getitem__)\n  7534181    0.618    0.000    0.618    0.000 {method 'append' of 'list' objects}\n    32768    0.044    0.000    0.491    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:129(write)\n        1    0.163    0.163    0.291    0.291 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n    32768    0.022    0.000    0.246    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:41(open_output_append)\n    49216    0.099    0.000    0.241    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:61(fasta_records)\n        1    0.000    0.000    0.241    0.241 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.224    0.224 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.104    0.104    0.224    0.224 {method 'writerows' of '_csv.writer' objects}\n    32770    0.023    0.000    0.137    0.000 <frozen os>:1060(fdopen)\n    32768    0.137    0.000    0.137    0.000 {method 'close' of '_io.TextIOWrapper' objects}\n   245760    0.068    0.000    0.114    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:395(__contains__)\n     1536    0.002    0.000    0.109    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:32(safe_output_path)\n    32901    0.103    0.000    0.108    0.000 {built-in method _io.open}\n   466963    0.062    0.000    0.102    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n     3721    0.003    0.000    0.093    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n    49152    0.031    0.000    0.089    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2040(__init__)\n    32770    0.072    0.000    0.085    0.000 {built-in method posix.open}\n   284434    0.042    0.000    0.070    0.000 {built-in method builtins.isinstance}\n\n\n"
+          "profile": "         20190176 function calls (20188767 primitive calls) in 5.168 seconds\n\n   Ordered by: cumulative time\n   List reduced from 440 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.001    0.001    5.168    5.168 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:264(run)\n        2    0.000    0.000    4.823    2.412 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.126    0.126    4.494    4.494 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n    24576    0.098    0.000    3.532    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    24576    0.032    0.000    3.280    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:1520(translate)\n    24576    1.796    0.000    3.179    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2733(_translate_str)\n  7618560    0.647    0.000    0.647    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:413(__getitem__)\n  7534182    0.626    0.000    0.626    0.000 {method 'append' of 'list' objects}\n    32768    0.047    0.000    0.525    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:204(write)\n        1    0.186    0.186    0.329    0.329 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n    32768    0.023    0.000    0.259    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:43(open_output_append)\n    49216    0.103    0.000    0.252    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:63(fasta_records)\n        1    0.000    0.000    0.222    0.222 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.215    0.215 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.099    0.099    0.215    0.215 {method 'writerows' of '_csv.writer' objects}\n    32768    0.152    0.000    0.152    0.000 {method 'close' of '_io.TextIOWrapper' objects}\n    32770    0.024    0.000    0.141    0.000 <frozen os>:1060(fdopen)\n     1536    0.002    0.000    0.119    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:34(safe_output_path)\n   245760    0.071    0.000    0.116    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Data/CodonTable.py:395(__contains__)\n    32901    0.107    0.000    0.113    0.000 {built-in method _io.open}\n     3721    0.003    0.000    0.102    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n   466963    0.061    0.000    0.098    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    49152    0.033    0.000    0.093    0.000 /opt/conda/lib/python3.12/site-packages/Bio/Seq.py:2040(__init__)\n    32770    0.078    0.000    0.091    0.000 {built-in method posix.open}\n   284434    0.044    0.000    0.074    0.000 {built-in method builtins.isinstance}\n\n\n"
         }
       }
     },
@@ -202,72 +202,72 @@
       "records": 65536,
       "variants": {
         "baseline": {
-          "median_seconds": 2.245098710000093,
-          "median_peak_rss_bytes": 142348288,
+          "median_seconds": 2.31852870900002,
+          "median_peak_rss_bytes": 142344192,
           "trials": [
             {
-              "seconds": 2.380474167999864,
+              "seconds": 2.215608168000017,
               "phases": {
-                "__init__": 1.3705228339999849,
-                "extract": 0.7586066259998461
+                "__init__": 1.2909323750000112,
+                "extract": 0.6786564170000702
               },
-              "peak_rss_bytes": 142348288,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 142356480,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             },
             {
-              "seconds": 2.245098710000093,
+              "seconds": 2.31852870900002,
               "phases": {
-                "__init__": 1.3198843339998803,
-                "extract": 0.67094837500008
+                "__init__": 1.2549473340000077,
+                "extract": 0.7794285010000976
               },
-              "peak_rss_bytes": 142352384,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 142344192,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             },
             {
-              "seconds": 2.1752489579998837,
+              "seconds": 2.5474828760000037,
               "phases": {
-                "__init__": 1.2716644590000215,
-                "extract": 0.6541578750000099
+                "__init__": 1.537954291999995,
+                "extract": 0.7484170839999251
               },
-              "peak_rss_bytes": 142270464,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 142290944,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             }
           ],
-          "profile": "         51493929 function calls (51486423 primitive calls) in 9.156 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2278 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    9.162    9.162 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.001    0.001    8.589    4.295 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    1.142    1.142    5.420    5.420 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n  4259840    0.643    0.000    3.615    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:19(source_gene_id)\n        1    0.142    0.142    3.168    3.168 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n  4259941    1.080    0.000    2.973    0.000 /opt/conda/lib/python3.12/re/__init__.py:179(sub)\n    65536    0.105    0.000    2.681    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n    68012    1.080    0.000    2.490    0.000 {built-in method builtins.sum}\n 19726336    1.410    0.000    1.410    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n  4260366    0.892    0.000    1.293    0.000 /opt/conda/lib/python3.12/re/__init__.py:280(_compile)\n  4260043    0.608    0.000    0.608    0.000 {method 'sub' of 're.Pattern' objects}\n        1    0.000    0.000    0.557    0.557 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:239(write_selection_report)\n        1    0.000    0.000    0.542    0.542 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.246    0.246    0.542    0.542 {method 'writerows' of '_csv.writer' objects}\n  4315188    0.399    0.000    0.399    0.000 {built-in method builtins.isinstance}\n4628657/4628384    0.318    0.000    0.318    0.000 {built-in method builtins.len}\n  1245203    0.159    0.000    0.254    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    473/1    0.001    0.000    0.245    0.245 <frozen importlib._bootstrap>:1349(_find_and_load)\n    473/1    0.001    0.000    0.245    0.245 <frozen importlib._bootstrap>:1304(_find_and_load_unlocked)\n    458/1    0.001    0.000    0.245    0.245 <frozen importlib._bootstrap>:911(_load_unlocked)\n    388/1    0.000    0.000    0.245    0.245 <frozen importlib._bootstrap_external>:993(exec_module)\n   1109/3    0.001    0.000    0.245    0.082 <frozen importlib._bootstrap>:480(_call_with_frames_removed)\n    408/1    0.002    0.000    0.244    0.244 {built-in method builtins.exec}\n        1    0.000    0.000    0.244    0.244 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/collect_common_BUSCO_genes.py:1(<module>)\n        1    0.000    0.000    0.241    0.241 /opt/conda/lib/python3.12/site-packages/pandas/__init__.py:1(<module>)\n\n\n"
+          "profile": "         51493929 function calls (51486423 primitive calls) in 8.939 seconds\n\n   Ordered by: cumulative time\n   List reduced from 2278 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    8.946    8.946 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/batch_extract_busco_fasta.py:136(run)\n        2    0.001    0.001    8.364    4.182 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    1.158    1.158    5.486    5.486 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:57(__init__)\n  4259840    0.647    0.000    3.627    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:19(source_gene_id)\n  4259941    1.068    0.000    2.981    0.000 /opt/conda/lib/python3.12/re/__init__.py:179(sub)\n        1    0.146    0.146    2.877    2.877 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:164(extract)\n    65536    0.107    0.000    2.375    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:34(sequence_quality)\n    68012    1.102    0.000    2.178    0.000 {built-in method builtins.sum}\n  4260366    0.871    0.000    1.273    0.000 /opt/conda/lib/python3.12/re/__init__.py:280(_compile)\n 19726336    1.076    0.000    1.076    0.000 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:52(<genexpr>)\n  4260043    0.648    0.000    0.648    0.000 {method 'sub' of 're.Pattern' objects}\n        1    0.000    0.000    0.565    0.565 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/busco_copy_selection.py:239(write_selection_report)\n        1    0.000    0.000    0.550    0.550 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.253    0.253    0.550    0.550 {method 'writerows' of '_csv.writer' objects}\n  4315188    0.400    0.000    0.400    0.000 {built-in method builtins.isinstance}\n4628657/4628384    0.322    0.000    0.322    0.000 {built-in method builtins.len}\n    473/1    0.001    0.000    0.273    0.273 <frozen importlib._bootstrap>:1349(_find_and_load)\n    473/1    0.001    0.000    0.273    0.273 <frozen importlib._bootstrap>:1304(_find_and_load_unlocked)\n    458/1    0.001    0.000    0.273    0.273 <frozen importlib._bootstrap>:911(_load_unlocked)\n    388/1    0.000    0.000    0.273    0.273 <frozen importlib._bootstrap_external>:993(exec_module)\n   1109/3    0.001    0.000    0.273    0.091 <frozen importlib._bootstrap>:480(_call_with_frames_removed)\n    408/1    0.002    0.000    0.272    0.272 {built-in method builtins.exec}\n        1    0.000    0.000    0.272    0.272 /Users/kf/repos/genegalleon/workspace/output/benchmarks/busco-copy-selection-review-20261022/baseline-support/collect_common_BUSCO_genes.py:1(<module>)\n        1    0.000    0.000    0.268    0.268 /opt/conda/lib/python3.12/site-packages/pandas/__init__.py:1(<module>)\n  1245203    0.158    0.000    0.254    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n\n\n"
         },
         "current": {
-          "median_seconds": 0.6421286659999623,
-          "median_peak_rss_bytes": 90116096,
+          "median_seconds": 0.6516571669999394,
+          "median_peak_rss_bytes": 90148864,
           "trials": [
             {
-              "seconds": 0.6395851260001564,
+              "seconds": 0.6516571669999394,
               "phases": {
-                "__init__": 0.15171062500007793,
-                "extract": 0.23233666600003744
+                "__init__": 0.15456895899990286,
+                "extract": 0.2338001670000267
               },
-              "peak_rss_bytes": 90181632,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 90206208,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             },
             {
-              "seconds": 0.6421286659999623,
+              "seconds": 0.6474898750000193,
               "phases": {
-                "__init__": 0.1571659159999399,
-                "extract": 0.22919049999995877
+                "__init__": 0.15465462500003468,
+                "extract": 0.23203895799997554
               },
-              "peak_rss_bytes": 90116096,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 90148864,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             },
             {
-              "seconds": 0.668256958000029,
+              "seconds": 0.6853518750000376,
               "phases": {
-                "__init__": 0.17456587499987108,
-                "extract": 0.2386787089999416
+                "__init__": 0.16532941699995263,
+                "extract": 0.2564167499999712
               },
-              "peak_rss_bytes": 90116096,
-              "sha256": "ecf13a1c55c9cfe0cdeac822247ef5ced3c97cfbcb1cc023d96e6fadb998acf1"
+              "peak_rss_bytes": 90148864,
+              "sha256": "a8abf9edfc304fa6c91a17bdb2995ce9ab5f185cc0fb21c128a2150426f29348"
             }
           ],
-          "profile": "         5903477 function calls (5903215 primitive calls) in 1.606 seconds\n\n   Ordered by: cumulative time\n   List reduced from 271 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    1.606    1.606 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:187(run)\n        2    0.001    0.001    1.035    0.518 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.123    0.123    0.635    0.635 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n        1    0.000    0.000    0.540    0.540 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.526    0.526 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.244    0.244    0.526    0.526 {method 'writerows' of '_csv.writer' objects}\n        1    0.243    0.243    0.399    0.399 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n  1245203    0.153    0.000    0.243    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    65536    0.098    0.000    0.219    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    65544    0.094    0.000    0.187    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:61(fasta_records)\n  1246493    0.097    0.000    0.097    0.000 {method 'get' of 'dict' objects}\n   198658    0.053    0.000    0.072    0.000 {built-in method builtins.sorted}\n    65537    0.035    0.000    0.040    0.000 /opt/conda/lib/python3.12/csv.py:155(_dict_to_list)\n477900/477658    0.036    0.000    0.036    0.000 {built-in method builtins.len}\n    65536    0.023    0.000    0.034    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:21(source_gene_id)\n   131072    0.034    0.000    0.034    0.000 {method 'update' of 'dict' objects}\n   133437    0.031    0.000    0.031    0.000 {method 'split' of 'str' objects}\n   329505    0.030    0.000    0.030    0.000 {method 'join' of 'str' objects}\n      384    0.001    0.000    0.029    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:32(safe_output_path)\n    65543    0.028    0.000    0.028    0.000 {method 'translate' of 'str' objects}\n   202672    0.026    0.000    0.026    0.000 {method 'startswith' of 'str' objects}\n   264233    0.025    0.000    0.025    0.000 {method 'append' of 'list' objects}\n     1024    0.001    0.000    0.024    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:129(write)\n      921    0.001    0.000    0.024    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n     2712    0.001    0.000    0.021    0.000 /opt/conda/lib/python3.12/gzip.py:340(read1)\n\n\n"
+          "profile": "         5903478 function calls (5903216 primitive calls) in 1.524 seconds\n\n   Ordered by: cumulative time\n   List reduced from 271 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    1.524    1.524 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:264(run)\n        2    0.001    0.000    0.953    0.476 /Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_busco_copy_selection.py:91(timed)\n        1    0.119    0.119    0.626    0.626 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:187(extract)\n        1    0.000    0.000    0.541    0.541 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:263(write_selection_report)\n        1    0.000    0.000    0.527    0.527 /opt/conda/lib/python3.12/csv.py:166(writerows)\n        1    0.241    0.241    0.527    0.527 {method 'writerows' of '_csv.writer' objects}\n        1    0.197    0.197    0.326    0.326 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:59(__init__)\n  1245203    0.152    0.000    0.240    0.000 /opt/conda/lib/python3.12/csv.py:161(<genexpr>)\n    65536    0.099    0.000    0.219    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:36(sequence_quality)\n    65544    0.095    0.000    0.187    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:63(fasta_records)\n  1246493    0.096    0.000    0.096    0.000 {method 'get' of 'dict' objects}\n   198658    0.048    0.000    0.067    0.000 {built-in method builtins.sorted}\n    65537    0.040    0.000    0.046    0.000 /opt/conda/lib/python3.12/csv.py:155(_dict_to_list)\n   131072    0.033    0.000    0.033    0.000 {method 'update' of 'dict' objects}\n477900/477658    0.033    0.000    0.033    0.000 {built-in method builtins.len}\n   133437    0.030    0.000    0.030    0.000 {method 'split' of 'str' objects}\n    65543    0.028    0.000    0.028    0.000 {method 'translate' of 'str' objects}\n   329505    0.027    0.000    0.027    0.000 {method 'join' of 'str' objects}\n      384    0.001    0.000    0.027    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:34(safe_output_path)\n    65536    0.016    0.000    0.026    0.000 /Users/kf/repos/genegalleon/workflow/support/busco_copy_selection.py:21(source_gene_id)\n   202672    0.025    0.000    0.025    0.000 {method 'startswith' of 'str' objects}\n   264234    0.023    0.000    0.023    0.000 {method 'append' of 'list' objects}\n      921    0.001    0.000    0.023    0.000 /opt/conda/lib/python3.12/pathlib.py:1228(resolve)\n     1024    0.001    0.000    0.022    0.000 /Users/kf/repos/genegalleon/workflow/support/batch_extract_busco_fasta.py:204(write)\n     2712    0.001    0.000    0.021    0.000 /opt/conda/lib/python3.12/gzip.py:340(read1)\n\n\n"
         }
       }
     }

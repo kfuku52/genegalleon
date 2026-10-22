@@ -46,7 +46,10 @@ class GuardSpill:
             self.database.execute('PRAGMA journal_mode=OFF')
             self.database.execute('PRAGMA synchronous=OFF')
             self.database.execute('PRAGMA cache_size=-4096')
-            self.database.execute('CREATE TABLE guards (key BLOB PRIMARY KEY, identity BLOB NOT NULL, reader INTEGER NOT NULL UNIQUE) WITHOUT ROWID')
+            # Keep the key index separate from potentially multi-megabyte
+            # inventory identities. A WITHOUT ROWID index carries those large
+            # payloads through unrelated key lookups and insertion paths.
+            self.database.execute('CREATE TABLE guards (key BLOB PRIMARY KEY NOT NULL, identity BLOB NOT NULL, reader INTEGER NOT NULL UNIQUE)')
         except BaseException:
             self.close()
             raise

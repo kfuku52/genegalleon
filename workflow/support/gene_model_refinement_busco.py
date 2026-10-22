@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import fcntl
 import gzip
@@ -13,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -393,6 +395,203 @@ def phases(pair):
     return ("pre_rescue", "before", "after") if "pre_rescue" in pair else ("before", "after")
 
 
+PROTEIN_TRANSLATION_POLICY = {
+    "schema": 1, "frame": 0, "terminal_stop": "remove_one",
+    "partial_terminal_codon": "reject", "internal_stop": "reject",
+    "invalid_base": "reject", "ambiguous_codon": "IUPAC_translation_or_X",
+    "partial_start_or_stop": "retain_without_inventing_residues",
+    "identifier": "preserve_first_header_token", "duplicate_identifier": "reject",
+    "context_dependent_genetic_code": "reject",
+}
+
+
+def protein_genetic_code(value):
+    from Bio.Data import CodonTable
+
+    if type(value) is not int or value not in CodonTable.unambiguous_dna_by_id:
+        raise ValueError("Unsupported protein translation genetic code: " + str(value))
+    table = CodonTable.unambiguous_dna_by_id[value]
+    if set(table.stop_codons) & table.forward_table.keys():
+        raise ValueError("Context-dependent genetic code cannot be inferred from CDS alone: " + str(value))
+    return table
+
+
+def read_genetic_codes(pairs, root, path=None):
+    """Use frozen native codes and explicit prepared codes for CDS-only species."""
+    plan_path = root / "plan.json"
+    plan_hash = digest(plan_path)
+    native = json.loads(plan_path.read_text())["request"]["sources"]
+    codes = {pair["species"]: native[pair["species"]]["genetic_code"]
+             for pair in pairs if pair["species"] in native}
+    if path is not None:
+        path = Path(path)
+        before = digest(path)
+        with path.open(newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            fields = reader.fieldnames or []
+            species_field = "species" if "species" in fields else "species_prefix"
+            code_field = "genetic_code" if "genetic_code" in fields else "nuclear_genetic_code_id"
+            if species_field not in fields or code_field not in fields:
+                raise ValueError("Genetic-code TSV needs species/genetic_code or species_prefix/nuclear_genetic_code_id")
+            seen = set()
+            wanted = {pair["species"] for pair in pairs}
+            for row in reader:
+                name = row[species_field]
+                if not name or name in seen:
+                    raise ValueError("Missing/duplicate species in genetic-code TSV")
+                seen.add(name)
+                if name not in wanted:
+                    continue
+                raw = row[code_field]
+                if not raw or not re.fullmatch(r"[1-9][0-9]*", raw):
+                    raise ValueError("Missing/invalid genetic code: " + name)
+                code = int(raw)
+                protein_genetic_code(code)
+                if name in codes and codes[name] != code:
+                    raise ValueError("Genetic code differs from the frozen refinement plan: " + name)
+                codes[name] = code
+        if digest(path) != before:
+            raise OSError("Genetic-code TSV changed while loading")
+    if digest(plan_path) != plan_hash:
+        raise OSError("Refinement plan changed while loading genetic codes")
+    missing = sorted({pair["species"] for pair in pairs} - codes.keys())
+    if missing:
+        raise ValueError("Protein mode requires explicit genetic codes for CDS-only species: " + ", ".join(missing))
+    for code in codes.values():
+        protein_genetic_code(code)
+    return codes
+
+
+def translate_cds(source, destination, genetic_code, source_hash=None):
+    """Audit declared-frame CDS; any rejected record prevents BUSCO admission."""
+    from Bio.Seq import Seq
+    from fasta_sequence_store import fasta_records
+
+    table = protein_genetic_code(genetic_code)
+    source_hash = source_hash or digest(source)
+    counts, invalid, seen = Counter(), [], set()
+    with destination.open("w", encoding="ascii", newline="\n") as output:
+        for identifier, _header, sequence in fasta_records(Path(source)):
+            counts["records"] += 1
+            sequence = sequence.upper()
+            reasons = []
+            if identifier in seen:
+                reasons.append("duplicate_identifier")
+            seen.add(identifier)
+            if not sequence:
+                reasons.append("empty_sequence")
+            if len(sequence) % 3:
+                reasons.append("partial_terminal_codon")
+            if set(sequence) - set("ACGTRYSWKMBDHVN"):
+                reasons.append("invalid_base")
+            peptide = (str(Seq(sequence[:len(sequence) // 3 * 3]).translate(table=genetic_code))
+                       if len(sequence) >= 3 and "invalid_base" not in reasons else "")
+            if "*" in peptide.removesuffix("*"):
+                reasons.append("internal_stop")
+            if not peptide.removesuffix("*"):
+                reasons.append("empty_protein")
+            counts["without_start_codon"] += sequence[:3] not in table.start_codons
+            counts["without_terminal_stop"] += len(sequence) % 3 != 0 or sequence[-3:] not in table.stop_codons
+            counts["ambiguous_sequence"] += bool(set(sequence) - set("ACGT"))
+            if reasons:
+                invalid.append({"identifier": identifier, "reasons": reasons})
+                counts.update(reasons)
+                continue
+            counts["translated"] += 1
+            counts["terminal_stop_removed"] += peptide.endswith("*")
+            output.write(">" + identifier + "\n" + peptide.removesuffix("*") + "\n")
+    if digest(source) != source_hash:
+        raise OSError("CDS changed during protein translation")
+    return {"schema": 1, "policy": PROTEIN_TRANSLATION_POLICY, "genetic_code": genetic_code,
+            "source_sha256": source_hash, "protein_sha256": digest(destination),
+            "counts": dict(counts), "invalid_records": invalid,
+            "status": "rejected" if invalid or not counts["records"] else "translated"}
+
+
+def _validate_admitted_input(descriptor, source_hash, genetic_code, *, species=None, phase=None):
+    """Bind existing admission output to its DNA collection and audit."""
+    from fasta_sequence_store import fasta_records
+    from refinement_busco_inputs import ADMITTED_PROTEIN_POLICY
+
+    fields = {"protein_path", "audit_path", "protein_sha256", "audit_sha256", "source_sha256", "policy"}
+    if (not isinstance(descriptor, dict) or set(descriptor) != fields
+            or descriptor["source_sha256"] != source_hash or descriptor["policy"] != ADMITTED_PROTEIN_POLICY):
+        raise ValueError("Admitted protein input identity differs from its DNA collection")
+    protein, audit_path = Path(descriptor["protein_path"]), Path(descriptor["audit_path"])
+    if digest(protein) != descriptor["protein_sha256"] or digest(audit_path) != descriptor["audit_sha256"]:
+        raise ValueError("Admitted protein input/audit changed")
+    audit = json.loads(audit_path.read_text())
+    counts = audit.get("counts", {})
+    excluded = audit.get("excluded_records")
+    if (audit.get("schema") != 1 or audit.get("status") != "translated"
+            or (species is not None and audit.get("species") != species)
+            or (phase is not None and audit.get("phase") != phase)
+            or audit.get("policy") != ADMITTED_PROTEIN_POLICY or audit.get("genetic_code") != genetic_code
+            or audit.get("source_sha256") != source_hash or audit.get("protein_sha256") != descriptor["protein_sha256"]
+            or not isinstance(excluded, list)
+            or any(type(counts.get(k)) is not int or counts[k] < 0 for k in ("records", "included", "excluded"))
+            or counts["included"] < 1 or counts["records"] != counts["included"] + counts["excluded"]
+            or counts["excluded"] != len(excluded)
+            or any(not isinstance(row, dict) or not row.get("source_fasta_id") or not row.get("reason") for row in excluded)):
+        raise ValueError("Admitted protein audit differs from its contracted input")
+    seen = set()
+    for identifier, _header, sequence in fasta_records(protein):
+        if (identifier in seen or not sequence or set(sequence) - set("ACDEFGHIKLMNPQRSTVWYBXZJUO")):
+            raise ValueError("Malformed admitted protein collection")
+        seen.add(identifier)
+    if len(seen) != counts["included"]:
+        raise ValueError("Admitted protein count differs from its audit")
+    if digest(audit_path) != descriptor["audit_sha256"] or digest(protein) != descriptor["protein_sha256"]:
+        raise OSError("Admitted protein input/audit changed during verification")
+    return audit
+
+
+def protein_input_identity(pair, phase, contract, source_hash):
+    """Use one leaf identity for scheduling, execution and verified reuse."""
+    key = {"contract": contract, "source_sha256": source_hash}
+    admitted = contract.get("translation", {}).get("input_kind") == "admitted"
+    if admitted:
+        from refinement_busco_inputs import ADMITTED_PROTEIN_POLICY
+        if contract.get("mode") != "proteins" or contract["translation"].get("policy") != ADMITTED_PROTEIN_POLICY:
+            raise ValueError("Admitted inputs require an admitted protein contract")
+        descriptor = pair.get("protein_inputs", {}).get(phase)
+        if descriptor is None:
+            raise ValueError("Missing admitted protein input: " + pair["species"] + "/" + phase)
+        key["protein_input"] = descriptor
+    elif pair.get("protein_inputs") is not None:
+        raise ValueError("Admitted inputs require an admitted protein contract")
+    return key
+
+
+def verify_translation(directory, receipt):
+    for filename, key in (("protein.faa", "protein_sha256"), ("translation_audit.json", "translation_audit_sha256")):
+        path = directory / filename
+        if not path.is_file() or digest(path) != receipt.get(key):
+            raise ValueError("BUSCO translated input/audit changed; use a new report directory")
+    audit = json.loads((directory / "translation_audit.json").read_text())
+    code = receipt["key"]["contract"]["translation"]["genetic_codes"][directory.parent.name]
+    if receipt["key"]["contract"]["translation"].get("input_kind") == "admitted":
+        descriptor = receipt["key"].get("protein_input")
+        original = _validate_admitted_input(descriptor, receipt["key"]["source_sha256"], code,
+                                             species=directory.parent.name, phase=directory.name)
+        if (audit != original or receipt["protein_sha256"] != descriptor["protein_sha256"]
+                or receipt["translation_audit_sha256"] != descriptor["audit_sha256"]):
+            raise ValueError("Retained admitted protein/audit differs from its contracted input")
+        return
+    if (audit.get("status") != "translated" or audit.get("invalid_records")
+            or audit.get("policy") != PROTEIN_TRANSLATION_POLICY or audit.get("genetic_code") != code
+            or audit.get("source_sha256") != receipt["key"]["source_sha256"]
+            or audit.get("protein_sha256") != receipt["protein_sha256"]):
+        raise ValueError("BUSCO translation audit differs from its contracted input")
+
+
+def contracted_result(path, contract):
+    result = read_result(path)
+    if contract.get("mode") == "proteins" and result["mode"] != "proteins":
+        raise ValueError("BUSCO summary does not match the requested protein mode")
+    return result
+
+
 def read_result(path):
     text = path.read_text()
     row = parse_short_summary(text, path)
@@ -439,14 +638,15 @@ def staged_result(pair, before, after, pre_rescue=None):
     return row
 
 
-def run_one(pair, phase, report, contract, cpus):
+def _run_one(pair, phase, report, contract, cpus):
     source = Path(pair[phase])
     source_hash = digest(source)
-    key = {"contract": contract, "source_sha256": source_hash}
+    key = protein_input_identity(pair, phase, contract, source_hash)
     directory = report / "runs" / pair["species"] / phase
     directory.mkdir(parents=True, exist_ok=True)
     summary, receipt = directory / "summary.txt", directory / "receipt.json"
     full_table = directory / "full_table.tsv"
+    protein_mode = contract.get("mode", "transcriptome") == "proteins"
     with (directory / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if receipt.exists():
@@ -454,7 +654,9 @@ def run_one(pair, phase, report, contract, cpus):
             if (saved["key"] != key or digest(summary) != saved["summary_sha256"]
                     or not full_table.is_file() or digest(full_table) != saved.get("full_table_sha256")):
                 raise ValueError("BUSCO cache changed; use a new report directory")
-            return read_result(summary)
+            if protein_mode:
+                verify_translation(directory, saved)
+            return contracted_result(summary, contract)
         # Reuse only exact bytes under the same complete BUSCO contract.
         previous = report / "runs" / pair["species"] / ("pre_rescue" if phase == "before" and "pre_rescue" in pair else "before")
         if phase != phases(pair)[0] and (previous / "receipt.json").exists():
@@ -462,21 +664,53 @@ def run_one(pair, phase, report, contract, cpus):
             if (saved["key"] == key and digest(previous / "summary.txt") == saved["summary_sha256"]
                     and (previous / "full_table.tsv").is_file()
                     and digest(previous / "full_table.tsv") == saved.get("full_table_sha256")):
+                translation = {}
+                if protein_mode:
+                    verify_translation(previous, saved)
+                    for filename in ("protein.faa", "translation_audit.json"):
+                        shutil.copyfile(previous / filename, directory / filename)
+                    translation = {key: digest(directory / filename) for filename, key in
+                                   (("protein.faa", "protein_sha256"), ("translation_audit.json", "translation_audit_sha256"))}
                 shutil.copyfile(previous / "summary.txt", summary)
                 shutil.copyfile(previous / "full_table.tsv", full_table)
                 atomic_json(receipt, {"key": key, "summary_sha256": digest(summary),
-                                      "full_table_sha256": digest(full_table), "reused_identical_before": True})
-                return read_result(summary)
+                                      "full_table_sha256": digest(full_table), "reused_identical_before": True,
+                                      **translation})
+                return contracted_result(summary, contract)
         # Preserve small QC tables and logs; discard large temporary predictor files.
         with tempfile.TemporaryDirectory(prefix="gg-refinement-busco-") as scratch:
             scratch = Path(scratch)
-            opener = gzip.open if source.suffix == ".gz" else open
-            with opener(source, "rb") as src, (scratch / "input.fasta").open("wb") as dst:
-                shutil.copyfileobj(src, dst)
+            translation = {}
+            if protein_mode:
+                code = contract["translation"]["genetic_codes"][pair["species"]]
+                if "protein_input" in key:
+                    descriptor = key["protein_input"]
+                    audit = _validate_admitted_input(descriptor, source_hash, code,
+                                                     species=pair["species"], phase=phase)
+                    shutil.copyfile(descriptor["protein_path"], scratch / "input.fasta")
+                    if digest(scratch / "input.fasta") != descriptor["protein_sha256"]:
+                        raise OSError("Admitted protein input changed during copying")
+                else:
+                    audit = translate_cds(source, scratch / "input.fasta", code, source_hash)
+                if "protein_input" in key:
+                    shutil.copyfile(descriptor["audit_path"], directory / "translation_audit.json")
+                    if digest(directory / "translation_audit.json") != descriptor["audit_sha256"]:
+                        raise OSError("Admitted protein audit changed during copying")
+                else:
+                    atomic_json(directory / "translation_audit.json", audit)
+                if audit["status"] != "translated":
+                    raise ValueError("Protein translation rejected CDS; inspect translation_audit.json: " + pair["species"] + "/" + phase)
+                shutil.copyfile(scratch / "input.fasta", directory / "protein.faa")
+                translation = {"protein_sha256": digest(directory / "protein.faa"),
+                               "translation_audit_sha256": digest(directory / "translation_audit.json")}
+            else:
+                opener = gzip.open if source.suffix == ".gz" else open
+                with opener(source, "rb") as src, (scratch / "input.fasta").open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
             support = Path(__file__).resolve().parent
             command = ["bash", "-c", 'source "$1"; gg_run_busco_with_metaeuk_modified_fas_compat "${@:2}"',
                        "gg-busco", str(support / "gg_busco.sh"), "--in", str(scratch / "input.fasta"),
-                       "--mode", "transcriptome", "--out", "busco", "--out_path", str(scratch),
+                       "--mode", contract.get("mode", "transcriptome"), "--out", "busco", "--out_path", str(scratch),
                        "--cpu", str(cpus), "--evalue", "1e-03", "--limit", "20", "--offline",
                        "--lineage_dataset", contract["lineage_path"], "--download_path", contract["download_path"]]
             with (directory / "busco.log").open("w") as log:
@@ -496,10 +730,23 @@ def run_one(pair, phase, report, contract, cpus):
                     shutil.copyfileobj(src, dst)
         if digest(source) != source_hash:
             raise OSError("BUSCO input mutated during evaluation")
-        result = read_result(summary)
+        if "protein_input" in key:
+            _validate_admitted_input(key["protein_input"], source_hash, code,
+                                     species=pair["species"], phase=phase)
+        result = contracted_result(summary, contract)
         atomic_json(receipt, {"key": key, "summary_sha256": digest(summary),
-                              "full_table_sha256": digest(full_table), "reused_identical_before": False})
+                              "full_table_sha256": digest(full_table), "reused_identical_before": False,
+                              **translation})
         return result
+
+
+def run_one(pair, phase, report, contract, cpus, *, reuse=None):
+    if contract.get("mode") == "proteins" and cpus != contract.get("cpus_per_job", cpus):
+        raise ValueError("BUSCO CPU count differs from its frozen computation contract")
+    if reuse is not None and not (Path(report) / "runs" / pair["species"] / phase / "receipt.json").exists():
+        from refinement_busco_reuse import reuse_previous
+        reuse_previous(pair, phase, report, contract, reuse, globals())
+    return _run_one(pair, phase, report, contract, cpus)
 
 
 def collect_model_changes(root, pairs, rescue_output=None):
@@ -1181,6 +1428,11 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
             paths.extend([pair[phase], directory / "receipt.json", directory / "summary.txt"])
             if (directory / "full_table.tsv").is_file():
                 paths.append(directory / "full_table.tsv")
+            if frozen["contract"].get("mode") == "proteins":
+                paths.extend([directory / "protein.faa", directory / "translation_audit.json"])
+                if "protein_inputs" in pair:
+                    descriptor = pair["protein_inputs"][phase]
+                    paths.extend([descriptor["protein_path"], descriptor["audit_path"]])
     hashes = boundary.read(paths)
     verified_tables = 0
     for row in rows:
@@ -1204,6 +1456,11 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
                 if hashes.get(str(directory / "full_table.tsv")) != saved["full_table_sha256"]:
                     raise ValueError("Comparison full table changed")
                 verified_tables += 1
+            if frozen["contract"].get("mode") == "proteins":
+                if saved["key"] != protein_input_identity(pair, phase, frozen["contract"], hashes[str(pair[phase])]):
+                    raise ValueError("Comparison admitted protein identity changed")
+                verify_translation(directory, saved)
+                contracted_result(directory / "summary.txt", frozen["contract"])
         if staged_result(pair, row["before_result"], row["after_result"], row.get("pre_rescue_result")) != row:
             raise ValueError("Comparison delta changed")
     changes = collect_model_changes(root, rows, rescue_output) if root is not None else None
@@ -1224,31 +1481,80 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     return rows
 
 
-def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_changes=None):
+def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_changes=None,
+             mode="transcriptome", genetic_codes=None, protein_inputs=None,
+             reuse_report=None, reuse_producer=None):
     if not pairs:
         raise ValueError("Empty BUSCO comparison")
+    if mode not in {"transcriptome", "proteins"}:
+        raise ValueError("Unsupported BUSCO mode: " + str(mode))
+    if mode == "proteins":
+        if not isinstance(genetic_codes, dict) or set(genetic_codes) != {pair["species"] for pair in pairs}:
+            raise ValueError("Protein mode requires one genetic code for every species")
+        for code in genetic_codes.values():
+            protein_genetic_code(code)
+    elif genetic_codes is not None:
+        raise ValueError("Genetic codes are used only in explicit protein mode")
+    if protein_inputs is not None:
+        if mode != "proteins":
+            raise ValueError("Admitted inputs require protein mode")
+        if (not isinstance(protein_inputs, dict)
+                or set(protein_inputs) != {pair["species"] for pair in pairs}
+                or any(not isinstance(protein_inputs[pair["species"]], dict)
+                       or set(protein_inputs[pair["species"]]) != set(phases(pair))
+                       or any(not isinstance(protein_inputs[pair["species"]][phase], dict)
+                              for phase in phases(pair)) for pair in pairs)):
+            raise ValueError("Admitted protein inputs must cover every species and phase")
+        pairs = [dict(pair, protein_inputs=copy.deepcopy(protein_inputs[pair["species"]])) for pair in pairs]
+    elif any("protein_inputs" in pair for pair in pairs):
+        raise ValueError("Provide admitted protein inputs explicitly")
     report.mkdir(parents=True, exist_ok=True)
     files = sorted(p for p in lineage.rglob("*") if p.is_file() and not p.name.startswith("."))
     if not (lineage / "dataset.cfg").is_file() or not files:
         raise ValueError("A complete local BUSCO lineage is required")
     batch = FreshDigestBatch()
     hashes = batch.read(files)
-    batch.read([pair[phase] for pair in pairs for phase in phases(pair)])
+    source_hashes = batch.read([pair[phase] for pair in pairs for phase in phases(pair)])
+    if protein_inputs is not None:
+        batch.read([pair["protein_inputs"][phase][field]
+                    for pair in pairs for phase in phases(pair) for field in ("protein_path", "audit_path")])
+        for pair in pairs:
+            for phase in phases(pair):
+                _validate_admitted_input(pair["protein_inputs"][phase], source_hashes[str(pair[phase])],
+                                         genetic_codes[pair["species"]], species=pair["species"], phase=phase)
     lineage_hash = hashlib.sha256(json.dumps({str(p.relative_to(lineage)): hashes[str(p)] for p in files}, sort_keys=True).encode()).hexdigest()
     version = subprocess.check_output(["busco", "--version"], text=True).strip()
     support = Path(__file__).resolve().parent
     contract = {"schema": 1, "busco_version": version, "lineage_sha256": lineage_hash,
                 "lineage_path": str(lineage), "download_path": str(download_path),
-                "mode": "transcriptome", "evalue": "1e-03", "limit": 20,
+                "mode": mode, "evalue": "1e-03", "limit": 20,
                 "cpus_per_job": cpus,
                 "tool_sha256": {tool: digest(shutil.which(tool)) for tool in ("busco", "metaeuk", "hmmsearch")},
                 "implementation": digest(Path(__file__)), "wrapper_sha256": digest(support / "gg_busco.sh"),
                 "hmmsearch_wrapper_sha256": digest(support / "gg_wrapper_bin/hmmsearch")}
+    if mode == "proteins":
+        import Bio
+        import Bio.Seq
+        from Bio.Data import CodonTable
+        contract["translation"] = {"policy": PROTEIN_TRANSLATION_POLICY, "genetic_codes": genetic_codes,
+                                   "biopython_version": Bio.__version__,
+                                   "module_sha256": {"Bio.Seq": digest(Bio.Seq.__file__),
+                                                     "Bio.Data.CodonTable": digest(CodonTable.__file__)}}
+        if protein_inputs is not None:
+            from refinement_busco_inputs import ADMITTED_PROTEIN_POLICY
+            contract["translation"].update(input_kind="admitted", policy=ADMITTED_PROTEIN_POLICY)
+    runner = run_one
+    if reuse_report is not None or reuse_producer is not None:
+        from functools import partial
+
+        from refinement_busco_reuse import prepare_reuse
+        reuse = prepare_reuse(reuse_report, reuse_producer, contract, Path(__file__))
+        runner = partial(run_one, reuse=reuse)
     atomic_json(report / "contract.json", {"contract": contract, "pairs": pairs}, immutable=True)
     def one(pair):
-        pre_rescue = run_one(pair, "pre_rescue", report, contract, cpus) if "pre_rescue" in pair else None
-        before = run_one(pair, "before", report, contract, cpus)
-        after = run_one(pair, "after", report, contract, cpus)
+        pre_rescue = runner(pair, "pre_rescue", report, contract, cpus) if "pre_rescue" in pair else None
+        before = runner(pair, "before", report, contract, cpus)
+        after = runner(pair, "after", report, contract, cpus)
         row = staged_result(pair, before, after, pre_rescue)
         print(json.dumps({"species": pair["species"], "delta_complete": row["delta_complete"]}), flush=True)
         return row
@@ -1310,9 +1616,28 @@ def main():
     parser.add_argument("--download-path", type=Path)
     parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
     parser.add_argument("--three-stage", action="store_true", help="Compare pre-rescue, rescued CDS and refined representatives under one BUSCO contract")
+    parser.add_argument("--mode", choices=("transcriptome", "proteins"),
+                        help="BUSCO assessment mode; default transcriptome")
+    parser.add_argument("--genetic-codes", type=Path,
+                        help="Explicit species/genetic_code TSV; native codes must agree with the frozen plan")
+    parser.add_argument("--protein-input-policy", choices=("strict", "admitted"),
+                        help="Strict frame-zero translation (default), or existing native protein admission")
+    parser.add_argument("--reuse-report", type=Path, help="Completed admitted-protein BUSCO report for verified reuse")
+    parser.add_argument("--reuse-producer", type=Path,
+                        help="Exact report producer Python file bound to the previous computation contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
+    mode = args.mode or "transcriptome"
+    if args.genetic_codes is not None and mode != "proteins":
+        parser.error("--genetic-codes is used only with --mode proteins")
+    policy = args.protein_input_policy or "strict"
+    if policy != "strict" and mode != "proteins":
+        parser.error("--protein-input-policy admitted requires --mode proteins")
+    if bool(args.reuse_report) != bool(args.reuse_producer):
+        parser.error("Supply both --reuse-report and --reuse-producer")
+    if args.reuse_report and (mode != "proteins" or policy != "admitted"):
+        parser.error("Previous-report reuse requires --mode proteins --protein-input-policy admitted")
     swiss_settings = (args.swissprot_db_prefix, args.swissprot_metadata, args.swissprot_cache)
     if any(swiss_settings) and not all(swiss_settings):
         parser.error("Supply all three Swiss-Prot DB, metadata and cache paths")
@@ -1327,7 +1652,8 @@ def main():
     if (args.rescue_output or args.rescue_evidence_dir or args.rescue_swissprot_dir or any(swiss_settings)) and not args.output:
         parser.error("Rescue support/evidence requires --output to bind it to the source annotation")
     if args.plot_only:
-        if args.lineage or args.download_path or args.cds_dir:
+        if (args.lineage or args.download_path or args.cds_dir or args.mode or args.genetic_codes
+                or args.protein_input_policy or args.reuse_report or args.reuse_producer):
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
         render_existing(report, root, args.rescue_output,
                         args.rescue_evidence_dir, args.rescue_swissprot_dir, swissprot_options=args)
@@ -1342,7 +1668,14 @@ def main():
         add_pre_rescue_pairs(pairs, changes)
     collect_rescue_repeat_evidence(changes, args.rescue_evidence_dir)
     connect_rescue_swissprot(changes, args.rescue_swissprot_dir, report=report, options=args)
-    evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs, model_changes=changes)
+    codes = read_genetic_codes(pairs, root, args.genetic_codes) if mode == "proteins" else None
+    protein_inputs = None
+    if policy == "admitted":
+        from refinement_busco_inputs import prepare_admitted_protein_inputs
+        protein_inputs = prepare_admitted_protein_inputs(pairs, root, report / "admitted_inputs", codes)
+    evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs,
+             model_changes=changes, mode=mode, genetic_codes=codes, protein_inputs=protein_inputs,
+             reuse_report=args.reuse_report, reuse_producer=args.reuse_producer)
 
 
 if __name__ == "__main__":

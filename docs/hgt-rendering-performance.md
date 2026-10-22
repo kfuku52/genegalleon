@@ -133,3 +133,12 @@ whole-project speed. Integration tests compare serial and concurrent native
 PDFs under the same RNG state after removing only creation/modification dates,
 and verify unchanged
 completed outputs on resume.
+
+Focused native tree batches install the complete bundled `genegalleon.treevis`
+package with `R CMD INSTALL` into a private temporary R library before rendering.
+That child process places this library before the image's installed copy, so a
+mounted workflow uses its own package revision even with a qualified older SIF.
+The library is shared by the bounded batch and removed afterwards; the SIF,
+global R libraries, scientific inputs and previous outputs remain unchanged.
+Installation failure stops the batch instead of falling back to another package.
+The package source directory remains a declared focus-provenance input.

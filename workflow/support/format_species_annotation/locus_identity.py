@@ -14,9 +14,10 @@ from format_species_writers import open_text
 
 from .common import parse_gff_attributes
 
-VERSION = 3
+VERSION = 5
 ANCHORS = frozenset({"gene", "pseudogene", "mrna", "rna", "transcript", "primary_transcript"})
 REFERENCES = frozenset({"Parent", "Derives_from", "gene_id", "gene", "locus_tag", "transcript_id"})
+ALIGNMENT_EVIDENCE = frozenset({"expressed_sequence_match", "cdna_match", "nucleotide_match", "protein_match", "match", "match_part"})
 MARKER = "##genegalleon-locus-identity version="
 
 
@@ -92,9 +93,27 @@ def rewrite_attributes(text, replacements):
 
 def normalise_locus_ids(source, scratch):
     anchors, ids, protected, coarse_leaves = defaultdict(dict), set(), set(), defaultdict(set)
+    rna_candidates = []
+    cds_parents = set()
+    alignment_ids, other_ids, referenced_ids = set(), set(), set()
     for number, fields, attrs in rows(source):
         values = attrs.get("ID", ())
         ids.update(values)
+        # Alignment evidence is not a gene model. Preserve its discontinuous
+        # source records, including strand changes, only when its namespace is
+        # isolated from every model/identity reference in the complete GFF.
+        isolated_alignment = (fields[2].lower() in ALIGNMENT_EVIDENCE
+            and len(attrs.get("Target", ())) == 1
+            and not any(attrs.get(key) for key in REFERENCES))
+        (alignment_ids if isolated_alignment else other_ids).update(values)
+        for key in REFERENCES:
+            referenced_ids.update(attrs.get(key, ()))
+        if fields[2].lower() == "cds":
+            cds_parents.update(attrs.get("Parent", ()))
+        if (fields[2].lower() == "mrna" and len(values) == 1
+                and attrs.get("Parent") == values and len(attrs.get("Name", ())) == 1
+                and attrs["Name"] != values):
+            rna_candidates.append((number, fields, attrs))
         if (attrs.get("part") or attrs.get("number") or attrs.get("exception")
                 or any(value.lower() == "true" for value in attrs.get("is_ordered", ()))):
             protected.update(values)
@@ -105,6 +124,19 @@ def normalise_locus_ids(source, scratch):
         elif len(values) == 1:
             coarse_leaves[values[0]].add((fields[2].lower(), leaf_geometry(fields, attrs),
                                         tuple(sorted(attrs.get("Parent", ())))))
+
+    alignment_ids.difference_update(other_ids | referenced_ids)
+    del other_ids, referenced_ids
+    for identifier in alignment_ids:
+        coarse_leaves.pop(identifier, None)
+
+    rna_candidates = [item for item in rna_candidates if item[2]["Name"][0] in cds_parents]
+    if rna_candidates:
+        from .rna_parent_names import repair_rna_parent_names
+        view, rna_mappings = repair_rna_parent_names(source, scratch, rna_candidates, anchors, ids, protected)
+        if rna_mappings:
+            result, audit = normalise_locus_ids(view, scratch)
+            return result, {**audit, "status": "repaired", "mappings": rna_mappings + audit["mappings"]}
 
     while True:
         previous = len(protected)
@@ -193,7 +225,7 @@ def normalise_locus_ids(source, scratch):
                         if gene_scope is not None:
                             coding.add((gene, gene_scope))
         values = attrs.get("ID", ())
-        if len(values) != 1 or fields[2].lower() in ANCHORS:
+        if len(values) != 1 or fields[2].lower() in ANCHORS or values[0] in alignment_ids:
             continue
         scope = (fields[2].lower(), leaf_geometry(fields, attrs), bound)
         record = leaves[values[0]].setdefault(scope, dict(line=number, start=int(fields[3]), end=int(fields[4]), blocks=set()))

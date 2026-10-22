@@ -27,6 +27,8 @@ from annevo_model_selection import (
 )
 from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
+from format_species_annotation.common import normalize_gff_attribute_value, parse_gff_attributes
+from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
 
@@ -77,12 +79,37 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,
     return data
 
 
+def _gff_identities(text):
+    """Decode structural identities without parsing unrelated native metadata."""
+    first = text.lstrip().split(';', 1)[0]
+    first_key = first.split('=', 1)[0]
+    if '=' not in first or first_key != first_key.strip() or len(first_key.split()) != 1:
+        attrs = parse_gff_attributes(text)
+        return attrs.get('ID', ()), attrs.get('Parent', ())
+    ids, parents = [], []
+    for field in text.split(';'):
+        key, separator, value = field.strip().partition('=')
+        if key.strip() in {'ID', 'Parent'} and key != key.strip():
+            attrs = parse_gff_attributes(text)
+            return attrs.get('ID', ()), attrs.get('Parent', ())
+        target = ids if key == 'ID' else parents if key == 'Parent' else None
+        if target is None or not separator:
+            continue
+        for raw in value.split(','):
+            normalized = normalize_gff_attribute_value(raw)
+            if normalized:
+                target.append(normalized)
+    return ids, parents
+
+
 def gff_counts(path):
     counts = {}
     identifiers = set()
     parents = set()
     with Path(path).open() as stream:
         for line in stream:
+            if line.rstrip('\r\n') == '##FASTA':
+                break
             if not line.strip() or line.startswith("#"):
                 continue
             fields = line.rstrip("\n").split("\t")
@@ -90,34 +117,39 @@ def gff_counts(path):
                 raise RuntimeError("ANNEVO emitted invalid GFF coordinates")
             if fields[6] not in {"+", "-"} or (fields[2] == "CDS" and fields[7] not in {"0", "1", "2"}):
                 raise RuntimeError("ANNEVO emitted invalid GFF strand or CDS phase")
-            attrs = dict(item.split("=", 1) for item in fields[8].split(";") if "=" in item)
-            if attrs.get("ID"):
-                if attrs["ID"] in identifiers:
+            ids, row_parents = _gff_identities(fields[8])
+            if ids:
+                if len(ids) != 1 or ids[0] in identifiers:
                     raise RuntimeError("ANNEVO emitted duplicate feature identifiers")
-                identifiers.add(attrs["ID"])
-            parents.update(attrs.get("Parent", "").split(","))
+                identifiers.add(ids[0])
+            parents.update(row_parents)
             counts[fields[2]] = counts.get(fields[2], 0) + 1
     if not counts.get("gene") or not counts.get("CDS") or parents - identifiers - {""}:
         raise RuntimeError("ANNEVO GFF lacks genes/CDS or has unresolved parents")
     return counts
 
 
-def publish_pair(predicted, output, output_receipt, receipt):
-    """Stage both files, then restore the previous pair if publication fails."""
+def publish_pair(predicted, output, output_receipt, receipt, *, companions=()):
+    """Publish the receipt last; restore the complete previous set on failure."""
+    sources = [(predicted, output), *companions]
+    destinations = [target for _, target in sources] + [output_receipt]
+    if len(set(map(lambda p: Path(p).resolve(), destinations))) != len(destinations):
+        raise ValueError('Prediction publication destinations overlap')
     token = uuid.uuid4().hex
-    stages = [p.with_name(p.name + ".staging-" + token) for p in (output, output_receipt)]
-    backups = [p.with_name(p.name + ".backup-" + token) for p in (output, output_receipt)]
+    stages = [p.with_name(p.name + ".staging-" + token) for p in destinations]
+    backups = [p.with_name(p.name + ".backup-" + token) for p in destinations]
     moved, published = [], []
     try:
-        shutil.copyfile(predicted, stages[0])
-        atomic_json(stages[1], receipt)
-        for destination, backup in zip((output, output_receipt), backups, strict=True):
+        for (source, _), stage in zip(sources, stages[:-1], strict=True):
+            shutil.copyfile(source, stage)
+        atomic_json(stages[-1], receipt)
+        for destination, backup in zip(destinations, backups, strict=True):
             if destination.is_symlink() or (destination.exists() and not destination.is_file()):
                 raise ValueError("ANNEVO publication target is redirected or nonregular")
             if destination.exists():
                 os.replace(destination, backup)
                 moved.append((destination, backup))
-        for stage, destination in zip(stages, (output, output_receipt), strict=True):
+        for stage, destination in zip(stages, destinations, strict=True):
             os.replace(stage, destination)
             published.append(destination)
     except BaseException:
@@ -232,7 +264,7 @@ def run(args):
             work = Path(temporary)
             predicted = work / "prediction.gff3"
             native_genome = genome.absolute()
-            compressed = genome.name.endswith(".gz")
+            compressed = input_compression(genome) == "gzip"
             if compressed:
                 native_genome = work / "genome.fa"
                 with gzip.open(genome, "rb") as source, native_genome.open("xb") as target:

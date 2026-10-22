@@ -17,6 +17,9 @@ from format_species_common import (
     is_probable_genome_filename,
     provider_candidate_sort_key,
 )
+from format_species_common import (
+    provider_raw_dir as provider_raw_dir,
+)
 from format_species_constants import (
     CITRUSGENOMEDB_ID_HINT_PATTERN,
     CNGB_ASSEMBLY_ACCESSION_PATTERN,
@@ -47,7 +50,6 @@ from format_species_constants import (
 )
 from format_species_network import guarded_urlopen as urlopen
 from format_species_provider_config import (
-    DEFAULT_INPUT_RELATIVE_DIRS,
     ENSEMBL_LIKE_PROVIDERS,
     ORYZA_MINUTA_PROVIDER,
 )
@@ -64,39 +66,6 @@ from format_species_taxonomy import (
     build_species_key_from_tokens,
     tokenize_taxonomic_name,
 )
-
-
-def provider_raw_dir(provider, download_root, species_key):
-    if provider in ENSEMBL_LIKE_PROVIDERS:
-        return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
-    if provider in (
-        "phycocosm",
-        "phytozome",
-        "ncbi",
-        "ddbj",
-        "refseq",
-        "genbank",
-        "coge",
-        "cngb",
-        "gwh",
-        "citrusgenomedb",
-        "figshare",
-        "plantgarden",
-        "plantaedb",
-        "flybase",
-        "wormbase",
-        "vectorbase",
-        "fernbase",
-        "veupathdb",
-        "dictybase",
-        "insectbase",
-        ORYZA_MINUTA_PROVIDER,
-        "onekp",
-        "direct",
-        "local",
-    ):
-        return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
-    raise ValueError("Unknown provider: {}".format(provider))
 
 
 def infer_provider_from_id(source_id):

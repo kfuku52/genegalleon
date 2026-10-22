@@ -69,6 +69,126 @@ def test_chunked_ranges_produce_exact_file(tmp_path, monkeypatch):
     assert not list(tmp_path.glob('*.part*'))
 
 
+@pytest.mark.parametrize('archive', [False, True])
+def test_meaningful_resumable_progress_survives_more_than_total_retry_count(tmp_path, monkeypatch, archive):
+    import io
+    import zipfile
+    payload = b'>sequence\n' + bytes(range(256)) * 4
+    body = payload
+    if archive:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as output:
+            output.writestr('genome.fa', payload)
+        body = buffer.getvalue()
+    monkeypatch.setenv('GG_DOWNLOAD_MIN_PROGRESS_BYTES', '16')
+    calls = []
+
+    def reply(h):
+        value = h.headers.get('Range')
+        start = int(value[6:].split('-')[0]) if value else 0
+        calls.append(start)
+        h.send_response(206 if value else 200)
+        h.send_header('ETag', '"same"')
+        h.send_header('Content-Length', str(len(body) - start))
+        if value:
+            h.send_header('Content-Range', f'bytes {start}-{len(body)-1}/{len(body)}')
+        h.end_headers()
+        h.wfile.write(body[start:start + 32])
+        h.close_connection = True
+
+    target = tmp_path / 'sequence'
+    with server(reply) as url:
+        download_url_to_file(url, target, {}, 3, False, False, 60, [], 'test',
+                             archive_member='genome.fa' if archive else '')
+    assert target.read_bytes() == payload
+    assert len(calls) > 16
+    assert calls == sorted(set(calls))
+
+
+def test_recovery_no_progress_and_total_time_limits_are_independent(monkeypatch):
+    import format_species_download.recovery as recovery
+    clock = [0.0]
+    monkeypatch.setattr(recovery.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setenv('GG_DOWNLOAD_MIN_PROGRESS_BYTES', '16')
+    monkeypatch.setenv('GG_DOWNLOAD_STALL_SECONDS', '10')
+    monkeypatch.setenv('GG_DOWNLOAD_MAX_TOTAL_SECONDS', '25')
+    budget = recovery.DownloadRecovery(3)
+    budget.response(dict(etag='"same"', total=1000), 0)
+    assert budget.retry() and budget.retry()
+    budget.progress(16)
+    assert budget.retry()  # useful progress replenishes the consecutive budget
+    clock[0] = 9
+    budget.progress(17)  # tiny trickle does not renew the stall window
+    clock[0] = 10
+    with pytest.raises(TimeoutError, match='stall'):
+        budget.check()
+    clock[0] = 0
+    budget = recovery.DownloadRecovery(3)
+    budget.response(dict(etag='"same"', total=1000), 0)
+    for now, offset in [(8, 16), (16, 32), (24, 48)]:
+        clock[0] = now
+        budget.progress(offset)
+    clock[0] = 25
+    with pytest.raises(TimeoutError, match='total'):
+        budget.check()
+
+
+def test_unvalidated_restart_does_not_replenish_retry_budget(monkeypatch):
+    from format_species_download.recovery import DownloadRecovery
+    monkeypatch.setenv('GG_DOWNLOAD_MIN_PROGRESS_BYTES', '16')
+    budget = DownloadRecovery(3)
+    for index in range(3):
+        budget.response({}, 0)
+        budget.progress(100)
+        assert budget.retry() is (index < 2)
+
+
+def test_transient_backoff_is_shared_with_existing_provider_limiter(tmp_path, monkeypatch):
+    from format_species_download.locking import sleep_before_download_retry
+    from input_download_limiter import Admission
+    monkeypatch.setenv('GG_INPUT_DOWNLOAD_LIMIT_DIR', str(tmp_path / 'limits'))
+    monkeypatch.setattr('format_species_network.random.uniform', lambda low, high: high)
+    monkeypatch.setattr('format_species_download.locking.time.sleep', lambda seconds: None)
+    url = 'https://download.cncb.ac.cn/data'
+    sleep_before_download_retry(1, 5, ConnectionResetError(), url=url)
+    assert Admission(url).state()['cooldown'] >= time.time() + 4
+
+
+def test_cncb_default_survives_a_server_that_closes_unbounded_responses(tmp_path, monkeypatch):
+    import format_species_download.locking as locking
+    limit = 8 * 1024 * 1024
+    payload = b'>sequence\n' + b'ACGT' * (limit // 4)
+    seen = []
+    parse = locking.urlparse
+    monkeypatch.delenv('GG_DOWNLOAD_RANGE_CHUNK_BYTES', raising=False)
+    monkeypatch.setattr(locking, 'urlparse', lambda url: parse(url)._replace(netloc='download.cncb.ac.cn'))
+    def reply(h):
+        value = h.headers.get('Range', '')
+        seen.append((value, h.headers.get('If-Range')))
+        start, _, end = value.removeprefix('bytes=').partition('-')
+        if not value or not end or int(end) - int(start) + 1 > limit:
+            h.send_response(200)
+            h.send_header('Content-Length', str(len(payload)))
+            h.send_header('ETag', '"stable"')
+            h.end_headers()
+            h.wfile.write(payload[:1])
+            h.close_connection = True
+            return
+        start, end = int(start), min(int(end), len(payload) - 1)
+        h.send_response(206)
+        h.send_header('Content-Range', f'bytes {start}-{end}/{len(payload)}')
+        h.send_header('Content-Length', str(end - start + 1))
+        h.send_header('ETag', '"stable"')
+        h.end_headers()
+        h.wfile.write(payload[start:end + 1])
+    with server(reply) as url:
+        download(url, tmp_path / 'sequence')
+    assert (tmp_path / 'sequence').read_bytes() == payload
+    assert seen == [(f'bytes=0-{limit - 1}', None),
+                    (f'bytes={limit}-{2 * limit - 1}', '"stable"')]
+    assert not list(tmp_path.glob('*.part*'))
+
+
 def test_slow_trickle_is_bounded_and_preserves_identified_partial(tmp_path, monkeypatch):
     monkeypatch.setenv('GG_DOWNLOAD_ATTEMPTS', '1')
     monkeypatch.setenv('GG_DOWNLOAD_MAX_RESPONSE_SECONDS', '0.15')
@@ -391,7 +511,7 @@ def test_enospc_preserves_valid_partial(tmp_path, monkeypatch):
     import json
 
     from format_species_download import locking
-    def interrupted(url, partial, *args):
+    def interrupted(url, partial, *args, **kwargs):
         partial.write_bytes(b'valid partial')
         Path(str(partial)+'.identity.json').write_text(json.dumps({'etag': '"v1"', 'total': 99}))
         raise OSError(28, 'disk full')

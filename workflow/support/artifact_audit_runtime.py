@@ -9,6 +9,7 @@ import stat
 import sys
 import threading
 import time
+from collections import deque
 from itertools import islice
 from pathlib import Path
 
@@ -99,6 +100,23 @@ def signature(path):
 def directory_signature(path):
     root = Path(path)
     return tuple((str(child.relative_to(root)), signature(child)) for child in sorted(root.rglob("*")))
+
+
+def _validation_results(executor, check, values, window):
+    """Keep a bounded ordered window full without waiting at batch boundaries.
+
+    Observe failures in input order. The caller owns the executor and joins
+    all already-submitted readers before a failure can escape its context.
+    """
+    iterator = iter(values)
+    pending = deque(executor.submit(check, item) for item in islice(iterator, window))
+    exhausted = object()
+    while pending:
+        result = pending.popleft().result()
+        item = next(iterator, exhausted)
+        if item is not exhausted:
+            pending.append(executor.submit(check, item))
+        yield result
 
 
 class AuditDigests:
@@ -209,11 +227,9 @@ class AuditDigests:
             progress.phase("source_revalidation", len(entries) + guard_count)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for values, check in ((entries, validate_entry), (guards, validate_guard)):
-                iterator = iter(values)
-                while batch := list(islice(iterator, workers * 8)):
-                    for _ in executor.map(check, batch):
-                        if progress:
-                            progress.advance(metrics=self.metrics())
+                for _ in _validation_results(executor, check, values, workers * 8):
+                    if progress:
+                        progress.advance(metrics=self.metrics())
 
     def metrics(self):
         with self.lock:

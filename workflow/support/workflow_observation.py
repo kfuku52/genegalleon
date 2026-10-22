@@ -12,6 +12,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -42,6 +43,42 @@ def observe_path(path):
         raise ValueError(f"Path changed during observation: {path}")
 
 
+def _verify_observed_paths(paths):
+    # This optional budget only selects I/O concurrency. Without a usable hint
+    # retain the original serial fence; every signature is still checked.
+    hint = os.environ.get('GG_TASK_CPUS', '')
+    workers = min(4, max(1, int(hint))) if len(hint) <= 6 and hint.isascii() and hint.isdecimal() else 1
+    if len(paths) < 64 or threading.current_thread() is not threading.main_thread():
+        workers = 1
+    def verify(item):
+        path, expected = item
+        if path_signature(path) != expected:
+            raise ValueError(f"Path changed during observation; retry: {path}")
+    if workers == 1:
+        for item in paths.items():
+            verify(item)
+        return
+    from itertools import islice
+    items = iter(paths.items())
+    sample = list(islice(items, 32))
+    began = time.perf_counter()
+    for item in sample:
+        verify(item)
+    if time.perf_counter() - began < len(sample) * 0.0001:
+        # Thread dispatch costs more than warm local metadata reads. The sample
+        # is part of this fence, not a cached proof or a repeated signature read.
+        for item in items:
+            verify(item)
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    # Ordered results preserve the serial failure location; bounded batches and
+    # joining on errors prevent background checks escaping the observation.
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='gg-metadata-fence') as pool:
+        while batch := list(islice(items, workers * 8)):
+            for _ in pool.map(verify, batch):
+                pass
+
+
 @contextlib.contextmanager
 def observe_files():
     """Detect changes to observed paths without writing locks or rescanning data."""
@@ -52,9 +89,7 @@ def observe_files():
     token = _OBSERVED_PATHS.set(paths)
     try:
         yield
-        for path, expected in paths.items():
-            if path_signature(path) != expected:
-                raise ValueError(f"Path changed during observation; retry: {path}")
+        _verify_observed_paths(paths)
     finally:
         _OBSERVED_PATHS.reset(token)
 
@@ -160,6 +195,8 @@ def contract_arguments(args):
                 parts[0] = os.path.abspath(parts[0])
                 value = label + "=" + "::".join(parts)
             argv.extend(["--" + name.replace("_", "-"), value])
+    if getattr(args, "frozen_plot", False):
+        argv.extend(["--frozen-plot", "--legacy-policy", getattr(args, "legacy_policy", "stop")])
     argv.extend(["--stale-policy", getattr(args, "stale_policy", "stop")])
     return argv
 

@@ -12,6 +12,17 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 native = importlib.import_module('oriongeno_runtime')
+AUDIT_BYTES = {'hmm_boundaries': b'{"sequence":"chr","status":"joined","left_end":9}\n',
+               'utr_repairs': b'{"sequence":"chr","status":"repaired","changed_bases":3}\n'}
+
+
+def write_prediction(argv, text):
+    path = Path(argv[argv.index('--output')+1])
+    path.write_text(text)
+    for name, suffix in native.AUDIT_SUFFIXES.items():
+        Path(str(path) + suffix).write_bytes(AUDIT_BYTES[name])
+    if argv[argv.index('--output-repeat')+1] == 'True':
+        path.with_name(path.stem+'.repeat.gff3').write_text('##gff-version 3\nchr\tOrionGeno\trepeat_region\t1\t3\t.\t+\t.\tID=r1\n')
 
 
 @pytest.fixture
@@ -196,22 +207,24 @@ def test_native_failure_preserves_previous_complete_pair(local_runtime, tmp_path
     assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
 
 
-@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('compression', ['plain', 'gzip-suffix', 'gzip-magic', 'gzip-upper'])
 @pytest.mark.parametrize('auto_selected', [False, True])
-def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compressed, auto_selected):
+def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compression, auto_selected):
     from test_transcript_utrs import model
 
     setup, _package, _model = local_runtime
     runtime = native.prepare(setup)
     original_execute = native.execute
-    genome = tmp_path/('genome.fa.gz' if compressed else 'genome.fa')
+    compressed = compression != 'plain'
+    filename = {'gzip-suffix': 'genome.fa.gz', 'gzip-upper': 'genome.fa.GZ'}.get(compression, 'genome.fa')
+    genome = tmp_path/filename
     sequence = b'>chr\nCCCATGAAATAACCC\n'
     genome.write_bytes(gzip.compress(sequence) if compressed else sequence)
     gff, receipt = tmp_path/'native.gff3', tmp_path/'separate-receipts/native.json'
     def execute(argv, env, **kwargs):
         if '--output' in argv:
             assert Path(argv[argv.index('--genome')+1]).read_bytes() == sequence
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((3, 12),), exons=((0, 15),)))
             return subprocess.CompletedProcess(argv, 0, '')
         if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
@@ -235,6 +248,26 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     assert value['GFF_sha256'] == native.file_sha(gff)
     assert value['runtime_digest'] == runtime['runtime_digest']
     assert value['feature_counts']['CDS'] == 1
+    assert value['feature_counts']['five_prime_UTR'] == value['feature_counts']['three_prime_UTR'] == 1
+    assert value['annotation_outputs']['output_repeat'] is True
+    assert value['annotation_outputs']['output_utrs'] is True
+    assert value['annotation_outputs']['schema_version'] == 2
+    assert value['annotation_outputs']['audit_log_compression'] == 'gzip'
+    for name, artifact in value['annotation_outputs']['files'].items():
+        path = native.companion_paths(gff)[name]
+        assert artifact['sha256'] == native.file_sha(path)
+        assert artifact['bytes'] == path.stat().st_size
+    for name, text in AUDIT_BYTES.items():
+        path = native.companion_paths(gff)[name]
+        assert gzip.decompress(path.read_bytes()) == text
+        artifact = value['annotation_outputs']['files'][name]
+        assert artifact['uncompressed_sha256'] == native.hashlib.sha256(text).hexdigest()
+        assert artifact['uncompressed_bytes'] == len(text) and artifact['jsonl_records'] == 1
+    assert '\tUTR\t' not in native.companion_paths(gff)['native_gff'].read_text()
+    from oriongeno_outputs import verify_companions
+    verify_companions(value, gff)
+    from annevo_gene_models import prediction_identity
+    assert prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno')['GFF_sha256'] == value['GFF_sha256']
     assert value['argv'][value['argv'].index('--species-name')+1] == ''
     if auto_selected:
         assert value['model_selection'] == record
@@ -259,7 +292,7 @@ def test_auto_selection_change_during_native_prediction_preserves_previous_pair(
     original_execute = native.execute
     def execute(argv, env, **kwargs):
         if '--output' in argv:
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((0, 9),), exons=((0, 9),)))
             if changed == 'taxonomy':
                 with sqlite3.connect(selected.taxonomy_db) as conn:
                     conn.execute("INSERT INTO synonym VALUES(3702,'late synonym')")
@@ -276,6 +309,128 @@ def test_auto_selection_change_during_native_prediction_preserves_previous_pair(
     with pytest.raises((OSError, ValueError, RuntimeError), match='changed'):
         native.run(args)
     assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
+
+
+@pytest.mark.parametrize('utrs,repeats', [(0, 0), (0, 1), (1, 0)])
+def test_native_output_controls_are_recorded_and_preserve_original_models(local_runtime, tmp_path, monkeypatch, utrs, repeats):
+    from test_transcript_utrs import model
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    original = native.execute
+    text = model(cds=((3, 12),), exons=((0, 15),))
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            write_prediction(argv, text)
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome = tmp_path/'genome.fa'
+    genome.write_text('>chr\nCCCATGAAATAACCC\n')
+    output = tmp_path/'genes.gff3'
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(tmp_path/'prediction.json'), threads=1, batch_size=1,
+                              output_utrs=utrs, output_repeat=repeats)
+    value = native.run(args)
+    paths = native.companion_paths(output)
+    assert paths['native_gff'].read_text() == text
+    assert paths['repeat_gff'].is_file() == bool(repeats)
+    assert all(gzip.decompress(paths[name].read_bytes()) == text for name, text in AUDIT_BYTES.items())
+    assert ('five_prime_UTR' in output.read_text()) == bool(utrs)
+    assert [r for r in output.read_text().splitlines() if '\tCDS\t' in r] == [r for r in text.splitlines() if '\tCDS\t' in r]
+    from oriongeno_outputs import verify_companions
+    verify_companions(value, output)
+
+
+@pytest.mark.parametrize('utrs', [0, 1])
+def test_genome_bounds_are_required_even_when_utr_export_is_disabled(local_runtime, tmp_path, monkeypatch, utrs):
+    from test_transcript_utrs import model
+
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    original = native.execute
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            write_prediction(argv, model(cds=((3, 12),), exons=((0, 20),)))
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome, output, receipt = [tmp_path/p for p in ['genome.fa', 'genes.gff3', 'prediction.json']]
+    genome.write_text('>chr\nCCCATGAAATAACCC\n')
+    output.write_bytes(b'previous GFF')
+    receipt.write_bytes(b'previous receipt')
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(receipt), threads=1, batch_size=1, output_utrs=utrs, output_repeat=0)
+    with pytest.raises(ValueError, match='outside'):
+        native.run(args)
+    assert output.read_bytes() == b'previous GFF' and receipt.read_bytes() == b'previous receipt'
+
+
+@pytest.mark.parametrize('name', ['hmm_boundaries', 'utr_repairs'])
+@pytest.mark.parametrize('damage', ['missing', 'invalid-json', 'empty'])
+def test_audit_capture_failure_preserves_previous_bundle_and_accepts_empty_logs(local_runtime, tmp_path, monkeypatch, name, damage):
+    from test_transcript_utrs import model
+
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    original = native.execute
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            write_prediction(argv, model(cds=((3, 12),), exons=((0, 15),)))
+            audit = Path(argv[argv.index('--output')+1] + native.AUDIT_SUFFIXES[name])
+            if damage == 'missing':
+                audit.unlink()
+            else:
+                audit.write_bytes(b'{broken}\n' if damage == 'invalid-json' else b'')
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome, output, receipt = [tmp_path / p for p in ('genome.fa', 'genes.gff3', 'prediction.json')]
+    genome.write_text('>chr\nCCCATGAAATAACCC\n')
+    paths = native.companion_paths(output)
+    previous = {p: ('old-' + p.name).encode() for p in [output, receipt, *paths.values()]}
+    for path, text in previous.items():
+        path.write_bytes(text)
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(receipt), threads=1, batch_size=1)
+    if damage != 'empty':
+        with pytest.raises(ValueError, match='audit'):
+            native.run(args)
+        assert {p: p.read_bytes() for p in previous} == previous
+    else:
+        value = native.run(args)
+        assert gzip.decompress(paths[name].read_bytes()) == b''
+        assert value['annotation_outputs']['files'][name]['jsonl_records'] == 0
+        paths[name].unlink()
+        from annevo_gene_models import prediction_identity
+        with pytest.raises(ValueError, match='companion'):
+            prediction_identity(output, receipt, value['genome_sha256'], engine='oriongeno')
+    assert not list(tmp_path.glob('.oriongeno-*'))
+
+
+@pytest.mark.parametrize('name', ['hmm_boundaries', 'utr_repairs'])
+@pytest.mark.parametrize('link', ['symlink', 'hardlink'])
+def test_audit_destination_alias_cannot_overwrite_genome(local_runtime, tmp_path, name, link):
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    genome, output = tmp_path/'genome.fa', tmp_path/'genes.gff3'
+    text = b'>chr\nATGAAATAA\n'
+    genome.write_bytes(text)
+    audit = native.companion_paths(output)[name]
+    if link == 'symlink':
+        audit.symlink_to(genome)
+    else:
+        os.link(genome, audit)
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(tmp_path/'prediction.json'), threads=1, batch_size=1)
+    with pytest.raises(ValueError, match='overwrite'):
+        native.run(args)
+    assert genome.read_bytes() == text
 
 
 @pytest.mark.parametrize('changed', ['mapping', 'selection', 'taxonomy', 'taxonomy-wal', 'genome'])
@@ -295,7 +450,7 @@ def test_final_runtime_inventory_cannot_hide_changed_selection_inputs(local_runt
     def execute(argv, env, **kwargs):
         nonlocal inventories
         if '--output' in argv:
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((0, 9),), exons=((0, 9),)))
             return subprocess.CompletedProcess(argv, 0, '')
         if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))

@@ -25,6 +25,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -441,8 +442,16 @@ def describe_optional_paths(
     return entries
 
 
-def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
-    return _gene_family_collection_digest(root)
+def gene_family_store_digest(root: Path, *, workers: int | None = None) -> tuple[str, int, int]:
+    """Hash every logical member in canonical order with bounded I/O workers.
+
+    Workflow calls use at most their allocated CPUs (capped at four). Small
+    per-family/subdirectory digests remain serial inside parallel full audits.
+    """
+    requested = int(os.environ.get("GG_TASK_CPUS", "1")) if workers is None else workers
+    if type(requested) is not int or requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    return _gene_family_collection_digest(root, workers=min(4, requested))
 
 
 def _store_artifact_digest(store, artifact):
@@ -458,12 +467,33 @@ def _store_artifact_digest(store, artifact):
         return sha256_stream(handle)
 
 
-def _gene_family_collection_digest(root, subdir=None):
+def _store_member_digest(store, subdir, name):
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is None:
+        artifact = store.source_artifact(subdir, name)
+    else:
+        # Seed the same resolver used by audit_entry_digest. Re-resolving each
+        # member here repeats metadata I/O, including on a content-cache hit.
+        def resolve_source():
+            artifact = store.source_artifact(subdir, name)
+            return artifact, _audit_artifact_identity(artifact)
+        artifact, _identity = memo.resolve((str(store.root), f"{subdir}/{name}"), resolve_source)
+    if artifact is None:
+        raise FileNotFoundError(store.root / subdir / name)
+    digest, size = _store_artifact_digest(store, artifact)
+    return artifact.logical_path, digest, size
+
+
+def _gene_family_collection_digest(root, subdir=None, *, workers=1):
     store = GeneFamilyOutputStore(root)
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
-    with store.read_snapshot():
+    pool = (concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+            if workers > 1 else contextlib.nullcontext(None))
+    # Join every worker before the store closes its snapshot ZIP readers,
+    # including exceptions while the coordinator combines member digests.
+    with store.read_snapshot(), pool as executor:
         subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
         memo = _DIGEST_OBSERVATION.get()
         if memo is not None:
@@ -474,18 +504,23 @@ def _gene_family_collection_digest(root, subdir=None):
             if memo is not None:
                 memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
                            lambda selected=selected: tuple(store.file_names(selected)))
-            for name in names:
-                artifact = store.source_artifact(selected, name)
-                if artifact is None:
-                    raise FileNotFoundError(store.root / selected / name)
-                artifact_digest, artifact_size = _store_artifact_digest(store, artifact)
-                logical_path = artifact.logical_path.encode("utf-8")
-                digest.update(len(logical_path).to_bytes(8, "big"))
-                digest.update(logical_path)
-                digest.update(bytes.fromhex(str(artifact_digest)))
-                digest.update(int(artifact_size).to_bytes(8, "big"))
-                total_size += int(artifact_size)
-                member_count += 1
+            context = contextvars.copy_context()
+            def read_member(name, selected=selected, context=context):
+                return context.copy().run(_store_member_digest, store, selected, name)
+            for offset in range(0, len(names), workers * 8):
+                batch = names[offset:offset + workers * 8]
+                # map retains canonical input order; batching bounds futures and
+                # keeps read-only/runtime-path contexts in every worker.
+                members = (executor.map(read_member, batch) if executor and len(batch) > 1
+                           else map(read_member, batch))
+                for name, artifact_digest, artifact_size in members:
+                    logical_path = name.encode("utf-8")
+                    digest.update(len(logical_path).to_bytes(8, "big"))
+                    digest.update(logical_path)
+                    digest.update(bytes.fromhex(str(artifact_digest)))
+                    digest.update(int(artifact_size).to_bytes(8, "big"))
+                    total_size += int(artifact_size)
+                    member_count += 1
     return digest.hexdigest(), total_size, member_count
 
 
@@ -501,7 +536,13 @@ def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
         raise ProvenanceError(f"Unsafe gene-family logical subdirectory: {subdir!r}")
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(root)
-    return _gene_family_collection_digest(root, subdir)
+    requested = int(os.environ.get("GG_TASK_CPUS", "1"))
+    if requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    # Full audits already parallelize families. Only a scalar caller overlaps
+    # subdirectory I/O, keeping nested audit workers within their original cap.
+    workers = min(4, requested) if threading.current_thread() is threading.main_thread() else 1
+    return _gene_family_collection_digest(root, subdir, workers=workers)
 
 
 def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str, int]:
@@ -790,6 +831,14 @@ def build_contract(
 
 
 def contract_comparison_payload(contract: dict[str, object]) -> dict[str, object]:
+    parameters = contract.get("parameters")
+    if (contract.get("step") == "species_tree_extract_fasta"
+            and contract.get("family_id") == "all_buscos" and isinstance(parameters, dict)):
+        # Before representative-copy selection was configurable, this stage
+        # always used single-copy extraction. Preserve that exact default's
+        # compatibility without changing its saved manifest or relaxing any
+        # sequence, output, strictness or best-score selection checks.
+        parameters = {"copy_policy": "single-copy", **parameters}
     return {
         "schema_version": contract.get("schema_version"),
         "step": contract.get("step"),
@@ -797,7 +846,7 @@ def contract_comparison_payload(contract: dict[str, object]) -> dict[str, object
         "inputs": contract.get("inputs"),
         "outputs": contract.get("outputs"),
         "optional_outputs": contract.get("optional_outputs", []),
-        "parameters": contract.get("parameters"),
+        "parameters": parameters,
     }
 
 
@@ -1064,7 +1113,70 @@ def legacy_policy_result(args: argparse.Namespace) -> int:
     return STALE_STOP
 
 
+def frozen_plot_contracts(args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
+    """Verify an unrequested plot's data and bytes, retaining its original recipe.
+
+    A selection-only continuation does not execute a renderer. Its historical
+    implementation and presentation settings remain in the untouched manifest;
+    they must not be interpreted as a claim that today's renderer produced it.
+    Biological inputs, output paths/content and all other parameters still match
+    the current stage declaration. This is unavailable to scientific producers.
+    """
+    recipes = {
+        "species_tree_busco_plot": (
+            {"adapter", "busco_plot_metadata"}, set(), {"undated_tree", "busco_directory"},
+        ),
+        "species_tree_dated_plot": (
+            {"adapter", "presentation", "geological_periods"},
+            {"engine", "geological_background", "nwkit_identity"}, {"dated_tree"},
+        ),
+    }
+    if (args.step not in recipes or args.family_id != "all_buscos"
+            or args.stale_policy != "stop" or args.legacy_policy != "stop"
+            or args.recover_output or args.output_fasta_type):
+        raise ProvenanceError("Frozen plots require a species-tree plot, stop policies and no recovery")
+    if not declared_path_exists(args.manifest):
+        raise FileNotFoundError(f"frozen plot has no provenance manifest: {args.manifest}")
+    implementation, presentation, required = recipes[args.step]
+
+    def comparison(contract):
+        result = contract_comparison_payload(contract)
+        entries = result["inputs"]
+        if (not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries)
+                or len(entries_by_label(contract, "inputs")) != len(entries)):
+            raise ProvenanceError("Frozen plot inputs must have distinct nonempty labels")
+        result["inputs"] = [entry for entry in entries if entry["label"] not in implementation]
+        if not required <= {entry["label"] for entry in result["inputs"]}:
+            raise ProvenanceError("Frozen plot is missing a required biological input")
+        if not isinstance(result["parameters"], dict):
+            raise ProvenanceError("Frozen plot parameters must be an object")
+        result["parameters"] = {key: value for key, value in result["parameters"].items()
+                                if key not in presentation}
+        return result
+
+    recorded = comparison(load_manifest(args.manifest))
+    projected = argparse.Namespace(**vars(args))
+    projected.input = [f"{label}={path}" for label, path in parse_path_pairs(args.input, "--input")
+                       if label not in implementation]
+    return recorded, comparison(build_contract(projected, include_diagnostics=False))
+
+
+def frozen_plot_current(args: argparse.Namespace) -> int:
+    try:
+        recorded, current = frozen_plot_contracts(args)
+    except FileNotFoundError as exc:
+        return stale_policy_result(args, f"frozen plot artifact is missing: {exc.filename or exc}",
+                                   reusable=False)
+    if recorded != current:
+        return stale_policy_result(args, describe_contract_difference(recorded, current), reusable=False,
+                                   error_code=contract_difference_code(recorded, current))
+    print(f"Frozen plot data and outputs verified; original rendering provenance retained: {args.manifest}")
+    return CURRENT
+
+
 def needs_run(args: argparse.Namespace) -> int:
+    if getattr(args, "frozen_plot", False):
+        return frozen_plot_current(args)
     try:
         if recover_declared_outputs(args) and args.dry_run:
             return NEEDS_RUN
@@ -1791,6 +1903,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_contract_arguments(needs_parser)
     needs_parser.add_argument("--dry-run", action="store_true",
                               help="Inspect without writing outputs, manifests, or the digest cache")
+    needs_parser.add_argument("--frozen-plot", action="store_true",
+                              help="Verify an unrequested species-tree plot while retaining its recorded rendering recipe")
     needs_parser.add_argument(
         "--stale-policy",
         choices=("stop", "reuse", "rebuild"),

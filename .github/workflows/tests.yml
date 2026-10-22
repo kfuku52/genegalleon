@@ -16,12 +16,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event_name != 'pull_request' && github.run_attempt > 1 && format('retry-{0}', github.run_id) || github.event.pull_request.head.ref || github.ref_name }}
+  # Let the active default-branch build finish and warm the exact SIF cache.
+  # First attempts still coalesce. An explicit trusted retry gets its own run
+  # group, so later pushes cannot discard required exact-commit validation.
+  # PR retries retain branch coalescing and superseded-PR cancellation.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   runtime-change-filter:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     outputs:
       should_run: ${{ steps.filter.outputs.should_run }}
 
@@ -37,14 +44,44 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Pending pushes can be coalesced. Compare with the last successful
+          # complete runtime check, rather than losing changes in a skipped run.
+          if [[ "${EVENT_NAME}" == push ]]; then
+            BASE_SHA=""
+            if candidates="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/tests.yml/runs?branch=${GITHUB_REF_NAME}&event=push&status=success&per_page=100" \
+              --jq '.workflow_runs[] | [.id, .head_sha] | @tsv')"; then
+              while IFS=$'\t' read -r run_id candidate; do
+                if [[ ! "${run_id}" =~ ^[0-9]+$ || ! "${candidate}" =~ ^[0-9a-f]{40}$ ]]; then
+                  continue
+                fi
+                if ! git merge-base --is-ancestor "${candidate}" "${GITHUB_SHA}"; then
+                  continue
+                fi
+                if ! complete="$(gh api \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+                  --jq 'any(.jobs[]; .name == "sif-runtime-validation" and .conclusion == "success")')"; then
+                  break
+                fi
+                if [[ "${complete}" == true ]]; then
+                  BASE_SHA="${candidate}"
+                  break
+                fi
+              done <<< "${candidates}"
+            fi
+            # No proof is an instruction to run every runtime check.
+            echo "Last complete runtime validation: ${BASE_SHA:-unavailable; running full validation}"
+          fi
           should_run=0
           if [[ "${EVENT_NAME}" == "workflow_dispatch" || -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
             should_run=1
           elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             should_run=1
           else
+            changed_paths="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")"
             while IFS= read -r path; do
               case "${path}" in
                 .dockerignore|dev|pyproject.toml|gg_container_build_entrypoint.sh|container/*|workflow/*|.github/workflows/tests.yml|.github/actions/*)
@@ -52,7 +89,7 @@ jobs:
                   break
                   ;;
               esac
-            done < <(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")
+            done <<< "${changed_paths}"
           fi
           echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
 
@@ -153,7 +190,7 @@ jobs:
           key: ${{ steps.wheels-cache.outputs.cache-primary-key }}
 
       - name: Share exact wheels with parallel test lanes
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-test-wheels
           path: ${{ runner.temp }}/gg-test-wheels
@@ -163,13 +200,9 @@ jobs:
 
   python-fast-shards:
     needs: [python-smoke, python-wheels]
-    name: python-fast (Python 3.12, ${{ matrix.shard }}/2)
+    name: python-fast (Python 3.12, complete suite)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
 
     steps:
       - name: Checkout
@@ -181,7 +214,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download exact test wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: python-test-wheels
           path: ${{ runner.temp }}/gg-test-wheels
@@ -201,10 +234,10 @@ jobs:
 
       - name: Run fast Python tests
         env:
-          TEST_SHARD: ${{ matrix.shard }}/2
+          TEST_SHARD: 1/1
         run: |
           python -m pytest -q \
-            -n 2 \
+            -n 4 \
             --dist load \
             --gg-suite fast \
             --gg-shard="${TEST_SHARD}" \
@@ -235,15 +268,9 @@ jobs:
           - name: download-and-traits
             suite: integration-download
             partition: 1/1
-          - name: workflow-integrations-1
+          - name: workflow-integrations
             suite: integration-workflow
-            partition: 1/3
-          - name: workflow-integrations-2
-            suite: integration-workflow
-            partition: 2/3
-          - name: workflow-integrations-3
-            suite: integration-workflow
-            partition: 3/3
+            partition: 1/1
 
     steps:
       - name: Checkout
@@ -255,7 +282,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download exact test wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: python-test-wheels
           path: ${{ runner.temp }}/gg-test-wheels
@@ -273,7 +300,7 @@ jobs:
           TEST_SHARD: ${{ matrix.shard.partition }}
         run: |
           python -m pytest -q \
-            -n 2 \
+            -n 4 \
             --dist load \
             --gg-suite "${TEST_SUITE}" \
             --gg-shard="${TEST_SHARD}" \
@@ -393,7 +420,7 @@ jobs:
 
       - name: Share uncached SIF with validation partitions
         if: steps.sif.outputs.cache-hit != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: validation-sif
           path: genegalleon.sif
@@ -405,10 +432,6 @@ jobs:
     needs: [prepare-sif]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,7 +441,8 @@ jobs:
         with:
           prepared-runtime-input: ${{ needs.prepare-sif.outputs.runtime-input }}
           validation-suite: runtime-python
-          shard: ${{ matrix.shard }}/8
+          shard: 1/1
+          workers: "4"
 
   sif-other:
     needs: [prepare-sif]
@@ -458,7 +482,7 @@ jobs:
           needs.prepare-sif.outputs.cache-hit != 'true' &&
           github.event_name != 'pull_request' &&
           github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: validation-sif
           path: .

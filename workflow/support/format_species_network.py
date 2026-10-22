@@ -200,6 +200,12 @@ def download_retry_delay(attempt, base_seconds, error=None):
     return delay
 
 
+def share_download_cooldown(url, seconds):
+    """Let other species respect the same transient-failure backoff."""
+    if seconds > 0 and limit_directory():
+        Admission(url, database=request_database(url, _REQUEST_PROVIDER.get())).cooldown(seconds)
+
+
 class LimitedResponse:
     def __init__(self, response, permit):
         self.response = response

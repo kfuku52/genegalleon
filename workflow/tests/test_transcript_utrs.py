@@ -40,6 +40,45 @@ def model(tid='t', gene='g', cds=((100, 400),), exons=((50, 450),), strand='+'):
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
+def test_shared_terminal_geometry_excludes_introns_and_uses_explicit_cds_endpoints(strand):
+    donor = utrs.read_models(model(cds=((100, 180), (220, 300)),
+                                  exons=((20, 40), (80, 180), (220, 320), (340, 370)), strand=strand))['t']
+    low, high = ('5', '3') if strand == '+' else ('3', '5')
+    assert utrs.coding_boundary(donor, low) == 100 and utrs.coding_boundary(donor, high) == 300
+    assert utrs.terminal_utr_blocks(donor, low) == [[20, 40], [80, 100]]
+    assert utrs.terminal_utr_blocks(donor, high) == [[300, 320], [340, 370]]
+    assert utrs.terminal_utr_blocks(donor, low, boundary=30) == [[20, 30]]
+    assert utrs.terminal_utr_blocks(donor, high, boundary=380) == []
+    assert utrs.exons_within_reference(donor, 370)
+    assert not utrs.exons_within_reference(donor, 369)
+    assert not utrs.exons_within_reference(donor, None)
+
+
+@pytest.mark.parametrize('strand,side', [('.', '5'), ('+', 'other')])
+def test_shared_geometry_rejects_an_unresolved_side_or_strand(strand, side):
+    donor = {'strand': strand, 'cds': [(100, 300, 0)], 'exons': [[50, 350]]}
+    with pytest.raises(ValueError, match='side 5 or 3'):
+        utrs.terminal_utr_blocks(donor, side)
+
+
+@pytest.mark.parametrize('changed', ['seqid', 'strand'])
+def test_projection_rejects_cross_contig_or_cross_strand_donors(changed):
+    selected = utrs.read_models(model())['t']
+    donor = {**selected, changed: 'other' if changed == 'seqid' else '-'}
+    with pytest.raises(ValueError, match='same contig and strand'):
+        utrs.project(donor, selected, '5', Genome())
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_shorter_selected_cds_does_not_manufacture_utrs_from_a_cds_only_donor(strand):
+    donor = utrs.read_models(model(cds=((100, 400),), exons=((100, 400),), strand=strand))['t']
+    selected = utrs.read_models(model(cds=((150, 350),), exons=((150, 350),), strand=strand))['t']
+    for side in ('5', '3'):
+        result = utrs.project(donor, selected, side, Genome())
+        assert result['blocks'] == [] and result['length'] == 0 and result['reason'] == 'no_source_utr'
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
 def test_boundary_shifts_choose_longest_independently_and_preserve_cds(strand):
     selected = model(cds=((150, 350),), exons=((150, 350),), strand=strand)
     original = model(cds=((100, 400),), exons=((30, 420),), strand=strand)
@@ -49,6 +88,10 @@ def test_boundary_shifts_choose_longest_independently_and_preserve_cds(strand):
     low, high = ('utr5', 'utr3') if strand == '+' else ('utr3', 'utr5')
     assert audit[0][low]['source'] == 'existing' and audit[0][low]['length'] == 120
     assert audit[0][high]['source'] == 'oriongeno' and audit[0][high]['length'] == 130
+    assert audit[0][low]['source_transcript'] == 't' and audit[0][high]['source_transcript'] == 'native'
+    assert audit[0]['annotation_basis'] == 'projected_longest_per_side'
+    attributes = [utrs.parse_gff_attributes(r.split('\t')[8]) for r in result.splitlines() if '_prime_UTR\t' in r]
+    assert {a['utr_source_transcript'] for a in attributes} == {('t',), ('native',)}
     expected = Genome().sequence[30:480]
     assert sequences['t'] == (str(Seq(expected).reverse_complement()) if strand == '-' else expected)
     reconstructed = utrs.read_models(result)['t']
@@ -63,6 +106,24 @@ def test_spliced_length_ranking_does_not_count_introns():
     _, audit, _ = utrs.complete(selected, original, Genome(), 'S', native)
     assert audit[0]['utr5']['source'] == 'oriongeno'
     assert audit[0]['utr5']['length'] == 60
+
+
+def test_fragmented_genome_reference_metadata_is_read_once_per_completion():
+    class FragmentedGenome(Genome):
+        accesses = 0
+
+        @property
+        def references(self):
+            self.accesses += 1
+            return (*('unused'+str(i) for i in range(16000)), 'chr')
+
+    genome = FragmentedGenome()
+    selected = model() + model('t2', 'g2', cds=((600, 900),), exons=((550, 950),))
+    native = utrs.read_models(model('n', 'ng'))
+    _, audit, sequences = utrs.complete(selected, selected, genome, 'S', native)
+    assert genome.accesses == 1
+    assert all(row['utr5']['length'] == row['utr3']['length'] == 50 for row in audit)
+    assert len(sequences) == 2
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
@@ -88,6 +149,86 @@ def test_utrs_outside_declared_exons_are_not_silently_ignored():
     with pytest.raises(ValueError, match='UTR is not contained'):
         utrs.read_models(text)
     assert utrs.read_models(text, strict=False)['t']['problem'] == 'utr_outside_exons'
+
+
+def coge_segments(strand='+'):
+    text = model(cds=((100, 160), (220, 400)), exons=((400, 450), (500, 520)), strand=strand)
+    rows = []
+    for line in text.splitlines():
+        fields = line.replace('\tsource\t', '\tCoGe\t').split('\t')
+        if fields[2] in {'gene', 'mRNA'}:
+            fields[3] = '101'
+        if fields[2] != 'gene':
+            fields[8] += ';coge_fid=' + ('9' if fields[2] == 'CDS' else '7')
+        rows.append('\t'.join(fields)+'\n')
+    return ''.join(rows)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_coge_coding_and_terminal_exon_segments_are_interpreted_automatically(strand):
+    text = coge_segments(strand)
+    parsed = utrs.read_models(text)['t']
+    assert parsed['exons'] == [[100, 160], [220, 450], [500, 520]]
+    assert parsed['exon_path_basis'] == 'coge_coding_plus_terminal_noncoding_segments'
+    result, audit, seq = utrs.complete(text, text, Genome(), 'S')
+    side = 'utr3' if strand == '+' else 'utr5'
+    assert audit[0][side]['length'] == 70
+    assert audit[0]['source_exon_interpretations'][0]['declared_exons'] == [[400, 450], [500, 520]]
+    assert len(seq['t']) == 310
+    assert [r for r in result.splitlines() if '\tCDS\t' in r] == [r for r in text.splitlines() if '\tCDS\t' in r]
+    assert utrs.read_models(result)['t']['exons'] == parsed['exons']
+
+
+@pytest.mark.parametrize('change', ['source', 'identity', 'bounds', 'internal_segment', 'shared_parent', 'rna_identity'])
+def test_coge_interpretation_requires_source_identity_and_terminal_structure(change):
+    text = coge_segments()
+    if change == 'source':
+        text = text.replace('\tCoGe\t', '\tother\t')
+    elif change == 'identity':
+        text = text.replace('Parent=t;coge_fid=7', 'Parent=t;coge_fid=8')
+    elif change == 'bounds':
+        text = text.replace('mRNA\t101\t520', 'mRNA\t91\t520')
+    elif change == 'internal_segment':
+        text = text.replace('exon\t401\t450', 'exon\t181\t190')
+    elif change == 'shared_parent':
+        text = text.replace('Parent=t;coge_fid=7', 'Parent=t,other;coge_fid=7')
+    else:
+        text = text.replace('Parent=g;coge_fid=7', 'Parent=g')
+    with pytest.raises(ValueError):
+        utrs.read_models(text)
+    assert utrs.read_models(text, strict=False)['t'].get('problem')
+
+
+def test_unique_full_coding_intron_chain_resolves_terminal_neighbour_overlap():
+    selected = model('a', 'ga', cds=((100, 200), (300, 400)), exons=((100, 200), (300, 400)))
+    selected += model('b', 'gb', cds=((420, 450),), exons=((420, 450),))
+    native = utrs.read_models(model('n', 'ng', cds=((90, 200), (300, 470)), exons=((30, 200), (300, 500))))
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    by_id = {r['transcript_id']: r for r in audit}
+    assert by_id['a']['utr5']['length'] == 70 and by_id['a']['utr3']['length'] == 100
+    match = by_id['a']['native_correspondence']['candidates'][0]
+    assert match['basis'] == 'identical_coding_intron_chain' and match['assigned_gene'] == 'ga'
+    assert by_id['b']['native_status'] == 'no_unique_coding_overlap'
+
+
+def test_shared_full_intron_chain_remains_ambiguous():
+    selected = model('a', 'ga', cds=((100, 200), (300, 400)), exons=((100, 200), (300, 400)))
+    selected += model('b', 'gb', cds=((110, 200), (300, 390)), exons=((110, 200), (300, 390)))
+    native = utrs.read_models(model('n', 'ng', cds=((90, 200), (300, 470)), exons=((30, 200), (300, 500))))
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    assert all(r['native_status'] == 'no_unique_coding_overlap' for r in audit)
+    assert all(r['native_correspondence']['status'] == 'ambiguous_coding_overlap' for r in audit)
+
+
+def test_unmapped_native_diagnostics_distinguish_absence_from_opposite_strand():
+    selected = utrs.read_models(model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
+                                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
+    native = utrs.read_models(model('n', 'ng', cds=((100, 200),), exons=((100, 200),), strand='-'))
+    _, reasons = utrs.native_correspondence(selected, native)
+    assert reasons['a']['status'] == 'opposite_strand_coding_overlap'
+    assert reasons['b']['status'] == 'no_coding_overlap'
+    _, reasons = utrs.native_correspondence(selected, {})
+    assert reasons['a']['status'] == 'no_native_prediction_on_contig'
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
@@ -165,7 +306,8 @@ def test_oriongeno_receipt_and_gff_are_bound_to_target_assembly(tmp_path):
         native.verify_inputs(frozen)
 
 
-def test_whole_cohort_finalization_preserves_cds_and_binds_utrs(tmp_path):
+@pytest.mark.parametrize('explicit_native', [False, True])
+def test_whole_cohort_finalization_preserves_cds_and_binds_utrs(tmp_path, explicit_native):
     from test_gene_model_refinement import tiny_inputs
 
     refinement = importlib.import_module('gene_model_refinement')
@@ -182,6 +324,11 @@ def test_whole_cohort_finalization_preserves_cds_and_binds_utrs(tmp_path):
         originals[name] = source_text
         gff, receipt = tmp_path/(name+'.native.gff3'), tmp_path/(name+'.native.json')
         gff.write_text(model('n', 'ng', cds=((10, 22),), exons=((2, 35),)))
+        if explicit_native:
+            import oriongeno_outputs
+            staged = tmp_path / (name + '.explicit.gff3')
+            oriongeno_outputs.write_explicit_utrs(gff, staged, lengths={'chr': 50})
+            gff.write_bytes(staged.read_bytes())
         value = dict(schema_version=1, kind='genegalleon-oriongeno-native-prediction', native_returncode=0,
                      gpu_probe={'gpu_verified': True}, model_profile='plants', inference_settings={'lineage': 'plants'},
                      runtime_digest='a'*64, cache_key='b'*64, source_commit='c'*40, model_sha256='d'*64,

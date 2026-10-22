@@ -211,7 +211,8 @@ def test_transcriptome_failed_scratch_has_locked_ttl_and_size_limits():
     assert "acquire_transcriptome_tmp_lock()" in core
     assert '".gg_active.lock"' in core
     assert "LOCK_NB" in core
-    assert "shutil.rmtree(candidate)" in core
+    assert 'candidate.rename(retired / "scratch")' in core
+    assert "shutil.rmtree(retired)" in core
     assert 'transcriptome_tmp_retention_days="${transcriptome_tmp_retention_days:-7}"' in entrypoint
     assert 'transcriptome_tmp_max_dirs="${transcriptome_tmp_max_dirs:-100}"' in entrypoint
     assert 'transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"' in entrypoint

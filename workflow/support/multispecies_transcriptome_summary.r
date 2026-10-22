@@ -188,7 +188,9 @@ if (file.exists('expression.tsv')) {
     file.remove('expression.tsv')
 }
 tpm_files = list.files(path=dir_amalgkit_merge, pattern="_tpm\\.tsv$", recursive=TRUE, full.names=TRUE)
-if (length(tpm_files)==0) {
+if (nrow(df_busco) == 0) {
+    cat('Skipping BUSCO-linked expression summary and dimensional reduction: no detected BUSCO genes.\n')
+} else if (length(tpm_files)==0) {
     cat(paste0('Skipping. No tsv file found in: ', dir_amalgkit_merge, '\n'))
 } else {
     tpm_list = list()
@@ -213,7 +215,7 @@ if (length(tpm_files)==0) {
         retained_cols = colnames(tpm)[2:length(colnames(tpm))]
         tmp_busco = data.frame(df_busco[,sp_ub])
         colnames(tmp_busco) = sp_ub
-        tmp_busco[,'row_index'] = 1:nrow(tmp_busco)
+        tmp_busco[,'row_index'] = seq_len(nrow(tmp_busco))
         tpm = merge(tmp_busco, tpm, by=sp_ub, all.x=TRUE, all.y=FALSE, sort=FALSE)
         tpm = tpm[order(tpm[['row_index']]),]
         tpm = data.frame(tpm[,retained_cols])
@@ -234,7 +236,7 @@ min_gene = 4
 
 if (file.exists('expression.tsv')) {
     df_exp = read.table('expression.tsv', header=TRUE, sep='\t', quote='')
-    df_exp = df_exp[,-c(1,2,3)]
+    df_exp = df_exp[,-c(1,2,3), drop=FALSE]
     is_gene_with_ge_min_species = apply(df_exp, 1, function(x){((length(x)-sum(is.na(x)))<min_species)})
     num_enough_gene = nrow(df_exp) - sum(is_gene_with_ge_min_species)
     is_no_enough_data = (num_enough_gene <= min_gene)

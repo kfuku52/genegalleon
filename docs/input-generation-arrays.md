@@ -1,5 +1,11 @@
 # Input generation with species arrays
 
+Namespace-lock coordination directories are explicitly restricted to the owner,
+including on NFS mounts whose inherited ACLs override `mkdir` permissions. This
+does not change the enclosing workspace's permissions. An interrupted owner is
+still retained: inspect the exact owner and prove all workspace users stopped
+before using the existing token-bound release API. Age never authorizes removal.
+
 The read-only `workflow/support/workflow_api.py input-inventory --request-json`
 command counts publication receipts over a fixed species cohort. Its request
 binds `cohort` and `sources` lists of absolute task-plan paths and SHA-256 values,
@@ -98,6 +104,9 @@ and checks the audit; it does not compare CDS with full transcript lengths.
 Strict worker and final validation support CDS-only inputs when genomic roles
 are optional. `require_gff=1` and `require_genome=1` still require those outputs;
 CDS-only finalization retains source-selection validation.
+CDS and GFF inputs can also finalize without genomes when genomes are optional;
+an absent unused genome directory does not request genome-based validation.
+Declared genome outputs still require genome-based validation.
 The `.orf-extraction.json`
 sidecar binds source/output hashes, genetic code, implementation and CDSKIT
 identity, with each selected ORF's strand and coordinates on its source transcript.
@@ -408,6 +417,11 @@ CDS-only species can run validation and BUSCO with `require_cds=1` and
 `require_gff=0`. Workers still validate longest-CDS selection; CDS-to-GFF
 mapping QC is produced and receipt-bound only when that task supplies a GFF.
 A supplied or required GFF that is missing still fails validation.
+Strict cohorts may mix CDS-only species with species that supply GFFs or genomes.
+Final validation checks each declared output against its species-summary row,
+rejects undeclared or misplaced files, validates CDS/GFF mapping for the paired
+species, and validates source representative selection for every CDS species.
+Optional roles do not require identical species sets across output directories.
 
 For native arrays with this project bind on audrey1 or NIG, explicitly declared local CDS, GFF,
 GenBank/EMBL and genome files are mounted individually read-only. Prepare reads
@@ -428,3 +442,32 @@ remain errors. Both imports retain the same content, parameter, task-ownership
 and BUSCO checks; new settings are written only when configured. Shared phase
 admission waits up to 30 seconds for reader-registration contention while still
 excluding prepare/finalize writers. Task-owner conflicts remain immediate errors.
+
+### BUSCO input mode
+
+`species_busco_mode="transcriptome"` retains the default nucleotide CDS evaluation
+with BUSCO's transcriptome predictor. Set `GG_INPUT_SPECIES_BUSCO_MODE=proteins`
+for a new cohort to translate the formatted CDS in frame 1 with
+`GG_COMMON_GENETIC_CODE` and evaluate those proteins directly. This avoids a
+second ORF prediction; it does not evaluate the original untranslated assembly.
+The mode and protein translation code are frozen in array settings and BUSCO
+provenance. Resume cannot import BUSCO results from a different mode or code;
+formatting, validation and fx2tab remain reusable. Quality comparisons must keep
+BUSCO mode, version and lineage consistent.
+
+Failed BUSCO attempts retain native scratch files and `failure-context.json`,
+including mode, exit code and available prediction-file sizes. Empty predictions
+remain a failed evaluation and never become a zero-percent completeness result.
+
+## Acquisition-only code recovery
+
+A frozen genome annotation cohort can use a newly qualified input-generation
+release for acquisition only. Pass `--acquisition-runtime-root` and
+`--acquisition-runtime-manifest-sha256` to the native
+`genome_annotation_cohort.py --phase acquire` driver. Both arguments are
+required together. The owned release must remain inside the cohort project
+and declare `gg_input_generation`; the regular entrypoint verifies its complete
+source inventory before execution. Prediction and BUSCO reject this override.
+The frozen cohort, source identities, existing workspace/cache and scientific
+parameters remain unchanged. The launcher and its scheduler claim must bind
+the exact new release; never overwrite a previously submitted launcher.

@@ -70,6 +70,127 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     assert list(iterator) == []
 
 
+@pytest.mark.parametrize('scope', ['models', 'accepted', 'partial', 'revision'])
+def test_repeated_decoded_bodies_keep_every_returned_mutable_field_independent(tmp_path, scope):
+    records = [model(2*i+1, 'accepted') for i in range(5)]
+    directory, _ = published(tmp_path, records, revisions=records)
+    reader = store._iter(directory, scope)
+    first, second = next(reader), next(reader)
+    first['cds'][0][0] = -1
+    second['raw_prediction']['cds'][0][0] = -2
+    second['support'][0]['donor'] = 'changed'
+    second['unknown']['empty'].append('changed')
+    remaining = list(reader)
+    assert store._json(remaining) == store._json(records[2:])
+    assert store._json(list(store._iter(directory, scope))) == store._json(records)
+
+
+@pytest.mark.parametrize('byte_limit, entry_limit', [(5000, 20), (1024*1024, 2), (128, 20), (5000, 0)])
+def test_decoded_body_cache_remains_bounded_and_oversized_values_are_still_read(tmp_path, monkeypatch, byte_limit, entry_limit):
+    records = [{**model(i), 'seqid': 'chr'+str(i//3)} for i in range(36)]
+    directory, _ = published(tmp_path, records)
+    instances = []
+    initialise = store._DecodedBodies.__init__
+    def observed(self, *args, **kwargs):
+        initialise(self, *args, **kwargs)
+        instances.append(self)
+    monkeypatch.setattr(store._DecodedBodies, '__init__', observed)
+    monkeypatch.setattr(store._DecodedBodies, 'max_decoded_bytes', byte_limit)
+    monkeypatch.setattr(store._DecodedBodies, 'max_decoded_entries', entry_limit)
+    assert store._json(list(store.iter_models(directory))) == store._json(records)
+    assert instances and all(value.decoded_bytes <= byte_limit and len(value.decoded) <= entry_limit for value in instances)
+    if byte_limit >= 5000 and entry_limit:
+        assert all(value.decoded for value in instances)
+
+
+def test_repeated_deeply_nested_saved_body_keeps_the_json_decoder_depth_contract(tmp_path):
+    nested = 'retained'
+    for _ in range(600):
+        nested = {'nested': nested}
+    records = [{**model(i), 'assembly_ambiguous_bases': nested} for i in range(3)]
+    directory, _ = published(tmp_path, records)
+    assert store._json(list(store.iter_models(directory))) == store._json(records)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_model_id_selection_keeps_duplicate_order_fields_and_statuses(tmp_path, legacy):
+    records = [{**model(i), "model_id": f"gene{i % 3}"} for i in range(9)]
+    records[6]["status"] = "unresolved"
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    expected = [r for r in records if r["model_id"] == "gene0"]
+    actual = list(store.iter_models(directory, model_ids={"gene0", "absent"}))
+    assert json.dumps(actual, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+    assert list(store.iter_models(directory, model_ids={"gene0"}, statuses={"unresolved"})) == [records[6]]
+    assert list(store.iter_models(directory, model_ids=set())) == []
+
+
+@pytest.mark.parametrize("codec", ["gzip", "zstd"])
+def test_model_id_selection_only_reconstructs_matches(tmp_path, monkeypatch, codec):
+    if codec == "zstd":
+        pytest.importorskip("zstandard")
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(12)]
+    directory, _ = published(tmp_path, records, codec=codec)
+    calls = []
+    unpack = store._unpack
+
+    def counted(envelope, *args, **kwargs):
+        calls.append(envelope["context"]["model_id"])
+        return unpack(envelope, *args, **kwargs)
+
+    monkeypatch.setattr(store, "_unpack", counted)
+    assert list(store.iter_models(directory, model_ids={"gene2", "gene10"})) == [records[2], records[10]]
+    assert calls == ["gene2", "gene10"]
+
+
+@pytest.mark.parametrize("selected", [set(), {"gene0"}])
+@pytest.mark.parametrize("member", ["bodies.sqlite", "models-000001.jsonl.gz"])
+def test_model_id_selection_checks_unselected_source_bytes(tmp_path, selected, member):
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(4)]
+    directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory)
+    path = directory / "model_store" / member
+    with path.open("ab") as handle:
+        handle.write(gzip.compress(b"") if member.endswith(".gz") else b"changed")
+    with pytest.raises(ValueError, match="checksum"):
+        list(store.iter_models(directory, model_ids=selected, frozen_key=key))
+
+
+@pytest.mark.parametrize("member", ["receipt.json", "model_store/bodies.sqlite"])
+def test_model_id_selection_preserves_end_generation_and_member_fences(tmp_path, member):
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(3)]
+    directory, _ = published(tmp_path, records)
+    iterator = store.iter_models(directory, model_ids={"gene0"})
+    assert next(iterator) == records[0]
+    with (directory / member).open("ab") as handle:
+        handle.write(b" ")
+    with pytest.raises(ValueError, match="generation|during consumption"):
+        list(iterator)
+
+
+def test_model_id_selection_checks_counts_even_without_matches(tmp_path):
+    directory, _ = published(tmp_path, [model(0)])
+    path = directory / "model_store/manifest.json"
+    value = json.loads(path.read_text())
+    value["shards"][0]["count"] += 1
+    value["counts"]["models"] += 1
+    path.write_text(json.dumps(value))
+    receipt(directory)
+    with pytest.raises(ValueError, match="shard count"):
+        list(store.iter_models(directory, model_ids={"absent"}))
+
+
+@pytest.mark.parametrize("bad", ["gene0", b"gene0", {1}])
+def test_model_id_selection_rejects_ambiguous_id_collections(tmp_path, bad):
+    directory, _ = published(tmp_path, [model(0)])
+    with pytest.raises(ValueError, match="collection of strings"):
+        list(store.iter_models(directory, model_ids=bad))
+
+
 @pytest.mark.parametrize("legacy_layout", [False, True])
 def test_donor_metrics_preserve_all_views_without_duplicating_dna(tmp_path, monkeypatch, legacy_layout):
     records = [model(0, "accepted"), model(1, "accepted")]

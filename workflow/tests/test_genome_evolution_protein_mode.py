@@ -1583,15 +1583,17 @@ def test_busco_copy_failed_regeneration_preserves_previous_fastas_audit_and_rece
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
-@pytest.mark.parametrize("policy,strict,error", [
-    ("longest", "0", "Invalid species_tree_busco_duplicate_policy"),
-    ("best_score", "1", "conflicts with strictly_single_copy_only=1"),
+@pytest.mark.parametrize("policy,strict,copy_policy,error", [
+    ("longest", "0", "single-copy", "Invalid species_tree_busco_duplicate_policy"),
+    ("best_score", "1", "single-copy", "conflicts with strictly_single_copy_only=1"),
+    ("best_score", "0", "best-score", "conflicts with species_tree_busco_copy_policy=best-score"),
 ])
-def test_busco_copy_policy_invalid_settings_preserve_outputs(tmp_path, policy, strict, error):
+def test_busco_copy_policy_invalid_settings_preserve_outputs(tmp_path, policy, strict, copy_policy, error):
     saved = tmp_path / "workspace/output/species_tree/single_copy_cds_fasta/user-data"
     saved.parent.mkdir(parents=True)
     saved.write_text("preserve")
     result = _run_core(tmp_path, {"species_tree_busco_duplicate_policy": policy,
+                                 "species_tree_busco_copy_policy": copy_policy,
                                  "strictly_single_copy_only": strict})
     assert result.returncode != 0 and error in result.stderr
     assert saved.read_text() == "preserve"
@@ -1646,6 +1648,52 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
         with zipfile.ZipFile(archive_path) as archive:
             assert archive.read(f"{name}/preserved.txt").decode("utf-8") == name
     assert (summary_dir / "preserved.txt").read_text(encoding="utf-8") == "visible"
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
+def test_species_tree_best_score_selection_is_provenance_bound(tmp_path, monkeypatch):
+    original_prepare = _prepare_stub_binaries
+
+    def prepare_with_gzip_seqkit(path):
+        binary_dir = original_prepare(path)
+        stub = binary_dir / "seqkit"
+        script = stub.read_text().replace("import re\n", "import gzip\nimport re\n")
+        script = script.replace('with open(path, "r", encoding="utf-8") as handle:',
+                                'with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as handle:')
+        script = script.replace('open(out_path, "w", encoding="utf-8") if out_path else sys.stdout',
+                                '(gzip.open(out_path, "wt") if out_path.endswith(".gz") else open(out_path, "w")) if out_path else sys.stdout')
+        stub.write_text(script)
+        return binary_dir
+
+    monkeypatch.setattr(sys.modules[__name__], "_prepare_stub_binaries", prepare_with_gzip_seqkit)
+    workspace = tmp_path / "workspace"
+    proteins = workspace / "input/species_protein"
+    proteins.mkdir(parents=True)
+    (proteins / "Arabidopsis_thaliana.pep.fa").write_text(
+        ">Arabidopsis_thaliana_low\nMPEPTIDE\n>Arabidopsis_thaliana_high\nMPEPTIDE\n")
+    output = workspace / "output"
+    full = output / "species_protein_busco_full"
+    full.mkdir(parents=True)
+    (full / "Arabidopsis_thaliana.busco.full.tsv").write_text(
+        "BUSCO1\tDuplicated\tArabidopsis_thaliana_low\t10\t8\n"
+        "BUSCO1\tDuplicated\tArabidopsis_thaliana_high\t20\t8\n")
+    summary = output / "species_tree/busco_summary_table"
+    summary.mkdir(parents=True)
+    (summary / "busco_summary.tsv").write_text(
+        "busco_id\torthodb_url\tdescription\tArabidopsis_thaliana\n"
+        "BUSCO1\tu\td\tArabidopsis_thaliana_low,Arabidopsis_thaliana_high\n")
+    completed = _run_core(tmp_path, {"run_orthofinder": "0", "run_extract_species_tree_fasta": "1",
+                                     "species_tree_busco_copy_policy": "best-score"})
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    audit = output / "species_tree/busco_representative_selection.tsv"
+    assert "Arabidopsis_thaliana_high\t20.0\t8\tDuplicated\t1" in audit.read_text()
+    receipt = json.loads((output / "artifact_provenance/genome_evolution/species_tree.extract_fasta.json").read_text())
+    assert receipt["parameters"]["copy_policy"] == "best-score"
+    assert any(row["label"] == "busco_full_tables" for row in receipt["inputs"])
+    assert any(row["label"] == "representative_selection" and row["sha256"] == hashlib.sha256(audit.read_bytes()).hexdigest()
+               for row in receipt["outputs"])
 
 
 @pytest.mark.skipif(
@@ -2710,3 +2758,217 @@ def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_p
     assert second.returncode == 0, second.stdout + second.stderr
     assert "figtree" in {entry["label"] for entry in json.loads(manifest.read_text())["outputs"]}
     assert (directory / "FigTree.tre").read_text() == figtree
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", ["", "source_changed", "prefix_changed", "source_symlink"])
+def test_frozen_selection_prefix_is_retained_and_revalidated(tmp_path, failure):
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    previous = filtered / "Orthogroups.GeneCount.selected.tsv"
+    previous.write_text("Orthogroup\tA\tB\tTotal\nOG2\t2\t2\t4\n")
+    digest = hashlib.sha256(previous.read_bytes()).hexdigest()
+    provenance = tmp_path / "provenance"
+    prefix = provenance / "orthogroup_selection_prefix" / (digest + ".tsv")
+    if failure == "source_changed":
+        previous.write_text("changed\n")
+    if failure == "source_symlink":
+        target = tmp_path / "target"
+        previous.rename(target)
+        previous.symlink_to(target)
+    if failure == "prefix_changed":
+        prefix.parent.mkdir(parents=True)
+        prefix.write_text("corrupted\n")
+    core = CORE_PATH.read_text()
+    block = "og_selection_prefix_args=()" + core.split("og_selection_prefix_args=()", 1)[1].split(
+        "og_selection_needs_update=0", 1)[0]
+    program = 'set -euo pipefail\nensure_dir() { mkdir -p -- "$1"; }\ncp_out() { cp -- "$1" "$2"; }\n' + block
+    env = {**os.environ, "genome_evolution_provenance_dir": str(provenance),
+           "dir_orthofinder_filtered": str(filtered), "orthogroup_selection_prefix_sha256": digest}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+    if failure:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert prefix.read_bytes() == previous.read_bytes()
+        previous.write_text("a later expanded selection\n")
+        repeated = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert hashlib.sha256(prefix.read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("stale", [False, True])
+def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tmp_path, stale):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    settings = {**config, "genome_evolution_mode": "orthogroups", "artifact_stale_policy": "rebuild",
+                "run_orthofinder": "1", "run_og_selection": "0"}
+    first = _run_core(tmp_path, settings)
+    assert first.returncode == 0, first.stdout + first.stderr
+    calls = tmp_path / "capture/orthofinder_args.txt"
+    assert calls.exists()
+    calls.unlink()
+    if stale:
+        (workspace / "output/orthofinder/hog2og/Orthogroups.GeneCount.tsv").write_text("changed\n")
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    original_tree = tree.read_bytes()
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection"})
+    assert not calls.exists()
+    assert tree.read_bytes() == original_tree
+    if stale:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "run_orthofinder=0" in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("name", ["Orthogroups_filtered", "additional-20261021", "../old", "/tmp/other", ".", "a,b"])
+def test_native_catalog_namespace_is_a_bounded_basename(tmp_path, name):
+    helper = WORKFLOW_DIR / "support/gg_util/01_runtime_config.sh"
+    command = f'source {shlex.quote(str(helper))}; gg_orthogroup_catalog_path "$1"'
+    result = subprocess.run([BASH_FOR_TESTS, "-c", command, "_", name],
+        env={**os.environ, "gg_workspace_output_dir": str(tmp_path)}, capture_output=True, text=True)
+    if name in {"Orthogroups_filtered", "additional-20261021"}:
+        assert result.returncode == 0
+        assert result.stdout.strip() == str(tmp_path / "orthofinder" / name)
+    else:
+        assert result.returncode != 0
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_explicit_summary_catalog_never_falls_back_to_the_old_selection(tmp_path):
+    output = tmp_path / "output"
+    original = output / "orthofinder/Orthogroups_filtered"
+    original.mkdir(parents=True)
+    for kind in ("selected", "annotated"):
+        (original / f"Orthogroups.GeneCount.{kind}.tsv").write_text("old data\n")
+    summary = (WORKFLOW_DIR / "core/gg_gene_summary_core.sh").read_text()
+    functions = summary.split("resolve_orthogroup_genecount_selected()", 1)[1].split(
+        'file_orthogroup_genecount_selected=""', 1)[0]
+    functions = "resolve_orthogroup_genecount_selected()" + functions
+    helper = WORKFLOW_DIR / "support/gg_util/01_runtime_config.sh"
+    command = f'source {shlex.quote(str(helper))}; ' + functions + '\nresolve_orthogroup_genecount_selected'
+    env = {**os.environ, "gg_workspace_output_dir": str(output), "orthogroup_catalog_name": "additional"}
+    missing = subprocess.run([BASH_FOR_TESTS, "-c", command], env=env, capture_output=True, text=True)
+    assert missing.returncode != 0
+    assert not missing.stdout
+    target = output / "orthofinder/additional"
+    target.mkdir()
+    (target / "Orthogroups.GeneCount.selected.tsv").write_text("new data\n")
+    found = subprocess.run([BASH_FOR_TESTS, "-c", command], env=env, capture_output=True, text=True)
+    assert found.returncode == 0
+    assert found.stdout.strip() == str(target / "Orthogroups.GeneCount.selected.tsv")
+    assert (original / "Orthogroups.GeneCount.selected.tsv").read_text() == "old data\n"
+
+
+@pytest.mark.parametrize("kind", ["selected", "annotated"])
+def test_incomplete_explicit_summary_catalog_stops_before_analysis(tmp_path, kind):
+    summary = (WORKFLOW_DIR / "core/gg_gene_summary_core.sh").read_text()
+    body = summary.split('file_orthogroup_genecount_selected=""', 1)[1].split(
+        'resolve_presence_absence_species_tree()', 1)[0]
+    body = 'file_orthogroup_genecount_selected=""' + body
+    prelude = 'resolve_orthogroup_genecount_selected() { return 1; }; resolve_orthogroup_genecount_annotated() { return 1; };'
+    prelude += f'resolve_orthogroup_genecount_{kind}() {{ echo /present; }};'
+    env = {**os.environ, "orthogroup_catalog_name": "additional", "gene_family_source": "orthogroup"}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", prelude + body + '\necho ANALYSIS_STARTED'],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 3
+    assert "catalog is incomplete" in result.stderr
+    assert "ANALYSIS_STARTED" not in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", [None, "sequence", "missing", "tree", "parameters", "manifest",
+                                  "missing_stamp", "legacy_stamp"])
+def test_selection_uses_verified_inference_inputs_after_cds_republication(tmp_path, failure):
+    workspace = tmp_path / "workspace"
+    cds = workspace / "input/species_cds"
+    cds.mkdir(parents=True)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        (cds / f"{species}_cds.fa").write_text(f">{species}_gene1\nATGAAA\n")
+    (workspace / "output/species_cds_resolved").mkdir(parents=True)
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    tree.parent.mkdir(parents=True)
+    tree.write_text("(Arabidopsis_thaliana:0.1,Oryza_sativa:0.1);\n")
+    settings = {"input_sequence_mode": "cds", "undated_species_tree": "astral_pep",
+                "species_tree_output_storage": "files", "run_cds_translation": "1"}
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "species_tree"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroups"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = workspace / "output/artifact_provenance/genome_evolution/orthofinder.json"
+    recorded = json.loads(manifest.read_text())
+    sequences = next(row for row in recorded["inputs"] if row["label"] == "species_sequences")
+    frozen = workspace / sequences["path"]
+    assert frozen.parent.name == "species_cds_resolved_views"
+    # Republish rather than editing the inode shared with the immutable view.
+    current = cds / "Arabidopsis_thaliana_cds.fa"
+    replacement = cds / "replacement"
+    replacement.write_text(">Arabidopsis_thaliana_gene1\nATGCCC\n")
+    replacement.replace(current)
+    if failure == "sequence":
+        (frozen / current.name).write_text("changed frozen sequence\n")
+    elif failure == "missing":
+        (frozen / current.name).unlink()
+    elif failure == "tree":
+        tree.write_text("(Arabidopsis_thaliana:9,Oryza_sativa:9);\n")
+    elif failure == "parameters":
+        settings["genetic_code"] = "2"
+    elif failure == "manifest":
+        manifest.unlink()
+    elif failure == "missing_stamp":
+        (workspace / "output/species_tree/.shared_protein_input_signature").unlink()
+    elif failure == "legacy_stamp":
+        (workspace / "output/species_tree/.shared_protein_input_signature").write_text("legacy stamp\n")
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for directory in (
+        workspace / "output/species_tree", workspace / "output/artifact_provenance/genome_evolution")
+        for p in directory.rglob("*") if p.is_file()
+        and not p.is_relative_to(workspace / "output/species_tree/tmp")}
+    views = set(frozen.parent.iterdir())
+    calls = tmp_path / "capture/orthofinder_args.txt"
+    calls.unlink()
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection",
+                                  "artifact_stale_policy": "rebuild"})
+    assert not calls.exists()
+    assert set(frozen.parent.iterdir()) == views
+    assert all((p.read_bytes(), p.stat().st_mtime_ns) == value for p, value in before.items())
+    if failure:
+        assert result.returncode != 0, result.stdout + result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Orthogroup inference and selection stages finished" in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("mode", ["orthogroups", "orthogroup_selection"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_orthogroup_modes_verify_historical_busco_plots_without_new_rendering(tmp_path, mode, changed):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    settings = {**config, "genome_evolution_mode": "orthogroups", "run_orthofinder": "1",
+                "run_og_selection": "0", "artifact_stale_policy": "rebuild"}
+    assert _run_core(tmp_path, settings).returncode == 0
+    output = workspace / "output"
+    summary = output / "species_tree/species_tree_summary"
+    buscos = output / "species_protein_busco_full"
+    buscos.mkdir(exist_ok=True)
+    (buscos / "Arabidopsis_thaliana.busco.full.tsv").write_text("historical BUSCO input\n")
+    manifest = output / "artifact_provenance/genome_evolution/species_tree.busco_plot.json"
+    args = [sys.executable, str(WORKFLOW_DIR / "support/artifact_provenance.py"), "record",
+            "--manifest", str(manifest), "--logical-root", str(output / ".gg_global_artifacts"),
+            "--workspace-root", str(workspace), "--step", "species_tree_busco_plot",
+            "--family-id", "all_buscos", "--input", f"undated_tree={summary / 'undated_species_tree.nwk'}",
+            "--input", f"busco_directory={buscos}", "--parameter", "min_og_species=auto"]
+    for label, name in [("pdf", "busco_cds.pdf"), ("svg", "busco_cds.svg"), ("summary", "annotation_summary.tsv")]:
+        path = summary / name
+        path.write_text("historical plot output\n")
+        args += ["--output", f"{label}={path}"]
+    subprocess.run(args, check=True, capture_output=True)
+    saved = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in [manifest, *summary.iterdir()] if p.is_file()}
+    if changed:
+        (buscos / "Arabidopsis_thaliana.busco.full.tsv").write_text("changed BUSCO input\n")
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": mode, "run_plot_species_trees": "1"})
+    assert result.returncode == (3 if changed else 0), result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in saved} == saved
+    if not changed:
+        assert "Frozen plot data and outputs verified" in result.stdout + result.stderr

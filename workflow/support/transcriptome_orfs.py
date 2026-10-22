@@ -3,6 +3,7 @@
 import hashlib
 import importlib.metadata
 import json
+import re
 from pathlib import Path
 
 
@@ -15,7 +16,11 @@ def input_type(value):
 
 def validate_manifest_row(row):
     if input_type(row) == "transcriptome":
-        if not (row.get("cds_url") or row.get("local_cds_path")):
+        onekp_sample = (str(row.get("provider", "")).strip().lower() == "onekp"
+                        and re.fullmatch(r"[A-Za-z]{4}", str(row.get("id", "")).strip()))
+        # The native 1KP resolver verifies the official sample identity and
+        # selects its transcript assembly before any nucleotide download.
+        if not (row.get("cds_url") or row.get("local_cds_path") or onekp_sample):
             raise ValueError("Transcriptome input requires an explicit sequence URL/path")
         if any(row.get(prefix + role + suffix) for role in ("gff", "gbff", "genome")
                for prefix, suffix in (("", "_url"), ("", "_path"), ("local_", "_path"))) or row.get("paired_curation"):
@@ -74,6 +79,7 @@ def contract(task):
     from cdskit import longestcds
 
     return dict(version=1, cds_input_type=input_type(task), selection="complete-first",
+                gene_grouping="declared-trinity-gene-v1",
                 genetic_code=int(task.get("genetic_code", 1)), source=signature(task["cds_path"]),
                 implementation=signature(__file__)["sha256"],
                 cdskit_version=importlib.metadata.version("cdskit"),

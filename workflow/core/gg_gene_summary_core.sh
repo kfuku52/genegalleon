@@ -219,12 +219,15 @@ mkdir -p "${summary_output_dir}"
 
 file_gene_family_db="${dir_gene_family}/gg_orthogroup.db"
 resolve_orthogroup_genecount_selected() {
-  local candidates=(
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.selected.tsv"
-    "${gg_workspace_output_dir}/orthofinder/hog2og/Orthogroups.GeneCount.selected.tsv"
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups.GeneCount.selected.tsv"
-  )
+  local catalog
+  catalog=$(gg_orthogroup_catalog_path) || return $?
+  local candidates=("${catalog}/Orthogroups.GeneCount.selected.tsv")
+  if [[ "${orthogroup_catalog_name:-Orthogroups_filtered}" == Orthogroups_filtered ]]; then
+    candidates+=(
+      "${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.selected.tsv"
+      "${gg_workspace_output_dir}/orthofinder/hog2og/Orthogroups.GeneCount.selected.tsv"
+      "${gg_workspace_output_dir}/orthofinder/Orthogroups.GeneCount.selected.tsv")
+  fi
   local candidate
   for candidate in "${candidates[@]}"; do
     if [[ -s "${candidate}" ]]; then
@@ -236,12 +239,15 @@ resolve_orthogroup_genecount_selected() {
 }
 
 resolve_orthogroup_genecount_annotated() {
-  local candidates=(
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.annotated.tsv"
-    "${gg_workspace_output_dir}/orthofinder/hog2og/Orthogroups.GeneCount.annotated.tsv"
-    "${gg_workspace_output_dir}/orthofinder/Orthogroups.GeneCount.annotated.tsv"
-  )
+  local catalog
+  catalog=$(gg_orthogroup_catalog_path) || return $?
+  local candidates=("${catalog}/Orthogroups.GeneCount.annotated.tsv")
+  if [[ "${orthogroup_catalog_name:-Orthogroups_filtered}" == Orthogroups_filtered ]]; then
+    candidates+=(
+      "${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.annotated.tsv"
+      "${gg_workspace_output_dir}/orthofinder/hog2og/Orthogroups.GeneCount.annotated.tsv"
+      "${gg_workspace_output_dir}/orthofinder/Orthogroups.GeneCount.annotated.tsv")
+  fi
   local candidate
   for candidate in "${candidates[@]}"; do
     if [[ -s "${candidate}" ]]; then
@@ -266,6 +272,10 @@ if [[ "${gene_family_source}" == "orthogroup" ]]; then
   else
     file_orthogroup_genecount_annotated=""
   fi
+fi
+if [[ "${gene_family_source}" == orthogroup && "${orthogroup_catalog_name:-Orthogroups_filtered}" != Orthogroups_filtered && ( -z "${file_orthogroup_genecount_selected}" || -z "${file_orthogroup_genecount_annotated}" ) ]]; then
+  echo "The explicitly selected orthogroup catalog is incomplete: ${orthogroup_catalog_name}" >&2
+  exit 3
 fi
 
 resolve_presence_absence_species_tree() {

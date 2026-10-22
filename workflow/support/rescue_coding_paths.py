@@ -230,6 +230,37 @@ def transferred_support(model):
                and alignment_support({**model, 'support': [row]}) for row in evidence)
 
 
+def _witnessed_retained_loci(rows):
+    """Preserve one verified producer's primary/alternative locus membership.
+
+    Alternatives must each agree with their freshly validated source primary.
+    Separate source loci stay separate, including nonoverlapping short paths
+    connected only by a longer isoform. True primary frame conflicts still fail.
+    Incomplete, mixed-generation or ambiguous witnesses use the strict resolver.
+    """
+    groups, generations = defaultdict(list), set()
+    for row in rows:
+        source = row['retained_coding_path']
+        loci = source.get('locus_model_ids', ())
+        if len(loci) != 1 or not source.get('source_directory') or not source.get('producer_receipt_sha256'):
+            return None
+        generations.add((source['source_directory'], source['producer_receipt_sha256'], source.get('history_depth', 0)))
+        groups[loci[0]].append(row)
+    if len(generations) != 1:
+        return None
+    primaries = []
+    for locus, members in groups.items():
+        primary = [row for row in members if locus in row['retained_coding_path'].get('primary_model_ids', ())
+                   and locus in row['retained_coding_path'].get('model_ids', ())]
+        if len(primary) != 1 or any(row is not primary[0] and not compatible_paths(row, primary[0]) for row in members):
+            return None
+        primaries.append(primary[0])
+    if any(coding_overlap(a, b)[0] and not compatible_paths(a, b)
+           for i, a in enumerate(primaries) for b in primaries[i + 1:]):
+        return None
+    return list(groups.values())
+
+
 def _coherent_retained_components(rows):
     """Keep recent annotation anchors; older bridges remain explicit proposals."""
     def coherent(group):
@@ -244,6 +275,10 @@ def _coherent_retained_components(rows):
 
     for component in overlap_components(rows):
         group = [rows[i] for i in component]
+        witnessed = _witnessed_retained_loci(group)
+        if witnessed is not None:
+            yield from witnessed
+            continue
         if coherent(group):
             yield group
             continue
@@ -253,7 +288,10 @@ def _coherent_retained_components(rows):
         bases = []
         for indexes in overlap_components(anchors):
             nearest = [anchors[i] for i in indexes]
-            if coherent(nearest):
+            witnessed = _witnessed_retained_loci(nearest)
+            if witnessed is not None:
+                bases.extend(witnessed)
+            elif coherent(nearest):
                 bases.append(nearest)
             else:
                 # No historical priority can choose between conflicting paths
@@ -299,7 +337,7 @@ def compatible_components(models):
                 row['status'] = 'unresolved'
         def coherent(group):
             return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
-        if coherent(valid):
+        if coherent(valid) and not any(row.get('retained_coding_path', {}).get('locus_model_ids') for row in valid):
             yield valid
             continue
         retained = [row for row in valid if row.get('retained_coding_path')]

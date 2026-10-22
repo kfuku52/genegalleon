@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import format_species_inputs as fsi
+from cloned_cds_models import binding_signature, copy_binding
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from input_generation_array_state import atomic_json, digest, digest_paths, load_plan
 from stage_input_generation_downloads import explicit_manifest_task
@@ -165,6 +166,7 @@ def resolve_manifest_task(task, args, *, raw_input_error=None, batch=None):
         actual[key] = task[key]
     actual["genetic_code"] = int(task.get("genetic_code", 1))
     apply_input_type(actual, task["manifest_row"])
+    copy_binding(actual, task)
     atomic_json(resolved, {"plan_sha256": plan_sha256, "task_index": args.task_index,
                           "task": {key: str(value) if isinstance(value, Path) else value for key, value in actual.items()}})
     return actual
@@ -215,6 +217,10 @@ def describe_task(args, *, batch=None, raw_input_error=None, write_meta=True):
     metadata = {"task_index": args.task_index, "task_count": plan["task_count"],
                 "species_prefix": task["species_prefix"], "species_key": task["species_key"],
                 "provider": task["provider"], **raw_paths, **expected_paths}
+    if task.get('cloned_cds_path'):
+        metadata['cloned_model_signature'] = binding_signature(task)
+        metadata['cloned_cds_path'] = str(task['cloned_cds_path'])
+        metadata['cloned_cds_mode'] = task.get('cloned_cds_mode', 'genomic')
     if task.get("cds_input_type") == "transcriptome":
         metadata["orf_audit_output_path"] = expected_paths["cds_output_path"] + ".orf-extraction.json"
     if batch is not None:
@@ -362,6 +368,12 @@ def main():
         "provider": task["provider"],
     }
     write_json(args.stats_output, stats)
+    if task.get('cloned_model_audit'):
+        metadata.update(cloned_model_audit_path=task['cloned_model_audit'],
+                        cloned_source_cds_path=str(task['cds_path']), cloned_source_gff_path=str(task.get('gff_path') or ''),
+                        cloned_source_genome_path=str(task.get('genome_path') or ''),
+                        cloned_cds_mode=task.get('cloned_cds_mode', 'genomic'),
+                        cloned_cds_path=str(task['cloned_cds_path']))
     write_json(
         args.task_meta_output,
         {

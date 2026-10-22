@@ -18,6 +18,33 @@ HELPER = Path(__file__).resolve().parents[1] / "support" / "shared_namespace_loc
 SHELL = HELPER.with_name("gg_shared_lock.sh")
 
 
+def test_namespace_privacy_survives_inherited_nfs_modes_without_changing_workspace(tmp_path, monkeypatch):
+    original = Path.mkdir
+    def inherited(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        if self.name.endswith('.namespace-v1') or self.name == 'readers':
+            self.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', inherited)
+    path = tmp_path / 'family.lock'
+    mode = tmp_path.stat().st_mode
+    with namespace_lock(path, exclusive=True):
+        root = Path(str(path) + '.namespace-v1')
+        assert root.stat().st_mode & 0o077 == 0
+        assert (root / 'readers').stat().st_mode & 0o077 == 0
+    assert tmp_path.stat().st_mode == mode
+
+
+def test_ineffective_namespace_permission_tightening_fails_before_ownership(tmp_path, monkeypatch):
+    root = tmp_path / 'family.lock.namespace-v1'
+    root.mkdir()
+    root.chmod(0o777)
+    monkeypatch.setattr(os, 'fchmod', lambda *_: None)
+    with pytest.raises(NamespaceLockError, match='privacy did not hold'):
+        acquire(tmp_path / 'family.lock', exclusive=True)
+    assert not (root / 'gate').exists()
+
+
 @pytest.mark.parametrize("ending,retained", [("exit 0", False), ("exit 7", False), ("exit 137", True), ("kill -TERM $$", True)])
 def test_input_core_lock_cleanup_retains_interrupted_ownership(tmp_path, ending, retained):
     core = HELPER.parents[1] / "core" / "gg_input_generation_core.sh"

@@ -87,7 +87,7 @@ fi
 discover_native_fastq_files() {
   # Shared by analysis and container-side launch qualification. Validate the
   # complete shallow inventory before publishing any paths to the caller.
-  python - "$1" <<'PY'
+  python - "$1" "${2:-files}" <<'PY'
 import os
 import stat
 import sys
@@ -95,9 +95,13 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 try:
+    mode = sys.argv[2]
+    if mode not in {'files', 'provenance'}:
+        raise ValueError(f"Unknown FASTQ discovery output mode: {mode}")
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f"FASTQ input directory must be a physical directory: {root}")
     selected = []
+    provenance = []
     for path in sorted(root.iterdir()):
         if path.name.startswith('.') or not path.name.endswith(('.fq', '.fastq', '.fq.gz', '.fastq.gz')):
             continue
@@ -113,12 +117,28 @@ try:
         with path.open('rb') as handle:
             handle.read(1)
         selected.append(str(path))
+        if mode == 'provenance':
+            target = str(path.resolve(strict=True))
+            if '\n' in target or '\r' in target:
+                raise ValueError(f"FASTQ target path contains a line break: {target!s}")
+            index = len(selected)
+            provenance.extend(('--input', f'fastq_{index}={target}',
+                               '--parameter', f'fastq_name_{index}={path.name}'))
 except (OSError, ValueError) as exc:
     print(f"Native FASTQ input discovery failed: {exc}", file=sys.stderr)
     raise SystemExit(1) from exc
-for path in selected:
-    print(path)
+for value in selected if mode == 'files' else provenance:
+    print(value)
 PY
+}
+
+validate_native_fastq_provenance_bindings() {
+  local actual
+  actual=$(discover_native_fastq_files "$1" provenance) || return $?
+  if [[ "${actual}" != "$2" ]]; then
+    echo "Native FASTQ input bindings changed during metadata generation; provenance was not published." >&2
+    return 1
+  fi
 }
 
 resolve_busco_lineage_for_current_species() {
@@ -1034,6 +1054,7 @@ import pathlib
 import re
 import shutil
 import sys
+import tempfile
 import time
 
 root = pathlib.Path(sys.argv[1])
@@ -1101,16 +1122,28 @@ for candidate, _, _, size, files in sorted(entries, key=lambda item: (-item[2], 
     kept_bytes += size
     kept_files += files
 
+closed = set()
 try:
     for candidate, fd, newest, _, _ in entries:
         expired = cutoff is not None and newest < cutoff
         excess = limited and candidate not in keep
         if expired or excess:
-            shutil.rmtree(candidate)
+            # Unlinking our own open lock creates a .nfs file on NFS. Move the
+            # exclusively held tree away first, then close before deleting it.
+            retired = pathlib.Path(tempfile.mkdtemp(prefix=".gg-tmp-retire-", dir=root))
+            retired.chmod(0o700)
+            candidate.rename(retired / "scratch")
+            os.close(fd)
+            closed.add(fd)
+            shutil.rmtree(retired)
             print("Removed expired transcriptome scratch: {}".format(candidate))
-        os.close(fd)
+        else:
+            os.close(fd)
+            closed.add(fd)
 finally:
     for _, fd, _, _, _ in entries:
+        if fd in closed:
+            continue
         try:
             os.close(fd)
         except OSError:
@@ -1140,6 +1173,27 @@ release_transcriptome_tmp_lock() {
     eval "exec ${transcriptome_tmp_lock_fd}>&-" 2>/dev/null || true
     transcriptome_tmp_lock_fd=""
   fi
+}
+
+retire_transcriptome_tmp() {
+  python - "${dir_tmp}" "${transcriptome_tmp_root}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+source, root = (pathlib.Path(value) for value in sys.argv[1:])
+if (not source.is_absolute() or source.is_symlink() or not source.is_dir()
+        or source.parent != root or root.is_symlink() or not root.is_dir()
+        or not re.fullmatch(r'[0-9]+_.+', source.name)
+        or source.stat().st_uid != os.getuid()):
+    raise SystemExit('Refusing an unsafe transcriptome scratch retirement')
+retired = pathlib.Path(tempfile.mkdtemp(prefix='.gg-tmp-retire-', dir=root))
+retired.chmod(0o700)
+source.rename(retired / 'scratch')
+print(retired)
+PY
 }
 
 write_getfastq_cache_contract() {
@@ -3930,7 +3984,9 @@ gg_artifact_contract_init metadata_provenance_args "transcriptome_metadata" "${s
 if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
   metadata_provenance_args+=(--input "sra_list=${file_input_sra_list}")
 elif [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
-  metadata_provenance_args+=(--input "fastq_directory=${dir_species_fastq}")
+  native_fastq_metadata_bindings=$(discover_native_fastq_files "${dir_species_fastq}" provenance) || exit $?
+  mapfile -t native_fastq_metadata_inputs <<< "${native_fastq_metadata_bindings}"
+  metadata_provenance_args+=("${native_fastq_metadata_inputs[@]}")
 fi
 metadata_provenance_args+=(
   --output "metadata=${file_amalgkit_metadata}"
@@ -4012,6 +4068,9 @@ if [[ "${selected_transcriptome_mode}" != "metadata" && ${metadata_needs_update}
     exit 1
   fi
 
+  if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
+    validate_native_fastq_provenance_bindings "${dir_species_fastq}" "${native_fastq_metadata_bindings}" || exit $?
+  fi
   gg_artifact_record "${metadata_provenance_args[@]}"
 
   echo "$(date): End: ${task}"
@@ -5442,7 +5501,10 @@ fi
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "delete_tmp_dir=1: Normal completion. Deleting ${dir_tmp}"
   if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then
-    rm -rf -- "${dir_tmp}"
+    cd "${transcriptome_tmp_root}"
+    retired_transcriptome_tmp=$(retire_transcriptome_tmp) || exit 1
+    release_transcriptome_tmp_lock
+    rm -rf -- "${retired_transcriptome_tmp}"
   else
     echo "Refusing to delete unsafe tmp directory: '${dir_tmp:-}'"
   fi

@@ -50,7 +50,8 @@ class FreshDigestBatch:
                     or str(Path(path).resolve(strict=True)) != target):
                 raise OSError("File changed while hashing: " + path)
 
-    def read(self, paths):
+    def read(self, paths, *, expected=None):
+        """Hash current members together; expected hashes retain fail-fast reads."""
         self.check()
         paths = list(dict.fromkeys(str(path) for path in paths))
         for path in paths:
@@ -60,6 +61,8 @@ class FreshDigestBatch:
             identity, target = self.paths[path]
             if identity not in self.hashes:
                 self.hashes[identity] = digest(target)
+            if expected is not None and self.hashes[identity] != expected[path]:
+                raise ValueError("File hash mismatch: " + path)
         self.check()
         return {path: self.hashes[self.paths[path][0]] for path in paths}
 
@@ -166,10 +169,15 @@ def verify_receipt(plan, index, plan_sha256=None, *, namespace_root=None):
             return False
         if not isinstance(receipt["files"], dict) or not receipt["files"]:
             return False
+        members = {}
         for name, value in receipt["files"].items():
             member = str(namespace_path(name, namespace_root))
-            if batch.read([member])[member] != value:
+            if member in members and members[member] != value:
                 return False
+            members[member] = value
+        # Fence all names together instead of revisiting every earlier member
+        # after each hash. Expected hashes still stop before later large reads.
+        batch.read(members, expected=members)
         # No saved digest survives this call. Fence metadata, all aliases and
         # earlier members until even the last output has been read.
         batch.check()
@@ -192,10 +200,24 @@ def frozen_input_hashes(plan_path, plan, index):
     return expected
 
 
-def export_manifest(plan, outfile, tasks=None):
+def export_manifest(plan, outfile, tasks=None, *, cloned_cds_options=None):
     selected_tasks = plan["tasks"] if tasks is None else list(tasks)
     rows = [dict(task.get("manifest_row") or {"provider": task["provider"],
             "id": task["species_key"], "species_key": task["species_key"]}) for task in selected_tasks]
+    if cloned_cds_options is not None:
+        options = cloned_cds_options
+        if not isinstance(options, dict) or not options or set(options) - {
+                'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases'}:
+            raise ValueError('Invalid cloned CDS export options')
+        if 'cloned_cds_unresolved_policy' in options and options['cloned_cds_unresolved_policy'] not in {'error', 'retain_source'}:
+            raise ValueError('Invalid cloned CDS unresolved policy')
+        size = options.get('cloned_cds_index_batch_bases', 'auto')
+        if not isinstance(size, str) or size != 'auto' and (not size.isdecimal() or int(size) < 1):
+            raise ValueError('Invalid cloned CDS index batch size')
+        if any(not row.get('cloned_cds_fasta') or (row.get('cloned_cds_mode') or 'genomic') != 'genomic' for row in rows):
+            raise ValueError('Cloned CDS export options require genomic cloned input rows')
+        for row in rows:
+            row.update(options)
     fields = ["provider", "id", "species_key"] + sorted({key for row in rows for key in row} - {"provider", "id", "species_key"})
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, delimiter="\t")

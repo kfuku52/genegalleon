@@ -27,6 +27,57 @@ while producer execution continues to require its own recorded tool identities.
 
 ## Workflow
 
+### Re-evaluate UTRs after coding-model completion
+
+UTR interpretation is automatic during finalization. CoGe annotations whose
+`exon` rows encode terminal noncoding segments separately from CDS rows are
+recognized only with matching CoGe feature identity, unique parents, terminal
+segments and consistent declared transcript bounds. Their exon path is the
+union of those segments and the unchanged CDS. Other inconsistent exon paths
+remain unsupported, with an explicit audit reason.
+
+Native UTR donors are assigned by unique exact CDS first, then a unique identical
+nonempty full coding intron chain, then unique same-strand coding overlap.
+Shared chains and multi-locus coding paths remain ambiguous. The UTR audit
+distinguishes ambiguous overlap, opposite-strand overlap, absence of coding
+overlap and contigs without native predictions.
+
+To apply a corrected interpreter without rerunning coding selection or BUSCO,
+use a separate derivative publication:
+
+```bash
+python workflow/support/gene_model_refinement.py reproject-utrs \
+  --source-output /path/to/completed/refinement_output \
+  --source-receipt-sha256 SHA256_OF_EFFECTIVE_RECEIPT \
+  --output /path/to/new/utr_reassessment \
+  --species Species_name
+```
+
+Repeat `--species` for a subset or omit it for the source cohort. Consumed source
+members and native prediction provenance are freshly verified against frozen
+receipts, with input-change fences through publication. The new `effective/`
+contains selected, analysis and full GFFs, transcript FASTA, UTR audits, a summary
+and provenance. Coding rows are checked byte-for-byte against each source GFF;
+CDS/protein FASTAs and BUSCO results remain in the immutable source publication.
+The summary denominator is the final exported CDS gene set, not all candidates.
+This UTR-only derivative is not a replacement coding-input manifest.
+
+Reassessment also recognises prior GeneGalleon-derived UTR children when the
+source has gene-owned CDS rows without a separate transcript row. Those ends
+are removed from the coding seed before independently evaluating the original
+annotation and frozen native prediction again. Independent original UTRs are
+not inferred from generated-looking identifiers or removed on that basis.
+
+Completion builds one command-local contig-length lookup rather than scanning
+the FASTA reference tuple for every donor and UTR end. In a synthetic fragmented
+assembly benchmark (1,500 genes, 16,307 contigs, pysam 0.23.3, Linux ARM64),
+one warmup and three timed runs gave median 1.104 s before and 0.131 s after.
+The rendered GFF, audit and transcript sequence digest was identical. This is
+a completion-kernel measurement, not whole-cohort or filesystem throughput.
+
+Identical invocations verify and reuse the derivative. A different source,
+species selection or UTR implementation requires a new output directory.
+
 ```mermaid
 flowchart LR
   A[Original CDS + full GFF + genome] --> B[All coding isoforms + provenance]
@@ -327,6 +378,28 @@ receipts permit verified restarts; changed inputs, implementation or settings
 require a new report directory. Failed or incomparable evaluations do not
 produce a completed comparison. Deltas use integer BUSCO counts, avoiding
 rounding errors in the displayed summary percentages.
+Explicit protein assessment is available with `--mode proteins`. The default
+`--protein-input-policy strict` translates declared frame-zero CDS and rejects
+partial terminal codons, internal stops, invalid bases and duplicate identifiers.
+`--protein-input-policy admitted` instead consumes completed native catalogues
+and the exact effective protein/translation-admission publication. It preserves
+the existing annotated-phase and usable/exportable admission rules, recording
+every excluded source identifier and reason. Neither policy guesses a genetic
+code: native codes come from the frozen plan and must agree with an optional
+`--genetic-codes` TSV; CDS-only species require an explicit TSV entry.
+
+Completed admitted-protein evaluations can be reused across separate reports
+with `--reuse-report /path/to/previous/busco --reuse-producer
+/path/to/exact/gene_model_refinement_busco.py`. The producer file must match the
+previous report's implementation hash. Reuse verifies its computational function
+bodies, translation policy and parser/provider dependencies against the current
+implementation, plus every numerical setting, tool/wrapper hash and lineage
+content hash. Different physical lineage/download paths are permitted only
+under those content identities. Identical protein bytes reuse verified scores
+and full tables with a fresh current-DNA/admission receipt; changed proteins run
+BUSCO again. Corrupt prior evidence fails verification rather than being imported.
+The current source records every imported leaf and its original receipt hash.
+
 The comparison also shows per-species missing-gene rescue counts and accepted
 repair/additional-isoform coding paths. Rescue counts are unique gene features
 with source `genegalleon_rescue` in the frozen annotation and are already included

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import subprocess
 import tempfile
@@ -212,7 +213,18 @@ def render_native_batch(requests, workspace):
     plan = workspace / 'native_jobs.json'
     plan.write_text(json.dumps(requests) + '\n')
     command = ['Rscript', str(Path(__file__).resolve().parent / 'tree_plot_batch.r'), str(plan)]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # The mounted workflow and the container's installed package can have different
+    # revisions. Install the complete owning package once per bounded batch; never
+    # patch a namespace or silently render with an older image's implementation.
+    with tempfile.TemporaryDirectory(prefix='treevis-library-', dir=workspace) as library:
+        package = Path(__file__).resolve().parent / 'treevis'
+        installed = subprocess.run(['R', 'CMD', 'INSTALL', '--no-multiarch',
+                                    '--library=' + library, str(package)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if installed.returncode:
+            raise RuntimeError('Native focused gene-tree package installation failed:\n' + installed.stdout)
+        env = {**os.environ, 'R_LIBS': library + (os.pathsep + os.environ['R_LIBS'] if os.environ.get('R_LIBS') else '')}
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     receipt = Path(str(plan) + '.results.json')
     if not receipt.is_file():
         raise RuntimeError('Native focused gene-tree batch produced no receipt:\n' + result.stdout)
@@ -230,7 +242,7 @@ def render_native_batch(requests, workspace):
 
 
 def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations='',
-                      mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None):
+                      mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None, uniprot_fasta=''):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     links = validated_event_links(events, links)
     csv.field_size_limit(100_000_000)
@@ -249,7 +261,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
 
     coordinates = GenomeCoordinates(gff_root)
     annotations = ContextAnnotations(context_annotations, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
-                                     scaffold_taxonomy_dir=scaffold_taxonomy_dir, taxonomy_dbfile=taxonomy_dbfile)
+                                     scaffold_taxonomy_dir=scaffold_taxonomy_dir, taxonomy_dbfile=taxonomy_dbfile, uniprot_fasta=uniprot_fasta)
     index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)

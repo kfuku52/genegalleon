@@ -244,8 +244,24 @@ commits remain temporary build metadata, never repository defaults.
 The fast lane also installs Ubuntu's `seqkit` package for the real per-species
 genetic-code translation regression; these tool-dependent assertions remain enabled.
 
-Commit CI partitions fast tests across two jobs, workflow integrations across
-three, and SIF runtime Python tests across eight, with two pytest workers per job.
+Commit CI uses one four-worker job per complete fast, workflow-integration and
+SIF Python suite, plus a separate download/traits job. This avoids repeated
+collection, dependency installation and SIF setup in many short partitions.
+Local and publication validation retain their existing worker defaults.
+R, extra runtime and real 3Di checks retain their independent execution and
+resource requirements. Fewer concurrent runners favor total Actions minutes;
+the complete SIF Python job may finish later than the former eight-way split.
+Default-branch and manual runs finish their active validation so a long runtime
+build can populate the exact cache. GitHub keeps one pending run per ref and
+replaces intermediate waiting first attempts with the latest. An explicit rerun
+of a trusted workflow uses a run-specific concurrency group: later pushes do not
+discard its exact-commit validation or displace another pending main-branch run.
+PR retries retain branch coalescing. This does not automatically rerun cancelled
+work or skip any checks. Superseded PR validation
+still cancels. This avoids repeatedly discarding cold builds before they finish.
+Main-branch runtime selection compares against the last ancestor whose complete
+SIF check succeeded, so coalescing cannot hide an intermediate code change behind
+a documentation-only push. If that proof is unavailable, all runtime checks run.
 `--gg-shard INDEX/COUNT`
 assigns each selected pytest node ID to exactly one partition using a stable hash;
 lane selection and explicit paths still apply first. Each job reports slow test
@@ -399,6 +415,12 @@ metadata because the checkout is mounted at test time. A cache miss may reuse
 the published daily image only when its runtime label matches exactly;
 otherwise CI builds the current container before conversion. The cache is
 saved only after all SIF validation checks succeed on the default branch.
+BuildKit's Actions cache exports use `mode=min` for both commit validation and
+container publishing. Observed `mode=max` exports exceeded the shared 10 GB
+allowance, alongside missing build blobs and disappearing SIF cache entries;
+one observed export alone took about 19.5 minutes. Keeping final-image layers
+reduces that competition, at the cost of fewer intermediate-stage cache hits
+when a new runtime must be built. Local disk cache policy is unchanged.
 The daily publisher primes that same cache from its immutable multi-architecture
 image, passing the already resolved runtime identity and security epoch. It
 does not resolve moving branches a second time during SIF preparation. Each
@@ -441,11 +463,15 @@ bash ./dev config-schema markdown
 Use `bash ./dev bump patch` (or `minor`/`major`) for an atomic Semantic Version
 update; `python workflow/support/bump_version.py patch --dry-run` previews it.
 
-`gg_genome_annotation_core.sh` and `gg_transcriptome_generation_core.sh`
+`gg_gene_evolution_core.sh`, `gg_genome_annotation_core.sh` and `gg_transcriptome_generation_core.sh`
 support `GG_CORE_SOURCE_ONLY=1` when a
 focused shell test needs to load its helper functions without starting a
 workflow. Its functions and ordered stages remain in the self-contained core
-file; the switch is a test boundary, not a sourced production architecture.
+file; the switch loads native helpers without starting a full analysis.
+For per-species protein preparation, `translate_orthogroup_cds_to_protein_fasta`
+accepts an optional fourth argument declaring the species. This avoids parsing
+every header for its species, while the source/output record-count check still
+rejects records outside that prefix.
 FASTQ recovery tests load the real transcriptome helper this way and exercise
 connection interruption, process restart, changed objects, and invalid HTTP
 ranges against a loopback server.
@@ -517,6 +543,45 @@ checks equivalent logical outputs and separates parent/child peak RSS.
 
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
+
+For bounded shell pools with uneven worker durations, output equivalence and
+failure propagation, see [background worker scheduling](background-worker-scheduling.md).
+
+## Rescue model-store admission comparisons
+
+`benchmark_rescue_model_store_patch.py` generates synthetic candidates and
+measures admission updates separately from input creation and candidate loading.
+Each timed patch runs in a fresh process. With `--baseline`, the runner alternates
+before/after order and requires an identical manifest digest, including every
+output file's SHA-256. Use the same runtime with no concurrent tests or builds:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/tests/benchmark_rescue_model_store_patch.py \
+  --implementation workflow/support/rescue_model_store_patch.py \
+  --baseline /mounted/baseline/rescue_model_store_patch.py \
+  --records 20000 --repeats 3 --codec gzip
+```
+
+Mount a saved baseline module with `GENEGALLEON_DOCKER_EXTRA_BINDS` when it is
+outside the checkout. Repeat with `--change-every 100` for sparse changes, or
+`--codec zstd` in a runtime containing `zstandard`. The reported peak RSS includes
+candidate loading; timed wall time covers only the patch. These results measure
+synthetic storage updates, not whole-genome prediction or total cohort runtime.
+
+For an append-heavy update, add `--records 8000 --change-every 8
+--appended-records 20000 --body-group-size 8`. This keeps eight consecutive
+donor-evidence records per distinct coding body and includes the original and
+appended partial-reference streams. All original records and every appended
+candidate remain in the output; the benchmark does not count them as genes.
+
+For decoded-reader reuse, run `benchmark_rescue_model_store_read.py` with
+`--implementation workflow/support/rescue_model_store.py --baseline /mounted/baseline/rescue_model_store.py`.
+It alternates fresh processes, verifies the complete publication while reading,
+retains all selected records, and compares every decoded field in original order.
+Use `--body-group-size 8` for shared bodies and `--body-group-size 1` as a unique-body
+control; `--scope partial` also exercises ordered partial references. Fixture
+creation and result hashing are excluded from the timed read. RSS includes all
+retained records and the bounded caches; it is not a whole-analysis memory claim.
 
 ## Reference annotation comparisons
 

@@ -1,4 +1,4 @@
-"""Independently check selected CDS against explicit source GFF gene parents.
+"""Independently check selected CDS against explicit source GFF/GTF gene parents.
 
 This parser deliberately does not use the formatter's aggregation or rescue
 index. Missing/ambiguous parent evidence is reported, never guessed from a
@@ -7,6 +7,7 @@ author's explicit identities when the original export's Parent labels are wrong.
 """
 
 import re
+import shlex
 from collections import defaultdict
 from urllib.parse import unquote
 
@@ -39,6 +40,8 @@ class SourceGeneSelection:
             return
         declared_nodes = set()
         missing_parent_axes = defaultdict(set)
+        gtf_axes = defaultdict(set)
+        gtf_gene_parents = defaultdict(set)
         with open_text(source_annotation_path(gff_path, repair_locus_ids=repair_locus_ids), "rt", errors="replace") as handle:
             for line in handle:
                 if line.startswith("##FASTA"):
@@ -49,18 +52,48 @@ class SourceGeneSelection:
                 if len(fields) != 9:
                     continue
                 attrs = defaultdict(list)
-                for item in fields[8].split(";"):
-                    if "=" in item:
-                        key, values = item.split("=", 1)
-                        key = key.strip().lower()
-                        # GFF ID is one opaque identity. Splitting an author's
-                        # comma-decorated ID invents shared description nodes
-                        # and falsely joins otherwise distinct RNA ancestries.
-                        items = [values] if key == "id" else values.split(",")
-                        attrs[key].extend(unquote(value.strip()) for value in items)
+                is_gtf = re.match(r"^[^=\s;]+\s+\S", fields[8].strip()) is not None
+                if is_gtf:
+                    lexer = shlex.shlex(fields[8], posix=True, punctuation_chars=";")
+                    lexer.whitespace_split = True
+                    lexer.commenters = ""
+                    tokens = iter(lexer)
+                    for key in tokens:
+                        if key == ";":
+                            continue
+                        value = next(tokens, None)
+                        separator = next(tokens, None)
+                        if value in (None, ";") or separator not in (None, ";"):
+                            raise ValueError("Invalid source GTF attributes: " + fields[8])
+                        attrs[key.lower()].append(value)
+                else:
+                    for item in fields[8].split(";"):
+                        if "=" in item:
+                            key, values = item.split("=", 1)
+                            key = key.strip().lower()
+                            # GFF ID is opaque, even when it contains commas.
+                            items = [values] if key == "id" else values.split(",")
+                            attrs[key].extend(unquote(value.strip()) for value in items)
+                kind = fields[2].lower()
+                if is_gtf:
+                    gene_ids = set(attrs.get("gene_id", ())) - {""}
+                    transcript_ids = set(attrs.get("transcript_id", ())) - {""}
+                    if len(gene_ids) > 1 or len(transcript_ids) > 1 or gene_ids & transcript_ids:
+                        raise ValueError("Ambiguous explicit source GTF identities")
+                    axis = (fields[0], fields[6])
+                    for identifier in gene_ids | transcript_ids:
+                        gtf_axes[identifier].add(axis)
+                    for transcript in transcript_ids:
+                        gtf_gene_parents[transcript].update(gene_ids)
+                    # GTF explicitly repeats this hierarchy on CDS/exon rows;
+                    # no gene feature or numeric transcript suffix is required.
+                    self.genes.update(gene_ids)
+                    for gene in gene_ids:
+                        self.nodes_by_alias[gene].add(gene)
+                    attrs["id"] = list(gene_ids if kind in ("gene", "pseudogene") else transcript_ids)
+                    attrs["parent"] = list(gene_ids if transcript_ids else ())
                 ids = attrs.get("id", [])
                 parents = set(attrs.get("parent", []))
-                kind = fields[2].lower()
                 declared_nodes.update(ids)
                 if kind.endswith("rna") or "transcript" in kind:
                     for parent in parents - set(ids):
@@ -69,7 +102,7 @@ class SourceGeneSelection:
                     self.genes.update(ids)
                 for identifier in ids:
                     self.parents[identifier].update(parents - {identifier})
-                targets = parents if kind == "cds" and parents else set(ids)
+                targets = parents if kind == "cds" and parents and not is_gtf else set(ids)
                 if kind == "cds":
                     for target in targets:
                         self.cds_parts[(target, fields[0], fields[6])].append(
@@ -79,6 +112,12 @@ class SourceGeneSelection:
                     for value in attrs.get(key, []):
                         for alias in aliases(value):
                             self.nodes_by_alias[alias].update(targets)
+        if set(gtf_gene_parents) & self.genes:
+            raise ValueError("Ambiguous source GTF gene/transcript identity collision")
+        if any(len(axes) != 1 for axes in gtf_axes.values()):
+            raise ValueError("Conflicting axes for explicit source GTF identity")
+        if any(len(genes) > 1 for genes in gtf_gene_parents.values()):
+            raise ValueError("Conflicting gene_id for explicit source GTF transcript_id")
         for parent, axes in missing_parent_axes.items():
             if parent in declared_nodes:
                 continue
@@ -118,7 +157,9 @@ class SourceGeneSelection:
             if match:
                 primary.add(match.group(1))
         location_roots = self.ncbi_location_roots(header)
-        for tokens in (primary, set(re.findall(r"\[gene=([^\]]+)\]", header))):
+        gene_tags = set(re.findall(r"\[gene=([^\]]+)\]", header))
+        gene_tags.update(re.findall(r"(?<!\S)gene=([^\s\[\]]+)", header))
+        for tokens in (primary, gene_tags):
             found = set()
             for token in tokens:
                 for alias in aliases(token):

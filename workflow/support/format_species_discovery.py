@@ -631,6 +631,8 @@ def prepare_cds_identifier_task(task):
 
 
 def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing=False):
+    from cloned_cds_models import apply_to_task
+    apply_to_task(task, task.get('cloned_model_root') or output_dir.parent / 'cloned_model_sources', dry_run=dry_run)
     from transcriptome_orfs import verify_existing, write_audit
     cds_input = task.get("cds_path")
     if cds_input is not None:

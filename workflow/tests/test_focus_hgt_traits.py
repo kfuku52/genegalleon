@@ -674,7 +674,11 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     jobs = [dict(id=family, output=str(tmp_path / f'{family}.pdf')) for family in ('OG1', 'OG2')]
 
     def run(command, **kwargs):
+        if command[:3] == ['R', 'CMD', 'INSTALL']:
+            assert Path(command[-1]).name == 'treevis'
+            return SimpleNamespace(returncode=0, stdout='complete owning package installed')
         assert Path(command[1]).name == 'tree_plot_batch.r'
+        assert Path(kwargs['env']['R_LIBS'].split(':')[0]).is_dir()
         rows = [dict(job, exit_code=0) for job in jobs]
         if problem == 'reordered':
             rows.reverse()
@@ -690,6 +694,27 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     monkeypatch.setattr(exporter.subprocess, 'run', run)
     with pytest.raises(RuntimeError, match='Native focused gene-tree'):
         exporter.render_native_batch(jobs, tmp_path)
+
+
+def test_native_batch_never_falls_back_after_package_installation_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import focus_hgt_gene_trees as exporter
+
+    output = tmp_path / 'existing.pdf'
+    output.write_bytes(b'preserve previous output')
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=1, stdout='deliberate R package installation failure')
+
+    monkeypatch.setattr(exporter.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='package installation failed'):
+        exporter.render_native_batch([dict(id='OG1', output=str(output))], tmp_path)
+    assert len(calls) == 1 and calls[0][:3] == ['R', 'CMD', 'INSTALL']
+    assert output.read_bytes() == b'preserve previous output'
+    assert not list(tmp_path.glob('treevis-library-*'))
 
 
 @pytest.fixture
@@ -772,8 +797,9 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
         positional = list(args)
         positional[8] = False
         return real_export(*positional, **kwargs)
-    def capture(directory, events, links, root, gff_root='', context_annotations=''):
+    def capture(directory, events, links, root, gff_root='', context_annotations='', uniprot_fasta=''):
         assert context_annotations == str(annotation_path)
+        assert uniprot_fasta == str(reference)
         calls.append((directory, {e['event_id'] for e in events}, root))
         write_tsv(directory/'event_node_audit.tsv', ['event_id','status'],
                   [dict(event_id=e['event_id'],status='selected') for e in events])
@@ -782,6 +808,7 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
     monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture)
     def capture_figures(*args, **kwargs):
         figure_calls.append(kwargs)
+        assert kwargs['uniprot_fasta'] == str(reference)
         assert kwargs['direction_filter'] == direction
         if direction == 'any':
             assert kwargs['direction_selected'] is None
@@ -792,8 +819,11 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
     monkeypatch.setattr(focus_hgt_figures, 'export_figures', capture_figures)
     annotation_path = source[0].parent/'existing_annotations.tsv'
     annotation_path.write_text('Existing normalized annotation input\n')
+    reference = source[0].parent/'reference.fa'
+    reference.write_text('>sp|P1|HIT Recorded reference name OS=Organism\nMKT\n')
     report = generate(*source, plots=True, gene_family_root='existing-families', context_annotations=str(annotation_path),
-                      direction_filter=direction, species_taxonomy=saved_species_taxonomy(source[0].parent/'taxonomy.tsv'))
+                      direction_filter=direction, species_taxonomy=saved_species_taxonomy(source[0].parent/'taxonomy.tsv'),
+                      uniprot_fasta=str(reference))
     assert len(calls) == 2  # One aggregate per binary/categorical trait, no per-tip rendering.
     assert len(figure_calls) == 2
     assert all(path.name == 'tree_plot' and root == 'existing-families' for path, _, root in calls)
@@ -802,6 +832,7 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
     assert report['gene_tree_plots']['binary']['selected_event_count'] == 3
     assert report['summary_figures']['binary']['pdf_count'] == 3
     assert str(annotation_path.resolve()) in report['inputs_sha256']
+    assert str(reference.resolve()) in report['inputs_sha256']
     assert not list(source[-1].rglob('transfer_tree.pdf'))
 
 

@@ -5,6 +5,9 @@ Set it to `annevo` for the existing ANNEVO route, or `none` for CDS-based
 annotation, including annotation of an existing verified representative bundle.
 Both predictors read `workspace/input/species_genome` and retain curated inputs.
 Each array task handles one sorted genome; provision the array for all species.
+OrionGeno and ANNEVO detect gzip inputs by their bytes as well as the `.gz`
+suffix, and unpack them only in temporary prediction storage. This also handles
+compressed public files named `.fa`; original source bytes and hashes are retained.
 
 ## Native prediction
 
@@ -28,6 +31,8 @@ for its GPU/driver requirements and non-commercial license.
 | `oriongeno_taxonomy_db` | blank | Read-only ETE NCBI SQLite snapshot; blank uses the shared workspace taxonomy cache. |
 | `oriongeno_source_ref` | declared branch | Moving branch read from `container/source_branches.env` on the host and forwarded into the container. |
 | `oriongeno_batch_size` | `1` | Native prediction batch size. |
+| `oriongeno_output_utrs` | `1` | Add explicit terminal exonic `five_prime_UTR` / `three_prime_UTR` rows to the published gene GFF3. |
+| `oriongeno_output_repeat` | `1` | Request and retain the separate native `repeat_region` GFF3. |
 | `oriongeno_no_download` | `0` | `1` requires verified local runtime/model assets. |
 | `oriongeno_python` | blank | Optional external native Python installation. |
 | `oriongeno_checkpoint` | blank | Optional local checkpoint directory; otherwise fetch only the selected checkpoint. |
@@ -36,6 +41,14 @@ for its GPU/driver requirements and non-commercial license.
 Scoped overrides use `GG_GENOME_ANNOTATION_`, for example
 `GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND=annevo`.
 The integrated native/candidate path requires nuclear genetic code 1.
+
+The frozen-cohort driver can resume `predict` or `busco` with
+`--annotation-runtime-root` and `--annotation-runtime-manifest-sha256` when a
+qualified annotation runtime fixes an earlier failure. Both arguments are
+required together. It retains the original manifest digest, species, acquired
+genomes, workspace, download cache and BUSCO lineage, and validates the new
+owning release before invoking the standard entrypoint. Acquisition has its
+separate `--acquisition-runtime-*` options.
 
 ### Automatic model selection
 
@@ -99,6 +112,137 @@ retains logs and the previous complete GFF/receipt pair.
 External Python paths retain their virtual-environment prefix. Preparation and
 prediction publication use the shared-filesystem namespace lock; all concurrent
 jobs sharing those paths must use the same lock protocol.
+
+### Retained annotations and prediction audits
+
+Each species prediction directory retains these outputs by default:
+
+| File | Contents |
+| --- | --- |
+| `<species>.gff3` | Gene annotation with explicit terminal exonic UTR features. |
+| `<species>.native.gff3` | Exact original OrionGeno gene GFF3, before GG's UTR export. |
+| `<species>.repeat.gff3` | Native binary repeat regions; these are not TE family classifications. |
+| `<species>.hmm_boundaries.jsonl.gz` | Exact native prediction-window boundary audit, compressed with gzip. |
+| `<species>.utr_repairs.jsonl.gz` | Exact native UTR repair audit, compressed with gzip. |
+| `native_prediction.json` | Source/model/genome identities, output flags, feature counts and companion hashes. |
+| `prediction.provenance.json` | The complete required output set and configuration used for resume validation. |
+
+UTR export uses only each transcript's retained exon path and CDS endpoints. It
+adds the strand-correct terminal exonic intervals, excludes introns, and preserves
+every original row, ID and CDS phase. Existing consistent UTR rows are retained
+without duplication. CDS-only models receive no invented extension. This is an
+explicit serialization of the native model, not additional biological evidence
+or the separate longest-UTR selection used by representative completion below.
+
+Native export and representative completion share the CDS-endpoint, strand-aware
+exon-clipping and genome-bound checks in `transcript_utrs.py`. For the same model
+they describe the same UTR regions, even when retained source rows split one
+region into adjacent features. Native export preserves source rows and only
+fills missing UTR intervals; representative completion applies its separately
+declared donor-selection policy. Repeated export/completion does not accumulate
+UTR rows or change CDS coordinates, phases or sequences.
+
+Annotation files are read through a line iterator, and native UTR export streams
+source rows and generated features to a separate output file. Source LF/CRLF/CR
+bytes and embedded FASTA are retained; generated children are inserted before
+their `###` group terminator or `##FASTA`, including in representative GFF views.
+Transcripts spanning closed groups are rejected. Decoded GFF identifiers are
+used for parent/duplicate checks, so equivalent percent-escape spellings do not
+create a false missing parent or conceal a repeated ID. Native export rejects
+input/output aliases and checks that its source generation stays fixed across
+all passes.
+Disabling explicit UTR export retains genome-bound checks for the native models.
+
+A [saved CPU benchmark](benchmarks/oriongeno-output-storage-2026-10-22.json)
+uses 20,000 synthetic genes, six exons and four CDS blocks per gene, alternating
+strands. Fresh sequential Linux ARM64 Docker workers use one warmup and three
+measured trials per version, alternating version order. GFF bytes, export counts
+and complete parsed-model digests agree. Median results are:
+
+| Operation | Before / after wall seconds | Before / after peak RSS MiB |
+| --- | --- | --- |
+| Native UTR export | 2.550 / 2.172 | 438.8 / 279.5 |
+| Model loading | 1.363 / 1.144 | 354.3 / 254.4 |
+| Export plus input/output validation | 3.198 / 3.241 | 442.6 / 282.2 |
+
+The validation-inclusive wall times overlap across trials; this does not show a
+total speed improvement. The memory reduction is about 36% for native export
+and its validated path. These measurements cover annotation handling, not native
+GPU prediction or the complete workflow. Reproduce with
+`workflow/tests/benchmark_oriongeno_outputs.py --baseline-support /path/to/old/support`.
+
+Both controls accept `0` or `1` and use the usual scoped overrides, for example
+`GG_GENOME_ANNOTATION_ORIONGENO_OUTPUT_REPEAT=0`. Disabling UTR export retains
+the native gene annotation unchanged. Only companions declared in the current
+receipt belong to that prediction; an older undeclared sibling is not adopted.
+The two audit logs are always retained, including when UTR export or repeat
+output is disabled. They preserve the native JSONL bytes, including original
+identifiers, repair decisions and any recorded before/after intervals. Compression
+uses a reproducible gzip header and reads one record at a time. A zero-record
+audit is retained as a valid empty gzip; a missing audit, invalid JSON or a
+non-object record fails publication. No audit records are fabricated from GFFs.
+The version-2 annotation-output contract records compressed hashes/sizes, original
+hashes/sizes and record counts. Version-1 receipts remain readable with their
+original output scope; new runs require both audits.
+
+Gene GFF, native GFF, enabled repeat GFF, both audit logs and receipt publish
+together, with the receipt last and restoration of the previous complete set on failure. Missing
+or modified declared companions invalidate reuse and candidate import. Repeat
+files with zero predictions are valid GFF3 files containing their header.
+Companion verification fences the complete file set before and after hashing,
+so a file changed while another companion is read cannot pass verification.
+
+Historical receipts retain their historical scope. Earlier GG predictions did
+not request/save repeats, and did not add explicit UTR rows. Their exon/CDS paths
+can still retain terminal UTR coordinates, allowing a later verified CPU export;
+CDS-only annotations cannot supply missing transcript ends. Repeats require native
+prediction when neither repeat labels nor a repeat GFF were retained. The new
+defaults do not modify completed artifacts or jobs using an immutable older
+runtime. Old runs whose audit files were discarded cannot recover those audits
+from the final GFF alone. Adopting the new output contract changes prediction
+provenance and uses the existing stale-artifact/rebuild policy.
+
+For separate species workspaces, set `GG_COMMON_DOWNLOADS_ROOT` to one existing,
+owned physical absolute directory and bind that directory at the same path in
+the container. OrionGeno environments/checkpoints and downloaded BUSCO lineages
+then share the existing asset locks and provenance checks. The default remains
+each workspace's `downloads` directory. Keep one source/model snapshot per cache;
+use a new cache for an intentional upgrade.
+
+## Separate acquisition, GPU and CPU allocations
+
+`workflow/support/genome_annotation_cohort.py` runs one frozen member with
+`--manifest COHORT.json --manifest-sha256 SHA --task N --phase acquire|predict|busco`.
+It runs on the host and invokes the installed native entrypoints. It does not
+submit jobs. A scheduler can connect arrays with Slurm `aftercorr` so one slow
+download does not delay other species, and run BUSCO without reserving a GPU.
+
+The version-1 JSON contains `project_root`, `runtime_root`,
+`runtime_manifest_sha256`, `image_path`, `work_root`, `downloads_root`,
+`busco_lineage` (`embryophyta_odb12`) and `members`.
+All roots are existing physical absolute paths under the project, which is bound
+into the container at the same path. Each member has a consecutive 1-based `task`,
+unique `species`, `filename` (`SPECIES.genome.fa` or `.fa.gz`) and `source`:
+either `local_path` plus `sha256`, or a public `url` with optional `md5` and
+`archive_member`. MD5 applies to a directly downloaded file, not an archive member.
+
+`runtime_root` owns `gg_genome_annotation`. Public downloads additionally require
+`acquisition_runtime_root` and `acquisition_runtime_manifest_sha256` for a separate
+`gg_input_generation` release. Each phase verifies its exact owning manifest and
+passes the normal release snapshot marker to the entrypoint; a different
+workflow or changed source fails the real bootstrap validation.
+Host bootstrap calls use the dispatcher's own Python through a short-lived
+private alias, so a site exposing only `python3` works without a system alias.
+The original interpreter and virtual-environment prefix remain intact.
+
+Acquisition records the actual genome hash and publishes a verified private copy
+without changing the original file's inode or link count. Prediction
+uses a separate species workspace and the shared native runtime/model cache.
+The CPU phase audits complete prediction/formatting provenance and copies only
+the required formatted CDS into its own BUSCO workspace. A missing, changed or incorrectly
+labelled BUSCO artifact fails the phase even if its entrypoint returned zero.
+Original annotations remain separate. Resource limits, duplicate exclusion and
+accepted-job verification belong to the scheduler submitting these phases.
 
 Outputs are below `output/genome_prediction/oriongeno/SPECIES/`: native GFF3,
 execution receipt, prediction/formatter provenance, formatted GFF/CDS/genome,
@@ -203,6 +347,10 @@ An overlap with another coding locus is not used to silently trim a UTR.
 The resulting model is a derived prediction and may combine different source
 transcripts. Longer UTRs are a coverage policy, not a claim of greater accuracy,
 experimental support or confirmed complete transcript ends.
+The original-model export and this final selection remain separate stages:
+shared coordinate calculations do not rank donors or supply RNA-seq evidence.
+Per-side source transcripts and new terminal junctions remain in the audit,
+including when the two ends come from different donors.
 
 The representative bundle adds:
 

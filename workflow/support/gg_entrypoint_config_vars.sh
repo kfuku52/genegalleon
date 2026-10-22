@@ -100,6 +100,7 @@ run_hgt_candidate_summary
 run_hgt_summary_plots
 run_hgt_trait_focus
 run_presence_absence_summary
+orthogroup_catalog_name
 EOF
       ;;
     gg_gene_evolution_entrypoint.sh)
@@ -318,6 +319,7 @@ treevis_synteny_similarity
 treevis_synteny_similarity_width_mm
 synteny_search_window
 uniprot_annotation_method
+orthogroup_catalog_name
 EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
@@ -334,6 +336,8 @@ oriongeno_checkpoint
 oriongeno_source_commit
 oriongeno_no_download
 oriongeno_batch_size
+oriongeno_output_utrs
+oriongeno_output_repeat
 annevo_model_profile
 annevo_taxid_map
 annevo_genome_metadata
@@ -444,6 +448,8 @@ input_sequence_mode
 representative_inputs
 max_gene_orthogroup_grampa
 max_num_gene
+remove_unannotated_orthogroups
+orthogroup_selection_prefix_sha256
 max_orthofinder_core_species
 mcmctree_divergence_time_constraints_str
 mcmctree_calibration_manifest
@@ -555,9 +561,13 @@ species_tree_zip_compression
 species_tree_zip_compression_level
 species_tree_rooting
 strictly_single_copy_only
+species_tree_busco_copy_policy
 target_branch_go
 timetree_constraint
 undated_species_tree
+orthogroup_catalog_name
+orthogroup_selection_prefix_name
+orthogroup_annotation_cache_name
 EOF
       ;;
     gg_input_generation_entrypoint.sh)
@@ -649,6 +659,7 @@ gbif_min_match_confidence
 gbif_page_size
 gene_grouping_mode
 gff_repair_mode
+species_busco_mode
 busco_timeout_seconds
 http_header
 input_dir

@@ -17,6 +17,24 @@ REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
 REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
+def test_manifest_plan_normalizes_dotted_genus_only_label_and_preserves_sample_id(tmp_path):
+    source = tmp_path / 'UOMY.cds.fa'
+    source.write_text('>scaffold-UOMY-1-Osmunda_sp.\nATGAAATAA\n')
+    manifest = tmp_path / 'manifest.tsv'
+    manifest.write_text('provider\tid\tspecies_key\tcds_url\tbind_local_sources\n'
+                        f'onekp\tUOMY\tOsmunda_sp.\t{source.as_uri()}\t1\n')
+    plan = tmp_path / 'plan.json'
+    result = run_python(PLAN_SCRIPT, '--provider', 'all', '--download-manifest', str(manifest),
+                        '--download-dir', str(tmp_path / 'downloads'), '--stage-downloads', '--outfile', str(plan))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(plan.read_text())
+    assert payload['species'] == ['Osmunda_sp_unknown']
+    row = payload['tasks'][0]['manifest_row']
+    assert row['species_key'] == 'Osmunda_sp_unknown'
+    assert row['id'] == 'UOMY'
+    assert row['cds_url'] == source.as_uri()
+
+
 @pytest.fixture
 def atomic_state(monkeypatch):
     monkeypatch.syspath_prepend(str(SUPPORT_DIR))
@@ -1856,6 +1874,39 @@ def test_verify_completion_stops_reading_after_a_mismatch(aliased_completion, mo
 
     monkeypatch.setattr(state, "digest", stop_at_invalid_source)
     assert not state.verify_receipt(plan, 1)
+
+
+def test_verify_completion_uses_linear_metadata_fences(aliased_completion, monkeypatch):
+    state, _, _, _, plan, receipt = aliased_completion
+    value = json.loads(receipt.read_text())
+    for index in range(64):
+        member = plan.parent / f"qc-{index}.json"
+        member.write_text(json.dumps({"species": "Species_a", "member": index}))
+        value["files"][str(member)] = state.digest(member)
+    state.atomic_json(receipt, value)
+    frozen = receipt.read_bytes()
+    checks = []
+    original = state.FreshDigestBatch.check
+
+    def counted(batch):
+        checks.append(len(batch.paths))
+        return original(batch)
+
+    monkeypatch.setattr(state.FreshDigestBatch, "check", counted)
+    assert state.verify_receipt(plan, 1)
+    assert sum(checks) <= 8 * (len(value["files"]) + 2)
+    assert receipt.read_bytes() == frozen
+
+
+@pytest.mark.parametrize("namespace_alias", [False, True])
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_verify_completion_keeps_all_normalized_path_expectations(aliased_completion, namespace_alias, conflicting):
+    state, raw, _, _, plan, receipt = aliased_completion
+    value = json.loads(receipt.read_text())
+    name = "/workspace/raw" if namespace_alias else str(raw.parent) + "/./raw"
+    value["files"][name] = "0" * 64 if conflicting else state.digest(raw)
+    state.atomic_json(receipt, value)
+    assert state.verify_receipt(plan, 1, namespace_root=raw.parent if namespace_alias else None) is not conflicting
 
 
 @pytest.mark.parametrize("changed", ["missing-receipt", "malformed-receipt", "wrong-plan", "wrong-index",

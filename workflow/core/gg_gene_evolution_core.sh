@@ -534,9 +534,8 @@ apply_gene_evolution_input_sequence_mode() {
 
   echo "input_sequence_mode=protein: gg_gene_evolution will keep only protein-compatible or output-only stages."
 
-  if [[ "${mode_gene_evolution}" == "query2family" ]]; then
-    echo 'input_sequence_mode=protein is not supported with mode_gene_evolution=query2family.'
-    echo 'query2family currently requires species_cds-backed search and CDS extraction.'
+  if [[ "${mode_gene_evolution}" == "query2family" && "${query_blast_method}" != "diamond" ]]; then
+    echo 'query2family protein mode requires query_blast_method=diamond and species_protein inputs.' >&2
     exit 1
   fi
 
@@ -738,6 +737,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   local cds_fasta=$1
   local protein_out=$2
   local table_path=$3
+  local declared_species=${4:-}
   local protein_part="${protein_out}.partial.$$"
   if [[ "${protein_out}" == *.gz ]]; then
     # seqkit selects output compression from the final filename suffix.  Keep
@@ -755,12 +755,18 @@ translate_orthogroup_cds_to_protein_fasta() {
 
   rm -f -- "${translated_tmp}"
   touch "${translated_tmp}"
-  mapfile -t species_names < <(
-    seqkit seq --threads "${GG_TASK_CPUS}" --name "${cds_fasta}" |
-      while IFS= read -r header; do
-        gg_species_name_from_path_or_dot "${header}"
-      done | sed -e '/^$/d' | sort -u
-  )
+  if [[ -n "${declared_species}" ]]; then
+    # Per-species files already declare their species. The record-count check
+    # below still rejects records that do not carry that species prefix.
+    species_names=("${declared_species}")
+  else
+    mapfile -t species_names < <(
+      seqkit seq --threads "${GG_TASK_CPUS}" --name "${cds_fasta}" |
+        while IFS= read -r header; do
+          gg_species_name_from_path_or_dot "${header}"
+        done | sed -e '/^$/d' | sort -u
+    )
+  fi
   if [[ ${#species_names[@]} -eq 0 ]]; then
     echo "No species prefixes were detected in the focal CDS FASTA: ${cds_fasta}"
     rm -f -- "${translated_tmp}"
@@ -772,7 +778,7 @@ translate_orthogroup_cds_to_protein_fasta() {
     echo "Translation started: ${sp_ub} (genetic_code=${species_code}) -> $(basename "${protein_out}")"
     seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${sp_ub}([_.-])" "${cds_fasta}" |
       seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" |
-      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" |
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --allow-unknown-codon --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
         >> "${translated_tmp}"
@@ -1212,6 +1218,12 @@ if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
   csubst_cutoff_stat="OCNany2spe,0|omegaCany2spe,1"
   echo "gg debug mode: csubst_cutoff_stat=${csubst_cutoff_stat}"
 fi
+# Allow the native sequence-preparation helpers to be called without starting
+# a gene-family analysis, as with the annotation and transcriptome cores.
+if [[ "${GG_CORE_SOURCE_ONLY:-0}" == 1 ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 query_blast_method=$(echo "${query_blast_method}" | tr '[:upper:]' '[:lower:]')
 mode_gene_evolution=$(echo "${mode_gene_evolution:-query2family}" | tr '[:upper:]' '[:lower:]')
 gene_evolution_profile=$(echo "${gene_evolution_profile:-default}" | tr '[:upper:]' '[:lower:]')
@@ -1513,7 +1525,8 @@ fi
 case "${mode_gene_evolution}" in
   "orthogroup")
     dir_output_active="${gg_workspace_output_dir}/orthogroup"
-    file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
+    orthogroup_catalog_dir=$(gg_orthogroup_catalog_path "${orthogroup_catalog_name:-Orthogroups_filtered}") || exit $?
+    file_orthogroup_genecount_selected="${orthogroup_catalog_dir}/Orthogroups.GeneCount.selected.tsv"
     if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
       echo "Orthogroup gene-count table not found: ${file_orthogroup_genecount_selected}"
       exit 1
@@ -1746,6 +1759,14 @@ file_species_protein_store_manifest="${dir_fasta_sequence_store}/species_protein
 file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"
 [[ -z "${representative_genetic_codes:-}" ]] || file_species_genetic_code="${representative_genetic_codes}"
 file_species_genetic_code_resolved="${dir_output_active}/parameters/${og_id}_species_genetic_code.resolved.tsv"
+if [[ "${mode_gene_evolution}" == "query2family" && "${input_sequence_mode}" == "protein" ]]; then
+  if ! species_protein_input_has_files; then
+    echo 'query2family protein mode requires species_protein inputs. Translate CDS with the per-species genetic codes before running.' >&2
+    exit 1
+  fi
+  check_species_protein_dir "${dir_sp_protein_input}"
+  check_if_species_files_unique "${dir_sp_protein_input}" fasta
+fi
 annotation_species_resolved=""
 treevis_clade_ortholog_prefix=""
 annotation_species_candidates=()
@@ -1767,7 +1788,8 @@ fi
 if [[ -n "${species_paralog_sampling_covariance}" && "${species_paralog_sampling_covariance}" != /* ]]; then
   species_paralog_sampling_covariance="${gg_workspace_dir}/${species_paralog_sampling_covariance}"
 fi
-file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
+orthogroup_catalog_dir=$(gg_orthogroup_catalog_path "${orthogroup_catalog_name:-Orthogroups_filtered}") || exit $?
+file_og="${orthogroup_catalog_dir}/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"
 dir_species_tree="${gg_workspace_output_dir}/species_tree"
 dir_species_tree_summary="${dir_species_tree}/species_tree_summary"
@@ -2076,7 +2098,7 @@ query_fasta_provenance_args=(
 )
 if [[ "$(head -c 1 "${file_query_gene}")" != ">" ]]; then
   query_fasta_sequence_kind=cds
-  if [[ -n "${representative_inputs:-}" ]]; then
+  if [[ -n "${representative_inputs:-}" || "${input_sequence_mode:-cds}" == "protein" ]]; then
     query_fasta_sequence_kind=protein
     query_fasta_store_db="${file_species_protein_store_db}"
     query_fasta_provenance_args+=(--input "species_protein_index=${file_species_protein_store_manifest}")
@@ -2208,7 +2230,7 @@ if [[ "${mode_gene_evolution}" == "query2family" ]]; then
   query_reference_dir="${dir_sp_cds}"
   query_reference_manifest="${file_species_cds_store_manifest}"
   query_reference_codes=""
-  if [[ -n "${representative_inputs:-}" && "${query_blast_method}" == "diamond" ]]; then
+  if [[ ( -n "${representative_inputs:-}" || "${input_sequence_mode}" == "protein" ) && "${query_blast_method}" == "diamond" ]]; then
     query_reference_kind=protein
     query_reference_dir="${dir_sp_protein_input}"
     query_reference_manifest="${file_species_protein_store_manifest}"

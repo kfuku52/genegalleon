@@ -104,7 +104,7 @@ ensure_busco_dataset_mapping_files() {
   local remote_odb_version=""
   local odb_version=""
 
-  dir_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
+  dir_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads" || return 1
   mapping_dir=$(workspace_busco_placement_root "${gg_workspace_dir}")
   lock_file="${dir_db}/locks/busco_dataset_mappings.lock"
 
@@ -461,14 +461,15 @@ gg_seqkit_grep_by_patterns_from_infile_list() {
 gg_prepare_cds_fasta_stream() {
   local threads=${1:-1}
   local codontable=${2:-}
+  local padding_mode=${3:-min-stop}
   if [[ -n "${codontable}" ]]; then
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
-    | cdskit pad --codon_table "${codontable}"
+    | cdskit pad --codon_table "${codontable}" --mode "${padding_mode}"
   else
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
-    | cdskit pad
+    | cdskit pad --mode "${padding_mode}"
   fi
 }
 
@@ -613,7 +614,7 @@ ensure_busco_download_path() {
     return 0
   fi
 
-  runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
+  runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads" || return 1
   runtime_busco_lineage="${runtime_busco_db}/lineages/${busco_lineage}"
   runtime_ready_marker="${runtime_busco_lineage}/.download.ready"
   lock_file="${runtime_busco_db}/lineages/.busco_${busco_lineage}.download.lock"

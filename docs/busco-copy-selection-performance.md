@@ -16,9 +16,9 @@ filesystem, with gzip input FASTAs.
 
 | Workload | Species × markers | Duplicated fraction / copies | Input sequences | Before → after seconds | Speedup | Before → after peak MiB |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| Protein, 300 residues | 192 × 512 | 25% / 4 | 172,032 | 5.559 → 2.068 | 2.69× | 184.5 → 131.7 |
-| CDS, 900 nucleotides | 64 × 512 | 25% / 3 | 49,152 | 2.884 → 1.684 | 1.71× | 107.6 → 55.8 |
-| Many-copy stress case, 300 residues | 8 × 128 | 100% / 64 | 65,536 | 2.245 → 0.642 | 3.50× | 135.8 → 85.9 |
+| Protein, 300 residues | 192 × 512 | 25% / 4 | 172,032 | 6.391 → 2.320 | 2.75× | 185.1 → 131.8 |
+| CDS, 900 nucleotides | 64 × 512 | 25% / 3 | 49,152 | 2.928 → 1.715 | 1.71× | 107.6 → 55.8 |
+| Many-copy stress case, 300 residues | 8 × 128 | 100% / 64 | 65,536 | 2.319 → 0.652 | 3.56× | 135.8 → 86.0 |
 
 Every FASTA and both TSV reports matched byte-for-byte between variants in all
 warmup, measured and separately profiled trials. The 64-copy case exercises a

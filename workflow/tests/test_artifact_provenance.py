@@ -1428,3 +1428,129 @@ def test_legacy_missing_input_diagnostic_identifies_the_actual_path(tmp_path):
     assert str(source) in result.stdout
     assert "missing: None" not in result.stdout
     assert not manifest.exists()
+
+
+@pytest.mark.parametrize("strict", ["0", "1"])
+@pytest.mark.parametrize("change", [None, "input", "output", "copy_policy", "strict"])
+def test_legacy_busco_copy_policy_keeps_only_the_identical_single_copy_contract(tmp_path, strict, change):
+    source = tmp_path / "busco_summary.tsv"
+    target = tmp_path / "fasta.fa"
+    manifest = tmp_path / "species_tree.extract_fasta.json"
+    source.write_text("BUSCO\tspecies\nBUSCO1\tgene1\n")
+    target.write_text(">gene1\nATGAAA\n")
+    args = contract_args(tmp_path, manifest, source, target, f"strictly_single_copy_only={strict}")
+    args[args.index("--step") + 1] = "species_tree_extract_fasta"
+    args[args.index("--family-id") + 1] = "all_buscos"
+    assert run_cli("record", *args).returncode == 0
+    before = manifest.read_bytes(), manifest.stat().st_mtime_ns
+    current = [*args, "--parameter", "copy_policy=single-copy"]
+    if change == "input":
+        source.write_text("changed BUSCO selection\n")
+    elif change == "output":
+        target.write_text(">changed\nATGCCC\n")
+    elif change == "copy_policy":
+        current[-1] = "copy_policy=best-score"
+    elif change == "strict":
+        current[current.index(f"strictly_single_copy_only={strict}")] = f"strictly_single_copy_only={1-int(strict)}"
+    output_before = target.read_bytes(), target.stat().st_mtime_ns
+    checked = run_cli("needs-run", *current, "--stale-policy", "stop", "--legacy-policy", "stop")
+    assert checked.returncode == (3 if change else 1), checked.stdout + checked.stderr
+    assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == before
+    assert (target.read_bytes(), target.stat().st_mtime_ns) == output_before
+
+
+@pytest.mark.parametrize("step,family", [("another_step", "all_buscos"),
+                                        ("species_tree_extract_fasta", "another_family")])
+def test_busco_copy_policy_default_does_not_apply_to_other_contracts(tmp_path, step, family):
+    source, target, manifest = (tmp_path / name for name in ("source", "target", "manifest.json"))
+    source.write_text("input\n")
+    target.write_text("output\n")
+    args = contract_args(tmp_path, manifest, source, target)
+    args[args.index("--step") + 1] = step
+    args[args.index("--family-id") + 1] = family
+    assert run_cli("record", *args).returncode == 0
+    checked = run_cli("needs-run", *args, "--parameter", "copy_policy=single-copy")
+    assert checked.returncode == 3
+
+
+@pytest.mark.parametrize("step", ["species_tree_busco_plot", "species_tree_dated_plot"])
+@pytest.mark.parametrize("change", ["recipe_only", "input", "output", "missing_output", "path",
+                                    "missing_manifest", "parameter", "identity", "schema"])
+def test_frozen_species_tree_plots_preserve_recipe_but_verify_data_and_outputs(tmp_path, step, change):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tree = workspace / "tree.nwk"
+    tree.write_text("(A:1,B:1);\n")
+    buscos = workspace / "buscos"
+    buscos.mkdir()
+    (buscos / "A.busco.full.tsv").write_text("complete\n")
+    plot = workspace / "plot.pdf"
+    plot.write_bytes(b"historical PDF")
+    renderer = workspace / "old-renderer.py"
+    renderer.write_text("old renderer")
+    manifest = workspace / "plot.json"
+    args = ["--manifest", manifest, "--logical-root", workspace / "output", "--workspace-root", workspace,
+            "--step", step, "--family-id", "all_buscos", "--output", f"plot={plot}"]
+    if step == "species_tree_busco_plot":
+        args += ["--input", f"undated_tree={tree}", "--input", f"busco_directory={buscos}",
+                 "--parameter", "min_og_species=auto"]
+    else:
+        args += ["--input", f"dated_tree={tree}", "--input", f"adapter={renderer}",
+                 "--parameter", "engine=nwkit_draw", "--parameter", "nwkit_identity=old",
+                 "--parameter", "branch_length_unit=Ma"]
+    assert run_cli("record", *args).returncode == 0
+    original = manifest.read_bytes(), manifest.stat().st_mtime_ns
+    renderer.unlink()  # Historic runtime need not remain mounted for an unrequested plot.
+    if step == "species_tree_busco_plot":
+        args += ["--input", f"adapter={renderer}", "--input", f"busco_plot_metadata={renderer}"]
+    else:
+        args[args.index("engine=nwkit_draw")] = "engine=new-presentation"
+        args += ["--input", f"presentation={renderer}", "--input", f"geological_periods={renderer}",
+                 "--parameter", "geological_background=period"]
+    # Normal rendering still requires the current complete implementation contract.
+    assert run_cli("needs-run", *args, "--legacy-policy", "stop").returncode != 1
+    if change == "input":
+        (buscos / "A.busco.full.tsv" if step == "species_tree_busco_plot" else tree).write_text("changed")
+    elif change == "output":
+        plot.write_bytes(b"changed PDF")
+    elif change == "missing_output":
+        plot.unlink()
+    elif change == "path":
+        other = workspace / "other.pdf"
+        other.write_bytes(plot.read_bytes())
+        args[args.index(f"plot={plot}")] = f"plot={other}"
+    elif change == "missing_manifest":
+        manifest.unlink()
+    elif change == "parameter":
+        key = "min_og_species=auto" if step == "species_tree_busco_plot" else "branch_length_unit=Ma"
+        args[args.index(key)] = key.split("=")[0] + "=changed"
+    elif change in {"identity", "schema"}:
+        payload = json.loads(manifest.read_text())
+        payload["family_id" if change == "identity" else "schema_version"] = "wrong" if change == "identity" else 2
+        manifest.write_text(json.dumps(payload))
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in workspace.rglob("*") if p.is_file()}
+    result = run_cli("needs-run", *args, "--frozen-plot", "--legacy-policy", "stop", "--dry-run")
+    assert result.returncode == (1 if change == "recipe_only" else 3), result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    if change == "recipe_only":
+        assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == original
+    if change == "missing_manifest":
+        assert not manifest.exists()
+
+
+@pytest.mark.parametrize("option", ["scientific_stage", "rebuild", "reuse", "adopt", "recovery", "fasta_type"])
+def test_frozen_plot_cannot_disable_scientific_or_strict_contracts(tmp_path, option):
+    args = contract_args(tmp_path, tmp_path / "missing.json", tmp_path / "in", tmp_path / "out")
+    if option != "scientific_stage":
+        args[args.index("summary_statistics")] = "species_tree_dated_plot"
+        args[args.index("OG0001")] = "all_buscos"
+    args += ["--legacy-policy", "adopt" if option == "adopt" else "stop"]
+    if option in {"rebuild", "reuse"}:
+        args += ["--stale-policy", option]
+    if option == "recovery":
+        args += ["--recover-output", f"stat_branch={tmp_path / 'candidate'}"]
+    if option == "fasta_type":
+        args += ["--output-fasta-type", "stat_branch=protein"]
+    result = run_cli("needs-run", *args, "--frozen-plot", "--dry-run")
+    assert result.returncode == 2
+    assert "Frozen plots require" in result.stderr

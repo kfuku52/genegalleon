@@ -63,11 +63,11 @@ synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
 synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
 synteny_ds_color_max="${synteny_ds_color_max:-2}"
 case "${genome_evolution_mode}" in
-  all|species_tree|orthogroups) ;;
+  all|species_tree|orthogroups|orthogroup_selection) ;;
   synteny) run_pairwise_synteny=1 ;;
   subgenome) run_subgenome_dominance=1 ;;
   wgd) run_wgd_ssd=1 ;;
-  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, synteny, subgenome or wgd" >&2; exit 2 ;;
+  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, orthogroup_selection, synteny, subgenome or wgd" >&2; exit 2 ;;
 esac
 for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance run_wgd_ssd; do
   case "${!synteny_flag}" in
@@ -141,6 +141,21 @@ orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
 orthofinder_binary="${orthofinder_binary:-orthofinder}"
 orthofinder_source_manifest="${orthofinder_source_manifest:-}"
 genome_parallel_jobs="${genome_parallel_jobs:-auto}"
+species_tree_busco_copy_policy="${species_tree_busco_copy_policy:-single-copy}"
+case "${species_tree_busco_copy_policy}" in
+  single-copy) ;;
+  best-score)
+    if [[ ${strictly_single_copy_only:-0} -eq 1 ]]; then
+      echo "best-score BUSCO representatives require strictly_single_copy_only=0" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "species_tree_busco_copy_policy must be single-copy or best-score" >&2; exit 2 ;;
+esac
+if [[ "${species_tree_busco_duplicate_policy}" == "best_score" && "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+  echo "species_tree_busco_duplicate_policy=best_score conflicts with species_tree_busco_copy_policy=best-score." >&2
+  exit 2
+fi
 genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
@@ -210,7 +225,8 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 # A rebuild request may rebuild only the two requested orthogroup producers.
 orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
 orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
-if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+frozen_species_tree_plot_args=()
+if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   case "${orthogroup_requested_stale_policy}" in
     stop|rebuild) ;;
     *) echo "orthogroups mode requires artifact_stale_policy=stop or rebuild" >&2; exit 2 ;;
@@ -222,8 +238,16 @@ if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
       printf -v "${config_name}" '%s' 0
     fi
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+  if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+    run_orthofinder=0
+    run_cds_translation=0
+  fi
   artifact_stale_policy=stop
   artifact_legacy_policy=stop
+  # Plots are preserved inputs here, not requests to run today's renderer.
+  # Audit their biological inputs and complete output hashes without rewriting
+  # their original implementation/presentation provenance.
+  frozen_species_tree_plot_args=(--frozen-plot)
 fi
 
 # Synteny-only execution calls this independent stage before species-tree setup
@@ -1477,6 +1501,13 @@ refresh_species_tree_for_shared_protein_input_signature() {
   if [[ -s "${stamp_file}" ]]; then
     previous_signature=$(< "${stamp_file}")
   fi
+  if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+    if [[ "${previous_signature}" != "${signature}" ]]; then
+      echo "Frozen species_tree signature is missing or differs from the inference inputs." >&2
+      return 3
+    fi
+    return 0
+  fi
   if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
     if ! shared_protein_input_signature_is_current_schema "${previous_signature}"; then
       echo "Legacy shared protein input signature found for species_tree."
@@ -1615,7 +1646,7 @@ prepare_species_protein_tmp() {
     echo "Translation started: ${cds} (genetic_code=${species_code}) -> ${translated_file}"
 
     seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
-      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" |
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
       sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' |
@@ -2584,8 +2615,48 @@ species_tree_rooting_value=""
 
 
 # Directories
+# Selection consumes the completed inference, not a newly resolved CDS view.
+# Its original byte-identical inputs remain authoritative even if a later
+# annotation run republishes equivalent compressed FASTA files.
+frozen_orthogroup_sequence_input_dir() {
+  python - "${gg_support_dir}" "${gg_workspace_dir}" "${gg_workspace_output_dir}" \
+    "${input_sequence_mode}" "${genetic_code}" <<'PY_FROZEN'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from artifact_provenance import SCHEMA_VERSION, ProvenanceError, load_manifest, resolve_reference, sha256_path
+
+workspace = Path(sys.argv[2])
+output = Path(sys.argv[3])
+manifest = output / "artifact_provenance/genome_evolution/orthofinder.json"
+try:
+    payload = load_manifest(manifest)
+    if (payload.get("schema_version") != SCHEMA_VERSION or payload.get("step") != "orthofinder"
+            or payload.get("family_id") != "all_species"):
+        raise ValueError("not a completed all-species OrthoFinder contract")
+    for key, value in zip(("input_sequence_mode", "genetic_code"), sys.argv[4:6], strict=True):
+        if payload.get("parameters", {}).get(key) != value:
+            raise ValueError(f"frozen inference parameter changed: {key}")
+    entries = [entry for entry in payload["inputs"] if entry.get("label") == "species_sequences"]
+    if len(entries) != 1 or entries[0].get("artifact_type") != "directory":
+        raise ValueError("expected exactly one species_sequences directory")
+    entry = entries[0]
+    if entry.get("scope") not in {"workspace", "absolute"}:
+        raise ValueError("unsupported species_sequences path scope")
+    path = resolve_reference(entry, output / ".gg_global_artifacts", workspace)
+    digest, size, kind = sha256_path(path)
+    if kind != "directory" or digest != entry.get("sha256") or size != entry.get("size_bytes"):
+        raise ValueError("frozen inference species_sequences changed")
+except (OSError, ValueError, KeyError, TypeError, ProvenanceError) as exc:
+    print(f"Cannot select from frozen OrthoFinder inputs: {exc}", file=sys.stderr)
+    raise SystemExit(3) from exc
+print(path)
+PY_FROZEN
+}
+
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
-if [[ -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+if [[ "${genome_evolution_mode}" != "orthogroup_selection" && -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
   dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
     --source-dir "${dir_sp_cds}" \
     --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
@@ -2603,6 +2674,14 @@ fi
 
 file_species_genetic_code="$(species_genetic_code_table_path)"
 [[ -z "${representative_genetic_codes:-}" ]] || file_species_genetic_code="${representative_genetic_codes}"
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  frozen_sequence_input=$(frozen_orthogroup_sequence_input_dir) || exit $?
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    dir_sp_protein_input="${frozen_sequence_input}"
+  else
+    dir_sp_cds="${frozen_sequence_input}"
+  fi
+fi
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 annotation_species_resolved=""
 annotation_species_candidates=()
@@ -2752,7 +2831,7 @@ species_tree_archive_managed_directories() {
 dir_sp_protein=$(gg_task_tmp_path "${gg_workspace_downloads_dir}/tmp/species_protein") || exit 1
 dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
-dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"
+dir_orthofinder_filtered=$(gg_orthogroup_catalog_path) || exit $?
 dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
 dir_orthogroup_decay="${dir_orthofinder}/single_copy_ortholog_decay"
 
@@ -2992,7 +3071,7 @@ if species_tree_summary_generation_requested; then
 fi
 species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
-if [[ "${genome_evolution_mode}" == "orthogroups" && ! -s "${file_undated_species_tree}" ]]; then
+if [[ ( "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ) && ! -s "${file_undated_species_tree}" ]]; then
   echo "orthogroups mode requires an existing audited undated species tree; run species_tree first." >&2
   exit 3
 fi
@@ -3024,6 +3103,18 @@ ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
 enable_all_run_flags_for_debug_mode
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  while IFS= read -r config_name; do
+    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection ]]; then
+      printf -v "${config_name}" '%s' 0
+    fi
+  done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+fi
+remove_unannotated_orthogroups="${remove_unannotated_orthogroups:-yes}"
+case "${remove_unannotated_orthogroups}" in
+  yes|no) ;;
+  *) echo "remove_unannotated_orthogroups must be yes or no" >&2; exit 2 ;;
+esac
 orthogroup_annotation_method=$(echo "${orthogroup_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 if [[ "${orthogroup_annotation_method}" != "blastp" && "${orthogroup_annotation_method}" != "mmseqs2" ]]; then
   echo "Invalid orthogroup_annotation_method: ${orthogroup_annotation_method}"
@@ -3122,6 +3213,7 @@ extract_species_tree_fasta_provenance_args+=(
   --output-logical-directory "fasta_directory=${dir_single_copy_fasta}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "strictly_single_copy_only=${strictly_single_copy_only}"
+  --parameter "copy_policy=${species_tree_busco_copy_policy}"
   --parameter "genetic_code=${genetic_code}"
   --parameter "sequence_label=${species_tree_sequence_label}"
 )
@@ -3137,6 +3229,11 @@ if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
   if [[ "${input_sequence_mode}" == "cds" ]] || ! species_protein_input_has_files; then
     gg_artifact_add_input_if_present extract_species_tree_fasta_provenance_args "species_genetic_codes" "${file_species_genetic_code}"
   fi
+elif [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+  extract_species_tree_fasta_provenance_args+=(
+    --input "busco_full_tables=${dir_species_busco_full}"
+    --output "representative_selection=${dir_species_tree}/busco_representative_selection.tsv"
+  )
 fi
 gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
 if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
@@ -3179,6 +3276,9 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     if [[ "${input_sequence_mode}" == "cds" && -s "${file_species_genetic_code}" ]]; then
       busco_batch_args+=(--species-genetic-codes "${file_species_genetic_code}")
     fi
+  elif [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+    busco_batch_args+=(--copy-policy best-score --busco-full-dir "${dir_species_busco_full}"
+      --require-complete)
   fi
   if [[ ${strictly_single_copy_only} -eq 1 ]]; then
     busco_batch_args+=(--strict --require-complete)
@@ -3218,7 +3318,11 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     busco_id=$(basename "${busco_batch_raw_file}" .raw.fa)
     mv_out "${busco_batch_final_dir}/${busco_id}${single_copy_fasta_suffix}" "${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
   done
-  mv_out "${busco_copy_selection_report}" "${file_species_busco_copy_selection}"
+  if [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+    mv_out "${busco_copy_selection_report}" "${dir_species_tree}/busco_representative_selection.tsv"
+  else
+    mv_out "${busco_copy_selection_report}" "${file_species_busco_copy_selection}"
+  fi
   rm -rf -- "${busco_batch_raw_dir}"
   rm -rf -- "${busco_batch_final_dir}"
   rm -f -- "${busco_batch_report}"
@@ -4069,7 +4173,7 @@ species_tree_busco_plot_provenance_args+=(
   --output "summary=${file_species_tree_busco_summary}"
   --parameter "min_og_species=auto"
 )
-gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" || exit $?
+gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
 if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_species_tree_busco_plot} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_species_tree_summary}"
@@ -4620,7 +4724,7 @@ dated_tree_plot_provenance_args+=(
 if [[ -s "${file_dated_species_tree}" ]]; then
   dated_tree_plot_provenance_args+=(--output "summary_plot=${file_dated_species_tree_pdf}")
 fi
-gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dated_tree_plot_provenance_args[@]}" || exit $?
+gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dated_tree_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
 if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -5226,6 +5330,12 @@ run_shared_species_omark_stage
 task="Summarizing OMArk species quality results"
 run_shared_omark_summary_stage
 
+# Selection-only must audit frozen inference with stop policy before restoring
+# rebuild solely for the selected-table producer below.
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  artifact_stale_policy="${orthogroup_requested_stale_policy}"
+  artifact_legacy_policy="${orthogroup_requested_legacy_policy}"
+fi
 task="Selecting orthogroups based on gene and species numbers"
 if [[ ${orthogroup_table} == "OG" ]]; then
   dir_orthogroup_selection_input="${dir_orthofinder_og}"
@@ -5235,8 +5345,63 @@ else
   echo "Unsupported orthogroup_table: ${orthogroup_table}. Allowed values are OG or HOG."
   exit 1
 fi
+og_selection_prefix_args=()
+orthogroup_selection_prefix_sha256="${orthogroup_selection_prefix_sha256:-}"
+if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
+  if [[ ! "${orthogroup_selection_prefix_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "orthogroup_selection_prefix_sha256 must be a SHA256 digest" >&2; exit 2
+  fi
+  selection_prefix_dir="${genome_evolution_provenance_dir}/orthogroup_selection_prefix"
+  selection_prefix="${selection_prefix_dir}/${orthogroup_selection_prefix_sha256}.tsv"
+  if [[ -L "${selection_prefix_dir}" || -L "${selection_prefix}" ]]; then
+    echo "Orthogroup selection prefix cannot be a symbolic link" >&2; exit 2
+  fi
+  if [[ ! -e "${selection_prefix}" ]]; then
+    prefix_catalog="${dir_orthofinder_filtered}"
+    if [[ -n "${orthogroup_selection_prefix_name:-}" ]]; then
+      prefix_catalog=$(gg_orthogroup_catalog_path "${orthogroup_selection_prefix_name}") || exit $?
+    fi
+    previous_counts="${prefix_catalog}/Orthogroups.GeneCount.selected.tsv"
+    if [[ ! -f "${previous_counts}" || -L "${previous_counts}" || "$(sha256sum -- "${previous_counts}" | cut -d' ' -f1)" != "${orthogroup_selection_prefix_sha256}" ]]; then
+      echo "Previous selected count table does not match the frozen prefix" >&2; exit 3
+    fi
+    ensure_dir "${selection_prefix_dir}"
+    cp_out "${previous_counts}" "${selection_prefix}"
+  fi
+  if [[ "$(sha256sum -- "${selection_prefix}" | cut -d' ' -f1)" != "${orthogroup_selection_prefix_sha256}" ]]; then
+    echo "Preserved orthogroup selection prefix changed" >&2; exit 3
+  fi
+  og_selection_prefix_args=(--selection_prefix "${selection_prefix}")
+fi
+og_annotation_cache_args=()
+orthogroup_annotation_cache_name="${orthogroup_annotation_cache_name:-}"
+if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+  annotation_cache_dir=$(gg_orthogroup_catalog_path "${orthogroup_annotation_cache_name}") || exit $?
+  if [[ "${annotation_cache_dir}" == "${dir_orthofinder_filtered}" ]]; then
+    echo "Annotation cache must belong to a different preserved catalog" >&2; exit 2
+  fi
+  annotation_cache="${annotation_cache_dir}/Orthogroups.GeneCount.annotated.tsv"
+  [[ -s "${annotation_cache}" ]] || { echo "Missing declared orthogroup annotation cache" >&2; exit 3; }
+  if [[ "${genome_evolution_mode}" != orthogroup_selection ]]; then
+    echo "Annotation cache reuse requires audited orthogroup_selection mode" >&2; exit 2
+  fi
+  annotation_cache_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.json"
+  if [[ "${orthogroup_annotation_cache_name}" != Orthogroups_filtered ]]; then
+    annotation_cache_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.${orthogroup_annotation_cache_name}.json"
+  fi
+  og_annotation_cache_args=(--annotation_cache "${annotation_cache}"
+    --annotation_cache_manifest "${annotation_cache_manifest}"
+    --annotation_cache_workspace "${gg_workspace_dir}"
+    --annotation_cache_logical_root "${gg_workspace_output_dir}/.gg_global_artifacts")
+fi
+og_selection_family=all_species
+og_selection_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.json"
+if [[ "${orthogroup_catalog_name:-Orthogroups_filtered}" != Orthogroups_filtered ]]; then
+  og_selection_family="all_species.${orthogroup_catalog_name}"
+  og_selection_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.${orthogroup_catalog_name}.json"
+fi
 og_selection_needs_update=0
-gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "all_species" "${genome_evolution_provenance_dir}/orthogroup_selection.json"
+gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "${og_selection_family}" "${og_selection_manifest}"
 og_selection_provenance_args+=(
   --input "orthogroups=${dir_orthogroup_selection_input}/Orthogroups.tsv"
   --input "gene_counts=${dir_orthogroup_selection_input}/Orthogroups.GeneCount.tsv"
@@ -5247,11 +5412,18 @@ og_selection_provenance_args+=(
   --parameter "max_gene_num=${max_num_gene}"
   --parameter "min_species_num=${min_num_species}"
   --parameter "min_percent_species_coverage=${min_percent_species_coverage}"
-  --parameter "remove_unannotated=yes"
+  --parameter "remove_unannotated=${remove_unannotated_orthogroups}"
   --parameter "gene_size_quantiles=0.05,0.25,0.5,0.75,0.95"
   --parameter "annotation_search_method=${orthogroup_annotation_method}"
   --parameter "evalue=1e-2"
 )
+if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+  og_selection_provenance_args+=(--input "annotation_cache=${annotation_cache}"
+    --input "annotation_cache_manifest=${annotation_cache_manifest}")
+fi
+if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
+  og_selection_provenance_args+=(--input "selection_prefix=${selection_prefix}")
+fi
 if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
   og_selection_provenance_args+=(--input "uniprot_sprot=/usr/local/db/uniprot_sprot.pep")
 else
@@ -5260,10 +5432,12 @@ fi
 gg_artifact_prepare_stage og_selection_needs_update run_og_selection "${og_selection_provenance_args[@]}" || exit $?
 if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
   gg_step_start "${task}"
-  prepare_species_protein_tmp
+  if [[ -z "${orthogroup_annotation_cache_name}" ]]; then prepare_species_protein_tmp; fi
   rm -rf -- "${dir_orthofinder_filtered}"
   ensure_dir "${dir_orthofinder_filtered}"
-  if [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
+  if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+    uniprot_db_prefix=/dev/null # Native provenance verifies the original reference; no new search is requested.
+  elif [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
@@ -5297,7 +5471,9 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
     --max_gene_num "${max_num_gene}" \
     --min_species_num "${min_num_species}" \
     --min_percent_species_coverage "${min_percent_species_coverage}" \
-    --remove_unannotated 'yes' \
+    --remove_unannotated "${remove_unannotated_orthogroups}" \
+    "${og_selection_prefix_args[@]}" \
+    "${og_annotation_cache_args[@]}" \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \
@@ -5325,7 +5501,7 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   echo "Orthogroup inference and selection stages finished; later genome-evolution stages were not requested."
   exit 0
 fi

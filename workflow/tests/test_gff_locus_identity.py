@@ -261,3 +261,37 @@ def test_distinct_author_ids_survive_formatted_identity_collision(tmp_path, iden
     assert mapping["ok"], mapping.get("error")
     assert gff.read_bytes() == original
     assert locus_identity_audit(task)["status"] == "repaired"
+
+
+@pytest.mark.parametrize("kind", ["expressed_sequence_match", "cDNA_match", "protein_match"])
+def test_isolated_alignment_evidence_preserves_source_records(tmp_path, kind):
+    task = bundle(tmp_path)
+    evidence = (f"chr1\taligner\t{kind}\t20\t24\t.\t-\t.\tID=hit;Target=query 1 5 +\n"
+                f"chr2\taligner\t{kind}\t25\t29\t.\t+\t.\tID=hit;Target=query 6 10 +\n")
+    with task["gff_path"].open("a") as handle:
+        handle.write(evidence)
+    source = task["gff_path"].read_bytes()
+    cds = format_cds(task, tmp_path, False, False)
+    assert cds["after_count"] == 2  # Both independent coding loci survive.
+    view = task_annotation_path(task).read_text()
+    assert evidence in view and "hit.locus" not in view
+    assert task["gff_path"].read_bytes() == source
+
+
+@pytest.mark.parametrize("mutation", ["no_target", "coding_id", "referenced_id", "parented"])
+def test_alignment_evidence_does_not_hide_model_identity_problems(tmp_path, mutation):
+    source = tmp_path / "source.gff"
+    extra = ""
+    attributes = "ID=hit;Target=query 1 9 +"
+    if mutation == "no_target":
+        attributes = "ID=hit"
+    elif mutation == "coding_id":
+        extra = "chr3\ts\tCDS\t1\t9\t.\t+\t0\tID=hit\n"
+    elif mutation == "referenced_id":
+        extra = "chr3\ts\tCDS\t1\t9\t.\t+\t0\tID=child;Parent=hit\n"
+    else:
+        attributes += ";Parent=missing"
+    source.write_text("".join(f"{seqid}\ts\texpressed_sequence_match\t1\t9\t.\t+\t.\t{attributes}\n"
+                              for seqid in ("chr1", "chr2")) + extra)
+    with pytest.raises(LocusIdentityError, match="parent model"):
+        source_annotation_path(source, repair_locus_ids=True)

@@ -133,6 +133,8 @@ def build_species_summary_row(
         "plastid_genetic_code_name": metadata["plastid_genetic_code_name"],
         "cds_input_path": str(cds_result.get("input_path") or ""),
         "cds_input_type": input_type(task),
+        "cloned_model_audit_path": task.get('cloned_model_audit', ''),
+        "cloned_cds_mode": task.get('cloned_cds_mode', 'genomic') if task.get('cloned_cds_path') else '',
         "cds_genetic_code": str(task.get("genetic_code", 1)),
         "cds_normalised_records": str(cds_result.get("cds_normalised_records", 0)),
         "cds_unresolved_records": str(cds_result.get("cds_unresolved_records", 0)),

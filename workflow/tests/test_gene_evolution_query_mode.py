@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,7 @@ def _run_query_fasta_stage(
     mode: str,
     query_path: Optional[Path],
     capture_path: Path,
+    input_sequence_mode: str = "cds",
 ):
     script = "\n".join(
         [
@@ -24,11 +26,14 @@ def _run_query_fasta_stage(
 mode_gene_evolution=$1
 query_path=$2
 capture_path=$3
+input_sequence_mode=$4
 dir_output_active=/output
 og_id=OG0001
 gg_workspace_dir=/workspace
 file_og_query_aa_fasta=/output/OG0001.query.aa.fasta
 file_species_cds_store_manifest=/workspace/species_cds.json
+file_species_protein_store_manifest=/workspace/species_protein.json
+file_species_protein_store_db=/workspace/species_protein.sqlite3
 genetic_code=1
 run_extract_query_fasta=0
 query_blast_method=diamond
@@ -64,6 +69,7 @@ gg_artifact_record() {
             mode,
             "" if query_path is None else str(query_path),
             str(capture_path),
+            input_sequence_mode,
         ],
         input=script,
         text=True,
@@ -104,3 +110,36 @@ def test_query2family_mode_keeps_query_file_required(tmp_path):
 
     assert completed.returncode != 0
     assert "file_query_gene" in completed.stderr
+
+
+def test_protein_query_ids_bind_the_protein_inventory(tmp_path):
+    query = tmp_path / "family"
+    query.write_text("Ciliate_species_gene1\n", encoding="utf-8")
+    capture = tmp_path / "captured.txt"
+    completed = _run_query_fasta_stage("query2family", query, capture, "protein")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    text = capture.read_text()
+    assert "query_sequence_kind=protein" in text
+    assert "species_protein_index=/workspace/species_protein.json" in text
+    assert "species_cds_index=" not in text
+
+
+def test_protein_query2family_accepts_diamond_and_rejects_tblastn():
+    source = CORE_PATH.read_text()
+    function = re.search(r"^apply_gene_evolution_input_sequence_mode\(\) \{\n.*?^\}", source, re.M | re.S)
+    assert function is not None
+    script = "\n".join([
+        "set -eu", function.group(),
+        "input_sequence_mode=protein; mode_gene_evolution=query2family; generax_model=GTR+G4",
+        'query_blast_method=$1',
+        'disable_flag_with_reason() { printf -v "$1" 0; }',
+        'apply_gene_evolution_input_sequence_mode',
+        '[[ "$generax_model" == LG+G4 && "$run_csubst" == 0 ]]',
+    ])
+    for method in ("diamond", "tblastn"):
+        completed = subprocess.run(["bash", "-s", "--", method], input=script, text=True, capture_output=True)
+        if method == "diamond":
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+        else:
+            assert completed.returncode != 0
+            assert "requires query_blast_method=diamond" in completed.stderr

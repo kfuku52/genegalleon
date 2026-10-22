@@ -1,7 +1,14 @@
 # Reliable input downloads
 
 Input generation retains one bounded retry budget per downloaded file, including
-body interruptions. `GG_DOWNLOAD_ATTEMPTS` defaults to four. Transient failures
+body interruptions. `GG_DOWNLOAD_ATTEMPTS` defaults to four consecutive failures
+without meaningful resumable progress. A stable ETag/Last-Modified transfer
+replenishes this budget after `GG_DOWNLOAD_MIN_PROGRESS_BYTES` (default 1 MiB).
+`GG_DOWNLOAD_STALL_SECONDS` (default 900) rejects a tiny trickle or no progress,
+and `GG_DOWNLOAD_MAX_TOTAL_SECONDS` (default 21600) bounds total recovery time.
+These settings must be finite and positive. Unvalidated restarts and failed
+integrity checks cannot replenish the retry budget. Transient backoff is shared
+with other species through the existing provider admission limiter. Transient failures
 use exponential backoff with jitter, capped at 300 seconds before applying a
 server's `Retry-After` minimum. Permanent HTTP errors are not repeatedly retried.
 The shared database limiter still applies cooldowns and per-database concurrency.
@@ -40,8 +47,10 @@ partial files for a later run. A missing or changed resume validator causes a
 fresh transfer, even when another validator type is present. A 416 response triggers a fresh request rather than declaring success
 from the byte count alone.
 
-CNGB transfers use sequential 128 MiB ranges when the server supports validated
-ranges. Set `GG_DOWNLOAD_RANGE_CHUNK_BYTES=0` to stream, or a positive byte count
+CNGB transfers use sequential 128 MiB ranges and CNCB/GWH transfers use 8 MiB
+ranges when the server supports validated ranges. These bounded responses avoid
+repeatedly restarting long connections while retaining ETag/Last-Modified and
+byte-integrity checks. Set `GG_DOWNLOAD_RANGE_CHUNK_BYTES=0` to stream, or a positive byte count
 to select a range size for all providers. This bounds connection lifetimes;
 it does not imply measured improvements in throughput or failure rate. A server
 ignoring Range falls back to its full response. Existing
@@ -56,6 +65,11 @@ accepted. HTML responses are rejected, and gzip is detected by its signature as
 well as its extension, including numeric Figshare filenames. Empty files and
 compressed or BOM/comment-prefixed HTML are rejected. Version-2 validation
 receipts invalidate earlier checks so cached data receives these stronger checks.
+The formatter also detects gzip and bzip2 input bytes without a compression
+suffix; its text, binary, GFF feature and genome-reference readers agree.
+Gzip CRC/truncation errors still fail, and a declared compression suffix never
+permits a plain-text fallback. Output compression continues to follow the
+destination filename.
 
 NCBI Datasets uses the same resumable transport and retains its downloaded ZIP.
 Extraction requires the requested accession/version and an unambiguous member;

@@ -57,6 +57,15 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
     if meta.get("gff_output_path"):
         paths["gff"] = meta["gff_output_path"]
     if stage == "format":
+        if task.get('cloned_cds_path'):
+            from cloned_cds_models import EVIDENCE_FIELDS, evidence_paths
+            if (meta.get('cloned_cds_mode') or 'genomic') != (task.get('cloned_cds_mode') or 'genomic'):
+                raise ValueError('Cloned model evidence mode changed')
+            evidence = evidence_paths(meta)
+            fields = EVIDENCE_FIELDS if (task.get('cloned_cds_mode') or 'genomic') == 'genomic' else EVIDENCE_FIELDS[:3]
+            paths.update({key: meta[key] for key in fields})
+            for i, path in enumerate(value for value in evidence if value not in paths.values()):
+                paths['cloned_sequence_evidence_' + str(i)] = path
         if task.get("cds_input_type") == "transcriptome":
             expected = meta["cds_output_path"] + ".orf-extraction.json"
             if meta.get("orf_audit_output_path") != expected:
@@ -208,7 +217,10 @@ def import_fx2tab(source_root, target_root, species, source_cds, target_cds, sou
 def import_busco(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
     """Reuse only the identical lineage/mode contract and freshly verified CDS."""
     if (source_settings.get("run_species_busco") != "1" or target_settings.get("run_species_busco") != "1"
-            or source_settings.get("busco_lineage") != target_settings.get("busco_lineage")):
+            or source_settings.get("busco_lineage") != target_settings.get("busco_lineage")
+            or source_settings.get("species_busco_mode", "transcriptome") != target_settings.get("species_busco_mode", "transcriptome")
+            or (target_settings.get("species_busco_mode") == "proteins"
+                and source_settings.get("genetic_code", "1") != target_settings.get("genetic_code", "1"))):
         return False
     manifest = source_root / "artifact_provenance" / f"busco.{species}.json"
     if not manifest.is_file():
@@ -220,7 +232,9 @@ def import_busco(source_root, target_root, species, source_cds, target_cds, sour
     if not source_lineage or source_lineage != target_lineage:
         return False
     expected = dict(busco_lineage_request=target_settings["busco_lineage"], busco_lineage_resolved=target_lineage,
-                    busco_mode="transcriptome", evalue="1e-03", limit="20")
+                    busco_mode=target_settings.get("species_busco_mode", "transcriptome"), evalue="1e-03", limit="20")
+    if expected["busco_mode"] == "proteins":
+        expected["genetic_code"] = target_settings.get("genetic_code", "1")
     payload = json.loads(manifest.read_text())
     if (payload.get("schema_version") != 1 or payload.get("step") != "input_generation_species_busco"
             or payload.get("family_id") != species or payload.get("parameters") != expected):
@@ -325,6 +339,9 @@ def _import_stages(args):
                 skipped.append(species)
                 continue
             donor_task = source["tasks"][old_index - 1]
+            if task.get('cloned_cds_path') or donor_task.get('cloned_cds_path'):
+                skipped.append(species)
+                continue
             if any(task.get(key) != donor_task.get(key) for key in ("provider", "species_key")):
                 raise ValueError("Source/target species identity differs: " + species)
             # A donor worker holds this same task lock while writing. Root
@@ -385,7 +402,19 @@ def start_worker(args):
     command.extend(["--auth-bearer-token-env", args.auth_bearer_token_env])
     # An incompatible checkpoint may have performed partial checks. Discard
     # them rather than carrying their fences across an attempted import.
-    describe_task(build_arg_parser().parse_args(command), batch=batch if current else FreshDigestBatch())
+    preserve_cloned_evidence = current and bool(
+        load_plan(args.task_plan)["tasks"][args.task_index - 1].get("cloned_cds_path"))
+    _, description = describe_task(build_arg_parser().parse_args(command),
+                                  batch=batch if current else FreshDigestBatch(),
+                                  write_meta=not preserve_cloned_evidence)
+    if preserve_cloned_evidence:
+        # A fresh description still verifies the frozen raw sources. Keep the
+        # qualified coupled-source paths already covered by the checkpoint;
+        # replacing them with an unexecuted description loses model evidence.
+        saved = json.loads((args.root / "tmp/task_meta_shards" / f"{args.task_index}.json").read_text())
+        if any(saved.get(key) != value for key, value in description.items()):
+            raise ValueError("Cloned task description differs from its verified format metadata")
+        batch.check()
 
 
 def _import_one(args, source_plan, source_root, source_namespace, source_settings,
@@ -393,7 +422,10 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     species = task["species_prefix"]
     from transcriptome_orfs import input_type
     if input_type(task) != input_type(donor_task):
-        raise ValueError("Source/target nucleotide input types differ: " + species)
+        # A new frozen plan can intentionally replace supplied CDS with raw
+        # transcripts. Recompute this species; never import a different role.
+        skipped.append(species)
+        return
     if input_type(task) == "transcriptome":
         # Cross-plan source/output paths are part of the ORF audit contract.
         # Until audit rebinding is qualified, retain the donor and compute this
@@ -468,6 +500,13 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
         validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
                                              args.format_contract_version, namespace_root=source_namespace,
                                              batch=before_copy)
+        if validation_files is None and not (complete or verify_receipt(
+                source_plan, old_index, args.source_plan_sha256, namespace_root=source_namespace)):
+            # Formatting alone may be the intermediate output of a failed
+            # validator. Give the current formatter the original source rather
+            # than binding that incomplete result to a new successful stage.
+            skipped.append(species)
+            return
     if validation_files is None and "gff" in old_paths and "genome" in old_paths:
         from format_species_annotation.reference import validate_gff_genome_references
         try:

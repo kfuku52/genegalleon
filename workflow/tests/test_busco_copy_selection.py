@@ -72,6 +72,28 @@ def test_default_excludes_duplicates_and_retains_existing_single_copy_behavior(t
     assert audit == []
 
 
+def test_quality_and_original_score_policies_cannot_be_enabled_together(tmp_path):
+    result, audit = run_extraction(tmp_path, {"A": [("g1", "MAAA"), ("g2", "MCCC")]},
+        {"A": [("b1", "Duplicated", "g1", "100", "4"),
+               ("b1", "Duplicated", "g2", "90", "4")]},
+        extra=("--copy-policy", "best-score"))
+    assert result.returncode == 2 and "conflicts" in result.stderr
+    assert not (tmp_path / "output").exists() and audit == []
+
+
+def test_original_score_policy_rejects_report_input_overlap(tmp_path):
+    records = {"A": [("g1", "MAAA"), ("g2", "MCCC")]}
+    rows = {"A": [("b1", "Duplicated", "g1", "100", "4"),
+                  ("b1", "Duplicated", "g2", "90", "4")]}
+    table = tmp_path / "full/A.busco.full.tsv"
+    result, _ = run_extraction(tmp_path, records, rows, policy="exclude",
+        extra=("--copy-policy", "best-score", "--busco-full-dir", str(tmp_path / "full"),
+               "--selection-report", str(table)))
+    assert result.returncode == 2 and "overlap" in result.stderr
+    assert not (tmp_path / "output").exists()
+    assert "g1\t100\t4" in table.read_text()
+
+
 def test_best_score_selects_per_species_and_preserves_input_and_all_copy_summary(tmp_path):
     records = {"A": [("a1", "MAAA"), ("a2", "MCCC")], "B": [("b1", "MDDD"), ("b2", "MEEE")]}
     rows = {"A": [("b1", "Duplicated", "a1", "110", "4"), ("b1", "Duplicated", "a2", "100", "4")],

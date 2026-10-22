@@ -126,11 +126,13 @@ def test_preserve_exact_busco_protein_and_mapping_deterministically(tmp_path):
     assert records["BUSCO2"]["sequence"] == "MXXDEK"
 
 
-@pytest.mark.parametrize("packed", [False, True])
-def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path, packed):
+@pytest.mark.parametrize("packed,mode", [(False, "transcriptome"), (True, "transcriptome"), (False, "proteins")])
+def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path, packed, mode):
     from workflow.support import input_generation_stage_resume as resume
     name = "Plant_example"
     args = make_archive(tmp_path / "source-data", name, {"BUSCO1": "MDEK"})
+    if mode == "proteins":
+        args.short.write_text(args.short.read_text().replace("mode: transcriptome", "mode: proteins"))
     source_root, target_root = tmp_path / "source-output", tmp_path / "target-output"
     for root in (source_root, target_root):
         (root / "tmp").mkdir(parents=True)
@@ -143,11 +145,16 @@ def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path,
                     species_busco_full_dir=str(args.full.parent), species_busco_short_dir=str(args.short.parent))
     target_settings = {**settings, "species_busco_full_dir": str(tmp_path / "target-full"),
                        "species_busco_short_dir": str(tmp_path / "target-short")}
+    if mode == "proteins":
+        settings.update(species_busco_mode=mode, genetic_code="1")
+        target_settings.update(species_busco_mode=mode, genetic_code="1")
     entries = [("busco_full", args.full), ("busco_short", args.short)]
     if packed:
         entries.append(("busco_single_copy", args.output))
     parameters = dict(busco_lineage_request="test_odb12", busco_lineage_resolved="test_odb12",
-                      busco_mode="transcriptome", evalue="1e-03", limit="20")
+                      busco_mode=mode, evalue="1e-03", limit="20")
+    if mode == "proteins":
+        parameters["genetic_code"] = "1"
     payload = dict(schema_version=1, step="input_generation_species_busco", family_id=name,
                    inputs=[dict(label="species_cds", sha256=guide.digest(args.input))],
                    outputs=[dict(label=label, sha256=guide.digest(path)) for label, path in entries],

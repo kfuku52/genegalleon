@@ -86,12 +86,52 @@ gg_background_register() {
 
 gg_background_wait_one() {
   local pid=""
+  local completed_pid=""
+  local active_jobs=""
+  local status=0
+  local -a remaining_pids=()
   if [[ ${#GG_BACKGROUND_PIDS[@]} -eq 0 ]]; then
     return 0
   fi
-  pid=${GG_BACKGROUND_PIDS[0]}
-  GG_BACKGROUND_PIDS=("${GG_BACKGROUND_PIDS[@]:1}")
-  if ! wait "${pid}"; then
+  # Bash 5.1+ identifies the completed child without waiting for an older,
+  # slower worker. Keep the existing wait behavior on supported older shells.
+  if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+    active_jobs=$'\n'"$(jobs -p)"$'\n'
+    for pid in "${GG_BACKGROUND_PIDS[@]}"; do
+      if [[ "${active_jobs}" != *$'\n'"${pid}"$'\n'* ]]; then
+        completed_pid=${pid}
+        break
+      fi
+    done
+    if [[ -z "${completed_pid}" ]]; then
+      # Children can finish between the jobs snapshot and wait. A missing
+      # result is reaped by explicit PID below, including its real exit status.
+      if wait -n -p completed_pid "${GG_BACKGROUND_PIDS[@]}" 2> /dev/null; then
+        status=0
+      else
+        status=$?
+      fi
+      if [[ -n "${completed_pid:-}" ]]; then
+        pid=${completed_pid}
+      else
+        pid=${GG_BACKGROUND_PIDS[0]}
+        if wait "${pid}"; then status=0; else status=$?; fi
+      fi
+    else
+      pid=${completed_pid}
+      if wait "${pid}"; then status=0; else status=$?; fi
+    fi
+  else
+    pid=${GG_BACKGROUND_PIDS[0]}
+    if wait "${pid}"; then status=0; else status=$?; fi
+  fi
+  for completed_pid in "${GG_BACKGROUND_PIDS[@]}"; do
+    if [[ "${completed_pid}" != "${pid}" ]]; then
+      remaining_pids+=("${completed_pid}")
+    fi
+  done
+  GG_BACKGROUND_PIDS=("${remaining_pids[@]}")
+  if [[ ${status} -ne 0 ]]; then
     GG_BACKGROUND_FAILURE=1
   fi
   return 0

@@ -72,6 +72,7 @@ require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
+species_busco_mode="${species_busco_mode:-transcriptome}"
 busco_timeout_seconds="${busco_timeout_seconds:-0}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
 species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
@@ -185,6 +186,10 @@ for requirement in require_cds require_gff require_genome; do
     *) echo "${requirement} must be 0 or 1" >&2; exit 1 ;;
   esac
 done
+case "${species_busco_mode}" in
+  transcriptome|proteins) ;;
+  *) echo "species_busco_mode must be transcriptome or proteins." >&2; exit 1 ;;
+esac
 if [[ ! "${busco_timeout_seconds}" =~ ^(0|[1-9][0-9]*)$ ]]; then
   echo "busco_timeout_seconds must be 0 or a positive integer." >&2
   exit 1
@@ -955,6 +960,9 @@ run_format_stage_single() {
   local existing_gff=()
   local existing_genome=()
   local format_needs_update=0
+  local cloned_model_signature=""
+  local cloned_evidence_files="" cloned_evidence_path="" cloned_evidence_index=0
+  local -a cloned_evidence_base_args=()
   local format_force_overwrite=${overwrite}
   local format_work_dir=""
   local format_cds_dir="${species_cds_dir}"
@@ -1001,9 +1009,15 @@ run_format_stage_single() {
   fi
 
   if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    if [[ -n "${download_manifest}" ]]; then
+      cloned_model_signature=$(python "${gg_support_dir}/cloned_cds_models.py" verify-manifest --manifest "${download_manifest}") || return $?
+    fi
     gg_artifact_contract_init format_provenance_args "input_generation_format" "all_species" "${format_provenance_manifest}"
     gg_artifact_add_input_if_present format_provenance_args "input_directory" "${input_dir}"
     gg_artifact_add_input_if_present format_provenance_args "download_manifest" "${download_manifest}"
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args+=(--parameter "cloned_model_signature=${cloned_model_signature}")
+    fi
     format_provenance_args+=(
       --output "species_cds=${species_cds_dir}"
       --output "species_gff=${species_gff_dir}"
@@ -1018,6 +1032,15 @@ run_format_stage_single() {
     )
     if [[ -n "${download_manifest}" ]]; then
       format_provenance_args+=(--optional-output "resolved_manifest=${resolved_manifest_output}")
+    fi
+    cloned_evidence_base_args=("${format_provenance_args[@]}")
+    if [[ -n "${cloned_model_signature}" && ${overwrite} -ne 1 && -s "${species_summary_output}" ]]; then
+      cloned_evidence_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --species-summary "${species_summary_output}") || return $?
+      while IFS= read -r cloned_evidence_path; do
+        [[ -n "${cloned_evidence_path}" ]] || continue
+        format_provenance_args+=(--output "cloned_model_evidence_${cloned_evidence_index}=${cloned_evidence_path}")
+        cloned_evidence_index=$((cloned_evidence_index + 1))
+      done <<< "${cloned_evidence_files}"
     fi
     if [[ ${overwrite} -eq 1 ]]; then
       format_needs_update=1
@@ -1052,7 +1075,7 @@ run_format_stage_single() {
     echo "Staging formatted-input outputs before publication."
   fi
 
-  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+  if [[ ${download_only} -eq 0 ]] && ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
   fi
 
@@ -1062,6 +1085,7 @@ run_format_stage_single() {
   cmd=(python "${gg_support_dir}/format_species_inputs.py")
   cmd+=(--provider "${provider}")
   cmd+=(--species-cds-dir "${format_cds_dir}")
+  cmd+=(--cloned-model-root "${input_generation_root}/cloned_models")
   cmd+=(--species-gff-dir "${format_gff_dir}")
   cmd+=(--species-genome-dir "${format_genome_dir}")
   cmd+=(--species-summary-output "${format_summary_output}")
@@ -1138,6 +1162,16 @@ run_format_stage_single() {
     rm -f -- "${format_stats_file}"
   fi
   if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args=("${cloned_evidence_base_args[@]}")
+      cloned_evidence_index=0
+      cloned_evidence_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --species-summary "${species_summary_output}") || return $?
+      while IFS= read -r cloned_evidence_path; do
+        [[ -n "${cloned_evidence_path}" ]] || continue
+        format_provenance_args+=(--output "cloned_model_evidence_${cloned_evidence_index}=${cloned_evidence_path}")
+        cloned_evidence_index=$((cloned_evidence_index + 1))
+      done <<< "${cloned_evidence_files}"
+    fi
     gg_artifact_record "${format_provenance_args[@]}"
   fi
   stage_format_status="ok"
@@ -1151,8 +1185,8 @@ run_validate_stage() {
   local cds_files=()
   local gff_files=()
   local genome_files=()
-  local set_status=0
   local validation_reuse_args=()
+  local validation_genome_args=()
 
   if [[ ${run_validate_inputs} -ne 1 || ${run_format_inputs} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1181,6 +1215,9 @@ run_validate_stage() {
   num_species_cds=${#cds_files[@]}
   num_species_gff=${#gff_files[@]}
   num_species_genome=${#genome_files[@]}
+  if [[ ${#genome_files[@]} -gt 0 ]]; then
+    validation_genome_args=(--species-genome-dir "${species_genome_dir}")
+  fi
   echo "Detected ${#cds_files[@]} species CDS files, ${#gff_files[@]} species GFF files, and ${#genome_files[@]} species genome files."
 
   if [[ ${#cds_files[@]} -eq 0 ]]; then
@@ -1209,79 +1246,81 @@ run_validate_stage() {
     fi
   fi
 
-  if [[ ${#cds_files[@]} -gt 0 && ${#gff_files[@]} -gt 0 ]]; then
-    if is_species_set_identical "${species_cds_dir}" "${species_gff_dir}"; then
-      set_status=0
-    else
-      set_status=$?
-    fi
-    if [[ ${set_status} -ne 0 && ${strict} -eq 1 ]]; then
-      echo "Species set mismatch between species_cds and species_gff. Exiting due to strict mode."
+  if [[ ${strict} -eq 1 ]]; then
+    cmd=(python "${gg_support_dir}/validate_species_role_coverage.py")
+    cmd+=(--species-summary "${species_summary_output}" --species-cds-dir "${species_cds_dir}")
+    cmd+=(--species-gff-dir "${species_gff_dir}" --species-genome-dir "${species_genome_dir}")
+    [[ ${require_cds} -ne 1 ]] || cmd+=(--require-cds)
+    [[ ${require_gff} -ne 1 ]] || cmd+=(--require-gff)
+    [[ ${require_genome} -ne 1 ]] || cmd+=(--require-genome)
+    if ! "${cmd[@]}"; then
       stage_validate_status="failed"
+      echo "Failed: Validate declared species output coverage"
       exit 1
     fi
-    if [[ ${set_status} -eq 0 ]]; then
-      mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
-      longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
-      ensure_parent_dir "${mapping_stats_file}"
-      rm -f -- "${mapping_stats_file}"
-      rm -f -- "${longest_cds_stats_file}"
-      if [[ "${input_generation_mode}" == array_finalize ]]; then
-        cmd=(python "${gg_support_dir}/input_validation_reuse.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}" --species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
-        cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
-        [[ ${strict} -ne 1 ]] || cmd+=(--strict)
-        echo "Running: ${cmd[*]}"
-        if ! "${cmd[@]}"; then
-          stage_validate_status="failed"
-          echo "Failed: Validate formatted species inputs"
-          exit 1
-        fi
-      else
-        cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}")
-        cmd+=(--species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}")
-        cmd+=(--species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-        cmd+=(--stats-output "${mapping_stats_file}")
-        cmd+=("${validation_reuse_args[@]}")
-        if [[ ${strict} -eq 1 ]]; then
-          cmd+=(--strict)
-        fi
-        echo "Running: ${cmd[*]}"
-        if "${cmd[@]}"; then
-          :
-        else
-          stage_validate_status="failed"
-          echo "Failed: Validate CDS-to-GFF mapping compatibility"
-          exit 1
-        fi
-        if [[ ! -s "${species_summary_output}" ]]; then
-          stage_validate_status="failed"
-          echo "Species summary not found for longest CDS validation: ${species_summary_output}"
-          exit 1
-        fi
-        cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}")
-        cmd+=(--species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-        cmd+=(--stats-output "${longest_cds_stats_file}")
-        cmd+=("${validation_reuse_args[@]}")
-        echo "Running: ${cmd[*]}"
-        if "${cmd[@]}"; then
-          :
-        else
-          stage_validate_status="failed"
-          echo "Failed: Validate longest CDS representative selection"
-          exit 1
-        fi
+  fi
+
+  if [[ ${#cds_files[@]} -gt 0 && ${#gff_files[@]} -gt 0 ]]; then
+    mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
+    longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
+    ensure_parent_dir "${mapping_stats_file}"
+    rm -f -- "${mapping_stats_file}"
+    rm -f -- "${longest_cds_stats_file}"
+    if [[ "${input_generation_mode}" == array_finalize ]]; then
+      cmd=(python "${gg_support_dir}/input_validation_reuse.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
+      cmd+=("${validation_genome_args[@]}" --species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
+      cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
+      [[ ${strict} -ne 1 ]] || cmd+=(--strict)
+      echo "Running: ${cmd[*]}"
+      if ! "${cmd[@]}"; then
+        stage_validate_status="failed"
+        echo "Failed: Validate formatted species inputs"
+        exit 1
       fi
-      rm -f -- "${mapping_stats_file}"
-      # Retain source-ownership coverage alongside the selection result.
+    else
+      cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-gff-dir "${species_gff_dir}")
+      cmd+=("${validation_genome_args[@]}")
+      cmd+=(--species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+      cmd+=(--stats-output "${mapping_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
+      if [[ ${strict} -eq 1 ]]; then
+        cmd+=(--strict)
+      fi
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate CDS-to-GFF mapping compatibility"
+        exit 1
+      fi
+      if [[ ! -s "${species_summary_output}" ]]; then
+        stage_validate_status="failed"
+        echo "Species summary not found for longest CDS validation: ${species_summary_output}"
+        exit 1
+      fi
+      cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+      cmd+=(--stats-output "${longest_cds_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate longest CDS representative selection"
+        exit 1
+      fi
     fi
+    rm -f -- "${mapping_stats_file}"
+    # Retain source-ownership coverage alongside the selection result.
   elif [[ ${#cds_files[@]} -gt 0 ]]; then
     # CDS-only inputs retain full source-selection validation. Presence of
     # genomic roles is controlled by require_gff/require_genome above.
@@ -1595,10 +1634,13 @@ run_species_busco_for_one_file() {
     --output "busco_short=${file_sp_busco_short}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
-    --parameter "busco_mode=transcriptome"
+    --parameter "busco_mode=${species_busco_mode}"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
   )
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    busco_provenance_args+=(--parameter "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
+  fi
   [[ ${busco_requires_single_copy} -ne 1 ]] || busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   if [[ ${overwrite} -eq 1 ]]; then
     busco_needs_update=1
@@ -1618,7 +1660,12 @@ run_species_busco_for_one_file() {
   busco_work_root=$(mktemp -d "${download_tmp_root}/busco.${species_name}.XXXXXX")
   busco_input_fasta="${busco_work_root}/input.fasta"
   busco_output_dir="${busco_work_root}/busco_tmp"
-  seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}"
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    seqkit translate --transl-table "${GG_COMMON_GENETIC_CODE:-1}" --threads "${busco_threads}" \
+      "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  else
+    seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  fi
 
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
@@ -1627,11 +1674,11 @@ run_species_busco_for_one_file() {
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  (
+  if (
     cd "${busco_work_root}"
     GG_BUSCO_TIMEOUT_SECONDS="${busco_timeout_seconds}" gg_run_busco_with_metaeuk_modified_fas_compat \
       --in "input.fasta" \
-      --mode "transcriptome" \
+      --mode "${species_busco_mode}" \
       --out "busco_tmp" \
       --cpu "${busco_threads}" \
       --force \
@@ -1649,7 +1696,15 @@ run_species_busco_for_one_file() {
             for (i = first; i <= NR; i++) print tail_lines[i % 50]
           }
         }'
-  )
+  ); then
+    :
+  else
+    local busco_exit_code=$?
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code "${busco_exit_code}" || true
+    echo "BUSCO failed for ${species_name}; mode=${species_busco_mode}; retained diagnostics: ${busco_work_root}" >&2
+    return "${busco_exit_code}"
+  fi
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
     python "${gg_support_dir}/busco_guide_tree.py" preserve \
@@ -1659,9 +1714,10 @@ run_species_busco_for_one_file() {
     rm -rf -- "${busco_work_root}"
     gg_artifact_record "${busco_provenance_args[@]}"
   else
-    echo "Failed to locate normalized BUSCO outputs for ${species_name}. Exiting."
-    rm -rf -- "${busco_work_root}"
-    exit 1
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code 1 || true
+    echo "Failed to locate normalized BUSCO outputs for ${species_name}; retained diagnostics: ${busco_work_root}" >&2
+    return 1
   fi
 }
 
@@ -2211,6 +2267,7 @@ run_array_worker_mode() {
   local gff_output_path=""
   local genome_output_path=""
   local orf_audit_output_path=""
+  local cloned_model_signature=""
   local format_provenance_manifest=""
   local -a format_provenance_args=()
 
@@ -2262,7 +2319,7 @@ run_array_worker_mode() {
   fi
   read_stats_json_fields "${task_meta_file}" species_prefix cds_input_path=cds_path \
     gff_input_path=gff_path gbff_input_path=gbff_path genome_input_path=genome_path \
-    cds_output_path gff_output_path genome_output_path orf_audit_output_path || exit $?
+    cds_output_path gff_output_path genome_output_path orf_audit_output_path cloned_model_signature || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
@@ -2293,6 +2350,9 @@ run_array_worker_mode() {
     gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args+=(--parameter "cloned_model_signature=${cloned_model_signature}")
+    fi
     format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
     [[ -z "${orf_audit_output_path}" ]] || format_provenance_args+=(--output "orf_audit=${orf_audit_output_path}")
     if [[ -n "${gff_output_path}" ]]; then
@@ -2405,6 +2465,11 @@ run_array_worker_mode() {
     receipt_cmd+=(--file "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json")
   fi
   local raw_input_path
+  local cloned_model_files
+  cloned_model_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --metadata "${task_meta_file}") || exit $?
+  while IFS= read -r raw_input_path; do
+    [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
+  done <<< "${cloned_model_files}"
   for raw_input_path in "${cds_input_path}" "${gff_input_path}" "${gbff_input_path}" "${genome_input_path}"; do
     [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
   done
@@ -2768,6 +2833,9 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  if [[ "${species_busco_mode}" != transcriptome ]]; then
+    array_settings_cmd+=(--setting "species_busco_mode=${species_busco_mode}")
+  fi
   array_settings_cmd+=(--setting "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
   # Do not add empty resume fields to old immutable settings documents.
   for resume_prefix in resume_from resume_fallback; do

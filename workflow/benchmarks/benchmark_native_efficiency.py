@@ -54,6 +54,12 @@ def worker(args):
     state.digest = digest
     os.environ["GG_TASK_CPUS"] = "1"
     if args.mode == "receipt":
+        fence_sizes = []
+        original_check = state.FreshDigestBatch.check
+        def check(batch):
+            fence_sizes.append(len(batch.paths))
+            return original_check(batch)
+        state.FreshDigestBatch.check = check
         # Native completion preserves both the caller's source alias and its
         # resolved path. Verification must read their shared bytes only once.
         plan = root / "plan.json"
@@ -71,6 +77,10 @@ def worker(args):
             output.write_bytes(block)
             sha = original(source)
             files = {str(source): sha, str(output): original(output)}
+            for member in range(args.receipt_extra_files):
+                extra = root / f"qc-{index}-{member}.json"
+                extra.write_text(json.dumps({"species": index, "member": member, "data": "A" * 4096}))
+                files[str(extra)] = original(extra)
             if args.receipt_aliases:
                 files[str(alias)] = sha
             state.atomic_json(state.receipt_path(plan, index), {
@@ -79,15 +89,20 @@ def worker(args):
                 "files": files})
         frozen = {p: p.read_bytes() for p in state.receipt_path(plan, 1).parent.glob("*.json")}
         reads.clear()
+        fence_sizes.clear()
+        cpu_started = time.process_time()
         stamp = time.perf_counter()
         verified = [state.verify_receipt(plan, index) for index in range(1, args.species + 1)]
         seconds = time.perf_counter() - stamp
+        cpu_seconds = time.process_time() - cpu_started
         assert all(verified) and all(path.read_bytes() == raw for path, raw in frozen.items())
         # Changed output must remain a failed verification in both variants.
         (root / "output-1.fa").write_bytes(b"changed")
         measured_reads = list(reads)
+        measured_fences = list(fence_sizes)
         assert not state.verify_receipt(plan, 1)
         reads[:] = measured_reads
+        fence_sizes[:] = measured_fences
         proof = hashlib.sha256(json.dumps([verified, False]).encode()).hexdigest()
     elif args.mode == "prepared":
         plan = root / "plan.json"
@@ -206,7 +221,9 @@ def worker(args):
                 payload.pop("validation_implementation")
             proof = hashlib.sha256(json.dumps([data_sha, payloads], sort_keys=True).encode()).hexdigest()
     print(json.dumps({"seconds": seconds, "logical_sha256": proof, "sha256_calls": len(reads),
-                      "sha256_bytes": sum(reads), "process_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+                      "sha256_bytes": sum(reads), "process_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                      **({"metadata_fence_path_checks": sum(fence_sizes), "cpu_seconds": cpu_seconds}
+                         if args.mode == "receipt" else {})}))
 
 
 def main():
@@ -217,12 +234,13 @@ def main():
     parser.add_argument("--genome-mib", type=int, default=64)
     parser.add_argument("--species", type=int, default=560)
     parser.add_argument("--receipt-aliases", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--receipt-extra-files", type=int, default=0)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--repo", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--fixture-root", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if min(args.genome_mib, args.species, args.trials) < 1:
-        parser.error("Positive workload sizes and trials required")
+    if min(args.genome_mib, args.species, args.trials) < 1 or args.receipt_extra_files < 0:
+        parser.error("Require positive workload sizes/trials and nonnegative extra receipt files")
     if args.repo:
         worker(args)
         return
@@ -238,6 +256,7 @@ def main():
                 command = [sys.executable, str(Path(__file__).resolve()), "--mode", args.mode, "--repo", str(roots[name]),
                            "--output", str(args.output), "--fixture-root", str(fixture), "--genome-mib", str(args.genome_mib),
                            "--species", str(args.species), "--receipt-aliases", str(args.receipt_aliases)]
+                command += ["--receipt-extra-files", str(args.receipt_extra_files)]
                 proc = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
                 peak = 0
                 while proc.poll() is None:
@@ -256,7 +275,7 @@ def main():
     if len({row["logical_sha256"] for rows in samples.values() for row in rows}) != 1:
         raise RuntimeError("Outputs differ")
     payload = {"mode": args.mode, "genome_mib": args.genome_mib, "species": args.species,
-               "receipt_aliases": args.receipt_aliases,
+               "receipt_aliases": args.receipt_aliases, "receipt_extra_files": args.receipt_extra_files,
                "platform": platform.platform(), "python": sys.version, "warmups": 1, "trials": samples,
                "medians": {name: {key: statistics.median(row[key] for row in rows) for key in rows[0] if key != "logical_sha256"}
                            for name, rows in samples.items()}, "equivalent": True,

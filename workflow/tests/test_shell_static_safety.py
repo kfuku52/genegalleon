@@ -1,6 +1,8 @@
 # ruff: noqa: E501
 
+import copy
 import re
+import runpy
 from pathlib import Path
 
 from shell_static_helpers import (
@@ -1063,7 +1065,7 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     assert "assert_gene_evolution_aa_model_for_protein_mode() {" in core
     assert 'if [[ "${input_sequence_mode}" != "protein" ]]; then' in core
     assert 'if [[ "${mode_gene_evolution}" == "query2family" ]]; then' in core
-    assert "query2family currently requires species_cds-backed search and CDS extraction." in core
+    assert "query2family protein mode requires query_blast_method=diamond and species_protein inputs." in core
     assert 'dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"' in core
     assert 'file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"' in core
     assert 'file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"' in core
@@ -2170,12 +2172,21 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     assert '--iqtree-anc "${file_og_iqtree_anc}"' in core
 
 
-def test_artifact_provenance_versions_are_diagnostic_only():
-    script = _read_text(WORKFLOW_DIR / "support" / "artifact_provenance.py")
-    assert 'contract["diagnostics"] = normalized_diagnostics(args.diagnostic)' in script
-    comparison_body = script.split("def contract_comparison_payload", 1)[1].split("\ndef ", 1)[0]
-    assert '"parameters": contract.get("parameters")' in comparison_body
-    assert "diagnostics" not in comparison_body
+def test_artifact_provenance_versions_are_diagnostic_only(monkeypatch):
+    support = WORKFLOW_DIR / 'support'
+    monkeypatch.syspath_prepend(str(support))
+    compare = runpy.run_path(str(support / 'artifact_provenance.py'))['contract_comparison_payload']
+    for step, family in [('format_inputs', 'Test_species'), ('species_tree_extract_fasta', 'all_buscos')]:
+        contract = dict(schema_version=1, step=step, family_id=family,
+                        inputs=[{'sha256': 'original'}], outputs=[{'path': 'output.fa'}],
+                        parameters={'strict': 1}, diagnostics={'genegalleon_version': 'old'})
+        before = copy.deepcopy(contract)
+        expected = compare(contract)
+        assert compare({**contract, 'diagnostics': {'genegalleon_version': 'new', 'tool_version': 'changed'}}) == expected
+        assert compare({**contract, 'parameters': {'strict': 0}}) != expected
+        assert compare({**contract, 'inputs': [{'sha256': 'changed'}]}) != expected
+        assert compare({**contract, 'outputs': [{'path': 'changed.fa'}]}) != expected
+        assert contract == before
 
 
 def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
@@ -2206,7 +2217,8 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     )
     assert '--out_tsv "${aa_summary_tsv}"' in core
     assert "resolve_orthogroup_genecount_annotated" in core
-    assert '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"' in core
+    assert 'catalog=$(gg_orthogroup_catalog_path)' in core
+    assert '"${catalog}/Orthogroups.GeneCount.annotated.tsv"' in core
     assert 'if [[ "${gene_family_source}" == "orthogroup" ]]; then' in csubst_summary_body
     assert 'summary_args+=(--orthogroup_annotation_tsv "${file_orthogroup_genecount_annotated}")' in core
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"' in core

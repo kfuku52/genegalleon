@@ -308,6 +308,20 @@ RAW_FIELDS = ("coverage", "query_span_coverage", "query_start", "query_end", "qu
               "paf_query", "paf_seqid", "paf_strand", "paf", "query", "seqid", "strand", "identity", "cds", "id", "search")
 
 
+def _same_cached_evidence(original, current, native_engine):
+    if native_engine is None:
+        return original == current
+    if (not isinstance(original, dict) or not isinstance(current, dict)
+            or not isinstance(original.get(native_engine), dict) or not isinstance(current.get(native_engine), dict)):
+        return False
+    def pristine(evidence):
+        # Confirmation is appended after raw genomic/terminal validation. Native
+        # paths are re-nominated below; this derived evidence is never reused.
+        return {**evidence, native_engine: {key: value for key, value in evidence[native_engine].items()
+                                            if key != 'genomic_structure_transfer'}}
+    return pristine(original) == pristine(current)
+
+
 def _raw_prediction(model, regions):
     if not isinstance(model, dict) or model.get("query") not in regions:
         return None
@@ -316,19 +330,22 @@ def _raw_prediction(model, regions):
         # source prediction, never replayed as additional independent searches.
         return None
     completion = model.get("terminal_completion")
+    native_engine = {'annevo_nominated_path': 'annevo', 'oriongeno_nominated_path': 'oriongeno',
+                     'oriongeno_genomewide_path': 'oriongeno'}.get(model.get('search'))
     if ("raw_prediction" not in model and isinstance(completion, dict)
             and (completion.get("status") in {"completed", "accepted"} or "selected_cds" in completion)):
         raise ValueError("Completed terminal model lacks pristine cached prediction")
     if "raw_prediction" in model:
         original = model["raw_prediction"]
         if (not isinstance(original, dict) or any(original.get(key) != model.get(key)
-                                                for key in ("query", "evidence", "search", "seqid", "strand"))):
+                                                for key in ("query", "search", "seqid", "strand"))
+                or not _same_cached_evidence(original.get('evidence'), model.get('evidence'), native_engine)):
             raise ValueError("Cached raw prediction does not match its model provenance")
         model = original
     region = regions[model["query"]]
     old_evidence = model.get("evidence", {})
-    if model.get('search') in {'annevo_nominated_path', 'oriongeno_nominated_path'}:
-        engine = model['search'].removesuffix('_nominated_path')
+    if model.get('search') in {'annevo_nominated_path', 'oriongeno_nominated_path', 'oriongeno_genomewide_path'}:
+        engine = 'oriongeno' if model['search'] == 'oriongeno_genomewide_path' else model['search'].removesuffix('_nominated_path')
         if not isinstance(old_evidence.get(engine), dict):
             raise ValueError('Cached ANNEVO prediction lacks its native provenance')
         # These paths must be re-nominated against the selected native GFF and

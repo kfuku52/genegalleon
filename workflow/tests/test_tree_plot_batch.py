@@ -42,6 +42,46 @@ def normalized(path):
     return re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', path.read_bytes())
 
 
+def test_focused_batch_uses_complete_bundled_package_over_incompatible_installed_copy(tmp_path, monkeypatch):
+    import focus_hgt_gene_trees as exporter
+    from pypdf import PdfReader
+
+    # Reproduce an older installed namespace without modifying the image library.
+    old = tmp_path / 'old-source'
+    (old / 'R').mkdir(parents=True)
+    (old / 'DESCRIPTION').write_text('Package: genegalleon.treevis\nVersion: 0.0.1\n'
+        'Title: Incompatible Runtime Fixture\nDescription: An older installed namespace.\n'
+        'Author: Fixture\nMaintainer: Fixture <fixture@example.invalid>\nLicense: MIT\n')
+    (old / 'NAMESPACE').write_text('export(old_namespace)\n')
+    (old / 'R' / 'old.R').write_text('old_namespace = function() TRUE\n')
+    old_lib = tmp_path / 'old-library'
+    old_lib.mkdir()
+    installed = subprocess.run(['R', 'CMD', 'INSTALL', '--library=' + str(old_lib), str(old)], capture_output=True)
+    assert installed.returncode == 0, installed.stdout.decode() + installed.stderr.decode()
+    monkeypatch.setenv('R_LIBS', str(old_lib))
+    check = subprocess.run(['Rscript', '-e', "library(genegalleon.treevis); "
+        "stopifnot(!exists('add_focused_hgt_node_marks', asNamespace('genegalleon.treevis'), inherits=FALSE))"],
+        capture_output=True)
+    assert check.returncode == 0, check.stderr.decode()
+    stat = tmp_path / 'focused.tsv'
+    stat.write_text('branch_id\tparent\tsister\tchild1\tchild2\tnode_name\tbl_rooted\tso_event\tso_event_parent\thgtfocus_event_count\thgtfocus_node_label\n'
+        '4\t-999\t-999\t2\t3\troot\t0\tS\tS\t0\t\n'
+        '2\t4\t3\t0\t1\tn4\t1\tS\tS\t1\tHGT1 UFB=90\n'
+        '0\t2\t1\t\t\tg1\t1\tL\tS\t0\t\n1\t2\t0\t\t\tg2\t1\tL\tS\t0\t\n'
+        '3\t4\t2\t\t\tg3\t2\tL\tS\t0\t\n')
+    output = tmp_path / 'focused.pdf'
+    args = ['--stat_branch=' + str(stat), '--max_delta_intron_present=-0.5',
+        '--panel_widths_mm=tree:60', '--panel1=tree,bl_rooted,no,no,L', '--show_branch_id=no',
+        '--event_method=species_overlap', '--species_color_table=PLACEHOLDER',
+        '--pie_chart_value_transformation=identity', '--long_branch_display=no']
+    exporter.render_native_batch([dict(id='OG1', cwd=str(tmp_path), args=args,
+        output=str(output), check_ggimage=False)], tmp_path)
+    pages = PdfReader(output).pages
+    assert len(pages) == 1 and 'UFB=90' in ''.join(pages[0].extract_text().split())
+    assert os.environ['R_LIBS'] == str(old_lib)
+    assert not list(tmp_path.glob('treevis-library-*'))
+
+
 def test_batch_render_matches_cli_and_recovers_from_one_family_error(tmp_path):
     (tmp_path/'identity').write_text('a file named like a scalar option')
     (tmp_path/'tree').mkdir()

@@ -250,6 +250,7 @@ def download_from_manifest(
     jobs,
     resolved_manifest_output_path=None,
     validation_cache_dir=None,
+    allow_genome_only=False,
 ):
     download_root = Path(download_root).expanduser().resolve()
     validation_cache = GzipValidationCache(
@@ -440,7 +441,7 @@ def download_from_manifest(
         if species_key == "" and resolved_ncbi is not None:
             species_key = (resolved_ncbi.get("species_key") or "").strip()
 
-        if provider not in ("local", ORYZA_MINUTA_PROVIDER) and (
+        if not (allow_genome_only and genome_url) and provider not in ("local", ORYZA_MINUTA_PROVIDER) and (
             not manifest_has_usable_source_bundle(cds_url, gff_url, gbff_url, genome_url)
         ):
             try:
@@ -524,7 +525,7 @@ def download_from_manifest(
             errors.append("Manifest line {}: {}".format(i, invalid_species_key))
             continue
 
-        if provider != ORYZA_MINUTA_PROVIDER and not manifest_has_usable_source_bundle(
+        if not (allow_genome_only and genome_url) and provider != ORYZA_MINUTA_PROVIDER and not manifest_has_usable_source_bundle(
             cds_url, gff_url, gbff_url, genome_url
         ):
             errors.append(

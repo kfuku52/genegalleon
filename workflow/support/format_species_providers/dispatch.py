@@ -66,7 +66,7 @@ class ProviderIdResolver:
 
 
 PROVIDER_ID_RESOLVERS = {
-    "onekp": ProviderIdResolver(resolve_onekp_download_urls_from_id),
+    "onekp": ProviderIdResolver(resolve_onekp_download_urls_from_id, accepts_row=True),
     "coge": ProviderIdResolver(resolve_coge_download_urls_from_id),
     "cngb": ProviderIdResolver(resolve_cngb_download_urls_from_id, accepts_species_key=False),
     "ddbj": ProviderIdResolver(resolve_ddbj_download_urls_from_id),

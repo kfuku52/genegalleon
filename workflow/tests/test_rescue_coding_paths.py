@@ -322,6 +322,9 @@ def test_read_retained_paths_binds_primary_and_alternative_to_exact_source_recei
     retained = rescue.read_retained_coding_paths(directory, expected, verification=proof)
     assert set(retained) == {paths.coding_shape(long), paths.coding_shape(short)}
     assert all(row['producer_receipt_sha256'] == expected for row in retained.values())
+    assert all(row['locus_model_ids'] == ['old_0'] for row in retained.values())
+    assert retained[paths.coding_shape(long)]['primary_model_ids'] == ['old_0']
+    assert retained[paths.coding_shape(short)]['primary_model_ids'] == []
     with pytest.raises(ValueError, match='receipt differs'):
         rescue.read_retained_coding_paths(directory, '0' * 64)
     member = directory / ('models.json' if legacy else 'model_store/accepted.sqlite')
@@ -363,6 +366,99 @@ def test_conflicting_same_generation_prior_paths_are_preserved_for_review():
     paths.resolve_coding_paths([a, b])
     assert all(row['status'] == 'unresolved' and row['sequence'] for row in (a, b))
     assert all(row['retained_coding_path']['source_directory'] == '/verified/old' for row in (a, b))
+
+
+def witnessed_locus(primary, alternatives=(), *, depth=0, receipt='a' * 64):
+    for row in (primary, *alternatives):
+        row['retained_coding_path'] = {'history_depth': depth, 'source_directory': '/verified/old',
+            'producer_receipt_sha256': receipt, 'model_ids': [row['model_id']],
+            'locus_model_ids': [primary['model_id']],
+            'primary_model_ids': [primary['model_id']] if row is primary else []}
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_source_loci_keep_disjoint_old_isoforms_without_fusing_other_prior_gene(reverse):
+    primary = model('long', [[0, 60, 0], [120, 180, 0]])
+    short = model('terminal', [[120, 180, 0]])
+    other = model('other_gene', [[0, 60, 0]])
+    witnessed_locus(primary, [short])
+    witnessed_locus(other)
+    rows = [primary, short, other]
+    paths.resolve_coding_paths(list(reversed(rows)) if reverse else rows)
+    assert primary['status'] == other['status'] == 'accepted'
+    assert short['status'] == 'accepted_alternative_path'
+    assert short['parent_model_id'] == primary['model_id']
+    assert [row['model_id'] for row in primary['alternative_coding_paths']] == ['terminal']
+    assert 'parent_model_id' not in other
+    assert all(not row.get('integration_conflict') for row in rows)
+
+
+def test_source_locus_does_not_require_disjoint_alternatives_to_overlap_each_other():
+    primary = model('long', [[0, 60, 0], [120, 180, 0]])
+    left, right = model('left', [[0, 60, 0]]), model('right', [[120, 180, 0]])
+    witnessed_locus(primary, [left, right])
+    paths.resolve_coding_paths([right, primary, left])
+    assert primary['status'] == 'accepted'
+    assert {row['model_id'] for row in primary['alternative_coding_paths']} == {'left', 'right'}
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_source_bound_locus_membership_survives_normal_reconsolidation(tmp_path, legacy):
+    from workflow.support import rescue_model_store as store
+    from workflow.tests.test_rescue_model_store import receipt
+    primary = model('source_long', [[0, 60, 0], [120, 180, 0]])
+    short, other = model('source_terminal', [[120, 180, 0]]), model('source_other_gene', [[0, 60, 0]])
+    current = copy.deepcopy([primary, short, other])
+    primary['alternative_coding_paths'] = [short]
+    directory = tmp_path / 'previous'
+    directory.mkdir()
+    if legacy:
+        (directory / 'models.json').write_text(json.dumps([primary, other]))
+    else:
+        store.write_model_store(directory, [primary, other])
+    receipt(directory)
+    retained = rescue.read_retained_coding_paths(directory, rescue.digest(directory / 'receipt.json'))
+    rescue.consolidate(current, [], 'Target', retained_paths=retained)
+    assert current[0]['status'] == current[2]['status'] == 'accepted'
+    assert current[1]['status'] == 'accepted_alternative_path'
+    assert current[1]['parent_model_id'] == current[0]['model_id']
+    assert len(current[0]['alternative_coding_paths']) == 1
+    assert all(row['retained_coding_path']['producer_receipt_sha256'] == rescue.digest(directory / 'receipt.json') for row in current)
+
+
+@pytest.mark.parametrize('bad', ['missing_primary', 'frame_conflict', 'mixed_receipt', 'ambiguous_locus'])
+def test_source_locus_membership_cannot_override_missing_or_conflicting_witness(bad):
+    primary = model('long', [[0, 60, 0], [120, 180, 0]])
+    left, right = model('left', [[0, 60, 0]]), model('right', [[120, 180, 0]])
+    witnessed_locus(primary, [left, right])
+    rows = [primary, left, right]
+    if bad == 'missing_primary':
+        rows.remove(primary)
+    elif bad == 'frame_conflict':
+        right['cds'] = [[121, 181, 0]]
+    elif bad == 'mixed_receipt':
+        right['retained_coding_path']['producer_receipt_sha256'] = 'b' * 64
+    else:
+        right['retained_coding_path']['locus_model_ids'].append('unknown')
+    assert paths._witnessed_retained_loci(rows) is None
+    if bad != 'missing_primary':
+        paths.resolve_coding_paths(rows)
+        assert all(row['status'] == 'unresolved' for row in rows)
+
+
+def test_source_primary_frame_conflict_and_older_bridge_remain_review_proposals():
+    a, b = model('a', [[0, 60, 0]]), model('b', [[1, 61, 0]])
+    witnessed_locus(a)
+    witnessed_locus(b)
+    paths.resolve_coding_paths([a, b])
+    assert a['status'] == b['status'] == 'unresolved'
+    recent, older = model('recent', [[0, 60, 0]]), model('older', [[0, 60, 0], [120, 180, 0]])
+    right = model('right', [[120, 180, 0]])
+    witnessed_locus(recent)
+    witnessed_locus(older, [right], depth=2)
+    paths.resolve_coding_paths([older, recent, right])
+    assert recent['status'] == right['status'] == 'accepted'
+    assert older['status'] == 'unresolved'
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])

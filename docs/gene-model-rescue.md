@@ -1,5 +1,73 @@
 # Synteny-guided gene-model rescue
 
+## Evaluate native predictions outside nominated regions
+
+The independent CLI's opt-in `plan --oriongeno-genomewide --oriongeno-inputs
+native.tsv` evaluates each native coding isoform without same-strand CDS overlap
+with the original annotation. The ordinary bounded route remains enabled for
+other native paths. Species absent from a frozen native subset keep their
+ordinary rescue route and receive an explicit unavailable-native audit. Every
+prepared protein from the frozen selected external donor species is eligible,
+including proteins classified as already represented;
+`--max-genome-queries` does not cap this candidate-first search. Target proteins
+cannot provide independent donor support.
+
+DIAMOND searches unique translated proteins with `--ultra-sensitive`, no masking
+or composition correction, E-value 1000 and no target cap. Exact protein matches
+are also included independently of seeding. All returned sequence pairs pass the
+existing global reciprocal-coverage alignment. Identical sequences share this
+computation, while donor identifiers, native isoforms and genomic copies remain
+distinct. No search hit means no hit under this declared search, not proof of
+biological absence or an exhaustive comparison of every possible alignment.
+
+The ordinary genomic and unanchored admission gates still apply. Actual Miniprot
+mapping at the candidate locus supplies the existing native coding-structure
+check; a native coordinate window does not assign synteny, orthology or an
+expected copy. Missing confirmation, invalid CDS, insufficient independent donor
+support or ambiguous copies remain unresolved. Previous adopted paths remain
+subject to the existing explicit annotation-retention contract.
+
+For a completed rescue, create a new generation without repeating its already
+covered Miniprot searches:
+
+```bash
+python workflow/support/rescue_gene_models.py native-genomewide-plan \
+  --previous-output /data/completed_rescue --output /data/expanded_rescue
+python workflow/support/rescue_gene_models.py native-genomewide-prepare \
+  --output /data/expanded_rescue --cpus 4
+python workflow/support/rescue_gene_models.py rescue \
+  --output /data/expanded_rescue --task-index 1 --cpus 4
+```
+
+The extension freezes the same sources, reference selection, per-species profiles
+and cutoffs, and explicitly imports byte-verified prepared/comparison inputs.
+The original Miniprot binary must match for raw prediction-cache reuse. Native
+donor alignment, genomic QC and admission run freshly; no native GPU prediction
+is repeated. Complete all species before the ordinary `finalize` command.
+
+For large completed compact stores, add `--producer-source /archive/producer`
+to `native-genomewide-plan` to reuse already validated coding evidence. The
+archived source must match the producer plan and prove unchanged genomic,
+homology, terminal, boundary and native coding-structure decisions. A changed
+UTR parser must reconstruct identical coding paths from each actual frozen
+native GFF. Unknown or changed strict evidence stops this route. Prepared donor
+proteins and every old publication member are freshly byte-verified; strict
+rejections remain recorded. The genomewide donor search and Miniprot structure
+confirmation run freshly. Placement and locus admission run on the combined
+old and new evidence, and admitted CDS pass fresh genomic QC.
+
+Completed workers from an identical genomewide scope may be independently copied
+with `--completed-output /data/pilot --completed-producer-source /archive/pilot`.
+Their original plan, source contract and worker receipt remain explicit in
+`completed_native_worker_import.json`. Changed scientific scope, admission rules
+or worker bytes prevent import. Neither route edits its producer generation.
+
+Each worker publishes `oriongeno_genomewide.json`, accounting for every native
+transcript as original overlap, invalid translation, no protein-search hit,
+admitted or not admitted. Counts of native genes can overlap across categories
+when their isoforms differ. They are not counts of newly adopted loci. The normal
+model store and admission audit supply final locus counts and preserved evidence.
+
 `workflow/support/rescue_gene_models.py` is an independent, restartable CLI.
 Input generation optionally runs it after formatting and initial BUSCO, before
 augmented CDS/GFF inputs are used in OrthoFinder. Enable it with
@@ -338,6 +406,8 @@ never replaces these checks or adds donor support. A new conflicting prediction
 cannot invalidate such a CDS or join independent existing loci. If a historical
 path is absent from current valid predictions, its fixed CDS is reconstructed
 from the current genome and aligned anew to its still-available current donors.
+Current transfer searches finish before this reconstruction, so existing
+predictor mappings retain their provenance without redundant derived candidates.
 It must pass the same structural and coverage/identity policy. One optimal
 traceback can establish homology for these fixed coordinates; this does not
 infer new coding boundaries or reuse historical alignment metrics. These derived
@@ -347,7 +417,14 @@ rather than replayed as pristine predictor output.
 Other paths remain review proposals when they conflict. Recent annotation
 anchors take priority over older conflicting paths. Older bridges cannot join
 independent annotations; conflicting paths from the same historical generation
-remain explicit review records without an arbitrary winner. Retention does not assign
+remain explicit review records without an arbitrary winner. Verified prior
+publications also retain each path's primary/alternative locus membership. When
+the current primary and every alternative pass fresh QC and each alternative
+agrees with that primary, the existing locus remains intact. Two short paths
+need not overlap each other merely because both agree with a longer primary.
+Separate prior loci remain separate; overlapping primary conflicts, missing
+primary witnesses and ambiguous membership still use the strict conflict review.
+Retention does not assign
 orthology or an expected copy, and original-annotation ownership still applies.
 New alternatives supported only by the target species cannot revoke a retained
 CDS. In a tied component without an external donor, only the currently validated
@@ -441,6 +518,16 @@ contain all three arrays and their own provenance receipt. Automatic compression
 uses zstd when its Python module is available, otherwise gzip; the manifest
 records the selected codec. Shards have a bounded target size, though a single
 record can exceed it.
+
+For targeted inspection, `rescue_model_store.iter_models(..., model_ids={...})`
+restores only matching `model_id` values, retaining their source order and all
+duplicate evidence records. Exhaust the iterator: it still verifies all raw
+shard bytes, the full body database and the enclosing producer generation.
+Only selected bodies are decompressed and layout-validated; omit `model_ids`
+for a full record-layout audit. Existing publications need no rewritten index.
+`workflow/benchmarks/benchmark_rescue_model_selection.py baseline` and `selected`,
+run through the normal runtime wrapper, reproduce a 35,000-candidate synthetic
+comparison with full input hashing and exact ordered output fingerprints.
 
 Within one immutable genome and genetic-code context, raw DNA validation also
 reuses exact candidate-independent results through a bounded cache (8,192 entries,
@@ -657,7 +744,54 @@ assign orthology or a biologically preferred CDS. Frame disruptions, assembly am
 tails remain failures. The original predictor coordinates and PAF are retained;
 `boundary_revalidation` records attempted paths and the admission decision.
 Prediction-cache replay rechecks raw predictions with the current implementation.
+For at least 512 reusable raw records, `--cpus` also bounds spawned validation
+workers. They open the staged genome independently and apply the same genomic,
+terminal, boundary and homology checks in batches of 64, retaining source order
+with at most two pending batches per worker. Smaller replays use the ordinary
+serial caller. Each worker's DNA memo is limited to 32 MiB; candidate metrics and
+donor-specific completion remain independent. `cached_prediction_validation.json`
+records the replay count, worker budget and memo totals separately from the
+submitting process's `raw_validation_memo.json`. Worker failures abort publication.
+The dispatcher implementation is frozen in new plans; changing it does not
+replace an active generation or authorize reuse of old QC decisions.
 Frozen result and preparation files are hashed in groups, with full-byte reads
 and generation checks before and after each group and before cache use. This
 avoids repeated per-file scans of every previously verified pathname.
 This step does not assign orthology or relax coding-path compatibility.
+
+For an admission-only change, completed compact outputs can instead use the
+standard verified reclassification path:
+
+```bash
+python workflow/support/rescue_gene_models.py reclassify-plan \
+  --previous-output /previous/rescue --producer-source /previous/fixed/source \
+  --output /new/rescue
+python workflow/support/rescue_gene_models.py reclassify-prepare --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py rescue --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py finalize --output /new/rescue --cpus 4
+```
+
+The archived source must match the producer plan's implementation digests.
+Strict validation, boundary completion, donor alignments, native structure
+confirmation, preparation and comparison semantics must match the current
+implementation, with unchanged scientific parameters, inputs, donor graph and
+relevant runtime identities. Unknown or changed contracts fail before workers
+publish; use ordinary prediction-cache replay when raw evidence must change.
+GeMoMa and legacy JSON publications are not qualified by this narrower path.
+
+Reclassification imports full-byte-verified prepared and comparison outputs
+into the new plan, then runs current placement, ownership, coding-path admission
+and fresh genomic QC on admitted primary and alternative CDS. It preserves
+native structure decisions under the unchanged source-bound contract; it does
+not clear unconfirmed-native or structural failures. Every raw candidate,
+unknown field, original ordinal, partial-reference order and no-alignment audit
+row survives. Unselected DNA bodies need not be reconstructed, but all source
+bytes and the final generation fence are verified. Immutable copies avoid shared
+writable files, and each worker retains an `admission_replay.json` proof.
+Earlier v1 stores with donor metrics inside shared bodies remain readable.
+Changed records may normalize that layout only after exact predictor/DNA
+comparison; unselected records and partial references retain their original order.
+Separately declared annotation ancestors in older integration publications are
+retained through frozen plan/worker receipts and matching genome/code identity.
+Their accepted CDS nominate historical paths only; current QC, donor support and
+admission still apply. They cannot supply reusable native support or extra donors.

@@ -321,7 +321,7 @@ print_gg_container_starting_message() {
   gg_workspace_layout_local=$(gg_resolve_workspace_layout "${gg_workspace_dir}")
   gg_workspace_input_dir_resolved=$(workspace_input_root "${gg_workspace_dir}")
   gg_workspace_output_dir_resolved=$(workspace_output_root "${gg_workspace_dir}")
-  gg_workspace_downloads_dir_resolved=$(workspace_downloads_root "${gg_workspace_dir}")
+  gg_workspace_downloads_dir_resolved=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   echo "$(date): Starting gg Singularity/Apptainer environment"
   echo "pwd: $(pwd)"
   echo "gg_workspace_dir: ${gg_workspace_dir}"

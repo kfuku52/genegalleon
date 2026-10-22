@@ -26,12 +26,27 @@ class NamespaceLockError(RuntimeError):
     pass
 
 
-def _directory(path: Path) -> None:
+def _directory(path: Path, *, private: bool = False) -> None:
     if path.is_symlink():
         raise NamespaceLockError(f"Symlinked lock directory: {path}")
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not path.is_dir() or path.is_symlink():
         raise NamespaceLockError(f"Invalid lock directory: {path}")
+    if private:
+        # NFS default ACLs can override mkdir's mode. Restrict only protocol
+        # directories, never the user's enclosing scientific workspace.
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(fd)
+            if before.st_uid != os.getuid():
+                raise NamespaceLockError(f"Foreign lock directory: {path}")
+            if before.st_mode & 0o077:
+                os.fchmod(fd, 0o700)
+            after = path.lstat()
+            if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino) or after.st_mode & 0o077:
+                raise NamespaceLockError(f"Lock directory privacy did not hold: {path}")
+        finally:
+            os.close(fd)
 
 
 def _root(path: Path) -> Path:
@@ -40,8 +55,8 @@ def _root(path: Path) -> Path:
     fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     os.close(fd)
     root = Path(str(path) + ".namespace-v1")
-    _directory(root)
-    _directory(root / "readers")
+    _directory(root, private=True)
+    _directory(root / "readers", private=True)
     return root
 
 

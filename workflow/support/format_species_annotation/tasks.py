@@ -307,6 +307,10 @@ def resolve_gene_aggregate_id(task, header, transcript_id):
     if gff_match["status"] == "mapped":
         prefixed = "{}_{}".format(task["species_prefix"], sanitize_identifier(gff_match["gene_token"]))
         return sanitize_identifier(prefixed), gff_match
+    if task.get("cds_input_type") == "transcriptome":
+        trinity = re.fullmatch(r"(TRINITY_DN[0-9]+_c[0-9]+_g[0-9]+)_i[0-9]+", header.split()[0])
+        if trinity:
+            return sanitize_identifier(task["species_prefix"] + "_" + trinity.group(1)), gff_match
     return build_header_gene_aggregate_id(task, header, transcript_id), gff_match
 
 

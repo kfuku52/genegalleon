@@ -246,3 +246,15 @@ def test_donor_owner_prepared_and_receipt_resolve_namespace_without_rewriting(ch
     Path(paths["cds_output_path"]).write_text("changed donor contents\n")
     assert not resume.prepared(plan, namespace_root=workspace)
     assert not resume.verify_receipt(plan, 1, namespace_root=workspace)
+
+
+@pytest.mark.parametrize('source_mode,target_mode,source_code,target_code', [
+    ('transcriptome', 'proteins', '1', '1'), ('proteins', 'transcriptome', '1', '1'),
+    ('proteins', 'proteins', '1', '4'),
+])
+def test_busco_import_does_not_reuse_other_mode_or_translation(tmp_path, source_mode, target_mode, source_code, target_code):
+    source = dict(run_species_busco='1', busco_lineage='eukaryota_odb12',
+                  species_busco_mode=source_mode, genetic_code=source_code)
+    target = {**source, 'species_busco_mode': target_mode, 'genetic_code': target_code}
+    assert not resume.import_busco(tmp_path/'old', tmp_path/'new', 'Plant_one',
+                                   tmp_path/'old.fa', tmp_path/'new.fa', source, target)

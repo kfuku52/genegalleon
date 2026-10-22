@@ -580,6 +580,13 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
     fi
     echo "Skipping trait-focused HGT results: event context tables or analysis species tree unavailable."
   else
+    hgt_focus_uniprot_fasta=""
+    for hgt_focus_reference in "${gg_workspace_downloads_dir}/uniprot_sprot/uniprot_sprot.pep" "/usr/local/db/uniprot_sprot.pep"; do
+      if [[ -s "${hgt_focus_reference}" ]]; then
+        hgt_focus_uniprot_fasta="${hgt_focus_reference}"
+        break
+      fi
+    done
     hgt_focus_provenance_args=()
     hgt_focus_taxonomy_path="${hgt_focus_species_taxonomy}"
     if [[ "${hgt_focus_taxonomy_path}" == "auto" ]]; then
@@ -643,6 +650,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"
         --input "gene_tree_config=${gg_support_dir}/gene_tree_plot_config.py"
         --input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"
+        --input "uniprot_name_reader=${gg_support_dir}/reformat_uniprot_diamond.py"
         --input "gene_context_taxonomy_schema=${gg_support_dir}/scaffold_taxonomy.py"
         --input "gene_context=${gg_support_dir}/focus_hgt_context.py"
         --input "focused_figures=${gg_support_dir}/focus_hgt_figures.py"
@@ -653,6 +661,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       for hgt_focus_subdir in artifact_provenance synteny rpsblast clipkit orthogroup_extraction_fasta maxalign mafft cds_fasta protein_fasta dated_tree fimo meme promoter_fasta; do
         hgt_focus_provenance_args+=(--input-gene-family-subdir "focus_${hgt_focus_subdir}=${dir_orthogroup}::${hgt_focus_subdir}")
       done
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "context_uniprot_fasta" "${hgt_focus_uniprot_fasta}"
       gg_artifact_add_input_if_present hgt_focus_provenance_args "gff_coordinates" "${gg_workspace_output_dir}/species_gff_info"
       gg_artifact_add_input_if_present hgt_focus_provenance_args "context_query_lineage_database" "${hgt_taxonomy_db_candidate}"
       if [[ -n "${hgt_focus_context_annotations_tsv}" ]]; then
@@ -674,6 +683,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --gff_info_root "${gg_workspace_output_dir}/species_gff_info" \
         --filter_audit_tsv "${hgt_focus_filter_audit_tsv}" \
         --context_annotations_tsv "${hgt_focus_context_annotations_tsv}" \
+        --uniprot_fasta "${hgt_focus_uniprot_fasta}" \
         --mmseqs2_taxonomy_dir "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy" \
         --scaffold_taxonomy_dir "${gg_workspace_output_dir}/species_scaffold_taxonomy" \
         --taxonomy_dbfile "${hgt_focus_query_taxonomy_path}" \

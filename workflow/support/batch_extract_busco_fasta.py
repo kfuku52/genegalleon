@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
+import math
 import os
 import re
 import sys
@@ -86,11 +88,80 @@ def fasta_records(path: Path) -> Iterator[tuple[str, list[str]]]:
         yield identifier, record
 
 
-def read_rows(summary: Path, mode: str, strict: bool) -> tuple[dict[str, list[str]], dict[str, int]]:
+class BestScoreSelection:
+    """Opt-in representative selection; HMM ranking does not establish orthology."""
+
+    def __init__(self, full_dir: Path):
+        self.full_dir = full_dir
+        self.tables = {}
+        self.table_paths = []
+        self.audit = []
+
+    def choose(self, species: str, busco: str, token: str) -> str:
+        if BUSCO_ID_PATTERN.fullmatch(species) is None or species in {".", ".."}:
+            raise ExtractionError(f"Invalid species column: {species!r}")
+        if species not in self.tables:
+            path = self.full_dir / (species + ".busco.full.tsv")
+            if path.is_symlink() or not path.is_file():
+                raise ExtractionError(f"Missing regular BUSCO full table: {path}")
+            table = {}
+            with path.open() as stream:
+                for line in stream:
+                    if not line.strip() or line.startswith("#"):
+                        continue
+                    fields = line.rstrip("\r\n").split("\t")
+                    if len(fields) >= 2 and fields[1] == "Missing":
+                        continue
+                    if len(fields) < 5:
+                        raise ExtractionError(f"Incomplete scored BUSCO row in {path}")
+                    if fields[1] not in {"Complete", "Duplicated", "Fragmented"}:
+                        raise ExtractionError(f"Unsupported scored BUSCO status in {path}: {fields[1]}")
+                    try:
+                        score, length = float(fields[3]), int(fields[4])
+                    except ValueError as exc:
+                        raise ExtractionError(f"Invalid BUSCO score/length in {path}") from exc
+                    if not math.isfinite(score) or length <= 0:
+                        raise ExtractionError(f"Invalid BUSCO score/length in {path}")
+                    key = (fields[0], fields[2])
+                    if key in table:
+                        raise ExtractionError(f"Ambiguous duplicate BUSCO scoring row: {key}")
+                    table[key] = (score, length, fields[1])
+            self.tables[species] = table
+            self.table_paths.append(path)
+        candidates = token.split(",")
+        if len(candidates) != len(set(candidates)) or any(not gene for gene in candidates):
+            raise ExtractionError(f"Invalid BUSCO candidates: {busco}/{species}")
+        scored = []
+        for gene in candidates:
+            row = self.tables[species].get((busco, gene))
+            if row is None:
+                raise ExtractionError(f"Missing BUSCO score: {busco}/{species}/{gene}")
+            score, length, status = row
+            scored.append((gene, score, length, status))
+        ranked = sorted(scored, key=lambda row: (-row[1], -row[2], row[0]))
+        selected = ranked[0][0]
+        for gene, score, length, status in ranked:
+            self.audit.append((busco, species, gene, score, length, status, int(gene == selected)))
+        return selected
+
+    def write(self, path: Path) -> None:
+        if path.is_symlink():
+            raise ExtractionError(f"Refusing BUSCO selection report symlink: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open_output_replace(path) as stream:
+            writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
+            writer.writerow(["busco_id", "species", "gene_id", "hmm_score", "alignment_length", "status", "selected"])
+            writer.writerows(self.audit)
+
+
+def read_rows(summary: Path, mode: str, strict: bool, selection=None) -> tuple[dict[str, list[str]], dict[str, int]]:
     gene_to_buscos: dict[str, list[str]] = defaultdict(list)
     expected: dict[str, int] = {}
     with summary.open(encoding="utf-8") as handle:
-        next(handle, None)
+        header = next(handle, "").rstrip("\r\n").split("\t")
+        species = header[3:]
+        if selection is not None and (not species or len(species) != len(set(species))):
+            raise ExtractionError("BUSCO summary requires unique species columns")
         for line_number, raw_line in enumerate(handle, start=2):
             fields = raw_line.rstrip("\r\n").split("\t")
             if not fields or not fields[0]:
@@ -98,10 +169,14 @@ def read_rows(summary: Path, mode: str, strict: bool) -> tuple[dict[str, list[st
             busco_id = fields[0]
             validate_busco_id(busco_id, line_number)
             tokens = fields[3:] if len(fields) > 3 else []
+            if selection is not None and len(tokens) != len(species):
+                raise ExtractionError(f"BUSCO summary row width mismatch: {busco_id}")
             if mode == "single-copy":
                 if strict and any(token == "-" or "," in token for token in tokens):
                     continue
-                genes = [token for token in tokens if token != "-" and "," not in token]
+                genes = ([selection.choose(sp, busco_id, token) for sp, token in zip(species, tokens, strict=True)
+                          if token != "-"] if selection is not None else
+                         [token for token in tokens if token != "-" and "," not in token])
             else:
                 genes = []
                 for token in tokens:
@@ -150,7 +225,9 @@ def validate_output_layout(args, fasta_paths, expected, selection):
     """Check all destinations before clearing outputs or truncating a report."""
     protected = [args.summary, args.fasta_list, *fasta_paths]
     if selection is not None:
-        protected += [args.species_fasta_map, *selection.table_paths]
+        protected += selection.table_paths
+        if args.species_fasta_map:
+            protected.append(args.species_fasta_map)
         if args.species_genetic_codes:
             protected.append(args.species_genetic_codes)
     sources = {path.resolve() for path in protected}
@@ -186,6 +263,8 @@ def validate_output_layout(args, fasta_paths, expected, selection):
 
 def run(args: argparse.Namespace) -> int:
     validate_suffix(args.suffix)
+    if args.copy_policy == "best-score" and args.duplicate_policy == "best_score":
+        raise ExtractionError("--copy-policy best-score conflicts with --duplicate-policy best_score")
     if args.species_headers and args.duplicate_policy != "best_score":
         raise ExtractionError("--species-headers requires best_score and its explicit species FASTA map")
     if args.duplicate_policy == "best_score":
@@ -202,18 +281,23 @@ def run(args: argparse.Namespace) -> int:
         if not path.is_file() or path.is_symlink():
             raise ExtractionError(f"Invalid FASTA input: {path}")
     selection = None
+    legacy_selection = None
     if args.duplicate_policy == "best_score":
-        from busco_copy_selection import BestScoreSelection
+        from busco_copy_selection import BestScoreSelection as QualitySelection
 
-        selection = BestScoreSelection(args, fasta_paths)
+        selection = QualitySelection(args, fasta_paths)
         expected = selection.expected
         for line_number, marker in enumerate(expected, start=2):
             validate_busco_id(marker, line_number)
     else:
-        gene_to_buscos, expected = read_rows(args.summary, args.mode, args.strict)
+        if args.copy_policy == "best-score":
+            if args.mode != "single-copy" or args.strict or not args.busco_full_dir or not args.selection_report:
+                raise ExtractionError("best-score requires single-copy mode, full tables and selection report, without --strict")
+            legacy_selection = BestScoreSelection(args.busco_full_dir)
+        gene_to_buscos, expected = read_rows(args.summary, args.mode, args.strict, legacy_selection)
     if args.output_dir.is_symlink():
         raise ExtractionError(f"Refusing to use a symlink as the BUSCO output directory: {args.output_dir}")
-    validate_output_layout(args, fasta_paths, expected, selection)
+    validate_output_layout(args, fasta_paths, expected, selection or legacy_selection)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for path in args.output_dir.glob(f"*{args.suffix}"):
         if path.is_symlink():
@@ -234,7 +318,7 @@ def run(args: argparse.Namespace) -> int:
                         found[busco_id] += 1
     finally:
         pool.close()
-    if args.selection_report:
+    if args.selection_report and legacy_selection is None:
         from busco_copy_selection import write_selection_report
 
         args.selection_report.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +343,8 @@ def run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 3
+    if legacy_selection is not None:
+        legacy_selection.write(args.selection_report)
     return 0
 
 
@@ -270,6 +356,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--suffix", required=True)
     result.add_argument("--report", required=True, type=Path)
     result.add_argument("--mode", choices=("single-copy", "duplicate-aware"), required=True)
+    result.add_argument("--copy-policy", choices=("single-copy", "best-score"), default="single-copy",
+                        help="Opt-in best-score: one candidate per species/BUSCO, ranked by HMM score, aligned length, then gene ID; not proof of orthology")
     result.add_argument("--strict", action="store_true")
     result.add_argument("--require-complete", action="store_true")
     result.add_argument("--max-open-files", type=int, default=64)

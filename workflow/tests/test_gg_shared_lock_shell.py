@@ -255,8 +255,13 @@ def test_shared_semaphore_releases_slot_when_term_arrives_during_acquire_return(
         eval "$(declare -f gg_shared_semaphore_acquire | sed '1s/gg_shared_semaphore_acquire/gg_shared_semaphore_acquire_original/')"
         gg_shared_semaphore_acquire() {{
           gg_shared_semaphore_acquire_original "$@"
+          # Publish the marker after the blocker has forked. A foreground
+          # sleep started after killpg can otherwise escape the test's signal
+          # and defer Bash's trap until that unrelated 30-second sleep ends.
+          sleep 30 &
+          acquire_sleep_pid=$!
           : > "{acquired_marker}"
-          sleep 30
+          wait "${{acquire_sleep_pid}}"
         }}
         gg_run_with_shared_semaphore "{semaphore_dir}" 1 "NCBI acquire test" true
         """

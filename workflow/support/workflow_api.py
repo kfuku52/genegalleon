@@ -347,12 +347,18 @@ def inspect_preflight_step(args, argv):
     with contextlib.redirect_stdout(capture), contextlib.redirect_stderr(capture):
         result = provenance.dispatch(["needs-run", *argv, "--dry-run"])
     current = None
+    comparison_before = before
+    matched = False
     try:
-        current = provenance.build_contract(args, include_diagnostics=False)
+        if getattr(args, "frozen_plot", False):
+            comparison_before, current = provenance.frozen_plot_contracts(args)
+            matched = comparison_before == current
+        else:
+            current = provenance.build_contract(args, include_diagnostics=False)
+            matched = before is not None and (
+                provenance.contract_comparison_payload(before) == provenance.contract_comparison_payload(current))
     except (OSError, ValueError, provenance.ProvenanceError):
         pass
-    matched = before is not None and current is not None and (
-        provenance.contract_comparison_payload(before) == provenance.contract_comparison_payload(current))
     adopted = before is not None and legacy_baseline(before)
     if result == provenance.CURRENT:
         state = "verified_current" if matched and not adopted else (
@@ -371,7 +377,7 @@ def inspect_preflight_step(args, argv):
         state, action = "unavailable", "retry_observation"
     code = {provenance.STALE_STOP: "artifact_stale", provenance.ERROR: "provenance_error"}.get(result)
     if result == provenance.STALE_STOP and before is not None and current is not None:
-        code = provenance.contract_difference_code(before, current)
+        code = provenance.contract_difference_code(comparison_before, current)
     return {"family_id": args.family_id, "step": args.step, "state": state,
             "action": action, "runtime_exit_code": result, "stale_policy": args.stale_policy,
             "error_code": code,

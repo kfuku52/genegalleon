@@ -123,3 +123,32 @@ def test_export_fences_sources_from_size_collection_through_hashing(tmp_path, mo
                               target_part_gb=20, metadata_table=[])
     with pytest.raises(ValueError, match="Input changed while planning"):
         module.build(args)
+
+
+def test_export_supports_consistent_protein_busco_and_rejects_mixed_modes(tmp_path):
+    args = fixture(tmp_path)
+    for species in ['Plant_a', 'Plant_b', 'Plant_c']:
+        short = tmp_path / f'short/{species}.busco.short.txt'
+        short.write_text(short.read_text().replace('mode: transcriptome', 'mode: proteins'))
+        path = tmp_path / f'provenance/busco.{species}.json'
+        contract = json.loads(path.read_text())
+        contract['parameters'].update(busco_mode='proteins', genetic_code='1')
+        for entry in contract['outputs']:
+            if entry['label'] == 'busco_short':
+                entry.update(sha256=hashlib.sha256(short.read_bytes()).hexdigest(), size_bytes=short.stat().st_size)
+        path.write_text(json.dumps(contract))
+    result = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    short = tmp_path / 'short/Plant_b.busco.short.txt'
+    short.write_text(short.read_text().replace('mode: proteins', 'mode: transcriptome'))
+    path = tmp_path / 'provenance/busco.Plant_b.json'
+    contract = json.loads(path.read_text())
+    contract['parameters']['busco_mode'] = 'transcriptome'
+    for entry in contract['outputs']:
+        if entry['label'] == 'busco_short':
+            entry.update(sha256=hashlib.sha256(short.read_bytes()).hexdigest(), size_bytes=short.stat().st_size)
+    path.write_text(json.dumps(contract))
+    args[-1] = str(tmp_path / 'mixed_export')
+    mixed = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+    assert mixed.returncode != 0
+    assert not (tmp_path / 'mixed_export').exists()
