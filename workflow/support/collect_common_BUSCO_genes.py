@@ -4,25 +4,13 @@
 import argparse
 import csv
 import os
-import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+from busco_table_utils import normalize_species_label
 
 BUSCO_TABLE_COLUMNS = ["busco_id", "sequence", "orthodb_url", "description"]
-
-
-def normalize_species_label(path_label):
-    normalized = str(path_label)
-    if normalized.endswith(".tsv"):
-        normalized = normalized[:-4]
-    for suffix in (".busco.full", "_busco.full", ".busco", "_busco", ".full", "_full"):
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            break
-    normalized = re.sub(r"\s+", "_", normalized.strip())
-    return normalized or str(path_label)
 
 
 def empty_busco_table():

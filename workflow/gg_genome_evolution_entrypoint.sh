@@ -189,6 +189,7 @@ nucleotide_model="GTR+R4" # IQ-TREE nucleotide substitution model.
 protein_model="LG+R4" # IQ-TREE protein substitution model.
 
 # Species-tree parameters
+species_tree_busco_duplicate_policy="exclude" # exclude|best_score; best_score selects one complete duplicate and records candidate decisions in busco_copy_selection.tsv.
 species_tree_output_storage="${species_tree_output_storage:-${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip}}" # zip|files|raw; ZIP mode archives high-file-count single-copy stage directories between uses.
 species_tree_zip_compression="${species_tree_zip_compression:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:-adaptive}}" # adaptive|deflate|store.
 species_tree_zip_compression_level="${species_tree_zip_compression_level:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION_LEVEL:-6}}" # Deflate level 0-9.

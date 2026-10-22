@@ -97,6 +97,20 @@ input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
 species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
+species_tree_busco_duplicate_policy="${species_tree_busco_duplicate_policy:-exclude}"
+case "${species_tree_busco_duplicate_policy}" in
+  exclude) ;;
+  best_score)
+    if [[ ${strictly_single_copy_only:-0} -eq 1 ]]; then
+      echo "species_tree_busco_duplicate_policy=best_score conflicts with strictly_single_copy_only=1." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "Invalid species_tree_busco_duplicate_policy=${species_tree_busco_duplicate_policy}; expected exclude or best_score." >&2
+    exit 2
+    ;;
+esac
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
@@ -2770,6 +2784,7 @@ fi
 # Output files
 # Species tree
 file_species_busco_summary_table="${dir_species_tree}/busco_summary_table/busco_summary.tsv"
+file_species_busco_copy_selection="${dir_species_tree}/busco_summary_table/busco_copy_selection.tsv"
 file_astral_tree_dna_q1="${dir_astral_dna}/single_copy.astral.dna.q1.nwk"     # Quartet supports for the main topology; The lengths of terminal branches are not computed.
 file_astral_tree_dna="${dir_astral_dna}/single_copy.astral.dna.optimized.nwk" # ASTRAL topology with branch lengths optimized by IQ-TREE.
 file_astral_log_dna="${dir_astral_dna}/single_copy.astral.dna.log"
@@ -3097,7 +3112,7 @@ run_shared_species_busco_stage
 task="Collecting IDs of common BUSCO genes"
 run_shared_busco_summary_stage
 
-task="Generating FASTA files for duplicate-aware BUSCO genes"
+task="Generating FASTA files for species-tree BUSCO genes"
 num_busco_ids=$(get_busco_summary_gene_count "${file_species_busco_summary_table}")
 num_singlecopy_fasta=$(species_tree_matching_file_count "${dir_single_copy_fasta}" "${single_copy_fasta_glob}")
 extract_species_tree_fasta_needs_update=0
@@ -3110,18 +3125,33 @@ extract_species_tree_fasta_provenance_args+=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "sequence_label=${species_tree_sequence_label}"
 )
+if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
+  extract_species_tree_fasta_provenance_args+=(
+    --output "copy_selection=${file_species_busco_copy_selection}"
+    --parameter "duplicate_policy=${species_tree_busco_duplicate_policy}"
+    --input "busco_full_directory=${dir_species_busco_full}"
+    --input "species_sequences=$(effective_species_input_source_dir_path)"
+    --parameter "copy_selection_rule=prefer_no_internal_stop;score_desc;ambiguous_fraction_asc;gene_id_asc"
+    --parameter "sequence_header_policy=explicit_source_species"
+  )
+  if [[ "${input_sequence_mode}" == "cds" ]] || ! species_protein_input_has_files; then
+    gg_artifact_add_input_if_present extract_species_tree_fasta_provenance_args "species_genetic_codes" "${file_species_genetic_code}"
+  fi
+fi
 gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
 if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
-  species_tree_clear_managed_directory "${dir_single_copy_fasta}"
-  ensure_dir "${dir_single_copy_fasta}"
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   busco_batch_raw_dir="${dir_tmp}/species_tree_busco_batch_raw"
   busco_batch_report="${dir_tmp}/species_tree_busco_batch.tsv"
+  busco_copy_selection_report="${dir_tmp}/species_tree_busco_copy_selection.tsv"
+  busco_batch_final_dir="${dir_tmp}/species_tree_busco_batch_final"
   rm -rf -- "${busco_batch_raw_dir}"
   ensure_dir "${busco_batch_raw_dir}"
+  rm -rf -- "${busco_batch_final_dir}"
+  ensure_dir "${busco_batch_final_dir}"
   busco_batch_args=(
     --summary "${file_species_busco_summary_table}"
     --fasta-list "species_tree_input_fasta_list.txt"
@@ -3129,7 +3159,27 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     --suffix ".raw.fa"
     --report "${busco_batch_report}"
     --mode single-copy
+    --duplicate-policy "${species_tree_busco_duplicate_policy}"
+    --selection-report "${busco_copy_selection_report}"
   )
+  if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
+    busco_fasta_species_map="${dir_tmp}/species_tree_busco_fasta_species.tsv"
+    printf 'species\tfasta\n' > "${busco_fasta_species_map}"
+    while IFS= read -r busco_input_fasta; do
+      printf '%s\t%s\n' "$(gg_species_name_from_path "$(basename "${busco_input_fasta}")")" "${busco_input_fasta}" >> "${busco_fasta_species_map}"
+    done < species_tree_input_fasta_list.txt
+    busco_batch_args+=(
+      --busco-full-dir "${dir_species_busco_full}"
+      --species-fasta-map "${busco_fasta_species_map}"
+      --sequence-mode "${input_sequence_mode}"
+      --genetic-code "${genetic_code}"
+      --species-headers
+      --require-complete
+    )
+    if [[ "${input_sequence_mode}" == "cds" && -s "${file_species_genetic_code}" ]]; then
+      busco_batch_args+=(--species-genetic-codes "${file_species_genetic_code}")
+    fi
+  fi
   if [[ ${strictly_single_copy_only} -eq 1 ]]; then
     busco_batch_args+=(--strict --require-complete)
   fi
@@ -3140,16 +3190,18 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     local busco_id
     local outfile1
     busco_id=$(basename "${raw_fasta}" .raw.fa)
-    outfile1="${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
+    local -a header_command=(gg_fasta_relabel_headers_to_species)
+    if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then header_command=(cat); fi
+    outfile1="${busco_batch_final_dir}/${busco_id}${single_copy_fasta_suffix}"
     if [[ "${input_sequence_mode}" == "protein" ]]; then
       seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 "${raw_fasta}" |
-        gg_fasta_relabel_headers_to_species |
+        "${header_command[@]}" |
         seqkit seq --threads 1 --out-file "${outfile1}"
     else
       seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads 1 "${raw_fasta}" |
         seqkit replace --pattern " .*" --replacement "" --ignore-case --threads 1 |
         cdskit pad |
-        gg_fasta_relabel_headers_to_species |
+        "${header_command[@]}" |
         seqkit seq --threads 1 --out-file "${outfile1}"
     fi
   }
@@ -3160,7 +3212,15 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     gg_background_register "$!"
   done
   wait_for_background_jobs
+  species_tree_clear_managed_directory "${dir_single_copy_fasta}"
+  ensure_dir "${dir_single_copy_fasta}"
+  for busco_batch_raw_file in "${busco_batch_raw_files[@]}"; do
+    busco_id=$(basename "${busco_batch_raw_file}" .raw.fa)
+    mv_out "${busco_batch_final_dir}/${busco_id}${single_copy_fasta_suffix}" "${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
+  done
+  mv_out "${busco_copy_selection_report}" "${file_species_busco_copy_selection}"
   rm -rf -- "${busco_batch_raw_dir}"
+  rm -rf -- "${busco_batch_final_dir}"
   rm -f -- "${busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${extract_species_tree_fasta_provenance_args[@]}"

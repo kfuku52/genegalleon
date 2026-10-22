@@ -520,6 +520,10 @@ equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 
 ## Reference annotation comparisons
 
+For representative BUSCO copy extraction, per-marker path caching, exact
+FASTA/TSV equivalence, and repeated time/peak-RSS comparisons, see
+[BUSCO copy-selection performance](busco-copy-selection-performance.md).
+
 For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot
 metadata retention, see [reference annotation performance](reference-annotation-performance.md).
 Its benchmark compares exact outputs across saved/current support directories,

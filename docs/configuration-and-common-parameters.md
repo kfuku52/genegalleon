@@ -108,6 +108,66 @@ verified; acceptance and genome validation are rerun. See
 [additional rescue candidates](rescue-additional-candidates.md) for the explicit
 limits, independent donor support and distinction from orthology/copy recovery.
 
+## BUSCO duplicate representatives for species trees
+
+`species_tree_busco_duplicate_policy=exclude` preserves the existing species-tree
+extraction behavior: a species with multiple IDs for a BUSCO contributes no
+sequence to that marker. With `strictly_single_copy_only=1`, a marker with a
+missing or duplicated species is excluded altogether.
+
+Set `species_tree_busco_duplicate_policy=best_score` to select one complete
+candidate per species and duplicated BUSCO. For a one-off run, use
+`GG_GENOME_EVOLUTION_SPECIES_TREE_BUSCO_DUPLICATE_POLICY=best_score`.
+This setting conflicts with `strictly_single_copy_only=1` and stops before
+changing outputs.
+
+Selection first prefers candidates without internal stop codons, then the
+highest BUSCO HMM score. Equal scores are resolved by the lowest ambiguous
+amino-acid fraction, then lexical gene ID. Terminal stops are ignored for
+quality assessment. CDS quality uses the configured NCBI genetic code and
+`input/species_genetic_code/species_genetic_code.tsv` overrides; the extracted
+source sequence is preserved. If all complete candidates have internal stops,
+the remaining ranking still selects a representative and records its stops.
+Mixed-code species-tree analyses should use protein mode with CDS-to-protein
+translation; downstream CDS/codon stages still use the run's `genetic_code`.
+Fragmented candidates are not rescued as duplicates. Existing single-ID
+extraction behavior is unchanged. Missing/nonfinite complete-candidate scores,
+missing/repeated FASTA IDs and summary/full-table ID mismatches stop extraction
+instead of using another selection method.
+Missing cells and markers are also checked against the full tables; genuinely
+all-missing markers need not occur in the shared summary. Malformed mapping rows
+and empty FASTA headers/sequences fail with the input context. Extraction rejects
+input/output path overlaps, including hard-linked report destinations, before
+removing any managed FASTAs or truncating a report.
+
+The persistent audit is
+`output/species_tree/busco_summary_table/busco_copy_selection.tsv`.
+It contains one row per candidate source gene for duplicated groups: original
+BUSCO sequence IDs/status/length, score, sequence mode and genetic code,
+sequence length (nucleotides for CDS, residues for protein), internal stops,
+ambiguous fraction, selected flag, reason, selected and runner-up IDs, and
+score margin (selected minus runner-up; it can be negative when quality wins).
+Multiple transcript-coordinate hits for one source gene are collapsed using
+their highest complete-candidate score. Rows are sorted independently of input
+order. In `exclude` mode the audit has a header only, clearing earlier decisions
+when extraction is rerun with that policy. The original all-copy BUSCO summary
+and duplicate-aware genome-evolution inputs remain unchanged. Existing `exclude`
+results can be reused without a selection audit; `best_score` requires its audit
+as part of the provenance contract.
+In `best_score` workflow runs, FASTA headers use the species-to-file mapping,
+including when gene IDs lack species prefixes or are reused in different species.
+The raw extraction CLI preserves gene headers unless `--species-headers` is set.
+Validation and final FASTA preparation finish in temporary directories before
+the workflow replaces previous FASTAs and the audit; failures retain the previous
+artifacts and their completion record.
+
+Policy, ranking rule, source sequences and full-table content participate in
+the extraction provenance contract. Policy or score changes require extraction
+to be rerun through the normal stale-artifact policy, and sequence changes
+invalidate downstream alignments and trees. HMM score is a representative
+selection heuristic; it does not guarantee the same paralog lineage across
+species after ancient duplications or polyploidy.
+
 ## Shared common parameter file
 
 `workflow/gg_common_params.sh` currently defines:

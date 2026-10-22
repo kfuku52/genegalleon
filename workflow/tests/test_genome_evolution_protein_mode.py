@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 import os
@@ -104,6 +105,7 @@ exit 0
     _write_executable(
         bin_dir / "seqkit",
         r"""#!/usr/bin/env python3
+import os
 import re
 import sys
 
@@ -207,6 +209,8 @@ def main():
                 input_path = arg
                 idx += 1
         records = load_records(input_path)
+        if os.environ.get("GG_TEST_FAIL_SEQKIT_FINALIZE") and out_path and out_path.endswith(".cds.fa.gz"):
+            raise SystemExit(43)
         if remove_gaps:
             records = [(header, sequence.replace("-", "")) for header, sequence in records]
         output_handle = open(out_path, "w", encoding="utf-8") if out_path else sys.stdout
@@ -846,10 +850,13 @@ def _run_core(
     extra_env: Optional[dict[str, str]] = None,
     *,
     missing_flags: tuple[str, ...] = (),
+    native_seqkit: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = _prepare_stub_binaries(tmp_path)
+    if native_seqkit:
+        (bin_dir / "seqkit").unlink()
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("CONDA") and not key.startswith("_CE_")
     }
@@ -1454,6 +1461,140 @@ def test_genome_evolution_core_defaults_shared_protein_flags_for_legacy_launcher
     assert ">Tetrahymena_thermophila_gene1" in proteins
     assert "M*" in proteins
     assert "unbound variable" not in completed.stderr
+
+
+def _prepare_busco_copy_inputs(tmp_path, mode, *, qualify_ids=True):
+    workspace = tmp_path / "workspace"
+    suffix = "cds" if mode == "cds" else "pep"
+    source = workspace / f"input/species_{mode}"
+    full = workspace / f"output/species_{mode}_busco_full"
+    single, d1, d2 = ("ATGAAA", "ATGCCC", "ATGGGG") if mode == "cds" else ("MK", "MP", "MG")
+    for directory in (source, full):
+        directory.mkdir(parents=True)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        prefix = species if qualify_ids else "external"
+        (source / f"{species}_{suffix}.fa").write_text(
+            f">{prefix}_single\n{single}\n>{prefix}_d1\n{d1}\n>{prefix}_d2\n{d2}\n")
+        (full / f"{species}.busco.full.tsv").write_text(
+            f"b1\tComplete\t{prefix}_single\t100\t2\t-\t-\n"
+            f"b2\tDuplicated\t{prefix}_d1\t110\t2\t-\t-\n"
+            f"b2\tDuplicated\t{prefix}_d2\t100\t2\t-\t-\n")
+    return workspace, full, (single, d1, d2)
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("mode,storage", [("cds", "files"), ("protein", "zip")])
+def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_audit(tmp_path, mode, storage):
+    workspace, full, (_, d1, d2) = _prepare_busco_copy_inputs(tmp_path, mode)
+    suffix = "cds" if mode == "cds" else "pep"
+    config = {"genome_evolution_mode": "species_tree", "input_sequence_mode": mode,
+              "run_build_species_busco_summary": "1", "run_extract_species_tree_fasta": "1",
+              "run_orthofinder": "0", "species_tree_output_storage": storage,
+              "artifact_stale_policy": "rebuild"}
+    first = _run_core(tmp_path, config, missing_flags=("species_tree_busco_duplicate_policy",), native_seqkit=True)
+    assert first.returncode == 0, first.stdout + first.stderr
+    tree = workspace / "output/species_tree"
+    fasta = tree / "single_copy_cds_fasta"
+    report = tree / "busco_summary_table/busco_copy_selection.tsv"
+    summary = tree / "busco_summary_table/busco_summary.tsv"
+
+    def marker_text(marker):
+        filename = f"{marker}.{suffix}.fa.gz"
+        if storage == "zip":
+            with zipfile.ZipFile(fasta.with_suffix(".zip")) as archive:
+                member = f"{fasta.name}/{filename}"
+                return gzip.decompress(archive.read(member)).decode() if member in archive.namelist() else None
+        path = fasta / filename
+        return gzip.decompress(path.read_bytes()).decode() if path.exists() else None
+
+    assert marker_text("b1") is not None and marker_text("b2") is None
+    assert len(report.read_text().splitlines()) == 1
+    shared = summary.read_bytes()
+
+    best = {**config, "species_tree_busco_duplicate_policy": "best_score"}
+    second = _run_core(tmp_path, best, native_seqkit=True)
+    assert second.returncode == 0, second.stdout + second.stderr
+    audit = pandas.read_csv(report, sep="\t")
+    assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {
+        "Arabidopsis_thaliana_d1", "Oryza_sativa_d1"}
+    assert set(audit.loc[audit["selected"] == 1, "reason"]) == {"highest_score"}
+    assert marker_text("b2").count(f"\n{d1}\n") == 2
+    assert summary.read_bytes() == shared
+    report_mtime = report.stat().st_mtime_ns
+    reused = _run_core(tmp_path, best, native_seqkit=True)
+    assert reused.returncode == 0, reused.stdout + reused.stderr
+    assert report.stat().st_mtime_ns == report_mtime
+
+    table = full / "Oryza_sativa.busco.full.tsv"
+    table.write_text(table.read_text().replace("_d2\t100", "_d2\t120"))
+    rescored = _run_core(tmp_path, best, native_seqkit=True)
+    assert rescored.returncode == 0, rescored.stdout + rescored.stderr
+    audit = pandas.read_csv(report, sep="\t")
+    assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {
+        "Arabidopsis_thaliana_d1", "Oryza_sativa_d2"}
+    assert marker_text("b2").count(f"\n{d1}\n") == marker_text("b2").count(f"\n{d2}\n") == 1
+    assert summary.read_bytes() == shared
+    restored = _run_core(tmp_path, config, native_seqkit=True)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert marker_text("b2") is None
+    assert len(report.read_text().splitlines()) == 1
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_busco_copy_species_labels_use_input_species_even_for_shared_external_ids(tmp_path):
+    workspace, _, _ = _prepare_busco_copy_inputs(tmp_path, "protein", qualify_ids=False)
+    result = _run_core(tmp_path, {"genome_evolution_mode": "species_tree", "run_orthofinder": "0",
+        "run_build_species_busco_summary": "1", "run_extract_species_tree_fasta": "1",
+        "species_tree_busco_duplicate_policy": "best_score"}, native_seqkit=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    tree = workspace / "output/species_tree"
+    with zipfile.ZipFile(tree / "single_copy_cds_fasta.zip") as archive:
+        for marker in ("b1", "b2"):
+            text = gzip.decompress(archive.read(f"single_copy_cds_fasta/{marker}.pep.fa.gz")).decode()
+            assert {line for line in text.splitlines() if line.startswith(">")} == {
+                ">Arabidopsis_thaliana", ">Oryza_sativa"}
+    audit = pandas.read_csv(tree / "busco_summary_table/busco_copy_selection.tsv", sep="\t")
+    assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {"external_d1"}
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("storage", ["files", "zip"])
+@pytest.mark.parametrize("failure", ["score", "finalization"])
+def test_busco_copy_failed_regeneration_preserves_previous_fastas_audit_and_receipt(tmp_path, storage, failure):
+    workspace, full, _ = _prepare_busco_copy_inputs(tmp_path, "cds")
+    config = {"genome_evolution_mode": "species_tree", "input_sequence_mode": "cds",
+              "run_orthofinder": "0", "run_build_species_busco_summary": "1", "run_extract_species_tree_fasta": "1",
+              "species_tree_busco_duplicate_policy": "best_score", "species_tree_output_storage": storage,
+              "artifact_stale_policy": "rebuild"}
+    first = _run_core(tmp_path, config)
+    assert first.returncode == 0, first.stdout + first.stderr
+    tree = workspace / "output/species_tree"
+    fasta = tree / "single_copy_cds_fasta"
+    paths = [fasta.with_suffix(".zip")] if storage == "zip" else list(fasta.iterdir())
+    paths += [tree / "busco_summary_table/busco_copy_selection.tsv",
+              workspace / "output/artifact_provenance/genome_evolution/species_tree.extract_fasta.json"]
+    saved = {path: path.read_bytes() for path in paths}
+    table = full / "Oryza_sativa.busco.full.tsv"
+    table.write_text(table.read_text().replace("_d1\t110", "_d1\t" + ("nan" if failure == "score" else "111")))
+    extra = {"GG_TEST_FAIL_SEQKIT_FINALIZE": "1"} if failure == "finalization" else {}
+    failed = _run_core(tmp_path, {**config, **extra})
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+    assert all(path.exists() and path.read_bytes() == content for path, content in saved.items())
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("policy,strict,error", [
+    ("longest", "0", "Invalid species_tree_busco_duplicate_policy"),
+    ("best_score", "1", "conflicts with strictly_single_copy_only=1"),
+])
+def test_busco_copy_policy_invalid_settings_preserve_outputs(tmp_path, policy, strict, error):
+    saved = tmp_path / "workspace/output/species_tree/single_copy_cds_fasta/user-data"
+    saved.parent.mkdir(parents=True)
+    saved.write_text("preserve")
+    result = _run_core(tmp_path, {"species_tree_busco_duplicate_policy": policy,
+                                 "strictly_single_copy_only": strict})
+    assert result.returncode != 0 and error in result.stderr
+    assert saved.read_text() == "preserve"
 
 
 @pytest.mark.skipif(

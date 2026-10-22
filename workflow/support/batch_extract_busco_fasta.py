@@ -12,12 +12,11 @@ from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Iterator, TextIO
 
+from busco_table_utils import BUSCO_ID_PATTERN
+
 
 class ExtractionError(RuntimeError):
     pass
-
-
-BUSCO_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def validate_busco_id(busco_id: str, line_number: int) -> None:
@@ -62,18 +61,28 @@ def open_text(path: Path) -> TextIO:
 def fasta_records(path: Path) -> Iterator[tuple[str, list[str]]]:
     record: list[str] = []
     identifier = ""
+    has_sequence = False
     with open_text(path) as handle:
         for raw_line in handle:
             if raw_line.startswith(">"):
                 if record:
+                    if not has_sequence:
+                        raise ExtractionError(f"Empty FASTA sequence for {identifier!r}: {path}")
                     yield identifier, record
-                identifier = raw_line[1:].split(None, 1)[0]
+                fields = raw_line[1:].split(None, 1)
+                if not fields:
+                    raise ExtractionError(f"Empty FASTA identifier: {path}")
+                identifier = fields[0]
                 record = [raw_line if raw_line.endswith("\n") else raw_line + "\n"]
+                has_sequence = False
             elif record:
                 record.append(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                has_sequence = has_sequence or bool(raw_line.strip())
             elif raw_line.strip():
                 raise ExtractionError(f"Sequence data precedes the first FASTA header: {path}")
     if record:
+        if not has_sequence:
+            raise ExtractionError(f"Empty FASTA sequence for {identifier!r}: {path}")
         yield identifier, record
 
 
@@ -115,6 +124,7 @@ class OutputPool:
         self.suffix = suffix
         self.max_open = max(1, max_open)
         self.handles: OrderedDict[str, TextIO] = OrderedDict()
+        self.paths: dict[str, Path] = {}
 
     def write(self, busco_id: str, record: list[str]) -> None:
         handle = self.handles.pop(busco_id, None)
@@ -122,7 +132,10 @@ class OutputPool:
             if len(self.handles) >= self.max_open:
                 _old_id, old_handle = self.handles.popitem(last=False)
                 old_handle.close()
-            path = safe_output_path(self.output_dir, busco_id, self.suffix)
+            if busco_id not in self.paths:
+                self.paths[busco_id] = safe_output_path(self.output_dir, busco_id, self.suffix)
+            path = self.paths[busco_id]
+            # O_NOFOLLOW in open_output_append still checks every reopen.
             handle = open_output_append(path)
         self.handles[busco_id] = handle
         handle.writelines(record)
@@ -133,11 +146,74 @@ class OutputPool:
         self.handles.clear()
 
 
+def validate_output_layout(args, fasta_paths, expected, selection):
+    """Check all destinations before clearing outputs or truncating a report."""
+    protected = [args.summary, args.fasta_list, *fasta_paths]
+    if selection is not None:
+        protected += [args.species_fasta_map, *selection.table_paths]
+        if args.species_genetic_codes:
+            protected.append(args.species_genetic_codes)
+    sources = {path.resolve() for path in protected}
+    source_inodes = {(path.stat().st_dev, path.stat().st_ino) for path in protected}
+    root = args.output_dir.resolve()
+    if any(root == path or root in path.parents for path in sources):
+        raise ExtractionError("Output paths overlap input files: output directory contains inputs")
+    if selection is not None and root.is_relative_to(args.busco_full_dir.resolve()):
+        raise ExtractionError("Output paths overlap input BUSCO full-table directory")
+    reports = [args.report] + ([args.selection_report] if args.selection_report else [])
+    output_paths = {safe_output_path(args.output_dir, marker, args.suffix).resolve() for marker in expected}
+    output_inodes = {(path.stat().st_dev, path.stat().st_ino) for path in output_paths if path.exists()}
+    seen = set()
+    seen_inodes = set()
+    for report in reports:
+        resolved = report.resolve()
+        inode = (report.stat().st_dev, report.stat().st_ino) if report.exists() else None
+        if (resolved in sources or resolved in output_paths or resolved in seen or
+                inode is not None and inode in source_inodes | output_inodes | seen_inodes):
+            raise ExtractionError(f"Output paths overlap input or other output files: {report}")
+        if selection is not None and resolved.is_relative_to(args.busco_full_dir.resolve()):
+            raise ExtractionError(f"Output paths overlap input BUSCO full-table directory: {report}")
+        if report.is_symlink():
+            raise ExtractionError(f"Refusing to replace BUSCO report symlink: {report}")
+        if report.exists() and not report.is_file():
+            raise ExtractionError(f"Unexpected non-file BUSCO report path: {report}")
+        if any(parent.exists() and not parent.is_dir() for parent in report.parents):
+            raise ExtractionError(f"BUSCO report parent is not a directory: {report}")
+        seen.add(resolved)
+        if inode is not None:
+            seen_inodes.add(inode)
+
+
 def run(args: argparse.Namespace) -> int:
     validate_suffix(args.suffix)
-    gene_to_buscos, expected = read_rows(args.summary, args.mode, args.strict)
+    if args.species_headers and args.duplicate_policy != "best_score":
+        raise ExtractionError("--species-headers requires best_score and its explicit species FASTA map")
+    if args.duplicate_policy == "best_score":
+        if args.mode != "single-copy" or args.strict:
+            raise ExtractionError("best_score requires single-copy mode without --strict")
+        if not args.busco_full_dir or not args.species_fasta_map or not args.selection_report:
+            raise ExtractionError("best_score requires --busco-full-dir, --species-fasta-map and --selection-report")
+    fasta_paths = [
+        Path(line.strip()) for line in args.fasta_list.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    if len(fasta_paths) != len(set(fasta_paths)):
+        raise ExtractionError("Repeated FASTA input paths")
+    for path in fasta_paths:
+        if not path.is_file() or path.is_symlink():
+            raise ExtractionError(f"Invalid FASTA input: {path}")
+    selection = None
+    if args.duplicate_policy == "best_score":
+        from busco_copy_selection import BestScoreSelection
+
+        selection = BestScoreSelection(args, fasta_paths)
+        expected = selection.expected
+        for line_number, marker in enumerate(expected, start=2):
+            validate_busco_id(marker, line_number)
+    else:
+        gene_to_buscos, expected = read_rows(args.summary, args.mode, args.strict)
     if args.output_dir.is_symlink():
         raise ExtractionError(f"Refusing to use a symlink as the BUSCO output directory: {args.output_dir}")
+    validate_output_layout(args, fasta_paths, expected, selection)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for path in args.output_dir.glob(f"*{args.suffix}"):
         if path.is_symlink():
@@ -145,21 +221,25 @@ def run(args: argparse.Namespace) -> int:
         if not path.is_file():
             raise ExtractionError(f"Unexpected non-file BUSCO output path: {path}")
         path.unlink()
-    fasta_paths = [
-        Path(line.strip()) for line in args.fasta_list.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
     found = defaultdict(int)
     pool = OutputPool(args.output_dir, args.suffix, args.max_open_files)
     try:
-        for fasta_path in fasta_paths:
-            if not fasta_path.is_file() or fasta_path.is_symlink():
-                raise ExtractionError(f"Invalid FASTA input: {fasta_path}")
-            for identifier, record in fasta_records(fasta_path):
-                for busco_id in gene_to_buscos.get(identifier, ()):
-                    pool.write(busco_id, record)
-                    found[busco_id] += 1
+        if selection is not None:
+            found = selection.extract(fasta_paths, fasta_records, pool)
+        else:
+            for fasta_path in fasta_paths:
+                for identifier, record in fasta_records(fasta_path):
+                    for busco_id in gene_to_buscos.get(identifier, ()):
+                        pool.write(busco_id, record)
+                        found[busco_id] += 1
     finally:
         pool.close()
+    if args.selection_report:
+        from busco_copy_selection import write_selection_report
+
+        args.selection_report.parent.mkdir(parents=True, exist_ok=True)
+        with open_output_replace(args.selection_report) as handle:
+            write_selection_report(handle, selection.report_rows if selection else [])
     missing = [busco_id for busco_id, count in expected.items() if found.get(busco_id, 0) != count]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     if args.report.is_symlink():
@@ -193,6 +273,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--strict", action="store_true")
     result.add_argument("--require-complete", action="store_true")
     result.add_argument("--max-open-files", type=int, default=64)
+    result.add_argument("--duplicate-policy", choices=("exclude", "best_score"), default="exclude")
+    result.add_argument("--busco-full-dir", type=Path)
+    result.add_argument("--species-fasta-map", type=Path, help="TSV with species and fasta columns")
+    result.add_argument("--selection-report", type=Path, help="Persistent per-candidate duplicate selection TSV")
+    result.add_argument("--sequence-mode", choices=("cds", "protein"), default="protein")
+    result.add_argument("--genetic-code", type=int, default=1)
+    result.add_argument("--species-genetic-codes", type=Path)
+    result.add_argument("--species-headers", action="store_true", help="Use explicitly mapped species as output FASTA IDs")
     return result
 
 
@@ -200,7 +288,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         return run(args)
-    except (OSError, UnicodeError, ExtractionError) as exc:
+    except (OSError, UnicodeError, ExtractionError, ValueError) as exc:
         print(f"BUSCO batch extraction error: {exc}", file=sys.stderr)
         return 2
 

@@ -549,6 +549,7 @@ self_fractionation_bias_table
 species_label_parser
 species_label_regex
 species_label_map_tsv
+species_tree_busco_duplicate_policy
 species_tree_output_storage
 species_tree_zip_compression
 species_tree_zip_compression_level
