@@ -23,3 +23,8 @@ to a later CLI, and dependency receipt/content verification remains independent.
 This changes neither scientific admission nor output keys except the normal
 implementation fingerprint. Existing frozen plans require their original
 implementation; validation of a changed implementation uses a fresh plan.
+
+Rescue finalization also shares its existing receipt proof with preparation
+checks nested inside comparison-key construction. See
+[dependency-key verification](rescue-dependency-proof-performance.md) for the
+bounded benchmark and unchanged full-byte-first verification contract.
