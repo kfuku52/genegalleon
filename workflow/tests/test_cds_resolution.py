@@ -352,7 +352,10 @@ def test_record_resolution_preserves_mixed_identifier_values():
 @pytest.mark.parametrize('traits, exception, message', [
     (pd.DataFrame([['gene', 'gene']], columns=['gene_id', 'gene_id']), TypeError, 'unhashable'),
     (pd.DataFrame({'other': ['gene']}), AttributeError, 'gene_id'),
-], ids=['duplicate-columns', 'missing-column'])
+    (pd.DataFrame([['gene', 'consistent', 0]], columns=pd.MultiIndex.from_tuples([
+        ('gene_id', 'value'), ('phase_status', 'value'), ('cds_first_phase', 'value'),
+    ])), TypeError, 'unhashable'),
+], ids=['duplicate-columns', 'missing-column', 'hierarchical-columns'])
 def test_record_resolution_preserves_malformed_trait_errors(traits, exception, message):
     original = traits.copy(deep=True)
     with pytest.raises(exception, match=message):

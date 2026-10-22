@@ -158,6 +158,7 @@ def resolve_records(records, traits, genomic, code):
     # Native traits have string IDs. Avoid building all-column row Series for
     # those IDs while retaining legacy dtype coercion for other helper inputs.
     if (traits.columns.is_unique and 'gene_id' in traits
+            and isinstance(traits.gene_id, pd.Series)
             and all(type(value) is str for value in traits.gene_id)):
         indices = dict(zip(traits.gene_id, traits.index, strict=True))
     else:
