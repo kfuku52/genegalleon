@@ -1428,3 +1428,46 @@ def test_legacy_missing_input_diagnostic_identifies_the_actual_path(tmp_path):
     assert str(source) in result.stdout
     assert "missing: None" not in result.stdout
     assert not manifest.exists()
+
+
+@pytest.mark.parametrize("strict", ["0", "1"])
+@pytest.mark.parametrize("change", [None, "input", "output", "copy_policy", "strict"])
+def test_legacy_busco_copy_policy_keeps_only_the_identical_single_copy_contract(tmp_path, strict, change):
+    source = tmp_path / "busco_summary.tsv"
+    target = tmp_path / "fasta.fa"
+    manifest = tmp_path / "species_tree.extract_fasta.json"
+    source.write_text("BUSCO\tspecies\nBUSCO1\tgene1\n")
+    target.write_text(">gene1\nATGAAA\n")
+    args = contract_args(tmp_path, manifest, source, target, f"strictly_single_copy_only={strict}")
+    args[args.index("--step") + 1] = "species_tree_extract_fasta"
+    args[args.index("--family-id") + 1] = "all_buscos"
+    assert run_cli("record", *args).returncode == 0
+    before = manifest.read_bytes(), manifest.stat().st_mtime_ns
+    current = [*args, "--parameter", "copy_policy=single-copy"]
+    if change == "input":
+        source.write_text("changed BUSCO selection\n")
+    elif change == "output":
+        target.write_text(">changed\nATGCCC\n")
+    elif change == "copy_policy":
+        current[-1] = "copy_policy=best-score"
+    elif change == "strict":
+        current[current.index(f"strictly_single_copy_only={strict}")] = f"strictly_single_copy_only={1-int(strict)}"
+    output_before = target.read_bytes(), target.stat().st_mtime_ns
+    checked = run_cli("needs-run", *current, "--stale-policy", "stop", "--legacy-policy", "stop")
+    assert checked.returncode == (3 if change else 1), checked.stdout + checked.stderr
+    assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == before
+    assert (target.read_bytes(), target.stat().st_mtime_ns) == output_before
+
+
+@pytest.mark.parametrize("step,family", [("another_step", "all_buscos"),
+                                        ("species_tree_extract_fasta", "another_family")])
+def test_busco_copy_policy_default_does_not_apply_to_other_contracts(tmp_path, step, family):
+    source, target, manifest = (tmp_path / name for name in ("source", "target", "manifest.json"))
+    source.write_text("input\n")
+    target.write_text("output\n")
+    args = contract_args(tmp_path, manifest, source, target)
+    args[args.index("--step") + 1] = step
+    args[args.index("--family-id") + 1] = family
+    assert run_cli("record", *args).returncode == 0
+    checked = run_cli("needs-run", *args, "--parameter", "copy_policy=single-copy")
+    assert checked.returncode == 3

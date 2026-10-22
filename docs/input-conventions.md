@@ -11,6 +11,11 @@ duplicated assemblies, but HMM ranking does not establish orthology or distingui
 alleles from paralogs. Review duplication patterns and tree sensitivity before
 adopting the resulting species tree.
 
+Older BUSCO extraction manifests without a `copy_policy` parameter retain their
+historical `single-copy` meaning. Reuse still requires matching input/output
+hashes and every other parameter; selecting `best-score` invalidates that
+extraction provenance.
+
 ### Species naming
 
 Species IDs are inferred from filename prefixes such as `GENUS_SPECIES`.

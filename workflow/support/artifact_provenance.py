@@ -831,6 +831,14 @@ def build_contract(
 
 
 def contract_comparison_payload(contract: dict[str, object]) -> dict[str, object]:
+    parameters = contract.get("parameters")
+    if (contract.get("step") == "species_tree_extract_fasta"
+            and contract.get("family_id") == "all_buscos" and isinstance(parameters, dict)):
+        # Before representative-copy selection was configurable, this stage
+        # always used single-copy extraction. Preserve that exact default's
+        # compatibility without changing its saved manifest or relaxing any
+        # sequence, output, strictness or best-score selection checks.
+        parameters = {"copy_policy": "single-copy", **parameters}
     return {
         "schema_version": contract.get("schema_version"),
         "step": contract.get("step"),
@@ -838,7 +846,7 @@ def contract_comparison_payload(contract: dict[str, object]) -> dict[str, object
         "inputs": contract.get("inputs"),
         "outputs": contract.get("outputs"),
         "optional_outputs": contract.get("optional_outputs", []),
-        "parameters": contract.get("parameters"),
+        "parameters": parameters,
     }
 
 
