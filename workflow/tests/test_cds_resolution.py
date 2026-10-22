@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -472,3 +473,158 @@ def test_valid_supplied_frame_does_not_inherit_conflicting_gff_phase(tmp_path):
     meta_path.write_text(json.dumps(meta))
     apply_cds_resolution(traits, list(resolution.fasta_records(output)), output.parent)
     assert pd.isna(traits.iloc[0].cds_first_phase) and traits.iloc[0].phase_status == 'conflicting'
+
+
+def resolution_application_fixture(tmp_path):
+    """Real receipts and tables, without invoking scientific resolution."""
+    sequence = 'ATGAAATAA'
+    identifiers = [f'Plant_species_gene{i}' for i in range(3)]
+    resolved = pd.DataFrame({
+        'gene_id': identifiers, 'feature_size': [9] * 3, 'num_intron': [2] * 3,
+        'intron_positions': ['3;6'] * 3, 'feature_blocks': ['1-3;5-7;9-11'] * 3,
+        'utr_blocks': [''] * 3, 'chromosome': ['chr1'] * 3, 'strand': ['+'] * 3,
+        'start': [1, 21, 41], 'end': [11, 31, 51], 'cds_first_phase': [0, 1, 2],
+        'structure_status': ['sequence_verified'] * 3, 'phase_status': ['consistent'] * 3,
+        'cds_sequence_sha256': [resolution.sequence_digest(sequence)] * 3,
+    })
+    source = tmp_path / 'Plant_species.fa'
+    source.write_text(''.join(f'>{identifier}\n{sequence}\n' for identifier in identifiers))
+    directory = tmp_path / 'resolved'
+    directory.mkdir()
+    table = directory / 'Plant_species.fa.traits.tsv'
+    resolved.to_csv(table, sep='\t', index=False)
+    receipt = directory / 'Plant_species.fa.resolution.meta.json'
+    receipt.write_text(json.dumps({'traits_sha256': resolution.digest(table), 'contract': {
+        'sources': {'cds': {'path': str(source), 'sha256': resolution.digest(source)}}}}))
+    target = resolved.copy(deep=True)
+    target['feature_size'] = 6
+    target['structure_status'] = 'pending'
+    target['phase_status'] = 'pending'
+    records = [(identifier, identifier, sequence) for identifier in identifiers]
+    return target, records, directory, table, receipt, source
+
+
+def compare_resolution_application_with_scalar(target, records, directory, monkeypatch):
+    import gff2genestat as genestat
+    expected, actual = target.copy(deep=True), target.copy(deep=True)
+    def invoke(frame):
+        try:
+            genestat.apply_cds_resolution(frame, records, directory)
+        except Exception as error:
+            return type(error), str(error)
+        return None
+    with monkeypatch.context() as context:
+        context.setattr(genestat, '_batch_cds_resolution_traits', lambda *args: False)
+        expected_error = invoke(expected)
+    actual_error = invoke(actual)
+    assert actual_error == expected_error
+    pd.testing.assert_frame_equal(actual, expected, check_exact=True, check_dtype=True)
+    for column in expected:
+        if expected[column].dtype == object:
+            assert [type(value) for value in actual[column]] == [type(value) for value in expected[column]]
+    return actual, actual_error
+
+
+@pytest.mark.parametrize('index', [pd.Index([7, 19, 43, 59]),
+    pd.Index(['first', 'other', 'third', 'last']),
+    pd.MultiIndex.from_tuples([('a', 7), ('b', 19), ('c', 43), ('a', 59)])],
+    ids=['integer', 'string', 'multiindex'])
+@pytest.mark.parametrize('dtype', ['object', 'string', 'category'])
+def test_apply_resolution_keeps_last_duplicate_id_phase_and_mismatch(tmp_path, monkeypatch, index, dtype):
+    target, records, directory, *_ = resolution_application_fixture(tmp_path)
+    target = pd.concat([target, target.iloc[[0]]], ignore_index=True)
+    target.index = index
+    target['gene_id'] = target.gene_id.astype(dtype)
+    records[1] = (*records[1][:2], 'ATGCCCTAA')
+    actual, error = compare_resolution_application_with_scalar(target, records, directory, monkeypatch)
+    assert error is None
+    assert actual.iloc[0].structure_status == 'pending'
+    assert actual.iloc[3].structure_status == 'sequence_verified'
+    assert actual.iloc[1].structure_status == 'sequence_not_coordinate_matched'
+    assert pd.isna(actual.iloc[1].feature_size)
+    assert actual.iloc[2].phase_status == 'conflicting'
+    assert pd.isna(actual.iloc[2].cds_first_phase)
+
+
+@pytest.mark.parametrize('layout', ['boolean-index', 'duplicate-index', 'nullable-phase',
+    'missing-status', 'missing-phase', 'malformed-hash', 'array-hash', 'array-status', 'object-block',
+    'object-numeric', 'numeric-structure-column'])
+def test_apply_resolution_preserves_unusual_cell_errors_and_partial_writes(tmp_path, monkeypatch, layout):
+    import gff2genestat as genestat
+    target, records, directory, table, *_ = resolution_application_fixture(tmp_path)
+    resolved = pd.read_csv(table, sep='\t')
+    order = list(set(target.gene_id) & set(resolved.gene_id))
+    second = resolved.index[resolved.gene_id == order[1]][0]
+    if layout == 'boolean-index':
+        target = target.iloc[:2]
+        target.index = [False, True]
+    elif layout == 'duplicate-index':
+        target.index = [0, 0, 2]
+    elif layout == 'nullable-phase':
+        target['cds_first_phase'] = target.cds_first_phase.astype('Int64')
+    elif layout == 'missing-phase':
+        target = target.drop(columns='cds_first_phase')
+    elif layout == 'object-numeric':
+        target['feature_size'] = target.feature_size.astype(object)
+    elif layout == 'numeric-structure-column':
+        resolved['intron_positions'] = 3
+        target['intron_positions'] = 0
+        records[0] = (*records[0][:2], 'ATGCCCTAA')
+        monkeypatch.setattr(genestat, 'load_resolution_traits', lambda path: resolved.copy(deep=True))
+    else:
+        column = ('cds_sequence_sha256' if layout in {'malformed-hash', 'array-hash'} else
+                  'utr_blocks' if layout == 'object-block' else 'structure_status')
+        resolved[column] = resolved[column].astype(object)
+        target[column] = target[column].astype(object)
+        value = {'missing-status': pd.NA, 'malformed-hash': pd.NA,
+                 'array-hash': np.array(['bad', 'hash']),
+                 'array-status': np.array(['sequence_verified', 'other']),
+                 'object-block': ['1-3', '5-7']}[layout]
+        resolved.at[second, column] = value
+        monkeypatch.setattr(genestat, 'load_resolution_traits', lambda path: resolved.copy(deep=True))
+    actual, error = compare_resolution_application_with_scalar(target, records, directory, monkeypatch)
+    if layout in {'missing-status', 'malformed-hash', 'array-hash', 'array-status'}:
+        assert error is not None
+        first = actual.loc[actual.gene_id == order[0]].iloc[0]
+        assert first.structure_status == 'sequence_verified'
+        assert first.feature_size == 9
+
+
+@pytest.mark.parametrize('change', ['traits-and-source', 'source', 'traits-replace-during-read', 'receipt-hash'])
+def test_apply_resolution_retains_fresh_proofs_and_verification_precedence(tmp_path, monkeypatch, change):
+    import gff2genestat as genestat
+    target, records, directory, table, receipt, source = resolution_application_fixture(tmp_path)
+    if change in {'traits-and-source', 'source'}:
+        source.write_text(source.read_text().replace('AAA', 'CCC'))
+    if change == 'traits-and-source':
+        table.write_text(table.read_text().replace('chr1', 'chr2'))
+    elif change == 'receipt-hash':
+        report = json.loads(receipt.read_text())
+        report['traits_sha256'] = 'changed'
+        receipt.write_text(json.dumps(report))
+    elif change == 'traits-replace-during-read':
+        original = genestat.load_resolution_traits
+        def replaced(path):
+            result = original(path)
+            replacement = table.with_suffix('.replacement')
+            replacement.write_bytes(table.read_bytes())
+            replacement.replace(table)
+            return result
+        monkeypatch.setattr(genestat, 'load_resolution_traits', replaced)
+    expected = 'Stale CDS resolution source' if change == 'source' else (
+        'changed' if change == 'traits-replace-during-read' else 'Changed CDS resolution traits')
+    with pytest.raises((ValueError, OSError), match=expected):
+        genestat.apply_cds_resolution(target, records, directory)
+    assert target.structure_status.tolist() == ['pending'] * 3
+    assert target.feature_size.tolist() == [6] * 3
+
+
+def test_apply_resolution_retains_readonly_array_failure(tmp_path):
+    import gff2genestat as genestat
+    target, records, directory, *_ = resolution_application_fixture(tmp_path)
+    columns = {column: target[column].to_numpy(copy=True) for column in target}
+    columns['feature_size'].flags.writeable = False
+    target = pd.DataFrame(columns, copy=False)
+    with pytest.raises(ValueError, match='read-only'):
+        genestat.apply_cds_resolution(target, records, directory)
+    assert target.structure_status.tolist() == ['pending'] * 3

@@ -1265,6 +1265,106 @@ def load_resolution_traits(path):
     return pandas.read_csv(path, sep="\t")
 
 
+def _batch_cds_resolution_traits(traits, resolved, indices, sequences):
+    """Batch ordinary scalar writes; retain the scalar path for other layouts.
+
+    No writes occur before this guard establishes that comparisons, assignments,
+    and mismatch invalidation cannot fail on an unusual cell or dtype. Otherwise
+    the caller retains the original error order and partial mutations.
+    """
+    if (type(traits) is not pandas.DataFrame or not traits.columns.is_unique
+            or type(traits.index) not in (pandas.Index, pandas.RangeIndex)
+            or not traits.index.is_unique or not resolved.index.is_unique
+            or not resolved.columns.is_unique
+            or not all(type(column) is str for column in traits.columns)
+            or not all(type(identifier) is str for identifier in indices)):
+        return False
+    if not ((isinstance(traits.index.dtype, numpy.dtype) and traits.index.dtype.kind in 'iu')
+            or all(type(label) is str for label in traits.index)):
+        return False
+    columns = [column for column in traits.columns if column in resolved.columns]
+    if not {'structure_status', 'cds_first_phase', 'phase_status'} <= set(columns):
+        return False
+    if 'cds_sequence_sha256' not in resolved:
+        return False
+    identifiers = list(set(indices) & set(resolved.index))
+    if not identifiers:
+        return True
+    if not all(identifier in sequences and type(sequences[identifier]) is str
+               and sequences[identifier].isascii() for identifier in identifiers):
+        return False
+    selected = resolved.loc[identifiers]
+    if not all(type(value) is str for column in ('structure_status', 'cds_sequence_sha256')
+               for value in selected[column]):
+        return False
+    # Invalidation also touches columns absent from the resolution table.
+    invalidated_strings = {'intron_positions', 'feature_blocks', 'utr_blocks', 'chromosome', 'strand',
+                           'feature_block_sequences', 'feature_block_strands', 'transcript_junction_positions'}
+    invalidated = invalidated_strings | {'structure_status', 'feature_size', 'num_intron', 'cds_first_phase', 'start', 'end'}
+    object_dtype = numpy.dtype(object)
+    for column in set(columns) | (invalidated & set(traits.columns)):
+        target = traits[column].dtype
+        if not (target == object_dtype or isinstance(target, pandas.StringDtype)
+                or (isinstance(target, numpy.dtype) and target.kind in 'iuf')):
+            return False
+        # A mismatch converts numeric structure-text columns to object, which
+        # would change the scalar types of later vectorized numeric writes.
+        if column in invalidated_strings and target != object_dtype and not isinstance(target, pandas.StringDtype):
+            return False
+        if not traits[column].array.to_numpy(copy=False).flags.writeable:
+            return False
+        if column not in columns:
+            continue
+        source = selected[column].dtype
+        if source == object_dtype and not all(type(value) in (str, int, float, bool, type(None))
+                or (isinstance(value, numpy.generic) and value.dtype.kind in 'iufb')
+                for value in selected[column]):
+            return False
+        if isinstance(target, pandas.StringDtype):
+            if target == source:
+                continue
+            if isinstance(source, numpy.dtype) and source.kind in 'iuf' and selected[column].isna().all():
+                continue
+            return False
+        # Numeric ndarray assignment into object columns changes NumPy scalar
+        # cells into Python scalars; retain the original writes for that layout.
+        if target == object_dtype and (source == object_dtype or isinstance(source, pandas.StringDtype)):
+            continue
+        if not isinstance(source, numpy.dtype):
+            return False
+        if target.kind in 'iuf' and (target == source or (target == numpy.dtype('float64') and source.kind in 'iuf')):
+            continue
+        return False
+    if not (isinstance(traits['cds_first_phase'].dtype, numpy.dtype)
+            and traits['cds_first_phase'].dtype.kind in 'iuf'
+            and isinstance(selected['cds_first_phase'].dtype, numpy.dtype)
+            and selected['cds_first_phase'].dtype.kind in 'iuf'
+            and (traits['phase_status'].dtype == object_dtype
+                 or isinstance(traits['phase_status'].dtype, pandas.StringDtype))):
+        return False
+    verified = []
+    for identifier in identifiers:
+        if selected.at[identifier, 'cds_sequence_sha256'] != hashlib.sha256(sequences[identifier].encode('ascii')).hexdigest():
+            disable_structure(traits, indices[identifier], 'sequence_not_coordinate_matched')
+        else:
+            verified.append(identifier)
+    if not verified:
+        return True
+    labels = [indices[identifier] for identifier in verified]
+    selected = selected.loc[verified]
+    for column in columns:
+        # Native strings accept scalar NaNs but reject an all-float ndarray.
+        values = selected[column].to_numpy(dtype=object if isinstance(traits[column].dtype, pandas.StringDtype) else None)
+        traits.loc[labels, column] = values
+    conflicts = ((selected['structure_status'] == 'sequence_verified')
+                 & selected['cds_first_phase'].isin((1, 2))).to_numpy()
+    if conflicts.any():
+        labels = [label for label, conflict in zip(labels, conflicts, strict=True) if conflict]
+        traits.loc[labels, 'cds_first_phase'] = numpy.nan
+        traits.loc[labels, 'phase_status'] = 'conflicting'
+    return True
+
+
 def apply_cds_resolution(traits, records, directory, cache_dir=None):
     sequences = {identifier: sequence for identifier, _header, sequence in records}
     indices = dict(zip(traits.gene_id, traits.index, strict=True))
@@ -1282,6 +1382,8 @@ def apply_cds_resolution(traits, records, directory, cache_dir=None):
                 raise ValueError(f'Stale CDS resolution source: {Path(source["path"]).name}')
         resolved_traits = read_subset(traits_path, set(indices), load_resolution_traits, cache_dir,
                                      source_proof=traits_proof).set_index('gene_id')
+        if _batch_cds_resolution_traits(traits, resolved_traits, indices, sequences):
+            continue
         for identifier in set(indices) & set(resolved_traits.index):
             selected_hash = resolved_traits.at[identifier, 'cds_sequence_sha256']
             if selected_hash != hashlib.sha256(sequences[identifier].encode('ascii')).hexdigest():
