@@ -312,8 +312,11 @@ PYPROFILE
         --input "output_writer=${gg_support_dir}/oriongeno_outputs.py"
         --input "transcript_reader=${gg_support_dir}/transcript_utrs.py"
         --output "native_gff=${prediction_dir}/${sp_ub}.native.gff3"
+        --output "hmm_boundaries=${prediction_dir}/${sp_ub}.hmm_boundaries.jsonl.gz"
+        --output "utr_repairs=${prediction_dir}/${sp_ub}.utr_repairs.jsonl.gz"
         --parameter "output_utrs=${oriongeno_output_utrs}"
         --parameter "output_repeat=${oriongeno_output_repeat}"
+        --parameter "audit_log_compression=gzip"
         --parameter "utr_export_policy=exon_cds_boundaries_v1"
       )
       if [[ "${oriongeno_output_repeat}" == 1 ]]; then

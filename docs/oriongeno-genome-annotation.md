@@ -113,7 +113,7 @@ External Python paths retain their virtual-environment prefix. Preparation and
 prediction publication use the shared-filesystem namespace lock; all concurrent
 jobs sharing those paths must use the same lock protocol.
 
-### Retained gene, UTR and repeat annotations
+### Retained annotations and prediction audits
 
 Each species prediction directory retains these outputs by default:
 
@@ -122,6 +122,8 @@ Each species prediction directory retains these outputs by default:
 | `<species>.gff3` | Gene annotation with explicit terminal exonic UTR features. |
 | `<species>.native.gff3` | Exact original OrionGeno gene GFF3, before GG's UTR export. |
 | `<species>.repeat.gff3` | Native binary repeat regions; these are not TE family classifications. |
+| `<species>.hmm_boundaries.jsonl.gz` | Exact native prediction-window boundary audit, compressed with gzip. |
+| `<species>.utr_repairs.jsonl.gz` | Exact native UTR repair audit, compressed with gzip. |
 | `native_prediction.json` | Source/model/genome identities, output flags, feature counts and companion hashes. |
 | `prediction.provenance.json` | The complete required output set and configuration used for resume validation. |
 
@@ -136,8 +138,18 @@ Both controls accept `0` or `1` and use the usual scoped overrides, for example
 `GG_GENOME_ANNOTATION_ORIONGENO_OUTPUT_REPEAT=0`. Disabling UTR export retains
 the native gene annotation unchanged. Only companions declared in the current
 receipt belong to that prediction; an older undeclared sibling is not adopted.
-Gene GFF, native GFF, enabled repeat GFF and receipt publish together, with the
-receipt last and restoration of the previous complete set on failure. Missing
+The two audit logs are always retained, including when UTR export or repeat
+output is disabled. They preserve the native JSONL bytes, including original
+identifiers, repair decisions and any recorded before/after intervals. Compression
+uses a reproducible gzip header and reads one record at a time. A zero-record
+audit is retained as a valid empty gzip; a missing audit, invalid JSON or a
+non-object record fails publication. No audit records are fabricated from GFFs.
+The version-2 annotation-output contract records compressed hashes/sizes, original
+hashes/sizes and record counts. Version-1 receipts remain readable with their
+original output scope; new runs require both audits.
+
+Gene GFF, native GFF, enabled repeat GFF, both audit logs and receipt publish
+together, with the receipt last and restoration of the previous complete set on failure. Missing
 or modified declared companions invalidate reuse and candidate import. Repeat
 files with zero predictions are valid GFF3 files containing their header.
 
@@ -147,8 +159,9 @@ can still retain terminal UTR coordinates, allowing a later verified CPU export;
 CDS-only annotations cannot supply missing transcript ends. Repeats require native
 prediction when neither repeat labels nor a repeat GFF were retained. The new
 defaults do not modify completed artifacts or jobs using an immutable older
-runtime. Adopting the new output contract changes prediction provenance and uses
-the existing stale-artifact/rebuild policy.
+runtime. Old runs whose audit files were discarded cannot recover those audits
+from the final GFF alone. Adopting the new output contract changes prediction
+provenance and uses the existing stale-artifact/rebuild policy.
 
 For separate species workspaces, set `GG_COMMON_DOWNLOADS_ROOT` to one existing,
 owned physical absolute directory and bind that directory at the same path in

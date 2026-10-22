@@ -1,8 +1,11 @@
-"""Explicit UTR annotation and validation of retained native prediction outputs.
+"""Explicit UTRs, compressed audits and validation of native prediction outputs.
 
 UTRs are exonic intervals outside the unchanged CDS endpoints. This export
 does not predict sequence, extend a transcript, or choose among source models.
 """
+import gzip
+import hashlib
+import json
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -18,12 +21,36 @@ except ImportError:
 
 UTR_POLICY = 'exon_cds_boundaries_v1'
 UTR_KINDS = {'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}
+AUDIT_SUFFIXES = {'hmm_boundaries': '.hmm_boundaries.jsonl', 'utr_repairs': '.utr_repairs.jsonl'}
 
 
 def companion_paths(output):
     output = Path(output)
     return {'native_gff': output.with_name(output.stem + '.native.gff3'),
-            'repeat_gff': output.with_name(output.stem + '.repeat.gff3')}
+            'repeat_gff': output.with_name(output.stem + '.repeat.gff3'),
+            **{name: output.with_name(output.stem + suffix + '.gz') for name, suffix in AUDIT_SUFFIXES.items()}}
+
+
+def compress_audit_jsonl(source, output):
+    """Preserve exact JSONL bytes in deterministic gzip, retaining one line at a time."""
+    source = Path(source)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError('OrionGeno audit log is missing or nonregular: ' + source.name)
+    sha, size, records = hashlib.sha256(), 0, 0
+    with source.open('rb') as stream, Path(output).open('wb') as raw:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0, compresslevel=6) as compressed:
+            for line in stream:
+                try:
+                    value = json.loads(line)
+                except (ValueError, UnicodeError) as error:
+                    raise ValueError('Invalid OrionGeno audit JSONL: ' + source.name) from error
+                if not isinstance(value, dict):
+                    raise ValueError('OrionGeno audit JSONL records must be objects: ' + source.name)
+                compressed.write(line)
+                sha.update(line)
+                size += len(line)
+                records += 1
+    return dict(compression='gzip', uncompressed_sha256=sha.hexdigest(), uncompressed_bytes=size, jsonl_records=records)
 
 
 def _terminal_blocks(model):
@@ -144,7 +171,7 @@ def verify_companions(value, gff):
         if any(key in value.get('inference_settings', {}) for key in ('output_utrs', 'output_repeat')):
             raise ValueError('OrionGeno annotation output contract is missing')
         return
-    if (not isinstance(outputs, dict) or type(outputs.get('schema_version')) is not int or outputs['schema_version'] != 1
+    if (not isinstance(outputs, dict) or type(outputs.get('schema_version')) is not int or outputs['schema_version'] not in (1, 2)
             or type(outputs.get('output_repeat')) is not bool or type(outputs.get('output_utrs')) is not bool
             or outputs.get('utr_policy') != (UTR_POLICY if outputs['output_utrs'] else 'native')):
         raise ValueError('Invalid OrionGeno annotation output contract')
@@ -153,6 +180,12 @@ def verify_companions(value, gff):
         raise ValueError('OrionGeno annotation output flags differ from inference settings')
     paths = companion_paths(gff)
     names = {'native_gff'} | ({'repeat_gff'} if outputs['output_repeat'] else set())
+    if outputs['schema_version'] == 2:
+        if outputs.get('audit_log_compression') != 'gzip' or settings.get('audit_log_compression') != 'gzip':
+            raise ValueError('OrionGeno audit output contract is missing or inconsistent')
+        names.update(AUDIT_SUFFIXES)
+    elif 'audit_log_compression' in outputs or 'audit_log_compression' in settings:
+        raise ValueError('OrionGeno audit outputs require their versioned contract')
     if not isinstance(outputs.get('files'), dict) or set(outputs['files']) != names:
         raise ValueError('OrionGeno annotation companions are incomplete')
     for name, record in outputs['files'].items():
@@ -161,3 +194,8 @@ def verify_companions(value, gff):
                 or not path.is_file() or path.is_symlink() or record.get('bytes') != path.stat().st_size
                 or record.get('sha256') != file_sha(path)):
             raise ValueError('OrionGeno annotation companion changed: ' + name)
+        if name in AUDIT_SUFFIXES and (
+                record.get('compression') != 'gzip'
+                or not re.fullmatch('[0-9a-f]{64}', str(record.get('uncompressed_sha256')))
+                or any(type(record.get(key)) is not int or record[key] < 0 for key in ('uncompressed_bytes', 'jsonl_records'))):
+            raise ValueError('Invalid OrionGeno audit output metadata: ' + name)
