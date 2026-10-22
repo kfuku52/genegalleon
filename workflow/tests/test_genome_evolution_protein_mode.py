@@ -2795,3 +2795,37 @@ def test_selection_uses_verified_inference_inputs_after_cds_republication(tmp_pa
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "Orthogroup inference and selection stages finished" in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("mode", ["orthogroups", "orthogroup_selection"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_orthogroup_modes_verify_historical_busco_plots_without_new_rendering(tmp_path, mode, changed):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    settings = {**config, "genome_evolution_mode": "orthogroups", "run_orthofinder": "1",
+                "run_og_selection": "0", "artifact_stale_policy": "rebuild"}
+    assert _run_core(tmp_path, settings).returncode == 0
+    output = workspace / "output"
+    summary = output / "species_tree/species_tree_summary"
+    buscos = output / "species_protein_busco_full"
+    buscos.mkdir(exist_ok=True)
+    (buscos / "Arabidopsis_thaliana.busco.full.tsv").write_text("historical BUSCO input\n")
+    manifest = output / "artifact_provenance/genome_evolution/species_tree.busco_plot.json"
+    args = [sys.executable, str(WORKFLOW_DIR / "support/artifact_provenance.py"), "record",
+            "--manifest", str(manifest), "--logical-root", str(output / ".gg_global_artifacts"),
+            "--workspace-root", str(workspace), "--step", "species_tree_busco_plot",
+            "--family-id", "all_buscos", "--input", f"undated_tree={summary / 'undated_species_tree.nwk'}",
+            "--input", f"busco_directory={buscos}", "--parameter", "min_og_species=auto"]
+    for label, name in [("pdf", "busco_cds.pdf"), ("svg", "busco_cds.svg"), ("summary", "annotation_summary.tsv")]:
+        path = summary / name
+        path.write_text("historical plot output\n")
+        args += ["--output", f"{label}={path}"]
+    subprocess.run(args, check=True, capture_output=True)
+    saved = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in [manifest, *summary.iterdir()] if p.is_file()}
+    if changed:
+        (buscos / "Arabidopsis_thaliana.busco.full.tsv").write_text("changed BUSCO input\n")
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": mode, "run_plot_species_trees": "1"})
+    assert result.returncode == (3 if changed else 0), result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in saved} == saved
+    if not changed:
+        assert "Frozen plot data and outputs verified" in result.stdout + result.stderr

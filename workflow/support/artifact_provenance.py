@@ -1113,7 +1113,65 @@ def legacy_policy_result(args: argparse.Namespace) -> int:
     return STALE_STOP
 
 
+def frozen_plot_current(args: argparse.Namespace) -> int:
+    """Verify an unrequested plot's data and bytes, retaining its original recipe.
+
+    A selection-only continuation does not execute a renderer. Its historical
+    implementation and presentation settings remain in the untouched manifest;
+    they must not be interpreted as a claim that today's renderer produced it.
+    Biological inputs, output paths/content and all other parameters still match
+    the current stage declaration. This is unavailable to scientific producers.
+    """
+    recipes = {
+        "species_tree_busco_plot": (
+            {"adapter", "busco_plot_metadata"}, set(), {"undated_tree", "busco_directory"},
+        ),
+        "species_tree_dated_plot": (
+            {"adapter", "presentation", "geological_periods"},
+            {"engine", "geological_background", "nwkit_identity"}, {"dated_tree"},
+        ),
+    }
+    if (args.step not in recipes or args.family_id != "all_buscos"
+            or args.stale_policy != "stop" or args.legacy_policy != "stop" or args.recover_output):
+        raise ProvenanceError("Frozen plots require a species-tree plot, stop policies and no recovery")
+    if not declared_path_exists(args.manifest):
+        return stale_policy_result(args, "frozen plot has no provenance manifest", reusable=False)
+    implementation, presentation, required = recipes[args.step]
+
+    def comparison(contract):
+        result = contract_comparison_payload(contract)
+        entries = result["inputs"]
+        if (not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries)
+                or len(entries_by_label(contract, "inputs")) != len(entries)):
+            raise ProvenanceError("Frozen plot inputs must have distinct nonempty labels")
+        result["inputs"] = [entry for entry in entries if entry["label"] not in implementation]
+        if not required <= {entry["label"] for entry in result["inputs"]}:
+            raise ProvenanceError("Frozen plot is missing a required biological input")
+        if not isinstance(result["parameters"], dict):
+            raise ProvenanceError("Frozen plot parameters must be an object")
+        result["parameters"] = {key: value for key, value in result["parameters"].items()
+                                if key not in presentation}
+        return result
+
+    recorded = comparison(load_manifest(args.manifest))
+    projected = argparse.Namespace(**vars(args))
+    projected.input = [f"{label}={path}" for label, path in parse_path_pairs(args.input, "--input")
+                       if label not in implementation]
+    try:
+        current = comparison(build_contract(projected, include_diagnostics=False))
+    except FileNotFoundError as exc:
+        return stale_policy_result(args, f"frozen plot artifact is missing: {exc.filename or exc}",
+                                   reusable=False)
+    if recorded != current:
+        return stale_policy_result(args, describe_contract_difference(recorded, current), reusable=False,
+                                   error_code=contract_difference_code(recorded, current))
+    print(f"Frozen plot data and outputs verified; original rendering provenance retained: {args.manifest}")
+    return CURRENT
+
+
 def needs_run(args: argparse.Namespace) -> int:
+    if getattr(args, "frozen_plot", False):
+        return frozen_plot_current(args)
     try:
         if recover_declared_outputs(args) and args.dry_run:
             return NEEDS_RUN
@@ -1840,6 +1898,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_contract_arguments(needs_parser)
     needs_parser.add_argument("--dry-run", action="store_true",
                               help="Inspect without writing outputs, manifests, or the digest cache")
+    needs_parser.add_argument("--frozen-plot", action="store_true",
+                              help="Verify an unrequested species-tree plot while retaining its recorded rendering recipe")
     needs_parser.add_argument(
         "--stale-policy",
         choices=("stop", "reuse", "rebuild"),

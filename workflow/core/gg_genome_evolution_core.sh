@@ -207,6 +207,7 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 # A rebuild request may rebuild only the two requested orthogroup producers.
 orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
 orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
+frozen_species_tree_plot_args=()
 if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   case "${orthogroup_requested_stale_policy}" in
     stop|rebuild) ;;
@@ -225,6 +226,10 @@ if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" 
   fi
   artifact_stale_policy=stop
   artifact_legacy_policy=stop
+  # Plots are preserved inputs here, not requests to run today's renderer.
+  # Audit their biological inputs and complete output hashes without rewriting
+  # their original implementation/presentation provenance.
+  frozen_species_tree_plot_args=(--frozen-plot)
 fi
 
 # Synteny-only execution calls this independent stage before species-tree setup
@@ -4102,7 +4107,7 @@ species_tree_busco_plot_provenance_args+=(
   --output "summary=${file_species_tree_busco_summary}"
   --parameter "min_og_species=auto"
 )
-gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" || exit $?
+gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
 if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_species_tree_busco_plot} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_species_tree_summary}"
@@ -4653,7 +4658,7 @@ dated_tree_plot_provenance_args+=(
 if [[ -s "${file_dated_species_tree}" ]]; then
   dated_tree_plot_provenance_args+=(--output "summary_plot=${file_dated_species_tree_pdf}")
 fi
-gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dated_tree_plot_provenance_args[@]}" || exit $?
+gg_artifact_prepare_stage dated_tree_plot_needs_update run_plot_mcmctreer "${dated_tree_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
 if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; then
   gg_step_start "${task}"
 

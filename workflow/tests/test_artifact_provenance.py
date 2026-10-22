@@ -1471,3 +1471,84 @@ def test_busco_copy_policy_default_does_not_apply_to_other_contracts(tmp_path, s
     assert run_cli("record", *args).returncode == 0
     checked = run_cli("needs-run", *args, "--parameter", "copy_policy=single-copy")
     assert checked.returncode == 3
+
+
+@pytest.mark.parametrize("step", ["species_tree_busco_plot", "species_tree_dated_plot"])
+@pytest.mark.parametrize("change", ["recipe_only", "input", "output", "missing_output", "path",
+                                    "missing_manifest", "parameter", "identity", "schema"])
+def test_frozen_species_tree_plots_preserve_recipe_but_verify_data_and_outputs(tmp_path, step, change):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tree = workspace / "tree.nwk"
+    tree.write_text("(A:1,B:1);\n")
+    buscos = workspace / "buscos"
+    buscos.mkdir()
+    (buscos / "A.busco.full.tsv").write_text("complete\n")
+    plot = workspace / "plot.pdf"
+    plot.write_bytes(b"historical PDF")
+    renderer = workspace / "old-renderer.py"
+    renderer.write_text("old renderer")
+    manifest = workspace / "plot.json"
+    args = ["--manifest", manifest, "--logical-root", workspace / "output", "--workspace-root", workspace,
+            "--step", step, "--family-id", "all_buscos", "--output", f"plot={plot}"]
+    if step == "species_tree_busco_plot":
+        args += ["--input", f"undated_tree={tree}", "--input", f"busco_directory={buscos}",
+                 "--parameter", "min_og_species=auto"]
+    else:
+        args += ["--input", f"dated_tree={tree}", "--input", f"adapter={renderer}",
+                 "--parameter", "engine=nwkit_draw", "--parameter", "nwkit_identity=old",
+                 "--parameter", "branch_length_unit=Ma"]
+    assert run_cli("record", *args).returncode == 0
+    original = manifest.read_bytes(), manifest.stat().st_mtime_ns
+    renderer.unlink()  # Historic runtime need not remain mounted for an unrequested plot.
+    if step == "species_tree_busco_plot":
+        args += ["--input", f"adapter={renderer}", "--input", f"busco_plot_metadata={renderer}"]
+    else:
+        args[args.index("engine=nwkit_draw")] = "engine=new-presentation"
+        args += ["--input", f"presentation={renderer}", "--input", f"geological_periods={renderer}",
+                 "--parameter", "geological_background=period"]
+    # Normal rendering still requires the current complete implementation contract.
+    assert run_cli("needs-run", *args, "--legacy-policy", "stop").returncode != 1
+    if change == "input":
+        (buscos / "A.busco.full.tsv" if step == "species_tree_busco_plot" else tree).write_text("changed")
+    elif change == "output":
+        plot.write_bytes(b"changed PDF")
+    elif change == "missing_output":
+        plot.unlink()
+    elif change == "path":
+        other = workspace / "other.pdf"
+        other.write_bytes(plot.read_bytes())
+        args[args.index(f"plot={plot}")] = f"plot={other}"
+    elif change == "missing_manifest":
+        manifest.unlink()
+    elif change == "parameter":
+        key = "min_og_species=auto" if step == "species_tree_busco_plot" else "branch_length_unit=Ma"
+        args[args.index(key)] = key.split("=")[0] + "=changed"
+    elif change in {"identity", "schema"}:
+        payload = json.loads(manifest.read_text())
+        payload["family_id" if change == "identity" else "schema_version"] = "wrong" if change == "identity" else 2
+        manifest.write_text(json.dumps(payload))
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in workspace.rglob("*") if p.is_file()}
+    result = run_cli("needs-run", *args, "--frozen-plot", "--legacy-policy", "stop", "--dry-run")
+    assert result.returncode == (1 if change == "recipe_only" else 3), result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    if change == "recipe_only":
+        assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == original
+    if change == "missing_manifest":
+        assert not manifest.exists()
+
+
+@pytest.mark.parametrize("option", ["scientific_stage", "rebuild", "reuse", "adopt", "recovery"])
+def test_frozen_plot_cannot_disable_scientific_or_strict_contracts(tmp_path, option):
+    args = contract_args(tmp_path, tmp_path / "missing.json", tmp_path / "in", tmp_path / "out")
+    if option != "scientific_stage":
+        args[args.index("summary_statistics")] = "species_tree_dated_plot"
+        args[args.index("OG0001")] = "all_buscos"
+    args += ["--legacy-policy", "adopt" if option == "adopt" else "stop"]
+    if option in {"rebuild", "reuse"}:
+        args += ["--stale-policy", option]
+    if option == "recovery":
+        args += ["--recover-output", f"stat_branch={tmp_path / 'candidate'}"]
+    result = run_cli("needs-run", *args, "--frozen-plot", "--dry-run")
+    assert result.returncode == 2
+    assert "Frozen plots require" in result.stderr
