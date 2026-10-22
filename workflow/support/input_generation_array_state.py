@@ -9,7 +9,10 @@ import stat
 import tempfile
 from pathlib import Path
 
-from performance_metrics import count
+if __package__:
+    from .performance_metrics import count
+else:
+    from performance_metrics import count
 
 
 def _stat_identity(info):

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import struct
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +18,21 @@ import version_report_identity as identity
 from shared_namespace_lock import namespace_lock
 
 from workflow.benchmarks.benchmark_stage_resume import fixture
+
+
+def test_fresh_digest_batch_package_import_does_not_need_support_on_pythonpath(tmp_path):
+    source = tmp_path / 'source'
+    source.write_bytes(b'fresh package verification')
+    environment = dict(os.environ)
+    environment.pop('PYTHONPATH', None)
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'import sys; from workflow.support.input_generation_array_state import FreshDigestBatch; '
+         'print(FreshDigestBatch().read([sys.argv[1]])[sys.argv[1]])', str(source)],
+        cwd=Path(__file__).resolve().parents[2], env=environment, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == hashlib.sha256(source.read_bytes()).hexdigest()
 
 
 @pytest.fixture
