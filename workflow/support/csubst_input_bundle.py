@@ -42,7 +42,8 @@ def prepare_full_alignment(source, tree, destination):
 
 
 def _digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def structural_directory(bundle, verify=True):
