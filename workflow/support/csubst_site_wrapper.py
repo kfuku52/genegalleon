@@ -1347,10 +1347,20 @@ def recode_codon_alignment_records(records, aa_to_symbol):
         seq = str(seq).upper().replace("U", "T")
         if (len(seq) % 3) != 0:
             raise ValueError(f"CDS alignment sequence length is not a multiple of 3: {name}")
-        recoded_seq = []
-        for start in range(0, len(seq), 3):
-            aa = translate_codon_to_aa(seq[start : start + 3])
-            recoded_seq.append(aa_to_symbol.get(aa, "-"))
+        if type(aa_to_symbol) is dict and seq:
+            # Rebuild per record: a caller's iterator or sequence conversion
+            # can change the mapping between records. Invalid codons and stops
+            # retain the caller's mapping for the translated "-" state.
+            invalid_symbol = aa_to_symbol.get("-", "-")
+            codon_to_symbol = {
+                codon: aa_to_symbol.get(aa, "-") if aa != "*" else invalid_symbol
+                for codon, aa in STANDARD_GENETIC_CODE.items()
+            }
+            recoded_seq = [codon_to_symbol.get(seq[start : start + 3], invalid_symbol)
+                           for start in range(0, len(seq), 3)]
+        else:
+            recoded_seq = [aa_to_symbol.get(translate_codon_to_aa(seq[start : start + 3]), "-")
+                           for start in range(0, len(seq), 3)]
         recoded_records.append((name, "".join(recoded_seq)))
     return recoded_records
 

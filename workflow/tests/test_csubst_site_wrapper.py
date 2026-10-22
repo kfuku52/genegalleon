@@ -409,6 +409,35 @@ def test_build_alignment_panel_arg_includes_untrimmed_when_available():
     assert mod.build_alignment_panel_arg("trim.fa", None) == "--panel11=alignment,trim.fa"
 
 
+def test_recode_codon_alignment_preserves_unknown_states_and_record_boundaries():
+    mod = load_module()
+    symbols = {"M": "met", "F": "", "-": "?"}
+
+    def records():
+        yield "first description", "auguuuNNN---taatga"
+        symbols["M"] = "changed"
+        yield "second", "ATG"
+
+    assert mod.recode_codon_alignment_records(records(), symbols) == [
+        ("first description", "met????"), ("second", "changed")]
+    assert mod.recode_codon_alignment_records([("empty", "")], None) == [("empty", "")]
+    with pytest.raises(ValueError, match="not a multiple of 3: invalid"):
+        mod.recode_codon_alignment_records([("invalid", "AA")], None)
+
+
+def test_recode_codon_alignment_keeps_custom_mapping_lookup_order():
+    mod = load_module()
+
+    class Mapping(dict):
+        def get(self, key, default=None):
+            self["seen"].append(key)
+            return str(len(self["seen"]))
+
+    symbols = Mapping(seen=[])
+    assert mod.recode_codon_alignment_records([("g", "ATGNNNTAAATG")], symbols) == [("g", "1234")]
+    assert symbols["seen"] == ["M", "-", "-", "M"]
+
+
 def test_write_recoded_site_alignment_uses_csubst_state_symbols(tmp_path):
     mod = load_module()
     recoding_table = tmp_path / "csubst_nonsyn_recoding.tsv"
