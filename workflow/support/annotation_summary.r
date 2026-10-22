@@ -115,12 +115,17 @@ if (!path_exists_or_null(args[['file_species_trait']])) {
     colnames(trait)[1] = 'label'
     trait_tidy = data.frame(matrix(NA,0,3))
     colnames(trait_tidy) = c('label', 'value', 'trait')
+    trait_parts = vector('list', length(colnames(trait)[2:length(colnames(trait))]))
+    trait_part_index = 0L
     for (col in colnames(trait)[2:length(colnames(trait))]) {
         tmp = trait[,c('label',col)]
         colnames(tmp) = c('label','value')
         tmp[,'trait'] = col
-        trait_tidy = rbind(trait_tidy, tmp)
+        trait_part_index = trait_part_index + 1L
+        trait_parts[[trait_part_index]] = tmp
     }
+    # Keep the empty data.frame seed for rbind's data.frame dispatch.
+    trait_tidy = do.call(rbind, c(list(trait_tidy), trait_parts))
     g = tr
     rel_widths = c(1.0 ,0.7, 0.5)
     df_tip = get_df_tip(g[['tree']])

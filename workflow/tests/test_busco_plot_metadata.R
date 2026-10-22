@@ -94,3 +94,54 @@ check_annotation_counts <- function() {
 }
 check_annotation_counts()
 cat('Selective annotation count checks passed.\n')
+
+# Load the production trait transformation without starting its plotting CLI.
+# Literal expectations protect value coercion, row names and trait-column order.
+check_trait_tidy <- function() {
+    expressions <- parse(file.path(dirname(script), '..', 'support', 'annotation_summary.r'))
+    branch <- Filter(function(expr) is.call(expr) &&
+        identical(expr[[1]], as.name('if')) && 'trait_tidy' %in% all.names(expr), expressions)[[1]]
+    while (is.call(branch) && identical(branch[[1]], as.name('if'))) branch <- branch[[4L]]
+    expressions <- as.list(branch)
+    assigns <- function(expr, name) is.call(expr) && length(expr) >= 3L &&
+        as.character(expr[[1]]) %in% c('=', '<-') && identical(expr[[2]], as.name(name))
+    begin <- which(vapply(expressions, assigns, logical(1), name='trait_tidy'))[[1L]]
+    end <- which(vapply(expressions, assigns, logical(1), name='g'))[[1L]] - 1L
+    transform <- function(trait) NULL
+    body(transform) <- as.call(c(list(as.name('{')), expressions[begin:end], list(quote(trait_tidy))))
+
+    ordinary <- data.frame(label=c('A_a','B_b'), first=c(1,NA), second=c(2,3))
+    expected <- data.frame(label=c('A_a','B_b','A_a','B_b'), value=c(1,NA,2,3),
+                           trait=c('first','first','second','second'))
+    stopifnot(identical(transform(ordinary), expected))
+    one <- ordinary[,c('label','second')]
+    stopifnot(identical(transform(one), data.frame(label=c('A_a','B_b'), value=c(2,3), trait=c('second','second'))))
+    mixed <- data.frame(label=c('A_a','B_b'), first=c(1,NA), second=c('up','down'))
+    expected$value <- c('1',NA,'up','down')
+    stopifnot(identical(transform(mixed), expected))
+    factors <- data.frame(label=c('A_a','B_b'), first=ordered(c('a','b')), second=ordered(c('b','c')))
+    expected$value <- ordered(c('a','b','b','c'), levels=c('a','b','c'))
+    stopifnot(identical(transform(factors), expected))
+    dates <- data.frame(label=c('A_a','B_b'), first=as.Date(c('2020-01-01',NA)),
+                        second=as.Date(c('2021-01-01','2022-01-01')))
+    expected$value <- as.Date(c('2020-01-01',NA,'2021-01-01','2022-01-01'))
+    stopifnot(identical(transform(dates), expected))
+    empty <- ordinary[FALSE,]
+    empty_error <- tryCatch(transform(empty), error=identity)
+    stopifnot(inherits(empty_error,'error'),
+              grepl('replacement has 1 row, data has 0',conditionMessage(empty_error),fixed=TRUE))
+    no_columns <- tryCatch(transform(data.frame()), error=identity)
+    stopifnot(inherits(no_columns,'error'), grepl('undefined columns selected',conditionMessage(no_columns),fixed=TRUE))
+    rownames(ordinary) <- c('first_row','second_row')
+    expected$value <- c(1,NA,2,3)
+    rownames(expected) <- c('first_row','second_row','first_row1','second_row1')
+    stopifnot(identical(transform(ordinary), expected))
+    duplicate <- data.frame(label=c('A_a','B_b'), first=1:2, second=3:4)
+    names(duplicate) <- c('label','same','same')
+    expected <- data.frame(label=c('A_a','B_b','A_a','B_b'),value=c(1L,2L,1L,2L),trait=rep('same',4))
+    stopifnot(identical(transform(duplicate), expected))
+    missing <- tryCatch(transform(data.frame(label=c('A_a','B_b'))), error=identity)
+    stopifnot(inherits(missing,'error'), grepl('undefined columns selected',conditionMessage(missing),fixed=TRUE))
+}
+check_trait_tidy()
+cat('Trait tidy value and type checks passed.\n')
