@@ -13,11 +13,11 @@ from urllib.parse import quote
 try:
     from annevo_runtime_download import file_sha
     from format_species_annotation.common import parse_gff_attributes
-    from transcript_utrs import read_models
+    from transcript_utrs import UTR_FEATURE_TYPES, exons_within_reference, read_models, terminal_utr_blocks
 except ImportError:
     from .annevo_runtime_download import file_sha
     from .format_species_annotation.common import parse_gff_attributes
-    from .transcript_utrs import read_models
+    from .transcript_utrs import UTR_FEATURE_TYPES, exons_within_reference, read_models, terminal_utr_blocks
 
 UTR_POLICY = 'exon_cds_boundaries_v1'
 UTR_KINDS = {'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}
@@ -53,14 +53,6 @@ def compress_audit_jsonl(source, output):
     return dict(compression='gzip', uncompressed_sha256=sha.hexdigest(), uncompressed_bytes=size, jsonl_records=records)
 
 
-def _terminal_blocks(model):
-    start, end = model['cds'][0][0], model['cds'][-1][1]
-    low = [(a, min(b, start)) for a, b in model['exons'] if a < start]
-    high = [(max(a, end), b) for a, b in model['exons'] if b > end]
-    return {'five_prime_UTR': low, 'three_prime_UTR': high} if model['strand'] == '+' else {
-        'five_prime_UTR': high, 'three_prime_UTR': low}
-
-
 def _uncovered(block, covered):
     start, end = block
     for left, right in sorted(covered):
@@ -85,10 +77,9 @@ def write_explicit_utrs(source, output, *, lengths=None):
     models = read_models(annotation)
     expected, covered, used, encoded_ids = {}, {}, set(), {}
     for tid, model in models.items():
-        if lengths is not None and (model['seqid'] not in lengths or any(
-                b > lengths[model['seqid']] for _, b in model['exons'])):
+        if lengths is not None and not exons_within_reference(model, lengths.get(model['seqid'])):
             raise ValueError('OrionGeno transcript lies outside the genome')
-        expected[tid] = _terminal_blocks(model)
+        expected[tid] = {kind: terminal_utr_blocks(model, side) for side, kind in UTR_FEATURE_TYPES.items()}
     for line in annotation.splitlines():
         if not line or line.startswith('#'):
             continue

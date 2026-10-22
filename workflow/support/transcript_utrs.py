@@ -12,6 +12,36 @@ from Bio.Seq import Seq
 from format_species_annotation.common import parse_gff_attributes
 from format_species_writers import open_text
 
+UTR_FEATURE_TYPES = {'5': 'five_prime_UTR', '3': 'three_prime_UTR'}
+
+
+def _utr_low_side(model, side):
+    if side not in UTR_FEATURE_TYPES or model['strand'] not in {'+', '-'}:
+        raise ValueError('UTR coordinates require side 5 or 3 and a resolved strand')
+    return (side == '5') == (model['strand'] == '+')
+
+
+def coding_boundary(model, side):
+    """Return the unchanged zero-based CDS endpoint for a transcript side."""
+    return min(b[0] for b in model['cds']) if _utr_low_side(model, side) else max(b[1] for b in model['cds'])
+
+
+def terminal_utr_blocks(model, side, *, boundary=None):
+    """Clip donor exons outside a CDS endpoint, without extending or selecting ends.
+
+    Native export uses the model's own CDS endpoint. Representative completion
+    may supply its selected CDS endpoint after checking donor eligibility.
+    """
+    low = _utr_low_side(model, side)
+    boundary = coding_boundary(model, side) if boundary is None else boundary
+    return ([[a, min(b, boundary)] for a, b in model['exons'] if a < boundary] if low else
+            [[max(a, boundary), b] for a, b in model['exons'] if b > boundary])
+
+
+def exons_within_reference(model, length):
+    """Use the same genome-bound check for native export and final projection."""
+    return length is not None and bool(model['exons']) and all(0 <= a < b <= length for a, b in model['exons'])
+
 
 def merge_blocks(blocks):
     result = []
@@ -147,21 +177,21 @@ def load_models(path):
 
 def project(donor, selected, side, genome, *, reference_lengths=None):
     """Retain donor exons outside selected CDS; audit any new terminal splice."""
+    if (donor['seqid'], donor['strand']) != (selected['seqid'], selected['strand']):
+        raise ValueError('UTR projection requires the same contig and strand')
     if reference_lengths is None:
         length = genome.get_reference_length(donor['seqid']) if donor['seqid'] in genome.references else None
     else:
         length = reference_lengths.get(donor['seqid'])
-    if length is None or any(b > length for _, b in donor['exons']):
+    if not exons_within_reference(donor, length):
         return dict(blocks=[], length=0, reason='source_outside_genome', boundary_shift=0, new_junction=False)
-    low = (side == '5') == (selected['strand'] == '+')
-    old_boundary = min(b[0] for b in donor['cds']) if low else max(b[1] for b in donor['cds'])
-    boundary = min(b[0] for b in selected['cds']) if low else max(b[1] for b in selected['cds'])
+    low = _utr_low_side(selected, side)
+    old_boundary = coding_boundary(donor, side)
+    boundary = coding_boundary(selected, side)
     outer = donor['exons'][0][0] if low else donor['exons'][-1][1]
     if (old_boundary <= outer if low else old_boundary >= outer):
         return dict(blocks=[], length=0, reason='no_source_utr', boundary_shift=0, new_junction=False)
-    blocks = [[a, min(b, boundary)] for a, b in donor['exons'] if a < boundary] if low else [
-        [max(a, boundary), b] for a, b in donor['exons'] if b > boundary]
-    blocks = [b for b in blocks if b[0] < b[1]]
+    blocks = terminal_utr_blocks(donor, side, boundary=boundary)
     reason, new_junction, motif, canonical = 'projected', False, None, None
     if not blocks:
         reason = 'cds_reaches_transcript_end'
@@ -270,8 +300,7 @@ def complete(selected_text, original_text, genome, species, native=None):
         if not m.get('problem'):
             original_by_gene[m['gene']].append(m)
     for model in native.values():
-        if (model['seqid'] not in reference_lengths
-                or any(b > reference_lengths[model['seqid']] for _, b in model['exons'])):
+        if not exons_within_reference(model, reference_lengths.get(model['seqid'])):
             raise ValueError('OrionGeno transcript lies outside target genome')
     donors, correspondence = native_correspondence(selected, native)
     updates, audit, sequences = {}, [], {}
@@ -381,5 +410,5 @@ def render(text, updates):
             extra = ';annotation_basis=projected_longest;utr_source='+choice.get('source', 'none')+';utr_source_transcript='+quote(choice.get('source_transcript', ''), safe='._-:')
             for i, block in enumerate(choice['blocks']):
                 if (tid, 'utr', *block) not in retained_features:
-                    emit('five_prime_UTR' if side == '5' else 'three_prime_UTR', block, side+'.'+str(i+1), extra)
+                    emit(UTR_FEATURE_TYPES[side], block, side+'.'+str(i+1), extra)
     return ''.join(lines) + (marker + embedded if marker else '')

@@ -134,6 +134,14 @@ without duplication. CDS-only models receive no invented extension. This is an
 explicit serialization of the native model, not additional biological evidence
 or the separate longest-UTR selection used by representative completion below.
 
+Native export and representative completion share the CDS-endpoint, strand-aware
+exon-clipping and genome-bound checks in `transcript_utrs.py`. For the same model
+they describe the same UTR regions, even when retained source rows split one
+region into adjacent features. Native export preserves source rows and only
+fills missing UTR intervals; representative completion applies its separately
+declared donor-selection policy. Repeated export/completion does not accumulate
+UTR rows or change CDS coordinates, phases or sequences.
+
 Both controls accept `0` or `1` and use the usual scoped overrides, for example
 `GG_GENOME_ANNOTATION_ORIONGENO_OUTPUT_REPEAT=0`. Disabling UTR export retains
 the native gene annotation unchanged. Only companions declared in the current
@@ -308,6 +316,10 @@ An overlap with another coding locus is not used to silently trim a UTR.
 The resulting model is a derived prediction and may combine different source
 transcripts. Longer UTRs are a coverage policy, not a claim of greater accuracy,
 experimental support or confirmed complete transcript ends.
+The original-model export and this final selection remain separate stages:
+shared coordinate calculations do not rank donors or supply RNA-seq evidence.
+Per-side source transcripts and new terminal junctions remain in the audit,
+including when the two ends come from different donors.
 
 The representative bundle adds:
 
