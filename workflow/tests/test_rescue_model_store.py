@@ -70,6 +70,48 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     assert list(iterator) == []
 
 
+@pytest.mark.parametrize('scope', ['models', 'accepted', 'partial', 'revision'])
+def test_repeated_decoded_bodies_keep_every_returned_mutable_field_independent(tmp_path, scope):
+    records = [model(2*i+1, 'accepted') for i in range(5)]
+    directory, _ = published(tmp_path, records, revisions=records)
+    reader = store._iter(directory, scope)
+    first, second = next(reader), next(reader)
+    first['cds'][0][0] = -1
+    second['raw_prediction']['cds'][0][0] = -2
+    second['support'][0]['donor'] = 'changed'
+    second['unknown']['empty'].append('changed')
+    remaining = list(reader)
+    assert store._json(remaining) == store._json(records[2:])
+    assert store._json(list(store._iter(directory, scope))) == store._json(records)
+
+
+@pytest.mark.parametrize('byte_limit, entry_limit', [(5000, 20), (1024*1024, 2), (128, 20), (5000, 0)])
+def test_decoded_body_cache_remains_bounded_and_oversized_values_are_still_read(tmp_path, monkeypatch, byte_limit, entry_limit):
+    records = [{**model(i), 'seqid': 'chr'+str(i//3)} for i in range(36)]
+    directory, _ = published(tmp_path, records)
+    instances = []
+    initialise = store._DecodedBodies.__init__
+    def observed(self, *args, **kwargs):
+        initialise(self, *args, **kwargs)
+        instances.append(self)
+    monkeypatch.setattr(store._DecodedBodies, '__init__', observed)
+    monkeypatch.setattr(store._DecodedBodies, 'max_decoded_bytes', byte_limit)
+    monkeypatch.setattr(store._DecodedBodies, 'max_decoded_entries', entry_limit)
+    assert store._json(list(store.iter_models(directory))) == store._json(records)
+    assert instances and all(value.decoded_bytes <= byte_limit and len(value.decoded) <= entry_limit for value in instances)
+    if byte_limit >= 5000 and entry_limit:
+        assert all(value.decoded for value in instances)
+
+
+def test_repeated_deeply_nested_saved_body_keeps_the_json_decoder_depth_contract(tmp_path):
+    nested = 'retained'
+    for _ in range(600):
+        nested = {'nested': nested}
+    records = [{**model(i), 'assembly_ambiguous_bases': nested} for i in range(3)]
+    directory, _ = published(tmp_path, records)
+    assert store._json(list(store.iter_models(directory))) == store._json(records)
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_model_id_selection_keeps_duplicate_order_fields_and_statuses(tmp_path, legacy):
     records = [{**model(i), "model_id": f"gene{i % 3}"} for i in range(9)]

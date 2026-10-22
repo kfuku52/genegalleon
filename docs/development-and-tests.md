@@ -574,6 +574,15 @@ donor-evidence records per distinct coding body and includes the original and
 appended partial-reference streams. All original records and every appended
 candidate remain in the output; the benchmark does not count them as genes.
 
+For decoded-reader reuse, run `benchmark_rescue_model_store_read.py` with
+`--implementation workflow/support/rescue_model_store.py --baseline /mounted/baseline/rescue_model_store.py`.
+It alternates fresh processes, verifies the complete publication while reading,
+retains all selected records, and compares every decoded field in original order.
+Use `--body-group-size 8` for shared bodies and `--body-group-size 1` as a unique-body
+control; `--scope partial` also exercises ordered partial references. Fixture
+creation and result hashing are excluded from the timed read. RSS includes all
+retained records and the bounded caches; it is not a whole-analysis memory claim.
+
 ## Reference annotation comparisons
 
 For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 from collections import OrderedDict
 from pathlib import Path, PurePosixPath
@@ -190,17 +191,18 @@ def _restore_fields(shared, context, order):
     return result
 
 
-def _unpack(envelope, body, *, _context_owned=False):
+def _unpack(envelope, body, *, _context_owned=False, _body_decoded=False):
     if (not isinstance(envelope, dict) or set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
             or not _SHA.fullmatch(str(envelope.get("body", "")))):
         raise ValueError("Malformed model-store envelope")
     # Copies must be independent: callers routinely modify CDS/evidence/status.
-    shared = json.loads(body)
+    shared = body if _body_decoded else json.loads(body)
     context = envelope["context"]
     if _context_owned:
         # Streaming readers decoded this envelope exclusively for this record.
         # Retain finite-number/UTF-8 validation without decoding its context a
-        # second time. Shared-body values are still decoded independently above.
+        # second time. Mutable shared-body containers are already private to this
+        # record, including when its immutable DNA strings came from the cache.
         _json(context)
     else:
         context = json.loads(_json(context))
@@ -530,6 +532,75 @@ class _Bodies:
                 self.bytes -= len(old)
 
 
+def _copy_body(value):
+    """Copy mutable JSON containers while sharing immutable decoded DNA strings."""
+    if type(value) not in (dict, list):
+        return value
+    result = value.copy()
+    pending = [result]
+    while pending:
+        container = pending.pop()
+        entries = container.items() if type(container) is dict else enumerate(container)
+        for key, item in entries:
+            if type(item) in (dict, list):
+                child = item.copy()
+                container[key] = child
+                pending.append(child)
+    return result
+
+
+def _body_size(value):
+    size, pending = 0, [value]
+    while pending:
+        item = pending.pop()
+        size += sys.getsizeof(item)
+        if type(item) is dict:
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif type(item) is list:
+            pending.extend(item)
+    return size
+
+
+class _DecodedBodies(_Bodies):
+    """Context-local decoded reuse, admitted only after a repeated body read.
+
+    Unique bodies use the original one-pass decoder. Repeated bodies retain at
+    most 16 MiB of conservatively counted Python data, in addition to the existing
+    raw-byte cache. Every returned mutable container remains independent.
+    """
+    max_decoded_bytes = 16 * 1024 * 1024
+    max_decoded_entries = 2048
+
+    def __init__(self, db, codec):
+        super().__init__(db, codec)
+        self.decoded = OrderedDict()
+        self.decoded_bytes = 0
+
+    def unpack(self, envelope, *, context_owned=False):
+        sha = envelope["body"]
+        if sha in self.decoded:
+            body, _ = self.decoded[sha]
+            self.decoded.move_to_end(sha)
+            body = _copy_body(body)
+        else:
+            repeated = sha in self.cache
+            raw = self.read(sha)
+            if not repeated:
+                return _unpack(envelope, raw, _context_owned=context_owned)
+            body = json.loads(raw)
+            weight = _body_size(body) + sys.getsizeof(sha) + 256
+            if self.max_decoded_entries and weight <= self.max_decoded_bytes:
+                while self.decoded and (len(self.decoded) >= self.max_decoded_entries
+                        or self.decoded_bytes + weight > self.max_decoded_bytes):
+                    _, (_, removed) = self.decoded.popitem(last=False)
+                    self.decoded_bytes -= removed
+                self.decoded[sha] = body, weight
+                self.decoded_bytes += weight
+                body = _copy_body(body)
+        return _unpack(envelope, body, _context_owned=context_owned, _body_decoded=True)
+
+
 class _HashReader:
     def __init__(self, handle):
         self.handle = handle
@@ -623,13 +694,13 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
         if kind in {"accepted", "revision"}:
             db = _readonly(store / f"{kind}.sqlite")
             try:
-                bodies = _Bodies(db, manifest["body_codec"])
+                bodies = _DecodedBodies(db, manifest["body_codec"])
                 count = 0
                 for ordinal, blob in db.execute("SELECT ordinal,envelope FROM entries ORDER BY ordinal"):
                     envelope = json.loads(_decompress(blob, manifest["codec"]))
                     if envelope.get("ordinal") != ordinal:
                         raise ValueError("Model-store overlay order changed")
-                    record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
+                    record = bodies.unpack(envelope, context_owned=True)
                     if kind == "accepted" and record.get("status") != "accepted":
                         raise ValueError("Non-primary record in accepted overlay")
                     count += 1
@@ -644,7 +715,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
         else:
             db = _readonly(store / "bodies.sqlite")
             try:
-                bodies, ordinal = _Bodies(db, manifest["body_codec"]), 0
+                bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
                     count = 0
                     relative = f"{prefix}/{shard['path']}"
@@ -670,7 +741,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                                 continue
                             if context_filter is not None and not context_filter(envelope["context"]):
                                 continue
-                        record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
+                        record = bodies.unpack(envelope, context_owned=True)
                         if statuses is None or record.get("status") in statuses:
                             yield (envelope["ordinal"], record) if with_ordinals else record
                     if count != shard["count"]:
@@ -697,14 +768,14 @@ def _partials(root, store, manifest, key):
         if not count:
             return
         body_db = _readonly(store / "bodies.sqlite")
-        bodies = _Bodies(body_db, manifest["body_codec"])
+        bodies = _DecodedBodies(body_db, manifest["body_codec"])
         if manifest.get("partial_ordered") is True:
             position = 0
             for found_position, envelope in _partial_entries(root, store, manifest, key, refs):
                 if found_position != position:
                     raise ValueError("Model-store partial order changed")
                 position += 1
-                yield _unpack(envelope, bodies.read(envelope["body"]))
+                yield bodies.unpack(envelope)
             if position != count:
                 raise ValueError("Missing model-store partial reference")
             return
@@ -720,7 +791,7 @@ def _partials(root, store, manifest, key):
                     raise ValueError("Missing model-store partial reference")
                 for (_, blob) in spool.execute("SELECT position,envelope FROM entries ORDER BY position"):
                     envelope = json.loads(blob)
-                    yield _unpack(envelope, bodies.read(envelope["body"]))
+                    yield bodies.unpack(envelope)
             finally:
                 spool.close()
     finally:
