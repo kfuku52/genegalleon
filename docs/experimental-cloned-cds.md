@@ -75,7 +75,9 @@ them alone need not recover the experimental sequence.
 The native audit records substitutions/indels with both sequence offsets,
 old-to-new gene identities, priority decisions and reference/experimental
 lengths. The bundle retains every supplied clone, removed source CDS and GFF,
-and the projected reference CDS. Those archived full source models remain
+and the projected reference CDS. FASTA archive roles with no applicable records
+are omitted from `outputs`; `archive_record_counts` records their zero count.
+No dummy sequence or weaker completion check is used. Those archived full source models remain
 available for N-terminal/localization comparisons; a partial experimental CDS
 must not be reported as a verified full-length localization input.
 

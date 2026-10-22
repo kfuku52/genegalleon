@@ -113,6 +113,9 @@ def test_new_locus_is_explicit_and_does_not_remove_neighbouring_genes(tmp_path):
     audit = json.loads(Path(task['cloned_model_audit']).read_text())
     assert audit['replacements'][0]['new_locus'] is True
     assert audit['removed_CDS_ids'] == []
+    assert audit['archive_record_counts']['removed_cds'] == 0
+    assert 'removed_cds' not in audit['outputs']
+    assert all((Path(task['cloned_model_audit']).parent / p).stat().st_size for p in audit['outputs'].values())
 
 
 def test_longer_only_still_retains_longer_source_over_short_experimental_clone(tmp_path):
@@ -127,6 +130,9 @@ def test_longer_only_still_retains_longer_source_over_short_experimental_clone(t
     cloned.apply_to_task(task, tmp_path / 'curated')
     audit = json.loads(Path(task['cloned_model_audit']).read_text())
     assert not audit['replacements'] and audit['skipped'][0]['status'] == 'not_longer'
+    assert audit['archive_record_counts']['reference_projected_cds'] == 0
+    assert not {'removed_cds', 'reference_projected_cds'} & audit['outputs'].keys()
+    assert all((Path(task['cloned_model_audit']).parent / p).stat().st_size for p in audit['outputs'].values())
 
 
 @pytest.mark.parametrize('damage', ['coordinate', 'clone', 'reference', 'cigar', 'missing_genome', 'missing_proof', 'contig'])

@@ -223,12 +223,23 @@ def build_pair(task, directory):
     shutil.copyfile(task['genome_path'], genome)
     (directory / 'reference_projected_cds.fa').write_text(''.join(reference_records))
     (directory / 'received_cloned_cds.fa').write_text(''.join('>' + name + '\n' + sequence + '\n' for name, sequence in clones.items()))
+    archive_outputs = {}
+    # Empty FASTA has no applicable records and is not a completion artifact.
+    # Keep the native nonempty-output guard, rather than inventing a sequence.
+    for role, path, size in (('removed_cds', removed_path, len(removed_cds)),
+                             ('reference_projected_cds', directory / 'reference_projected_cds.fa', len(reference_records))):
+        if size:
+            archive_outputs[role] = path.name
+        else:
+            path.unlink()
     atomic_json(directory / 'audit.json', dict(schema_version=2, mode='experimental', species=task['species_prefix'],
                 genomic_CDS_identity_required=False, reference_genome_modified=False, original_sources_modified=False,
                 projections_reviewed=True, replacements=replacements, skipped=skipped, removed_CDS_ids=removed_cds,
+                archive_record_counts=dict(removed_cds=len(removed_cds), reference_projected_cds=len(reference_records),
+                                           received_cloned_cds=len(clones)),
                 removed_CDS_gene_tokens=sorted(removed_tokens), outputs=dict(cds=cds.name, gff=gff.name,
-                genome=str(genome.relative_to(directory)), removed_cds=removed_path.name, removed_gff=archived_gff.name,
-                reference_projected_cds='reference_projected_cds.fa', received_cloned_cds='received_cloned_cds.fa')))
+                genome=str(genome.relative_to(directory)), removed_gff=archived_gff.name,
+                received_cloned_cds='received_cloned_cds.fa', **archive_outputs)))
 
 
 def apply(task, root):

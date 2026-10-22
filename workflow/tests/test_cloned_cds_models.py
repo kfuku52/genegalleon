@@ -550,7 +550,7 @@ def test_manifest_signature_and_frozen_plan_include_only_explicit_selected_clone
 
 
 @pytest.mark.parametrize("mode", ["single", "array"])
-@pytest.mark.parametrize("curation_mode", ["genomic", "sequence", "experimental"])
+@pytest.mark.parametrize("curation_mode", ["genomic", "sequence", "experimental", "experimental_new_locus"])
 def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode, curation_mode):
     from test_gg_input_generation_end_to_end import (
         CORE_PATH,
@@ -563,11 +563,17 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     )
 
     _task, sequence, paths, row = fixture(tmp_path / "sources")
-    if curation_mode == 'experimental':
+    if curation_mode.startswith('experimental'):
         from test_cloned_cds_projection import change_clone, projected_fixture
         _task, sequence, paths, row, _ = projected_fixture(tmp_path / 'sources')
         sequence = sequence[:150] + 'GCT' + sequence[150:]
         change_clone(_task, paths, row, sequence)
+        if curation_mode == 'experimental_new_locus':
+            paths['gff'].write_text('\n'.join(line for line in paths['gff'].read_text().splitlines() if 'fragment' not in line) + '\n')
+            paths['cds'].write_text('>neighbour.t1\nATGAAACCCTAA\n')
+            targets = json.loads(row['cloned_cds_projection_targets'])
+            targets['experimental/clone:1'].update(source_gene_ids=[], new_locus=True)
+            row['cloned_cds_projection_targets'] = json.dumps(targets)
     row.update(
         provider="local",
         id="Arabidopsis_thaliana",
@@ -631,7 +637,7 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     clone_audit = Path(summary[0]["cloned_model_audit_path"])
     assert clone_audit.is_file()
     audit = json.loads(clone_audit.read_text())
-    assert summary[0]['cloned_cds_mode'] == curation_mode
+    assert summary[0]['cloned_cds_mode'] == ('experimental' if curation_mode.startswith('experimental') else curation_mode)
     if curation_mode == 'sequence':
         assert audit['decisions'][0]['status'] == 'replace'
     else:
