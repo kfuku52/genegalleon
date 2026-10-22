@@ -1138,3 +1138,45 @@ def test_batch_final_fence_rejects_earlier_family_state_change(tmp_path, monkeyp
     monkeypatch.setattr(api.GeneFamilyOutputStore, 'family_observation', lambda self, family: states[family])
     with pytest.raises(ValueError, match='Logical audit source changed'):
         api.verify_many([argparse.Namespace(root=root, family_id=family) for family in states])
+
+
+@pytest.mark.parametrize("change", ["none", "input", "output", "missing_manifest"])
+def test_frozen_plot_observation_roundtrip_and_preflight_keep_strict_data_checks(tmp_path, observer_module, change):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tree, renderer, plot, manifest = [workspace / name for name in ("tree", "renderer", "plot", "manifest.json")]
+    tree.write_text("(A:1,B:1);\n")
+    renderer.write_text("old implementation")
+    plot.write_text("old PDF")
+    argv = ["--workspace-root", str(workspace), "--logical-root", str(workspace / "output"),
+            "--manifest", str(manifest), "--step", "species_tree_dated_plot", "--family-id", "all_buscos",
+            "--input", f"dated_tree={tree}", "--input", f"adapter={renderer}", "--output", f"plot={plot}",
+            "--parameter", "engine=old", "--parameter", "branch_length_unit=Ma"]
+    assert cli(PROVENANCE, "record", *argv).returncode == 0
+    renderer.unlink()
+    argv[argv.index("engine=old")] = "engine=new"
+    argv += ["--frozen-plot", "--legacy-policy", "stop"]
+    # Export the actual observation arguments, then replay through the public API.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("frozen_plot_provenance", PROVENANCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    args = module.build_parser().parse_args(["needs-run", *argv])
+    exported = observer_module.contract_arguments(args)
+    assert "--frozen-plot" in exported
+    if change == "input":
+        tree.write_text("(A:2,B:2);\n")
+    elif change == "output":
+        plot.write_text("changed PDF")
+    elif change == "missing_manifest":
+        manifest.unlink()
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(dict(schema="genegalleon-preflight-plan-v1", contracts=[exported])))
+    before = snapshot(workspace)
+    result = query("preflight", "--plan", plan)["contracts"][0]
+    assert result["state"] == ("verified_current" if change == "none" else "blocked")
+    assert result["runtime_exit_code"] == (1 if change == "none" else 3)
+    if change in {"input", "output"}:
+        assert result["error_code"] == ("inputs_changed" if change == "input" else "outputs_changed")
+    assert cli(PROVENANCE, "needs-run", *exported, "--dry-run").returncode == result["runtime_exit_code"]
+    assert snapshot(workspace) == before

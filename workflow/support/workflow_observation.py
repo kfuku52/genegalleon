@@ -195,6 +195,8 @@ def contract_arguments(args):
                 parts[0] = os.path.abspath(parts[0])
                 value = label + "=" + "::".join(parts)
             argv.extend(["--" + name.replace("_", "-"), value])
+    if getattr(args, "frozen_plot", False):
+        argv.extend(["--frozen-plot", "--legacy-policy", getattr(args, "legacy_policy", "stop")])
     argv.extend(["--stale-policy", getattr(args, "stale_policy", "stop")])
     return argv
 

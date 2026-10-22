@@ -1538,7 +1538,7 @@ def test_frozen_species_tree_plots_preserve_recipe_but_verify_data_and_outputs(t
         assert not manifest.exists()
 
 
-@pytest.mark.parametrize("option", ["scientific_stage", "rebuild", "reuse", "adopt", "recovery"])
+@pytest.mark.parametrize("option", ["scientific_stage", "rebuild", "reuse", "adopt", "recovery", "fasta_type"])
 def test_frozen_plot_cannot_disable_scientific_or_strict_contracts(tmp_path, option):
     args = contract_args(tmp_path, tmp_path / "missing.json", tmp_path / "in", tmp_path / "out")
     if option != "scientific_stage":
@@ -1549,6 +1549,8 @@ def test_frozen_plot_cannot_disable_scientific_or_strict_contracts(tmp_path, opt
         args += ["--stale-policy", option]
     if option == "recovery":
         args += ["--recover-output", f"stat_branch={tmp_path / 'candidate'}"]
+    if option == "fasta_type":
+        args += ["--output-fasta-type", "stat_branch=protein"]
     result = run_cli("needs-run", *args, "--frozen-plot", "--dry-run")
     assert result.returncode == 2
     assert "Frozen plots require" in result.stderr

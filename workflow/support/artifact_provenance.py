@@ -1113,7 +1113,7 @@ def legacy_policy_result(args: argparse.Namespace) -> int:
     return STALE_STOP
 
 
-def frozen_plot_current(args: argparse.Namespace) -> int:
+def frozen_plot_contracts(args: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
     """Verify an unrequested plot's data and bytes, retaining its original recipe.
 
     A selection-only continuation does not execute a renderer. Its historical
@@ -1132,10 +1132,11 @@ def frozen_plot_current(args: argparse.Namespace) -> int:
         ),
     }
     if (args.step not in recipes or args.family_id != "all_buscos"
-            or args.stale_policy != "stop" or args.legacy_policy != "stop" or args.recover_output):
+            or args.stale_policy != "stop" or args.legacy_policy != "stop"
+            or args.recover_output or args.output_fasta_type):
         raise ProvenanceError("Frozen plots require a species-tree plot, stop policies and no recovery")
     if not declared_path_exists(args.manifest):
-        return stale_policy_result(args, "frozen plot has no provenance manifest", reusable=False)
+        raise FileNotFoundError(f"frozen plot has no provenance manifest: {args.manifest}")
     implementation, presentation, required = recipes[args.step]
 
     def comparison(contract):
@@ -1157,8 +1158,12 @@ def frozen_plot_current(args: argparse.Namespace) -> int:
     projected = argparse.Namespace(**vars(args))
     projected.input = [f"{label}={path}" for label, path in parse_path_pairs(args.input, "--input")
                        if label not in implementation]
+    return recorded, comparison(build_contract(projected, include_diagnostics=False))
+
+
+def frozen_plot_current(args: argparse.Namespace) -> int:
     try:
-        current = comparison(build_contract(projected, include_diagnostics=False))
+        recorded, current = frozen_plot_contracts(args)
     except FileNotFoundError as exc:
         return stale_policy_result(args, f"frozen plot artifact is missing: {exc.filename or exc}",
                                    reusable=False)
