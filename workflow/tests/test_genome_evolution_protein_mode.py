@@ -105,6 +105,7 @@ exit 0
     _write_executable(
         bin_dir / "seqkit",
         r"""#!/usr/bin/env python3
+import gzip
 import os
 import re
 import sys
@@ -152,7 +153,8 @@ def parse_fasta(lines):
 
 def load_records(path):
     if path:
-        with open(path, "r", encoding="utf-8") as handle:
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as handle:
             return parse_fasta(handle)
     return parse_fasta(sys.stdin)
 
@@ -213,7 +215,8 @@ def main():
             raise SystemExit(43)
         if remove_gaps:
             records = [(header, sequence.replace("-", "")) for header, sequence in records]
-        output_handle = open(out_path, "w", encoding="utf-8") if out_path else sys.stdout
+        opener = gzip.open if out_path and out_path.endswith(".gz") else open
+        output_handle = opener(out_path, "wt", encoding="utf-8") if out_path else sys.stdout
         try:
             if name_only:
                 for header, _sequence in records:
@@ -850,13 +853,10 @@ def _run_core(
     extra_env: Optional[dict[str, str]] = None,
     *,
     missing_flags: tuple[str, ...] = (),
-    native_seqkit: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = _prepare_stub_binaries(tmp_path)
-    if native_seqkit:
-        (bin_dir / "seqkit").unlink()
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("CONDA") and not key.startswith("_CE_")
     }
@@ -1491,7 +1491,7 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
               "run_build_species_busco_summary": "1", "run_extract_species_tree_fasta": "1",
               "run_orthofinder": "0", "species_tree_output_storage": storage,
               "artifact_stale_policy": "rebuild"}
-    first = _run_core(tmp_path, config, missing_flags=("species_tree_busco_duplicate_policy",), native_seqkit=True)
+    first = _run_core(tmp_path, config, missing_flags=("species_tree_busco_duplicate_policy",))
     assert first.returncode == 0, first.stdout + first.stderr
     tree = workspace / "output/species_tree"
     fasta = tree / "single_copy_cds_fasta"
@@ -1512,7 +1512,7 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
     shared = summary.read_bytes()
 
     best = {**config, "species_tree_busco_duplicate_policy": "best_score"}
-    second = _run_core(tmp_path, best, native_seqkit=True)
+    second = _run_core(tmp_path, best)
     assert second.returncode == 0, second.stdout + second.stderr
     audit = pandas.read_csv(report, sep="\t")
     assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {
@@ -1521,20 +1521,20 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
     assert marker_text("b2").count(f"\n{d1}\n") == 2
     assert summary.read_bytes() == shared
     report_mtime = report.stat().st_mtime_ns
-    reused = _run_core(tmp_path, best, native_seqkit=True)
+    reused = _run_core(tmp_path, best)
     assert reused.returncode == 0, reused.stdout + reused.stderr
     assert report.stat().st_mtime_ns == report_mtime
 
     table = full / "Oryza_sativa.busco.full.tsv"
     table.write_text(table.read_text().replace("_d2\t100", "_d2\t120"))
-    rescored = _run_core(tmp_path, best, native_seqkit=True)
+    rescored = _run_core(tmp_path, best)
     assert rescored.returncode == 0, rescored.stdout + rescored.stderr
     audit = pandas.read_csv(report, sep="\t")
     assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {
         "Arabidopsis_thaliana_d1", "Oryza_sativa_d2"}
     assert marker_text("b2").count(f"\n{d1}\n") == marker_text("b2").count(f"\n{d2}\n") == 1
     assert summary.read_bytes() == shared
-    restored = _run_core(tmp_path, config, native_seqkit=True)
+    restored = _run_core(tmp_path, config)
     assert restored.returncode == 0, restored.stdout + restored.stderr
     assert marker_text("b2") is None
     assert len(report.read_text().splitlines()) == 1
@@ -1545,7 +1545,7 @@ def test_busco_copy_species_labels_use_input_species_even_for_shared_external_id
     workspace, _, _ = _prepare_busco_copy_inputs(tmp_path, "protein", qualify_ids=False)
     result = _run_core(tmp_path, {"genome_evolution_mode": "species_tree", "run_orthofinder": "0",
         "run_build_species_busco_summary": "1", "run_extract_species_tree_fasta": "1",
-        "species_tree_busco_duplicate_policy": "best_score"}, native_seqkit=True)
+        "species_tree_busco_duplicate_policy": "best_score"})
     assert result.returncode == 0, result.stdout + result.stderr
     tree = workspace / "output/species_tree"
     with zipfile.ZipFile(tree / "single_copy_cds_fasta.zip") as archive:
@@ -1653,21 +1653,7 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
 @pytest.mark.skipif(
     SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
 )
-def test_species_tree_best_score_selection_is_provenance_bound(tmp_path, monkeypatch):
-    original_prepare = _prepare_stub_binaries
-
-    def prepare_with_gzip_seqkit(path):
-        binary_dir = original_prepare(path)
-        stub = binary_dir / "seqkit"
-        script = stub.read_text().replace("import re\n", "import gzip\nimport re\n")
-        script = script.replace('with open(path, "r", encoding="utf-8") as handle:',
-                                'with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as handle:')
-        script = script.replace('open(out_path, "w", encoding="utf-8") if out_path else sys.stdout',
-                                '(gzip.open(out_path, "wt") if out_path.endswith(".gz") else open(out_path, "w")) if out_path else sys.stdout')
-        stub.write_text(script)
-        return binary_dir
-
-    monkeypatch.setattr(sys.modules[__name__], "_prepare_stub_binaries", prepare_with_gzip_seqkit)
+def test_species_tree_best_score_selection_is_provenance_bound(tmp_path):
     workspace = tmp_path / "workspace"
     proteins = workspace / "input/species_protein"
     proteins.mkdir(parents=True)
