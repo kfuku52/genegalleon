@@ -100,6 +100,63 @@ def test_explicit_gff3_and_gtf_loci(tmp_path):
     assert scaffold.gff_loci(path) == {"g": "g", "t": "g", "c": "g", "g2": "g2", "t2": "g2"}
 
 
+def test_loci_shared_ancestors_preserve_ambiguous_and_missing_roots(tmp_path):
+    path = tmp_path / "input.gff"
+    path.write_text(
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g2\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t2;Parent=g1\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=ambiguous;Parent=g1,g2\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=unresolved;Parent=absent\n"
+        + "".join(f"s\tx\tCDS\t1\t9\t.\t+\t0\tID=c{i};Parent=t1,t2,unresolved\n" for i in range(12))
+        + "".join(f"s\tx\tCDS\t1\t9\t.\t+\t0\tID=a{i};Parent=ambiguous,t1\n" for i in range(12))
+    )
+    assert scaffold.gff_loci(path) == {
+        "g1": "g1", "g2": "g2", "t1": "g1", "t2": "g1",
+        **{f"c{i}": "g1" for i in range(12)},
+    }
+
+
+@pytest.mark.parametrize("parent_order", ["g1,g2,cycle", "g2,cycle,g1", "cycle,g1,g2"])
+def test_loci_reject_cycle_beside_ambiguous_parent_branches(tmp_path, parent_order):
+    path = tmp_path / "input.gff"
+    path.write_text(
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g2\n"
+        f"s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent={parent_order}\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=cycle;Parent=cycle_next\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=cycle_next;Parent=cycle\n"
+        "s\tx\tCDS\t1\t9\t.\t+\t0\tID=c;Parent=t\n"
+    )
+    with pytest.raises(ValueError, match="Cycle in GFF Parent relationships"):
+        scaffold.gff_loci(path)
+
+
+def test_loci_deep_shared_hierarchy_keeps_exact_identifiers(tmp_path):
+    path = tmp_path / "input.gff"
+    path.write_text(
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g%2C1\n"
+        + "".join(f"s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t{i};Parent="
+                  f"{'g%2C1' if i == 0 else f't{i-1}'}\n" for i in range(150))
+        + "".join(f"s\tx\tCDS\t1\t9\t.\t+\t0\tID=c{i}.001;Parent=t149,t148\n" for i in range(12))
+    )
+    assert scaffold.gff_loci(path) == {
+        "g,1": "g,1", **{f"t{i}": "g,1" for i in range(150)},
+        **{f"c{i}.001": "g,1" for i in range(12)},
+    }
+
+
+def test_loci_gene_records_terminate_parent_traversal(tmp_path):
+    path = tmp_path / "input.gff"
+    path.write_text(
+        "s\tx\tgene\t1\t9\t.\t+\t.\tID=g;Parent=t\n"
+        "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent=g\n"
+        "s\tx\tCDS\t1\t9\t.\t+\t0\tID=c;Parent=t\n"
+    )
+    assert scaffold.gff_loci(path) == {"g": "g", "t": "g", "c": "g"}
+
+
 def fixture_context(tmp_path):
     data, _ = build()
     other, _ = build("Donor_species")  # deliberately reuse the same gene/scaffold IDs

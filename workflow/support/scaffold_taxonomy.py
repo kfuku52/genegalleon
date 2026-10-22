@@ -171,12 +171,28 @@ def gff_loci(path):
             if identifier and attrs.get("Parent"):
                 parents.setdefault(identifier, set()).update(unquote(x) for x in attrs["Parent"].split(","))
 
-    def ancestors(identifier, seen):
+    # Store only a unique root (or None), never an arbitrarily large ambiguous
+    # root set. Parent-only admission avoids caching one-use exon/CDS leaves;
+    # the entry cap also bounds this extra memory on very large annotations.
+    resolved = {}
+    missing = object()
+    max_cached_ancestors = 65536
+
+    def ancestors(identifier, seen, cache_result=False):
         if identifier in seen:
             raise ValueError("Cycle in GFF Parent relationships")
         if identifier in genes:
             return {identifier}
-        return set().union(*(ancestors(p, seen | {identifier}) for p in parents.get(identifier, ())))
+        root = resolved.get(identifier, missing)
+        if root is not missing:
+            return {root} if root is not None else set()
+        roots = set().union(*(ancestors(p, seen | {identifier}, True)
+                              for p in parents.get(identifier, ())))
+        # Always finish every Parent branch, even once multiple roots are found:
+        # a later branch may contain a cycle that must still be rejected.
+        if cache_result and len(roots) <= 1 and len(resolved) < max_cached_ancestors:
+            resolved[identifier] = next(iter(roots), None)
+        return roots
 
     result = {}
     for identifier in parents.keys() | genes:
