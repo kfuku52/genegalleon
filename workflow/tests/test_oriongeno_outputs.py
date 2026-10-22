@@ -6,11 +6,12 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_transcript_utrs import model
+from test_transcript_utrs import Genome, model
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 outputs = importlib.import_module('oriongeno_outputs')
 runtime = importlib.import_module('annevo_runtime')
+transcripts = importlib.import_module('transcript_utrs')
 
 
 def exported(tmp_path, text, *, lengths=None):
@@ -35,6 +36,58 @@ def test_spliced_utrs_preserve_all_original_rows_and_coding_phase(tmp_path, stra
     assert all(r[6] == strand and r[7] == '.' for r in utrs)
     outputs.write_explicit_utrs(target, tmp_path / 'again.gff3')
     assert (tmp_path / 'again.gff3').read_bytes() == target.read_bytes()
+
+
+def utr_regions(text):
+    regions = {}
+    for line in text.splitlines():
+        if not line or line.startswith('#'):
+            continue
+        row = line.split('\t')
+        if row[2] not in {'five_prime_UTR', 'three_prime_UTR'}:
+            continue
+        for parent in transcripts.parse_gff_attributes(row[8]).get('Parent', ()):
+            regions.setdefault((parent, row[2], row[6]), []).append([int(row[3])-1, int(row[4])])
+    return {key: transcripts.merge_blocks(blocks) for key, blocks in regions.items()}
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+@pytest.mark.parametrize('cds,exons', [
+    (((100, 300),), ((50, 350),)),
+    (((100, 180), (220, 300)), ((20, 40), (80, 180), (220, 320), (340, 370))),
+    (((100, 300),), ((50, 300),)),
+    (((100, 300),), ((100, 350),)),
+    (((100, 300),), ((100, 300),)),
+    (((100, 300),), ((0, 1200),)),
+])
+def test_native_export_and_representative_completion_agree_and_do_not_accumulate_utrs(tmp_path, strand, cds, exons):
+    raw = model(cds=cds, exons=exons, strand=strand)
+    if len(cds) > 1:
+        lines = raw.splitlines(keepends=True)
+        row = lines[-1].rstrip('\n').split('\t')
+        row[7] = '1'
+        raw = ''.join(lines[:-1]) + '\t'.join(row) + '\n'
+    _, explicit, _ = exported(tmp_path, raw, lengths={'chr': 1200})
+    native = transcripts.read_models(raw)
+    implicit_final = transcripts.complete(raw, raw, Genome(), 'S', native)
+    explicit_final = transcripts.complete(explicit.read_text(), raw, Genome(), 'S', native)
+    again = transcripts.complete(explicit_final[0], raw, Genome(), 'S', native)
+    assert utr_regions(explicit.read_text()) == utr_regions(implicit_final[0]) == utr_regions(explicit_final[0])
+    assert implicit_final[1:] == explicit_final[1:] == again[1:]
+    assert again[0] == explicit_final[0]
+    coding_rows = [r for r in raw.splitlines() if '\tCDS\t' in r]
+    for text in [explicit.read_text(), implicit_final[0], explicit_final[0], again[0]]:
+        assert [r for r in text.splitlines() if '\tCDS\t' in r] == coding_rows
+        rows = [r for r in text.splitlines() if '_prime_UTR\t' in r]
+        assert len(rows) == len(set(rows))
+
+
+def test_partial_native_utr_rows_and_final_completion_have_the_same_covered_regions(tmp_path):
+    raw = model() + 'chr\tsource\tfive_prime_UTR\t51\t70\t.\t+\t.\tID=partial;Parent=t\n'
+    _, explicit, _ = exported(tmp_path, raw)
+    final, _, _ = transcripts.complete(explicit.read_text(), raw, Genome(), 'S')
+    assert utr_regions(explicit.read_text()) == utr_regions(final)
+    assert 'ID=partial;Parent=t' in explicit.read_text()
 
 
 def test_cds_only_has_no_invented_utrs_and_embedded_fasta_is_retained(tmp_path):
