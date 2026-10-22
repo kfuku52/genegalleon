@@ -19,13 +19,17 @@ from workflow_observation import atomic_json
 
 PROGRESS_SCHEMA = "genegalleon-step-progress-v1"
 RESULT_SCHEMA = "genegalleon-audit-result-v1"
+# The complete native support runtime has grown beyond 256 modules. Keep every
+# source in the identity while retaining bounded inventory and per-file reads.
+MAX_SOURCE_FILES = 1024
+MAX_SOURCE_FILE_BYTES = 4 * 1024 * 1024
 
 
 def source_identity(support):
     hashes = {}
     for path in sorted(Path(support).glob("*.py")):
         before = signature(path)
-        if len(hashes) >= 256 or before[3] > 4 * 1024 * 1024:
+        if len(hashes) >= MAX_SOURCE_FILES or before[3] > MAX_SOURCE_FILE_BYTES:
             raise ValueError("Audit source closure exceeds bound")
         hashes["workflow/support/" + path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
         if signature(path) != before:

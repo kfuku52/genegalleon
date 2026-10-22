@@ -24,6 +24,42 @@ ArchiveStoreError, GeneFamilyOutputStore = store_module.ArchiveStoreError, store
 INDEX_EPOCH_FILE, INDEX_UPDATE_FILE = store_module.INDEX_EPOCH_FILE, store_module.INDEX_UPDATE_FILE
 
 
+def test_source_identity_includes_every_module_above_the_old_256_file_limit(tmp_path):
+    for index in range(257):
+        (tmp_path / f"module_{index:04d}.py").write_text(f"VALUE = {index}\n")
+    before = source_identity(tmp_path)
+    (tmp_path / "module_0256.py").write_text("VALUE = 'changed'\n")
+    assert source_identity(tmp_path) != before
+
+
+def test_source_identity_retains_a_finite_file_count_boundary(tmp_path):
+    for index in range(runtime.MAX_SOURCE_FILES):
+        (tmp_path / f"module_{index:04d}.py").write_text("")
+    assert len(source_identity(tmp_path)) == 64
+    (tmp_path / "overflow.py").write_text("")
+    with pytest.raises(ValueError, match="source closure exceeds bound"):
+        source_identity(tmp_path)
+
+
+def test_source_identity_rejects_oversized_sources_before_reading(tmp_path, monkeypatch):
+    path = tmp_path / "large.py"
+    with path.open("wb") as handle:
+        handle.truncate(runtime.MAX_SOURCE_FILE_BYTES + 1)
+    def reject_read(_path):
+        raise AssertionError("oversized source must not be read")
+    monkeypatch.setattr(Path, "read_bytes", reject_read)
+    with pytest.raises(ValueError, match="source closure exceeds bound"):
+        source_identity(tmp_path)
+
+
+def test_source_identity_still_rejects_symlinks(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("VALUE = 1\n")
+    (tmp_path / "alias.py").symlink_to(source)
+    with pytest.raises(ValueError, match="Symlinked audit source"):
+        source_identity(tmp_path)
+
+
 def test_raw_directory_hash_and_count_share_one_walk(tmp_path, monkeypatch):
     root = tmp_path / 'alignments'
     (root / 'nested').mkdir(parents=True)
