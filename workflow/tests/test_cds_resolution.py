@@ -281,6 +281,85 @@ def test_excluded_gene_does_not_abort_other_genes():
     assert decisions[1]['reason'] == 'no_valid_cds'
 
 
+@pytest.mark.parametrize('index', [
+    pd.Index([7, 19, 43]),
+    pd.Index(['first', 'other', 'last']),
+    pd.MultiIndex.from_tuples([('a', 7), ('b', 19), ('a', 43)]),
+], ids=['nonconsecutive', 'string', 'multiindex'])
+@pytest.mark.parametrize('dtype', ['object', 'string', 'category'])
+def test_record_resolution_keeps_index_labels_and_last_duplicate_id(index, dtype):
+    traits = pd.DataFrame({
+        'gene_id': pd.array(['gene', 'other', 'gene'], dtype=dtype),
+        'phase_status': ['consistent'] * 3,
+        'cds_first_phase': [1, 0, 0],
+        'structure_status': ['pending'] * 3,
+    }, index=index)
+    original = traits.copy(deep=True)
+    sequence = 'ATGAAATAA'
+    output, decisions = resolution.resolve_records(
+        [('gene', 'gene descriptive header', sequence)], traits, {'gene': sequence}, 1)
+
+    assert output == [('gene', 'gene descriptive header', sequence)]
+    assert decisions[0]['reason'] == 'sources_agree'
+    assert decisions[0]['structure_status'] == 'sequence_verified'
+    assert 'phase_status' not in decisions[0]
+    pd.testing.assert_frame_equal(traits.iloc[:2], original.iloc[:2])
+    assert traits.iloc[2]['structure_status'] == 'sequence_verified'
+    assert traits.iloc[2]['phase_status'] == 'consistent'
+    assert traits.iloc[2]['cds_first_phase'] == 0
+    pd.testing.assert_index_equal(traits.index, original.index)
+
+
+@pytest.mark.parametrize('columns', [[], resolution.TRAIT_COLUMNS], ids=['no-columns', 'native-columns'])
+def test_record_resolution_keeps_empty_traits(columns):
+    traits = pd.DataFrame(columns=columns)
+    original = traits.copy(deep=True)
+    output, decisions = resolution.resolve_records([('gene', 'gene', 'ATGAAATAA')], traits, {}, 1)
+    assert output == [('gene', 'gene', 'ATGAAATAA')]
+    assert decisions[0]['structure_status'] == 'unverified_source'
+    pd.testing.assert_frame_equal(traits, original)
+
+
+def test_record_resolution_preserves_legacy_numeric_row_key_coercion():
+    # iterrows rounds this integer in an all-numeric frame. Such helper inputs
+    # must retain their existing unmatched-ID behavior instead of being updated.
+    identifier = 2 ** 53 + 1
+    traits = pd.DataFrame({'gene_id': [identifier], 'phase_status': [0.0], 'cds_first_phase': [0.0]})
+    original = traits.copy(deep=True)
+    output, decisions = resolution.resolve_records([(identifier, 'numeric', 'ATGAAATAA')], traits, {}, 1)
+    assert output == [(identifier, 'numeric', 'ATGAAATAA')]
+    assert decisions[0]['structure_status'] == 'unverified_source'
+    pd.testing.assert_frame_equal(traits, original)
+
+
+def test_record_resolution_preserves_mixed_identifier_values():
+    identifier = 2 ** 53 + 1
+    traits = pd.DataFrame({
+        'gene_id': ['gene', identifier, None],
+        'phase_status': ['consistent'] * 3,
+        'cds_first_phase': [0] * 3,
+        'structure_status': ['pending'] * 3,
+    }, index=[7, 19, 43])
+    sequence = 'ATGAAATAA'
+    records = [('gene', 'gene', sequence), (identifier, 'numeric', sequence)]
+    output, decisions = resolution.resolve_records(records, traits, {'gene': sequence, identifier: sequence}, 1)
+    assert output == records
+    assert [entry['structure_status'] for entry in decisions] == ['sequence_verified'] * 2
+    assert traits['structure_status'].tolist() == ['sequence_verified', 'sequence_verified', 'pending']
+    assert traits['gene_id'].tolist() == ['gene', identifier, None]
+
+
+@pytest.mark.parametrize('traits, exception, message', [
+    (pd.DataFrame([['gene', 'gene']], columns=['gene_id', 'gene_id']), TypeError, 'unhashable'),
+    (pd.DataFrame({'other': ['gene']}), AttributeError, 'gene_id'),
+], ids=['duplicate-columns', 'missing-column'])
+def test_record_resolution_preserves_malformed_trait_errors(traits, exception, message):
+    original = traits.copy(deep=True)
+    with pytest.raises(exception, match=message):
+        resolution.resolve_records([], traits, {}, 1)
+    pd.testing.assert_frame_equal(traits, original)
+
+
 def test_negative_strand_reference_and_explicit_fragment_order(tmp_path):
     genome = tmp_path / 'genome.fa'
     genome.write_text('>a\nTTACCC\n>b\nCAT\n')

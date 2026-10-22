@@ -155,7 +155,13 @@ def extract_genomic_candidates(traits, genome):
 
 
 def resolve_records(records, traits, genomic, code):
-    indices = {row.gene_id: index for index, row in traits.iterrows()}
+    # Native traits have string IDs. Avoid building all-column row Series for
+    # those IDs while retaining legacy dtype coercion for other helper inputs.
+    if (traits.columns.is_unique and 'gene_id' in traits
+            and all(type(value) is str for value in traits.gene_id)):
+        indices = dict(zip(traits.gene_id, traits.index, strict=True))
+    else:
+        indices = {row.gene_id: index for index, row in traits.iterrows()}
     output, decisions = [], []
     for identifier, header, sequence in records:
         index = indices.get(identifier)
