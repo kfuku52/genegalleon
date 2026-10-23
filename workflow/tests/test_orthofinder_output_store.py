@@ -255,3 +255,13 @@ def test_zip64_member_count_above_classic_zip_limit(tmp_path):
     assert len(data["files"]) == 65536 and not raw.exists()
     with zipfile.ZipFile(root / "Orthogroup_Sequences.zip") as archive:
         assert len(archive.infolist()) == 65537
+
+
+def test_logical_digest_keeps_path_component_order_for_prefix_collisions(tmp_path):
+    root = result(tmp_path)
+    (root / "Orthogroups").mkdir()
+    (root / "Orthogroups/table.tsv").write_text("table\n")
+    (root / "Orthogroups.tsv").write_text("sibling with shared prefix\n")
+    before = PROVENANCE.sha256_path(root)
+    STORE.convert(root)
+    assert PROVENANCE.sha256_path(root) == before

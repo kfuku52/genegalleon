@@ -482,7 +482,8 @@ def logical_records(root, *, observe=lambda _path: None, children=None):
             with _source(path, before) as handle:
                 digest, size = _hash(handle)
             rows.append((path.relative_to(root).as_posix(), digest, size))
-    return sorted(rows)
+    # Match Path ordering used by legacy directory digests, including a/ vs a.tsv.
+    return sorted(rows, key=lambda row: PurePosixPath(row[0]).parts)
 
 
 @contextlib.contextmanager
