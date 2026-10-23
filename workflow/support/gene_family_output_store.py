@@ -841,7 +841,7 @@ class GeneFamilyOutputStore:
         self._cache_lock = threading.RLock()
         self._zip_reader_cache: weakref.WeakKeyDictionary[
             threading.Thread,
-            Tuple[Path, zipfile.ZipFile, int],
+            OrderedDict,
         ] = weakref.WeakKeyDictionary()
 
     def _assert_no_pending_index_update(self) -> None:
@@ -1213,6 +1213,54 @@ class GeneFamilyOutputStore:
             if cached:
                 with self._cache_lock:
                     readers[path] = archive, readers[path][1] - 1
+            else:
+                archive.close()
+
+    @contextlib.contextmanager
+    def _cached_zip_reader(self, path: Path):
+        # Non-snapshot consumers alternate logical subdirectories. Retain a
+        # bounded pool, checking the current path against the opened descriptor.
+        cached = False
+        with self._cache_lock:
+            readers = self._zip_reader_cache.setdefault(threading.current_thread(), OrderedDict())
+            signature = _stat_signature(path)
+            entry = readers.get(path)
+            if entry is not None and entry[2] != signature:
+                if entry[1] == 0:
+                    entry[0].close()
+                    readers.pop(path)
+                entry = None
+            if entry is not None:
+                readers.pop(path)
+                archive, users, signature = entry
+                readers[path] = archive, users + 1, signature
+                cached = True
+            else:
+                if path not in readers and len(readers) >= 8:
+                    for old_path, (old_archive, users, _signature) in list(readers.items()):
+                        if users == 0:
+                            old_archive.close()
+                            readers.pop(old_path)
+                            break
+                archive = zipfile.ZipFile(path, "r")
+                try:
+                    metadata = os.fstat(archive.fp.fileno())
+                    signature = (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                                 metadata.st_mtime_ns, metadata.st_ctime_ns)
+                except BaseException:
+                    archive.close()
+                    raise
+                if path not in readers and len(readers) < 8:
+                    readers[path] = archive, 1, signature
+                    cached = True
+        try:
+            yield archive
+        finally:
+            if cached:
+                with self._cache_lock:
+                    entry = readers.get(path)
+                    if entry is not None and entry[0] is archive:
+                        readers[path] = archive, entry[1] - 1, entry[2]
             else:
                 archive.close()
 
@@ -2128,45 +2176,9 @@ class GeneFamilyOutputStore:
                     with archive.open(artifact.member_name, "r") as handle:
                         yield handle
                 return
-            thread = threading.current_thread()
-            cached_reader = False
-            with self._cache_lock:
-                cached = self._zip_reader_cache.get(thread)
-                if cached is not None and cached[0] == artifact.zip_path:
-                    archive = cached[1]
-                    self._zip_reader_cache[thread] = (
-                        cached[0],
-                        cached[1],
-                        cached[2] + 1,
-                    )
-                    cached_reader = True
-                elif cached is None or cached[2] == 0:
-                    if cached is not None:
-                        cached[1].close()
-                    archive = zipfile.ZipFile(artifact.zip_path, "r")
-                    self._zip_reader_cache[thread] = (
-                        artifact.zip_path,
-                        archive,
-                        1,
-                    )
-                    cached_reader = True
-                else:
-                    archive = zipfile.ZipFile(artifact.zip_path, "r")
-            try:
+            with self._cached_zip_reader(artifact.zip_path) as archive:
                 with archive.open(artifact.member_name, "r") as handle:
                     yield handle
-            finally:
-                if cached_reader:
-                    with self._cache_lock:
-                        cached = self._zip_reader_cache.get(thread)
-                        if cached is not None and cached[1] is archive:
-                            self._zip_reader_cache[thread] = (
-                                cached[0],
-                                cached[1],
-                                max(0, cached[2] - 1),
-                            )
-                else:
-                    archive.close()
 
     def materialize(
         self,
@@ -2571,8 +2583,9 @@ class GeneFamilyOutputStore:
 
     def _reset_cache(self) -> None:
         with self._cache_lock:
-            for _, archive, _ in self._zip_reader_cache.values():
-                archive.close()
+            for readers in self._zip_reader_cache.values():
+                for archive, _users, _signature in readers.values():
+                    archive.close()
             self._zip_reader_cache.clear()
             self._archives_loaded = False
             self._archived.clear()
@@ -3369,6 +3382,15 @@ def _compact_artifact_chunk(
             contextlib.ExitStack() as source_stack,
         ):
             source_archives: OrderedDict[Path, zipfile.ZipFile] = OrderedDict()
+
+            def close_source_archives() -> None:
+                # Register only the current pool at cleanup. Per-open callbacks
+                # would keep evicted readers' central directories alive.
+                with contextlib.ExitStack() as closing:
+                    for source_archive in source_archives.values():
+                        closing.callback(source_archive.close)
+
+            source_stack.callback(close_source_archives)
             for artifact in artifacts:
                 if artifact.zip_path is None or artifact.member_name is None:
                     raise ArchiveStoreError(f"Cannot compact live artifact: {artifact.logical_path}")
@@ -3384,9 +3406,10 @@ def _compact_artifact_chunk(
                 source_archive = source_archives.get(artifact.zip_path)
                 if source_archive is None:
                     if len(source_archives) >= MAX_OPEN_COMPACTION_SOURCES:
-                        _, evicted_archive = source_archives.popitem(last=False)
+                        old_path, evicted_archive = next(iter(source_archives.items()))
                         evicted_archive.close()
-                    source_archive = source_stack.enter_context(zipfile.ZipFile(artifact.zip_path, "r"))
+                        source_archives.pop(old_path)
+                    source_archive = zipfile.ZipFile(artifact.zip_path, "r")
                     source_archives[artifact.zip_path] = source_archive
                 else:
                     source_archives.move_to_end(artifact.zip_path)

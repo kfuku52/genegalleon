@@ -1000,3 +1000,97 @@ def test_trans_splicing_validates_phase_in_part_order_and_full_coordinate_system
     cds['phase'] = [0, 1]
     with pytest.raises(ValueError, match='Conflicting CDS phases'):
         attach_transcript_structure(cds, cds.assign(feature='CDS'))
+
+@pytest.mark.parametrize("validation", ["off", "strict", "report"])
+@pytest.mark.parametrize("resolution", [False, True])
+@pytest.mark.parametrize("source_binding", [False, True])
+def test_main_retains_complete_records_for_every_sequence_consumer(
+    tmp_path, monkeypatch, validation, resolution, source_binding,
+):
+    from workflow.support import gff2genestat as module
+
+    fasta = tmp_path / "Species_a.fa"
+    fasta.write_text(">Species_a_gene1 full header α\nATG\nAAA\n"
+                     ">Species_a_gene2 second header\natg nnn\n")
+    expected = [("Species_a_gene1", "Species_a_gene1 full header α", "ATGAAA"),
+                ("Species_a_gene2", "Species_a_gene2 second header", "atg nnn")]
+    directory = tmp_path / "gff"
+    directory.mkdir()
+    (directory / "Species_a_first.gff").write_text("fixture\n")
+    if source_binding:
+        (directory / "Species_a_second.gff").write_text("fixture\n")
+    parser_calls = []
+    actual_records = module.fasta_records
+
+    def read_all(path):
+        parser_calls.append(path)
+        yield from actual_records(path)
+
+    monkeypatch.setattr(module, "fasta_records", read_all)
+    monkeypatch.setattr(module, "process_single_gff", lambda **kwargs: pandas.DataFrame({
+        "gene_id": [item[0] for item in expected], "feature_size": [6, 7],
+    }))
+    called = []
+
+    def consume(_traits, records, *_args):
+        assert records == expected
+        called.append("records")
+
+    monkeypatch.setattr(module, "validate_cds_lengths", consume)
+    monkeypatch.setattr(module, "mark_incompatible_structures", consume)
+    monkeypatch.setattr(module, "apply_cds_resolution", consume)
+
+    def bind(_store, sequences, sources):
+        assert sequences == {item[0]: item[2] for item in expected}
+        assert set(sources) == set(sequences)
+        called.append("source_binding")
+        return {identifier: "Species_a_first.gff" for identifier in sequences}
+
+    monkeypatch.setattr(module, "source_bound_gff_names", bind)
+    argv = ["gff2genestat.py", "--seqfile", str(fasta), "--dir_gff", str(directory),
+            "--feature", "CDS", "--outfile", str(tmp_path / "stats.tsv")]
+    if validation != "off":
+        argv += ["--validate-cds-length", "--structure-policy", validation]
+    if resolution:
+        argv += ["--cds-resolution-dir", str(tmp_path / "resolution")]
+    if source_binding:
+        argv += ["--sequence-store", str(tmp_path / "source.sqlite3")]
+    monkeypatch.setattr(sys, "argv", argv)
+    module.main()
+    assert parser_calls == [fasta]
+    assert called.count("records") == (validation != "off") + resolution
+    assert called.count("source_binding") == source_binding
+    assert pandas.read_csv(tmp_path / "stats.tsv", sep="\t").gene_id.tolist() == [item[0] for item in expected]
+
+
+@pytest.mark.parametrize("compressed,damage", [
+    (False, "duplicate"), (True, "duplicate"),
+    (False, "invalid_utf8"), (True, "invalid_utf8"),
+    (False, "data_before_header"), (True, "data_before_header"), (True, "gzip_crc"),
+])
+def test_ids_only_main_finishes_fasta_validation_before_gff_or_output(tmp_path, compressed, damage):
+    import gzip
+
+    fasta = tmp_path / ("Species_a.fa.gz" if compressed else "Species_a.fa")
+    content = b">Species_a_gene1 header\nATGAAA\n>Species_a_gene1 repeated\nATGAAA\n"
+    if damage == "invalid_utf8":
+        content += b">Species_a_late\nATG\xff\n"
+    elif damage == "data_before_header":
+        content = b"sequence_before_header\n" + content
+    elif damage == "gzip_crc":
+        content = content.replace(b"gene1 repeated", b"gene2 second")
+    payload = bytearray(gzip.compress(content, mtime=0) if compressed else content)
+    if damage == "gzip_crc":
+        payload[-8] ^= 1
+    fasta.write_bytes(payload)
+    # A nonexistent GFF directory would fail if main advanced past FASTA.
+    output = tmp_path / "previous.tsv"
+    output.write_bytes(b"previous complete table\n")
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--seqfile", str(fasta),
+                             "--dir_gff", str(tmp_path / "missing-gff"), "--outfile", str(output)],
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    expected = {"duplicate": "Duplicate FASTA identifier", "invalid_utf8": "UnicodeDecodeError",
+                "data_before_header": "FASTA sequence data precedes the first header", "gzip_crc": "CRC check failed"}
+    assert expected[damage] in result.stderr
+    assert output.read_bytes() == b"previous complete table\n"

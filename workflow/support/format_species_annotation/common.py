@@ -62,7 +62,7 @@ def fasta_headers_overlap_gff_seqids(fasta_path, gff_path):
     seqids = gff_seqids(gff_path)
     if len(seqids) == 0:
         return False
-    for header, _sequence in iter_fasta_records(fasta_path):
+    for header in _iter_fasta_headers(fasta_path):
         fasta_seqid = first_token(header)
         if fasta_seqid in seqids:
             return True
@@ -596,7 +596,21 @@ def _iter_fasta_records_from_handle(handle):
         yield header, "".join(chunks)
 
 
-def iter_fasta_records(path):
+def _iter_fasta_headers_from_handle(handle):
+    header = None
+    for raw_line in handle:
+        if raw_line.startswith(">"):
+            line = raw_line.rstrip("\n\r")
+            # Retain record-reader timing: consume the previous sequence and
+            # the next header before yielding, including decoding errors.
+            if header is not None:
+                yield header
+            header = line[1:]
+    if header is not None:
+        yield header
+
+
+def _iter_fasta_items(path, reader):
     path_lower = path.name.lower()
     if any(path_lower.endswith(suffix) for suffix in FASTA_ARCHIVE_EXTENSIONS):
         with tarfile.open(path, "r:*") as archive:
@@ -609,17 +623,25 @@ def iter_fasta_records(path):
                 if extracted is None:
                     continue
                 with io.TextIOWrapper(extracted, encoding="utf-8") as handle:
-                    yield from _iter_fasta_records_from_handle(handle)
+                    yield from reader(handle)
         return
 
     with open_text(path, "rt") as handle:
-        yield from _iter_fasta_records_from_handle(handle)
+        yield from reader(handle)
+
+
+def iter_fasta_records(path):
+    yield from _iter_fasta_items(path, _iter_fasta_records_from_handle)
+
+
+def _iter_fasta_headers(path):
+    yield from _iter_fasta_items(path, _iter_fasta_headers_from_handle)
 
 
 def count_fasta_records(path):
     count = 0
     first_name = ""
-    for header, _ in iter_fasta_records(path):
+    for header in _iter_fasta_headers(path):
         count += 1
         if first_name == "":
             first_name = first_token(header)

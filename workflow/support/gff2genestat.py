@@ -1417,8 +1417,16 @@ def main():
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
                 "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status", "cds_partial", "utr_status", "structure_status"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
-    records = list(fasta_records(Path(args.seqfile)))
-    seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
+    if args.validate_cds_length or args.cds_resolution_dir or args.sequence_store:
+        records = list(fasta_records(Path(args.seqfile)))
+        seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
+    else:
+        # Still parse every FASTA record before processing GFFs; only the IDs
+        # are needed when no later consumer examines sequences or headers.
+        records = []
+        seq_names = pandas.Series(
+            [identifier for identifier, _header, _sequence in fasta_records(Path(args.seqfile))], dtype=str,
+        )
     if seq_names.duplicated().any():
         raise ValueError("Duplicate FASTA identifier in GFF input")
     seq_species_labels = seq_names.map(extract_species_label)
