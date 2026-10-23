@@ -217,3 +217,8 @@ combined line/branch coverage, security checks, and reproducible wheel/sdist
 checks. Optional studies/backends are separate from the rooting coverage.
 Local Docker evidence does not establish SIF behavior; published-runtime/SIF
 qualification is handled by the repository's delivery workflows.
+
+Synteny neighborhood caches record UTR annotation conflicts without assigning
+unsupported UTR blocks. CDS coordinates still pass the native strict block
+validator; the reporting policy is part of the cache contract, so older caches
+are rebuilt rather than silently reused under different rules.
