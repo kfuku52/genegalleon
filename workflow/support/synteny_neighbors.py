@@ -198,6 +198,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
         "parameters": {
             "feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5,
             "phase_policy": "report",
+            "structure_policy": "report",
         },
     }
     if representative_map:
@@ -286,6 +287,10 @@ def ensure_species_gene_cache(
                 # coding frames. Translate the independently supplied FASTA;
                 # retain conflicting phases as unavailable frame metadata.
                 "--phase-policy",
+                "report",
+                # UTRs do not define neighborhoods; preserve their conflict
+                # status while the native reader still validates CDS blocks.
+                "--structure-policy",
                 "report",
                 "--ncpu",
                 str(max(1, int(threads))),

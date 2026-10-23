@@ -23,12 +23,13 @@ from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 FIELDS = ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_cds_mode',
           'cloned_cds_longer_only_ids', 'cloned_cds_min_identity', 'cloned_cds_min_target_coverage',
           'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases',
-          'cloned_cds_projection_targets', 'cloned_cds_priority_ids')
+          'cloned_cds_projection_targets', 'cloned_cds_priority_ids', 'cloned_cds_sequence_groups')
 TASK_FIELDS = ('cloned_cds_path', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_model_implementation',
                'cloned_cds_mode', 'cloned_cds_longer_only_ids', 'cloned_cds_min_identity',
                'cloned_cds_min_target_coverage', 'cloned_sequence_implementation', 'cloned_cds_unresolved_policy',
                'cloned_cds_index_batch_bases', 'cloned_genomic_search_implementation',
-               'cloned_cds_projection_targets', 'cloned_cds_priority_ids', 'cloned_projection_implementation')
+               'cloned_cds_projection_targets', 'cloned_cds_priority_ids', 'cloned_projection_implementation',
+               'cloned_cds_sequence_groups')
 EVIDENCE_FIELDS = ('cloned_cds_path', 'cloned_model_audit_path', 'cloned_source_cds_path',
                    'cloned_source_gff_path', 'cloned_source_genome_path')
 
@@ -118,6 +119,12 @@ def attach(task, row, parent):
     elif any(row.get(k) for k in ('cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases')):
         raise ValueError('Genomic cloned CDS options require genomic mode')
     if mode == 'sequence':
+        from cloned_cds_sequences import GROUP_FIELD, reviewed_groups
+        groups = reviewed_groups(row, ids)
+        if groups:
+            task[GROUP_FIELD] = groups
+        else:
+            task.pop(GROUP_FIELD, None)
         task['cloned_sequence_implementation'] = digest(Path(__file__).with_name('cloned_cds_sequences.py'))
         for field in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage'):
             raw = row.get(field)
@@ -125,6 +132,8 @@ def attach(task, row, parent):
             if not 0 < value <= 1:
                 raise ValueError(field + ' must be greater than zero and at most one')
             task[field] = value
+    elif row.get('cloned_cds_sequence_groups'):
+        raise ValueError('Reviewed sequence groups require cloned_cds_mode=sequence')
     return task
 
 

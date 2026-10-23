@@ -22,7 +22,6 @@ REVIEWED_ACTIONS = {
     "docker/setup-buildx-action",
     "oras-project/setup-oras",
     "r-lib/actions/setup-r",
-    "r-lib/actions/setup-r-dependencies",
 }
 
 SINGULARITY_CE_VERSION = "4.5.0"

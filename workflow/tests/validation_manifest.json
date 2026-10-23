@@ -6,6 +6,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_clipkit_runtime_selection.py",
     "test_transcript_utr_reassessment.py",
     "test_cloned_cds_models.py",
     "test_cloned_cds_projection.py",

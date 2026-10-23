@@ -218,3 +218,123 @@ def test_search_cap_counts_even_ineligible_subjects_and_checks_query_length(tmp_
     assert grouped == {'query': {}} and capped == {'query'}
     with pytest.raises(ValueError, match='coordinates changed'):
         module.search_candidates(path, {'clone1': 'query'}, targets, .98, .98, {'query': 301})
+
+
+def group_row(row, clones, sources, *, unplaced=False):
+    return {**row, 'cloned_cds_ids': json.dumps(clones),
+            'cloned_cds_sequence_groups': json.dumps({'candidate': dict(clone_ids=clones,
+                source_cds_ids=sources, unplaced=unplaced)})}
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_reviewed_competitors_keep_one_representative_and_every_experimental_alternative(tmp_path, reverse):
+    task, sequence, source, incoming, row = fixture(tmp_path / 'inputs', longer=True)
+    changed = sequence[:450] + ('GCT' if sequence[450:453] != 'GCT' else 'GGT') + sequence[453:]
+    source.write_text('>old\n' + sequence[-306:] + '\n')
+    incoming.write_text('>clone\n' + sequence + '\n>other_clone\n' + changed + '\n')
+    row['cloned_cds_sha256'] = hashlib.sha256(incoming.read_bytes()).hexdigest()
+    row.pop('cloned_cds_longer_only_ids')
+    ids = ['other_clone', 'clone'] if reverse else ['clone', 'other_clone']
+    cloned.attach(task, group_row(row, ids, ['old']), tmp_path)
+    before = source.read_bytes(), incoming.read_bytes()
+    output = tmp_path / 'formatted'
+    output.mkdir()
+    result = fsi.format_cds(task, output, False, False)
+    records = list(fsi.iter_fasta_records(result['output_path']))
+    assert len(records) == 1 and records[0][1] == (changed if reverse else sequence)
+    audit_path = Path(task['cloned_model_audit'])
+    audit = json.loads(audit_path.read_text())
+    decisions = {x['clone_id']: x for x in audit['decisions']}
+    assert decisions[ids[0]]['status'] == 'replace'
+    assert decisions[ids[1]]['status'] == 'alternative_clone'
+    assert decisions[ids[1]]['representative_clone'] == ids[0]
+    assert decisions[ids[0]]['gene_identity_status'] == 'unresolved_candidate_group'
+    assert audit['removed_CDS_ids'] == ['old']
+    assert dict((h.split()[0], s) for h, s in fsi.iter_fasta_records(audit_path.parent / audit['outputs']['received_cloned_cds'])) == {'clone': sequence, 'other_clone': changed}
+    assert list(fsi.iter_fasta_records(audit_path.parent / audit['outputs']['alternative_cloned_cds']))[0][1] == (sequence if reverse else changed)
+    assert before == (source.read_bytes(), incoming.read_bytes())
+    assert fsi.format_cds(task, output, False, False)['status'] == 'skip'
+
+
+def test_explicit_unplaced_clone_is_added_without_removing_unknown_models_or_inventing_a_genome(tmp_path):
+    task, sequence, source, _, row = fixture(tmp_path / 'inputs')
+    unrelated = 'ATG' + 'AAA' * 100 + 'TAA'
+    source.write_text('>unrelated\n' + unrelated + '\n')
+    cloned.attach(task, group_row(row, ['clone'], [], unplaced=True), tmp_path)
+    cloned.apply_to_task(task, tmp_path / 'curated')
+    records = list(fsi.iter_fasta_records(task['cds_path']))
+    assert len(records) == 2 and [s for _, s in records] == [unrelated, sequence]
+    audit_path = Path(task['cloned_model_audit'])
+    audit = json.loads(audit_path.read_text())
+    decision = audit['decisions'][0]
+    assert decision['status'] == 'add_unplaced' and decision['search_status'] == 'no_supported_match'
+    assert decision['genomic_origin_status'] == 'not_assessed_no_genome'
+    assert decision['genomic_coordinates'] is None
+    assert decision['source_catalog_status'] == 'no_supported_match_in_sequence_catalog'
+    assert decision['gene_identity_status'] == 'unresolved_unplaced'
+    assert audit['removed_CDS_ids'] == [] and 'removed' not in audit['outputs']
+    assert 'alternative_cloned_cds' not in audit['outputs']
+    assert all((audit_path.parent / name).stat().st_size for name in audit['outputs'].values())
+    assert task['genome_path'] is None and task['gff_path'] is None
+
+
+@pytest.mark.parametrize('groups,selected', [
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, []),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, ['other']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=False)}, ['clone']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=['old'], unplaced=True)}, ['clone']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=1)}, ['clone']),
+    ({'group': dict(clone_ids=['clone', 'clone'], source_cds_ids=['old'], unplaced=False)}, ['clone']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=['old'], unplaced=False),
+      'other': dict(clone_ids=['other'], source_cds_ids=['old'], unplaced=False)}, ['clone', 'other']),
+    ({'bad\nname': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, ['clone']),
+])
+def test_reviewed_sequence_group_schema_rejects_incomplete_or_overlapping_ownership(groups, selected):
+    module = importlib.import_module('cloned_cds_sequences')
+    with pytest.raises(ValueError, match='(Reviewed|Invalid)'):
+        module.reviewed_groups({'cloned_cds_sequence_groups': json.dumps(groups)}, selected)
+
+
+@pytest.mark.parametrize('status', ['search_limit_reached', 'not_longer', 'ambiguous_alignment',
+                                    'ambiguous_extended_targets', 'ambiguous_overlapping_targets'])
+def test_reviewed_group_does_not_override_unsafe_search_or_length_evidence(status):
+    module = importlib.import_module('cloned_cds_sequences')
+    decisions = [dict(clone_id='clone', status=status, matches=[dict(target_id='old')])]
+    with pytest.raises(ValueError, match='current search evidence'):
+        module.apply_reviewed_groups({'clone': 'ATGAAATAA'}, decisions,
+            {'group': dict(clone_ids=['clone'], source_cds_ids=['old'], unplaced=False)}, {'old'})
+
+
+def test_reviewed_unplaced_group_rejects_an_existing_supported_hit(tmp_path):
+    task, _, _, _, row = fixture(tmp_path / 'inputs')
+    cloned.attach(task, group_row(row, ['clone'], [], unplaced=True), tmp_path)
+    with pytest.raises(ValueError, match='current search evidence'):
+        cloned.apply_to_task(task, tmp_path / 'curated')
+
+
+def test_reviewed_sequence_groups_cannot_be_used_for_genomic_inputs(tmp_path):
+    task, _, _, _, row = fixture(tmp_path / 'inputs')
+    with pytest.raises(ValueError, match='require cloned_cds_mode=sequence'):
+        cloned.attach(task, {**group_row(row, ['clone'], [], unplaced=True), 'cloned_cds_mode': 'genomic'}, tmp_path)
+
+
+def test_unplaced_sequence_cannot_bypass_a_longer_only_comparison(tmp_path):
+    task, _, source, _, row = fixture(tmp_path / 'inputs', longer=True)
+    source.write_text('>unrelated\nATG' + 'AAA' * 100 + 'TAA\n')
+    cloned.attach(task, group_row(row, ['clone'], [], unplaced=True), tmp_path)
+    with pytest.raises(ValueError, match='longer-only comparison'):
+        cloned.apply_to_task(task, tmp_path / 'curated')
+
+
+def test_reviewed_group_identity_and_representative_order_are_bound_to_the_native_plan(tmp_path):
+    task, sequence, _, incoming, row = fixture(tmp_path / 'inputs')
+    incoming.write_text(incoming.read_text() + '>other\n' + sequence + '\n')
+    row['cloned_cds_sha256'] = hashlib.sha256(incoming.read_bytes()).hexdigest()
+    cloned.attach(task, group_row(row, ['clone', 'other'], ['N_fragment', 'C_fragment']), tmp_path)
+    first = cloned.binding_signature(task)
+    forwarded = cloned.copy_binding({}, task)
+    assert forwarded['cloned_cds_sequence_groups'] == task['cloned_cds_sequence_groups']
+    cloned.attach(task, group_row(row, ['other', 'clone'], ['N_fragment', 'C_fragment']), tmp_path)
+    assert cloned.binding_signature(task) != first
+    cloned.attach(task, row, tmp_path)
+    assert 'cloned_cds_sequence_groups' not in task

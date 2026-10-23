@@ -1,5 +1,15 @@
 # Workflow helper efficiency
 
+## Complete native ClipKIT runtimes
+
+`gg_gene_evolution` accepts `clipkit_binary` and an optional
+`clipkit_source_manifest` for a complete external native runtime. Its executable
+and source inventory become hashed ClipKIT-stage inputs, so changing either
+invalidates that stage's cached result. Missing selected files stop before prior
+outputs are removed. Defaults keep using the installed `clipkit` command and
+the existing provenance inputs. Trimming mode, codon handling and cutoffs stay
+unchanged; qualify an external runtime in the actual execution container.
+
 ## OrthoFinder ZIP publication
 
 The ZIP writer buffers 1 MiB and uses standard ZIP64 data descriptors. It no
@@ -207,3 +217,8 @@ combined line/branch coverage, security checks, and reproducible wheel/sdist
 checks. Optional studies/backends are separate from the rooting coverage.
 Local Docker evidence does not establish SIF behavior; published-runtime/SIF
 qualification is handled by the repository's delivery workflows.
+
+Synteny neighborhood caches record UTR annotation conflicts without assigning
+unsupported UTR blocks. CDS coordinates still pass the native strict block
+validator; the reporting policy is part of the cache contract, so older caches
+are rebuilt rather than silently reused under different rules.

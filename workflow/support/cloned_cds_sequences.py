@@ -4,12 +4,75 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
 
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
+
+GROUP_FIELD = 'cloned_cds_sequence_groups'
+
+
+def reviewed_groups(row, selected):
+    """Bind reviewed transcript ownership without asserting genomic loci."""
+    raw = row.get(GROUP_FIELD)
+    if not raw:
+        return {}
+    groups = json.loads(str(raw))
+    if not selected or not isinstance(groups, dict) or not groups:
+        raise ValueError('Reviewed sequence groups require explicit selected clone IDs')
+    clones, sources = set(), set()
+    for name, group in groups.items():
+        if (not isinstance(name, str) or re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*', name) is None
+                or not isinstance(group, dict) or set(group) != {'clone_ids', 'source_cds_ids', 'unplaced'}
+                or type(group['unplaced']) is not bool):
+            raise ValueError('Invalid reviewed sequence group')
+        for field, seen in (('clone_ids', clones), ('source_cds_ids', sources)):
+            values = group[field]
+            if (not isinstance(values, list) or field == 'clone_ids' and not values
+                    or any(not isinstance(v, str) or not v or any(c.isspace() for c in v) for v in values)
+                    or len(set(values)) != len(values) or seen.intersection(values)):
+                raise ValueError('Reviewed sequence groups require unique clone and source IDs')
+            seen.update(values)
+        if bool(group['source_cds_ids']) == group['unplaced']:
+            raise ValueError('Reviewed sequence group must name source CDS or explicitly declare unplaced')
+    if clones != set(selected):
+        raise ValueError('Reviewed sequence groups must cover exactly the selected cloned CDS')
+    return groups
+
+
+def apply_reviewed_groups(clones, decisions, groups, seen):
+    """Select one representative; retain other clones as unresolved alternatives."""
+    rows = {r['clone_id']: r for r in decisions}
+    if groups and {c for g in groups.values() for c in g['clone_ids']} != set(clones):
+        raise ValueError('Reviewed sequence group selection changed')
+    evidence = []
+    for name, group in groups.items():
+        ids, source_ids = group['clone_ids'], set(group['source_cds_ids'])
+        if source_ids - seen:
+            raise ValueError('Reviewed source CDS is absent: ' + ','.join(sorted(source_ids - seen)))
+        for clone in ids:
+            row = rows[clone]
+            targets = {m['target_id'] for m in row['matches']}
+            if (group['unplaced'] and row['status'] != 'no_supported_match'
+                    or not group['unplaced'] and (row['status'] not in {'replace', 'competing_clones'}
+                                                  or targets != source_ids)):
+                raise ValueError('Reviewed sequence group conflicts with current search evidence: ' + clone)
+        representative = ids[0]
+        for clone in ids:
+            row = rows[clone]
+            row.update(search_status=row['status'], candidate_group=name, representative_clone=representative,
+                       clone_sha256=hashlib.sha256(clones[clone].encode()).hexdigest(),
+                       genomic_origin_status='not_assessed_no_genome', genomic_coordinates=None,
+                       source_catalog_status='no_supported_match_in_sequence_catalog' if group['unplaced'] else 'matched_sequence',
+                       gene_identity_status='unresolved_candidate_group' if len(ids) > 1 else 'unresolved_unplaced' if group['unplaced'] else 'sequence_only')
+            row['status'] = ('add_unplaced' if group['unplaced'] else 'replace') if clone == representative else 'alternative_clone'
+        evidence.append(dict(candidate_group=name, representative_clone=representative,
+                             alternative_clones=ids[1:], source_cds_ids=sorted(source_ids), unplaced=group['unplaced'],
+                             representative_selection='explicit_clone_order; no functional or genomic priority inferred'))
+    return evidence
 
 
 def _run(argv, directory, name):
@@ -157,7 +220,11 @@ def build_sequence(task, directory):
     for row in decisions:
         if row['clone_id'] in capped:
             row['status'] = 'search_limit_reached'
-    accepted = [r for r in decisions if r['status'] == 'replace']
+    groups = task.get(GROUP_FIELD, {})
+    if any(g['unplaced'] and longer.intersection(g['clone_ids']) for g in groups.values()):
+        raise ValueError('Unplaced sequence cannot establish a longer-only comparison')
+    group_evidence = apply_reviewed_groups(clones, decisions, groups, seen)
+    accepted = [r for r in decisions if r['status'] in {'replace', 'add_unplaced'}]
     removed = {m['target_id'] for r in accepted for m in r['matches']}
     additions = {'gg_clone_' + hashlib.sha256(r['clone_id'].encode()).hexdigest()[:16] + '.t1': r for r in accepted}
     if additions.keys() & seen:
@@ -173,6 +240,19 @@ def build_sequence(task, directory):
             retained.write('>' + identifier + '\n' + clones[row['clone_id']] + '\n')
             row['output_id'] = identifier
     outputs = dict(cds=output.name, alignments=alignments.name)
+    if groups:
+        received = directory / 'received_cloned_cds.fa'
+        received.write_text(''.join('>' + name + '\n' + sequence + '\n' for name, sequence in clones.items()))
+        outputs['received_cloned_cds'] = received.name
+        atomic_json(directory / 'reviewed_sequence_groups.json', groups)
+        outputs['reviewed_sequence_groups'] = 'reviewed_sequence_groups.json'
+        alternatives = [r for r in decisions if r['status'] == 'alternative_clone']
+        if alternatives:
+            path = directory / 'alternative_cloned_cds.fa'
+            path.write_text(''.join('>' + r['clone_id'] + ' candidate_group=' + r['candidate_group']
+                                   + ' representative_clone=' + r['representative_clone'] + '\n'
+                                   + clones[r['clone_id']] + '\n' for r in alternatives))
+            outputs['alternative_cloned_cds'] = path.name
     if removed:
         outputs['removed'] = removed_path.name
     if Path(str(source) + '.orf-extraction.json').exists():
@@ -180,7 +260,8 @@ def build_sequence(task, directory):
     atomic_json(directory / 'audit.json', dict(schema_version=1, mode='sequence', species=task['species_prefix'],
         coordinate_system='sequence only; no genomic coordinates inferred',
         minimum_identity=task['cloned_cds_min_identity'], minimum_target_coverage=task['cloned_cds_min_target_coverage'],
-        decisions=decisions, removed_CDS_ids=sorted(removed), original_sources_modified=False, outputs=outputs))
+        decisions=decisions, removed_CDS_ids=sorted(removed), original_sources_modified=False, outputs=outputs,
+        **(dict(reviewed_sequence_groups=group_evidence) if groups else {})))
 
 
 def apply_sequence_task(task, root):
@@ -201,6 +282,7 @@ def apply_sequence_task(task, root):
         raise ValueError('Cloned CDS changed after input qualification')
     key = dict(schema=1, inputs=hashes, species=task['species_prefix'],
                selection=task.get('cloned_cds_ids', []), longer_only=task.get('cloned_cds_longer_only_ids', []),
+               reviewed_sequence_groups=task.get(GROUP_FIELD, {}),
                identity=task['cloned_cds_min_identity'], coverage=task['cloned_cds_min_target_coverage'],
                input_type=input_type(task), genetic_code=int(task.get('genetic_code', 1)),
                implementation=digest(Path(__file__)), tools={name: digest(path) for name, path in tools.items()},

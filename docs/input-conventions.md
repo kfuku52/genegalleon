@@ -1111,6 +1111,14 @@ alignments and any source ORF audit remain with the derived input. Original
 source files are preserved. These inputs use the same standard native
 single/array plan, formatting, receipt and resume paths.
 
+For reviewed competing clones or an experimentally validated CDS absent from
+the available sequence catalog, opt in to
+[`cloned_cds_sequence_groups`](experimental-cloned-sequences.md). One explicit
+representative enters the canonical CDS set; other experimental alternatives
+are archived with their candidate group. A declared unplaced CDS can be added
+without deleting unrelated source models. Neither case establishes genomic
+coordinates or proves that a reference genome lacks the corresponding region.
+
 XLSX template notes:
 
 - `download_plan.xlsx` includes drop-downs for `provider` and `id`.
