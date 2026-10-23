@@ -35,6 +35,35 @@ For internal singleton nodes, rooting still computes native trees separately
 because NWKIT normalizes those nodes in comparison output; those inputs retain
 the original tree shape and branch placement.
 
+## RPS-BLAST query completion
+
+The gene-family workflow converts the translated FASTA once and indexes the
+RPS-BLAST query IDs in one pass before appending missing-query rows. Previously,
+every query rescanned the hit table, and each missing query converted the whole
+FASTA again. Original domain rows, appended-row order, fifteen-column schema,
+query lengths and per-query messages are preserved. The search itself and its
+scientific settings are unchanged.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_rpsblast_completion.py \
+  --base f54ba1a3 --queries 200 1000 --trials 3
+```
+
+On Linux x86_64 Docker under Apple Silicon emulation, SeqKit 2.14.0, three
+alternating trials after one warmup measured the following medians. Both use
+300-residue queries with half missing hits; complete output tables and query
+logs were byte-identical. The [measurement record](benchmarks/rpsblast-query-completion-2026-10-23.json)
+retains every trial and output hash.
+
+| Queries | Previous seconds | Updated seconds | Ratio |
+| --- | ---: | ---: | ---: |
+| 200 | 18.410 | 0.226 | 81.5× |
+| 1,000 | 96.664 | 0.257 | 375.8× |
+
+These measure only output completion, excluding the RPS-BLAST search and
+container startup. They do not estimate whole-job speed, HPC timing, peak RSS
+or SIF compatibility. The new index stores one key per observed query ID.
+
 ## Reproduce
 
 Save the baseline support directory from commit `3ce51d28`, then run:

@@ -2834,17 +2834,24 @@ if [[ ${rpsblast_needs_update} -eq 1 && ${run_rps_blast} -eq 1 ]]; then
     exit 1
   fi
 
-  genes=()
-  mapfile -t genes < <(awk '/^>/ {sub(/^>/, "", $0); sub(/^[[:space:]]*/, "", $0); sub(/[[:space:]].*$/, "", $0); print}' ungapped_translated_cds.fas)
-  for gene in "${genes[@]}"; do
-    if ! awk -F '\t' -v gene="${gene}" '$1 == gene {found=1; exit} END {exit(found ? 0 : 1)}' "${og_id}.rpsblast.tmp.tsv"; then
-      echo "${gene}: no hit in RPS-BLAST. Appending qlen to output tsv."
-      qlen=$(seqkit fx2tab --length ungapped_translated_cds.fas | awk -F '\t' -v gene="${gene}" '$1 == gene {print $NF}')
-      printf '%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t\t\n' "${gene}" "${qlen}" >> "${og_id}.rpsblast.tmp.tsv"
-    else
-      echo "${gene}: RPS-BLAST hit found."
-    fi
-  done
+  # Complete query coverage with one FASTA conversion and one hit-table scan.
+  seqkit fx2tab --length ungapped_translated_cds.fas > "${og_id}.rpsblast.lengths.tsv"
+  awk -F '\t' -v output="${og_id}.rpsblast.tmp.tsv" '
+    FILENAME == ARGV[1] {seen[$1]=1; next}
+    {
+      gene=$1
+      sub(/^[[:space:]]*/, "", gene)
+      sub(/[[:space:]].*$/, "", gene)
+      if (!(gene in seen)) {
+        print gene ": no hit in RPS-BLAST. Appending qlen to output tsv."
+        qlen=($1 == gene ? $NF : "")
+        printf "%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t\t\n", gene, qlen >> output
+        seen[gene]=1
+      } else {
+        print gene ": RPS-BLAST hit found."
+      }
+    }
+  ' "${og_id}.rpsblast.tmp.tsv" "${og_id}.rpsblast.lengths.tsv"
   {
     printf '%s\n' "${outfmt}" | tr ' ' '\t'
     cat "${og_id}.rpsblast.tmp.tsv"

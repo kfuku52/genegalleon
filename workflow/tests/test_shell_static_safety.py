@@ -1995,14 +1995,9 @@ def test_gene_evolution_core_uses_exact_qacc_match_for_rpsblast_hit_presence():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert 'if ! grep -F -q -- "${gene}" "${og_id}.rpsblast.tmp.tsv"; then' not in text
-    assert (
-        "if ! awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {found=1; exit} END {exit(found ? 0 : 1)}' \"${og_id}.rpsblast.tmp.tsv\"; then"
-        in text
-    )
-    assert (
-        "qlen=$(seqkit fx2tab --length ungapped_translated_cds.fas | awk -F '\\t' -v gene=\"${gene}\" '$1 == gene {print $NF}')"
-        in text
-    )
+    assert "FILENAME == ARGV[1] {seen[$1]=1; next}" in text
+    assert "if (!(gene in seen))" in text
+    assert 'qlen=($1 == gene ? $NF : "")' in text
 
 
 def test_gene_evolution_core_tree_pruning_uses_awk_id_match_instead_of_python_split_filter():

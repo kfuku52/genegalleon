@@ -1,0 +1,57 @@
+{
+  "platform": "Linux-7.0.12-linuxkit-x86_64-with-glibc2.39",
+  "seqkit": "seqkit v2.14.0",
+  "baseline": "f54ba1a3",
+  "results": [
+    {
+      "queries": 200,
+      "trials": 3,
+      "seconds": [
+        [
+          18.190079384,
+          18.410144842,
+          18.804010926000004
+        ],
+        [
+          0.22581779099999721,
+          0.21319012500000412,
+          0.23457720900000112
+        ]
+      ],
+      "median_seconds": [
+        18.410144842,
+        0.22581779099999721
+      ],
+      "speedup": 81.52654740121972,
+      "full_table_and_logs_identical": true,
+      "sha256": "10ecc73c4f3672b32383dedfec87c83d337dddbc33fe644e535f7c77ac93c079"
+    },
+    {
+      "queries": 1000,
+      "trials": 3,
+      "seconds": [
+        [
+          96.663557752,
+          101.753518004,
+          96.24454991900001
+        ],
+        [
+          0.25188641699998016,
+          0.25720454200001086,
+          0.26765404200000376
+        ]
+      ],
+      "median_seconds": [
+        96.663557752,
+        0.25720454200001086
+      ],
+      "speedup": 375.8236810296916,
+      "full_table_and_logs_identical": true,
+      "sha256": "3eba497019f67c76a6dcef83eca4f6f18f43256115c90c7d787971074deafc7c"
+    }
+  ],
+  "runtime": "Immutable existing GeneGalleon amd64 Docker image, Apple Silicon emulation",
+  "warmups_per_variant": 1,
+  "query_length_residues": 300,
+  "missing_hit_fraction": 0.5
+}
