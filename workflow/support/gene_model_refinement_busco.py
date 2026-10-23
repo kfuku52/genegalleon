@@ -1481,6 +1481,21 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     return rows
 
 
+def busco_version():
+    """Probe BUSCO in private scratch, including its import-time logger writes.
+
+    Scheduler packages and the caller's home may be read-only. Even --version
+    initialises BUSCO's logger; it must not create files in either location.
+    This probe performs no evaluation and cannot change the numerical contract.
+    """
+    import os
+
+    with tempfile.TemporaryDirectory(prefix="gg-busco-version-") as directory:
+        environment = dict(os.environ, MPLCONFIGDIR=directory)
+        return subprocess.check_output(["busco", "--version"], text=True,
+                                       cwd=directory, env=environment, timeout=30).strip()
+
+
 def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_changes=None,
              mode="transcriptome", genetic_codes=None, protein_inputs=None,
              reuse_report=None, reuse_producer=None):
@@ -1523,7 +1538,7 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_change
                 _validate_admitted_input(pair["protein_inputs"][phase], source_hashes[str(pair[phase])],
                                          genetic_codes[pair["species"]], species=pair["species"], phase=phase)
     lineage_hash = hashlib.sha256(json.dumps({str(p.relative_to(lineage)): hashes[str(p)] for p in files}, sort_keys=True).encode()).hexdigest()
-    version = subprocess.check_output(["busco", "--version"], text=True).strip()
+    version = busco_version()
     support = Path(__file__).resolve().parent
     contract = {"schema": 1, "busco_version": version, "lineage_sha256": lineage_hash,
                 "lineage_path": str(lineage), "download_path": str(download_path),

@@ -388,6 +388,14 @@ every excluded source identifier and reason. Neither policy guesses a genetic
 code: native codes come from the frozen plan and must agree with an optional
 `--genetic-codes` TSV; CDS-only species require an explicit TSV entry.
 
+The public `gene_model_refinement_busco.busco_version()` probe runs in a private
+temporary working directory with a 30-second timeout and a child-only writable
+Matplotlib cache. BUSCO initialises its logger even for `--version`, so the probe
+does not depend on a writable scheduler package or home. Errors propagate without
+retry, the scratch directory is removed, and the numerical evaluation/reuse
+contract is unchanged. Execution adapters should use this API rather than invoke
+the tool from a sealed launch directory.
+
 Completed admitted-protein evaluations can be reused across separate reports
 with `--reuse-report /path/to/previous/busco --reuse-producer
 /path/to/exact/gene_model_refinement_busco.py`. The producer file must match the

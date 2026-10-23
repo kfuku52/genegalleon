@@ -3,7 +3,9 @@ import ast
 import copy
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,48 @@ from workflow.tests.test_plot_gene_model_refinement import completed
 busco = import_module("gene_model_refinement_busco")
 reuse_api = import_module("refinement_busco_reuse")
 inputs_api = import_module("refinement_busco_inputs")
+
+
+def test_version_probe_isolates_import_time_writes_and_preserves_caller(tmp_path, monkeypatch):
+    """An actual child reproduces BUSCO's logger on a read-only launch cwd."""
+    executable = tmp_path / "busco"
+    executable.write_text("#!/bin/sh\nmkdir -p \"$MPLCONFIGDIR/cache\"\nprintf log > busco.log\nprintf 'BUSCO fixture\\n'\n")
+    executable.chmod(0o700)
+    caller = tmp_path / "sealed-package"
+    caller.mkdir(mode=0o500)
+    monkeypatch.chdir(caller)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("MPLCONFIGDIR", str(caller / "no-cache"))
+    original = dict(os.environ)
+    real = subprocess.check_output
+    scratch = []
+
+    def observe(command, **options):
+        scratch.append(Path(options["cwd"]))
+        assert options["timeout"] == 30
+        assert options["env"]["MPLCONFIGDIR"] == options["cwd"]
+        assert Path(options["cwd"]).stat().st_mode & 0o077 == 0
+        return real(command, **options)
+
+    monkeypatch.setattr(busco.subprocess, "check_output", observe)
+    assert busco.busco_version() == "BUSCO fixture"
+    assert Path.cwd() == caller and not list(caller.iterdir())
+    assert dict(os.environ) == original and all(not path.exists() for path in scratch)
+
+
+@pytest.mark.parametrize("failure", [subprocess.CalledProcessError(1, ["busco"]),
+                                    subprocess.TimeoutExpired(["busco"], 30)])
+def test_version_probe_propagates_failure_without_retry_and_cleans_scratch(monkeypatch, failure):
+    scratch = []
+
+    def fail(command, **options):
+        scratch.append(Path(options["cwd"]))
+        raise failure
+
+    monkeypatch.setattr(busco.subprocess, "check_output", fail)
+    with pytest.raises(type(failure)):
+        busco.busco_version()
+    assert len(scratch) == 1 and not scratch[0].exists()
 
 
 def sha(path):
