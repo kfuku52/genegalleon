@@ -1,5 +1,48 @@
 # Workflow helper efficiency
 
+## OrthoFinder ZIP publication
+
+The ZIP writer buffers 1 MiB and uses standard ZIP64 data descriptors. It no
+longer flushes small buffers and seeks back to rewrite every FASTA header.
+Manifest v1, member names, compression and CRC/SHA256 verification remain the
+same. Descriptors add 24 bytes per data member; existing archives need no rewrite.
+
+Linux arm64 Docker, Python 3.12.15, local `/tmp`, one warmup and three fresh
+process trials per variant gave these medians:
+
+| Workload | Previous writer | Streaming writer |
+| --- | ---: | ---: |
+| Write 8,192 small FASTAs, isolated ZIP creation | 0.111 s | 0.073 s |
+| Raw write calls for that ZIP | 16,464 | 2 |
+| Raw seek calls for that ZIP | 24,581 | 0 |
+| Full conversion, four directories × 2,048 FASTAs, one worker | 1.036 s | 0.984 s |
+| Full storage trial peak RSS, one worker | 62,664 KiB | 49,552 KiB |
+
+All trials preserved logical SHA256 and member contents. The isolated result
+measures ZIP output I/O; full conversion includes source scans, readback and
+retirement checks. These synthetic fixtures do not establish production
+QNAP/NFS throughput. Peak RSS covers fixture generation and both logical reads
+as well as conversion. A separate latency model adds a requested 0.05 ms per raw
+write/seek and includes scheduler overhead; treat it only as sensitivity evidence.
+[Measurements and runtime identity](benchmarks/orthofinder-storage-review-2026-10-23.json)
+include worker counts 1/2/4 and the latency model.
+
+Run the bounded benchmarks in a current GeneGalleon runtime:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python benchmarks/orthofinder_zip_writer.py --files 8192
+bash workflow/tests/run_in_runtime.sh python benchmarks/orthofinder_zip_writer.py --files 2048 --latency-ms 0.05
+bash workflow/tests/run_in_runtime.sh python benchmarks/orthofinder_storage.py --work-root /tmp --files-per-directory 2048
+```
+
+For the recorded full-conversion baseline, run the same storage benchmark with
+`workflow/support` and `benchmarks/orthofinder_storage.py` from commit
+`4930a484d98c6095529c802f59995c2721e190ba` in a separate temporary source tree,
+using the same immutable runtime and filesystem. The writer microbenchmark
+retains both implementations for direct comparison.
+
+## Repeated helper work
+
 The follow-up audit addresses twelve repeated-work and allocation costs. It
 preserves biological models, resampling streams, solver search limits, literal
 identifiers and output schemas.

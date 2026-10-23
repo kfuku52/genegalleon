@@ -49,6 +49,7 @@ from gene_family_output_store import (
     query_id_matchers,
     read_only_observation,
 )
+from orthofinder_output_store import logical_directory_records as orthofinder_directory_records
 from orthofinder_output_store import logical_records as orthofinder_logical_records
 from safe_zip_extract import extract_expected_prefix, validated_members
 from workflow_observation import observe_path, observing_files, strict_json_loads
@@ -691,7 +692,9 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
         current_cache = digest_cache()
         cached_archive = (
             current_cache.get("logical_zip_directory", archive_path)
-            if current_cache is not None
+            # Raw presence can change while the archive's identity stays fixed.
+            # Mixed forms need fresh semantic validation even on a cache hit.
+            if current_cache is not None and raw_result is None
             else None
         )
         if cached_archive is not None and cached_archive[2] is not None:
@@ -707,37 +710,44 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
             total_size = 0
             member_count = 0
             try:
-                with zipfile.ZipFile(archive_path, "r") as archive:
-                    infos, _directories = validated_members(
-                        archive,
-                        archive_path,
-                        path.name,
-                    )
-                    prefix = PurePosixPath(path.name)
-                    members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
-                    for info in infos:
-                        member = PurePosixPath(info.filename)
-                        if member.is_absolute() or ".." in member.parts:
-                            raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
-                        try:
-                            relative = member.relative_to(prefix)
-                        except ValueError as exc:
-                            raise ProvenanceError(
-                                f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
-                            ) from exc
-                        if not relative.parts:
-                            continue
-                        members.append((relative, info))
-                    for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
-                        relative_bytes = relative.as_posix().encode("utf-8")
-                        with archive.open(info, "r") as handle:
-                            member_digest, member_size = sha256_stream(handle)
+                orthofinder_records = orthofinder_directory_records(path)
+                if orthofinder_records is not None:
+                    for row in sorted(orthofinder_records, key=lambda row: PurePosixPath(row["path"]).parts):
+                        relative_bytes = row["path"].encode("utf-8")
                         digest.update(len(relative_bytes).to_bytes(8, "big"))
                         digest.update(relative_bytes)
-                        digest.update(bytes.fromhex(member_digest))
-                        digest.update(member_size.to_bytes(8, "big"))
-                        total_size += member_size
+                        digest.update(bytes.fromhex(row["sha256"]))
+                        digest.update(row["size"].to_bytes(8, "big"))
+                        total_size += row["size"]
                         member_count += 1
+                else:
+                    with zipfile.ZipFile(archive_path, "r") as archive:
+                        infos, _directories = validated_members(archive, archive_path, path.name)
+                        prefix = PurePosixPath(path.name)
+                        members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
+                        for info in infos:
+                            member = PurePosixPath(info.filename)
+                            if member.is_absolute() or ".." in member.parts:
+                                raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
+                            try:
+                                relative = member.relative_to(prefix)
+                            except ValueError as exc:
+                                raise ProvenanceError(
+                                    f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
+                                ) from exc
+                            if not relative.parts:
+                                continue
+                            members.append((relative, info))
+                        for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
+                            relative_bytes = relative.as_posix().encode("utf-8")
+                            with archive.open(info, "r") as handle:
+                                member_digest, member_size = sha256_stream(handle)
+                            digest.update(len(relative_bytes).to_bytes(8, "big"))
+                            digest.update(relative_bytes)
+                            digest.update(bytes.fromhex(member_digest))
+                            digest.update(member_size.to_bytes(8, "big"))
+                            total_size += member_size
+                            member_count += 1
             except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
                 raise ProvenanceError(f"Failed to read logical directory ZIP {archive_path}: {exc}") from exc
             archive_result = (digest.hexdigest(), total_size, member_count)

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import stat
 import tempfile
 import time
@@ -23,10 +24,10 @@ from pathlib import Path, PurePosixPath
 
 try:
     from . import species_tree_output_store as DIRECTORY
-    from .shared_namespace_lock import namespace_lock
+    from .shared_namespace_lock import inspect_lock, namespace_lock
 except ImportError:
     import species_tree_output_store as DIRECTORY
-    from shared_namespace_lock import namespace_lock
+    from shared_namespace_lock import inspect_lock, namespace_lock
 
 MANAGED_DIRECTORIES = (
     "Orthogroup_Sequences",
@@ -58,10 +59,43 @@ def lock_path(root):
 
 
 @contextlib.contextmanager
-def storage_lock(root, *, exclusive=True):
+def storage_lock(root, *, exclusive=True, producer_lock_token=None):
     _physical(root)
+    if producer_lock_token is not None:
+        # A native producer holds the fence through its child converter. The
+        # child may use, but must never release, its live parent's exact lock.
+        owner = inspect_lock(lock_path(root))["exclusive"]
+        _require(
+            exclusive and owner is not None and owner.get("token") == producer_lock_token
+            and owner.get("pid") == os.getppid() and owner.get("host") == socket.gethostname(),
+            "Invalid parent producer lock ownership",
+        )
+        yield
+        return
     with namespace_lock(lock_path(root), exclusive=exclusive, timeout=300):
         yield
+
+
+def _sync_directory(path):
+    """A failed durability barrier must prevent deletion of the recovery form."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+class _StreamingWriter:
+    """ZIP data descriptors avoid a flush/seek/header rewrite per small file."""
+
+    def __init__(self, handle):
+        self.handle = handle
+
+    def write(self, data):
+        return self.handle.write(data)
+
+    def flush(self):
+        return self.handle.flush()
 
 
 def _paths(root, name):
@@ -138,7 +172,10 @@ def _manifest(archive, path, name):
     _require(member.file_size <= 256 * 1024 * 1024, f"Oversized manifest: {path}")
     data = json.loads(archive.read(member))
     _require(
-        type(data.get("schema_version")) is int and data["schema_version"] == 1 and data.get("directory") == name,
+        isinstance(data, dict) and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1 and data.get("directory") == name
+        and isinstance(data.get("files"), list) and isinstance(data.get("directories"), list)
+        and all(isinstance(row, dict) for row in data["files"] + data["directories"]),
         f"Invalid OrthoFinder archive manifest: {path}",
     )
     records = data["files"]
@@ -219,19 +256,22 @@ def archive_records(root, name, *, deep=False, progress_callback=None):
                     progress_callback(
                         phase="verifying", directory=name, files_completed=index + 1, files_total=len(data["files"])
                     )
-    except (KeyError, ValueError, OSError, zipfile.BadZipFile) as exc:
+    except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as exc:
         raise OrthoFinderStorageError(f"Invalid OrthoFinder archive {path}: {exc}") from exc
     _require(before == _signature(path.stat()), f"Archive changed during read: {path}")
     return data
 
 
-def _retire(raw, data):
+def _retire(raw, data, *, recovery=None):
     """Resume a partial deletion only if every remaining file matches the ZIP."""
     directories, files = _inventory(raw)
     records = {row["path"]: row for row in data["files"]}
-    known_directories = {row["path"] for row in data["directories"]}
-    for path, _ in directories:
-        _require(path.relative_to(raw).as_posix() in known_directories, f"New source directory: {path}")
+    known_directories = {row["path"]: row for row in data["directories"]}
+    for path, value in directories:
+        record = known_directories.get(path.relative_to(raw).as_posix())
+        _require(record is not None, f"New source directory: {path}")
+        # Directory mtimes change during partial retirement; modes do not.
+        _require(stat.S_IMODE(value.st_mode) == record["mode"], f"Source directory metadata differs: {path}")
     for path, value in files:
         record = records.get(path.relative_to(raw).as_posix())
         _require(record is not None, f"Unarchived source file: {path}")
@@ -241,10 +281,14 @@ def _retire(raw, data):
         )
         with _source(path, value) as handle:
             _require(_hash(handle) == (record["sha256"], record["size"]), f"Source differs from ZIP: {path}")
+    if recovery is not None:
+        archive, expected_signature = recovery
+        _require(_signature(archive.lstat()) == expected_signature, f"Recovery archive changed: {archive}")
     for path, value in files:
         _require(_signature(path.lstat()) == _signature(value), f"Source changed before deletion: {path}")
         path.unlink()
-    for path, _ in sorted(directories, key=lambda row: len(row[0].parts), reverse=True):
+    for path, value in sorted(directories, key=lambda row: len(row[0].parts), reverse=True):
+        _require(stat.S_IMODE(path.lstat().st_mode) == stat.S_IMODE(value.st_mode), f"Source metadata changed: {path}")
         path.rmdir()  # A new file is never recursively deleted.
 
 
@@ -253,9 +297,14 @@ def _pack(
 ):
     raw, path = _paths(root, name)
     if path.exists():
+        archive_signature = _signature(path.stat())
         data = archive_records(root, name, deep=raw.exists(), progress_callback=progress_callback)
         if raw.exists():
-            _retire(raw, data)
+            with path.open("rb") as handle:
+                os.fsync(handle.fileno())
+            _sync_directory(path.parent)
+            _retire(raw, data, recovery=(path, archive_signature))
+            _sync_directory(path.parent)
         return dict(directory=name, state="archived", files=len(data["files"]))
     if not raw.exists():
         return dict(directory=name, state="absent", files=0)
@@ -266,7 +315,9 @@ def _pack(
     data = dict(schema_version=1, directory=name, files=[], directories=[_metadata(p, s, raw) for p, s in directories])
     DIRECTORY._validate_options(compression, compression_level)
     try:
-        with zipfile.ZipFile(partial, "x", allowZip64=True) as archive:
+        with partial.open("xb", buffering=CHUNK) as output, zipfile.ZipFile(
+            _StreamingWriter(output), "w", allowZip64=True
+        ) as archive:
             for index, (source, value) in enumerate(files):
                 info = zipfile.ZipInfo.from_file(
                     source, arcname=raw.name + "/" + source.relative_to(raw).as_posix(), strict_timestamps=False
@@ -301,9 +352,9 @@ def _pack(
             os.fsync(handle.fileno())
         _require(not path.exists(), f"Archive appeared during conversion: {path}")
         os.replace(partial, path)
-        DIRECTORY._fsync_directory(path.parent)
-        _retire(raw, data)
-        DIRECTORY._fsync_directory(path.parent)
+        _sync_directory(path.parent)
+        _retire(raw, data, recovery=(path, _signature(path.stat())))
+        _sync_directory(path.parent)
     finally:
         partial.unlink(missing_ok=True)
     return dict(directory=name, state="archived", files=len(files), zip_bytes=path.stat().st_size)
@@ -321,8 +372,9 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
     raw, path = _paths(root, name)
     if not path.exists():
         return dict(directory=name, state="raw" if raw.exists() else "absent")
-    data = archive_records(root, name, deep=True, progress_callback=progress_callback)
     archive_signature = _signature(path.stat())
+    data = archive_records(root, name, deep=True, progress_callback=progress_callback)
+    _require(_signature(path.stat()) == archive_signature, "Archive changed during restoration validation")
     _space(
         root,
         sum(max(4096, ((row["size"] + 4095) // 4096) * 4096) for row in data["files"])
@@ -361,9 +413,8 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
                 with archive.open(raw.name + "/" + record["path"]) as source, partial.open("xb") as destination:
                     shutil.copyfileobj(source, destination, CHUNK)
                     destination.flush()
-                    os.fsync(destination.fileno())
-                os.chmod(partial, record["mode"])
-                os.utime(partial, ns=(record["mtime_ns"], record["mtime_ns"]))
+                    os.fchmod(destination.fileno(), record["mode"])
+                    os.utime(destination.fileno(), ns=(record["mtime_ns"], record["mtime_ns"]))
                 os.replace(partial, target)
             finally:
                 partial.unlink(missing_ok=True)
@@ -378,18 +429,34 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
         == {row["path"] for row in data["directories"]},
         "Restored directory membership differs",
     )
-    expected = {row["path"]: (row["sha256"], row["size"]) for row in data["files"]}
+    expected = {row["path"]: row for row in data["files"]}
     _require(len(files) == len(expected), "Restored membership differs")
     for p, value in files:
+        record = expected[p.relative_to(raw).as_posix()]
+        _require(
+            stat.S_IMODE(value.st_mode) == record["mode"] and value.st_mtime_ns == record["mtime_ns"],
+            f"Restored metadata differs: {p}",
+        )
         with _source(p, value) as handle:
-            _require(_hash(handle) == expected[p.relative_to(raw).as_posix()], f"Restored content differs: {p}")
+            _require(_hash(handle) == (record["sha256"], record["size"]), f"Restored content differs: {p}")
+            # Also sync equal pre-existing files from an interrupted conversion.
+            os.fsync(handle.fileno())
+    for directory, _ in sorted(restored_directories, key=lambda row: len(row[0].parts), reverse=True):
+        _sync_directory(directory)
+    _sync_directory(raw.parent)
+    final_directories, final_files = _inventory(raw)
+    _require(
+        [(p, _signature(s)) for p, s in final_directories + final_files]
+        == [(p, _signature(s)) for p, s in restored_directories + files],
+        "Restored inventory changed before commit",
+    )
     _require(_signature(path.stat()) == archive_signature, "Archive changed before restoration commit")
     path.unlink()
-    DIRECTORY._fsync_directory(path.parent)
+    _sync_directory(path.parent)
     return dict(directory=name, state="raw", files=len(files))
 
 
-def convert(root, *, to="zip", directories=None, workers=1, **options):
+def convert(root, *, to="zip", directories=None, workers=1, producer_lock_token=None, **options):
     root = Path(root).absolute()
     names = tuple(directories or MANAGED_DIRECTORIES)
     _require(
@@ -397,9 +464,17 @@ def convert(root, *, to="zip", directories=None, workers=1, **options):
         "Invalid directory selection",
     )
     _require(1 <= workers <= 4 and to in ("zip", "raw"), "Invalid conversion settings")
-    with storage_lock(root):
+    with storage_lock(root, producer_lock_token=producer_lock_token):
         if to == "zip" and any((root / name).exists() for name in names):
             require_completed(root)
+        if workers > 1:
+            # The standalone backend needs the same aggregate quota guard as
+            # the workspace CLI, before any parallel worker publishes/deletes.
+            rows = status(root, names)
+            key = "estimated_peak_new_bytes" if to == "zip" else "raw_materialize_allocated_bytes"
+            peak = sum(sorted((row[key] for row in rows), reverse=True)[:workers])
+            growth = sum(max(0, row[key] - row["raw_bytes" if to == "zip" else "zip_bytes"]) for row in rows)
+            _space(root, peak + growth, options.get("available_bytes"))
         operation = _pack if to == "zip" else _materialize
         with ThreadPoolExecutor(max_workers=workers) as pool:
             records = list(pool.map(lambda name: operation(root, name, **options), names))
@@ -429,8 +504,8 @@ def status(root, directories=None):
                 archived_files=len(data["files"]),
                 archived_logical_bytes=logical_bytes,
                 zip_bytes=path.stat().st_size if path.exists() else 0,
-                estimated_peak_new_bytes=sum(value.st_size + value.st_size // 1000 + 2048 for _, value in files)
-                + (1024 * 1024 if raw.exists() and not path.exists() else 0),
+                estimated_peak_new_bytes=(sum(value.st_size + value.st_size // 1000 + 2048 for _, value in files)
+                + 1024 * 1024) if raw.exists() and not path.exists() else 0,
                 raw_materialize_allocated_bytes=sum(
                     max(4096, ((row["size"] + 4095) // 4096) * 4096) for row in data["files"]
                 )
@@ -438,6 +513,40 @@ def status(root, directories=None):
             )
         )
     return records
+
+
+def logical_directory_records(raw):
+    """Recognize the versioned archive for a declared raw-or-ZIP directory."""
+    raw = Path(raw)
+    path = raw.with_name(raw.name + ".zip")
+    location = _archive_location(path)
+    if location is None:
+        return None
+    _require(not raw.exists(), f"Incomplete conversion; raw and ZIP both exist: {raw}")
+    root, name = location
+    return archive_records(root, name, deep=True)["files"]
+
+
+def _archive_location(path):
+    if path.name not in {"Orthogroup_Sequences.zip", "MultipleSequenceAlignments.zip"}:
+        return None
+    _physical(path)
+    if not path.is_file():
+        return None
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if not archive.comment.startswith(MARKER):
+                return None
+            name = archive.comment[len(MARKER):].decode()
+    except UnicodeDecodeError as exc:
+        raise OrthoFinderStorageError(f"Invalid archive directory marker: {path}") from exc
+    except zipfile.BadZipFile:
+        return None  # An unmarked physical ZIP is ordinary provenance input.
+    _require(name in MANAGED_DIRECTORIES, f"Invalid archive directory: {path}")
+    base = path.parents[len(PurePosixPath(name).parts) - 1]
+    _, expected = _paths(base, name)
+    _require(path == expected, f"Misplaced OrthoFinder archive: {path}")
+    return base, name
 
 
 def logical_records(root, *, observe=lambda _path: None, children=None):
@@ -453,17 +562,10 @@ def logical_records(root, *, observe=lambda _path: None, children=None):
         if path.name not in {"Orthogroup_Sequences.zip", "MultipleSequenceAlignments.zip"}:
             continue
         observe(path)
-        _physical(path)
-        try:
-            with zipfile.ZipFile(path) as archive:
-                marked = archive.comment.startswith(MARKER)
-                name = archive.comment[len(MARKER) :].decode() if marked else ""
-        except zipfile.BadZipFile:
-            marked = False
-        if not marked:
+        location = _archive_location(path)
+        if location is None:
             continue
-        _require(name in MANAGED_DIRECTORIES, f"Invalid archive directory: {path}")
-        base = path.parents[len(PurePosixPath(name).parts) - 1]
+        base, name = location
         raw, expected = _paths(base, name)
         _require(path == expected and not raw.exists(), f"Incomplete conversion; raw and ZIP both exist: {raw}")
         archives[path] = (base, name, raw.relative_to(root).as_posix())
@@ -514,18 +616,24 @@ def open_binary(root, relative):
     with storage_lock(root, exclusive=False):
         path = root / relative
         _physical(path)
+        for name in MANAGED_DIRECTORIES:
+            if PurePosixPath(name) in relative.parents:
+                raw, archive_path = _paths(root, name)
+                _require(not (raw.exists() and archive_path.exists()), f"Incomplete conversion: {raw}")
         if path.is_file():
-            with path.open("rb") as handle:
+            with _source(path, path.stat()) as handle:
                 yield handle
             return
         for name in MANAGED_DIRECTORIES:
             prefix = PurePosixPath(name)
             if prefix in relative.parents:
                 _, archive_path = _paths(root, name)
-                archive_records(root, name)
+                before = _signature(archive_path.stat())
                 with zipfile.ZipFile(archive_path) as archive:
+                    _manifest(archive, archive_path, name)
                     with archive.open(Path(name).name + "/" + relative.relative_to(prefix).as_posix()) as handle:
                         yield handle
+                _require(before == _signature(archive_path.stat()), f"Archive changed during read: {archive_path}")
                 return
         raise FileNotFoundError(path)
 
@@ -537,6 +645,7 @@ def main():
     parser.add_argument("--directory", choices=MANAGED_DIRECTORIES, action="append")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--progress-interval", type=float, default=30)
+    parser.add_argument("--producer-lock-token", help=argparse.SUPPRESS)
     args = parser.parse_args()
     reporter = DIRECTORY.ProgressReporter(args.progress_interval)
     started = time.monotonic()
@@ -546,6 +655,7 @@ def main():
             to="zip" if args.operation == "pack" else "raw",
             directories=args.directory,
             workers=args.workers,
+            producer_lock_token=args.producer_lock_token,
             progress_callback=reporter.update,
         )
     elif args.operation == "verify":

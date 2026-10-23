@@ -93,7 +93,14 @@ and rereads source contents before deleting only verified files. Interrupted
 deletion can resume from an equal remaining subset. Changed or extra files stop
 conversion and retain both forms. Publication is atomic; a project-local
 OrthoFinder namespace lock excludes participating producers/converters without
-blocking other projects. Old runtimes do not participate: stop them first.
+blocking other projects. Native invalidation also takes this fence, and native
+publication hands it directly to its child converter without an unlocked gap.
+Old runtimes do not participate: stop them first.
+
+ZIP writing uses a 1 MiB buffer and standard ZIP64 data descriptors, avoiding a
+seek and header rewrite for every FASTA. The v1 manifest/layout stays compatible
+with existing readers; descriptors add 24 bytes per data member. Concurrent
+conversion checks combined temporary headroom before starting any worker.
 
 GeneGalleon's directory provenance uses the original logical paths and actual
 member contents, preserving existing raw-tree digests and summary freshness.
@@ -110,6 +117,13 @@ creating expanded files. Existing WorkingDirectory deletion policy is unchanged:
 these archives preserve retained results and cannot recreate a previously
 deleted native restart checkpoint. Check the native restart's required files
 before using `--assign`, `-b`, `-fg`, or `-ft`.
+
+Recovery ZIPs remain until every restored file and directory entry has passed a
+successful filesystem sync. Sync errors stop deletion. An interrupted restore
+can resume from matching files. Audit reports leftover `.restore.*` and
+`.zip.partial.*` files; after a hard crash, reconcile these and the exact
+namespace-lock owner only after all workspace users have stopped. Do not remove
+another process's lock or an unverified recovery ZIP.
 
 ## Before running a conversion
 

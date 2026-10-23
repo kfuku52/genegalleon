@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import subprocess
 import sys
 import zipfile
@@ -120,9 +121,9 @@ def test_changed_source_after_zip_publication_preserves_raw_and_zip(tmp_path, mo
     root = result(tmp_path)
     retire = STORE._retire
 
-    def changed(raw, data):
+    def changed(raw, data, **kwargs):
         (raw / "OG9999999.fa").write_bytes(b"changed")
-        return retire(raw, data)
+        return retire(raw, data, **kwargs)
 
     with monkeypatch.context() as scoped:
         scoped.setattr(STORE, "_retire", changed)
@@ -265,3 +266,250 @@ def test_logical_digest_keeps_path_component_order_for_prefix_collisions(tmp_pat
     before = PROVENANCE.sha256_path(root)
     STORE.convert(root)
     assert PROVENANCE.sha256_path(root) == before
+
+
+def test_orthofinder_conversion_does_not_require_an_unrelated_selected_catalog(tmp_path):
+    root = result(tmp_path)
+    (root / "Orthogroups.GeneCount.selected.tsv").write_text("a different selected catalog\n")
+    args = WORKSPACE.build_parser().parse_args([
+        "convert", "--workspace", str(root.parents[1]), "--target", "orthofinder", "--to", "zip", "--dry-run",
+    ])
+    code, report, _, _ = WORKSPACE.run(args)
+    assert code == 0 and report["targets"][0]["status"] == "dry-run"
+
+
+@pytest.mark.parametrize("to", ["zip", "raw"])
+def test_directory_sync_failure_preserves_recovery_data(tmp_path, monkeypatch, to):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    archive = raw.with_suffix(".zip")
+    if to == "raw":
+        STORE.convert(root, directories=[raw.name])
+    fsync = os.fsync
+
+    def fail_directory_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("directory sync failed")
+        return fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_sync)
+    with pytest.raises(OSError, match="directory sync failed"):
+        STORE.convert(root, to=to, directories=[raw.name])
+    assert archive.is_file() and (raw / "OG9999999.fa").is_file()
+
+
+def test_restore_syncs_nested_directory_entries_before_removing_zip(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    (raw / "nested").mkdir()
+    (raw / "nested/member.fa").write_text(">gene\nACGT\n")
+    STORE.convert(root, directories=[raw.name])
+    synced = set()
+    fsync, unlink = os.fsync, Path.unlink
+
+    def record_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.add(os.fstat(fd).st_ino)
+        return fsync(fd)
+
+    def check_commit(path, *args, **kwargs):
+        if path == raw.with_suffix(".zip"):
+            assert {p.stat().st_ino for p in [raw, raw / "nested", raw / "empty", raw.parent]} <= synced
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fsync", record_sync)
+    monkeypatch.setattr(Path, "unlink", check_commit)
+    STORE.convert(root, to="raw", directories=[raw.name])
+
+
+def test_changed_directory_mode_is_not_discarded_by_retirement(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    retire = STORE._retire
+
+    def changed(raw, data, **kwargs):
+        (raw / "empty").chmod(0o750)
+        return retire(raw, data, **kwargs)
+
+    monkeypatch.setattr(STORE, "_retire", changed)
+    with pytest.raises(STORE.OrthoFinderStorageError, match="metadata"):
+        STORE.convert(root, directories=["Orthogroup_Sequences"])
+    assert (root / "Orthogroup_Sequences/empty").stat().st_mode & 0o777 == 0o750
+    assert (root / "Orthogroup_Sequences/OG9999999.fa").is_file()
+
+
+@pytest.mark.parametrize("name", STORE.MANAGED_DIRECTORIES)
+def test_managed_logical_directory_digest_accepts_versioned_manifest(tmp_path, name):
+    root = result(tmp_path)
+    before = PROVENANCE.raw_or_zip_directory_digest(root / name)
+    STORE.convert(root, directories=[name])
+    assert PROVENANCE.raw_or_zip_directory_digest(root / name) == before
+
+
+@pytest.mark.parametrize("bad_data", [[], {"schema_version": 1, "directory": "Orthogroup_Sequences", "files": None}])
+def test_invalid_manifest_types_fail_with_storage_error(tmp_path, bad_data):
+    root = result(tmp_path)
+    path = root / "Orthogroup_Sequences.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(STORE.MANIFEST, json.dumps(bad_data))
+        archive.comment = STORE.MARKER + b"Orthogroup_Sequences"
+    with pytest.raises(STORE.OrthoFinderStorageError, match="Invalid"):
+        STORE.archive_records(root, "Orthogroup_Sequences")
+    assert (root / "Orthogroup_Sequences/OG9999999.fa").is_file()
+
+
+def test_parallel_backend_checks_combined_temporary_space(tmp_path):
+    root = result(tmp_path)
+    with pytest.raises(STORE.OrthoFinderStorageError, match="Insufficient temporary space"):
+        STORE.convert(root, workers=4, available_bytes=2_000_000)
+    assert not list(root.rglob("*.zip"))
+
+
+def test_empty_raw_directory_still_requires_completed_run_in_dry_run(tmp_path):
+    root = tmp_path / "workspace/output/orthofinder"
+    (root / "Orthogroup_Sequences").mkdir(parents=True)
+    args = WORKSPACE.build_parser().parse_args([
+        "convert", "--workspace", str(root.parents[1]), "--target", "orthofinder", "--to", "zip", "--dry-run",
+    ])
+    code, report, _, _ = WORKSPACE.run(args)
+    assert code == 1 and "completed" in report["targets"][0]["error"]
+
+
+def test_native_child_can_convert_without_releasing_its_parent_fence(tmp_path):
+    root = result(tmp_path)
+    with STORE.storage_lock(root):
+        owner = STORE.inspect_lock(STORE.lock_path(root))["exclusive"]
+        command = [sys.executable, STORE.__file__, "pack", "--root", str(root),
+                   "--directory", "Orthogroup_Sequences", "--producer-lock-token", owner["token"]]
+        child = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert child.returncode == 0, child.stderr
+        assert STORE.inspect_lock(STORE.lock_path(root))["exclusive"] == owner
+        command[-1] = "f" * 32
+        child = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert child.returncode != 0 and "ownership" in child.stderr
+        assert STORE.inspect_lock(STORE.lock_path(root))["exclusive"] == owner
+        with pytest.raises(STORE.OrthoFinderStorageError, match="ownership"):
+            STORE.convert(root, producer_lock_token=owner["token"])
+
+
+def test_interrupted_restore_resumes_and_keeps_zip_until_full_verification(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    STORE.convert(root, directories=[raw.name])
+    replace = os.replace
+
+    def interrupt(source, target):
+        if Path(target).name == "OG9999999.fa":
+            raise OSError("restore interrupted")
+        return replace(source, target)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(os, "replace", interrupt)
+        with pytest.raises(OSError, match="restore interrupted"):
+            STORE.convert(root, to="raw", directories=[raw.name])
+    assert (raw / "OG0000001.fa").is_file() and raw.with_suffix(".zip").is_file()
+    STORE.convert(root, to="raw", directories=[raw.name])
+    assert (raw / "OG9999999.fa").is_file() and not raw.with_suffix(".zip").exists()
+
+
+def test_recovery_zip_replacement_during_retirement_never_deletes_source(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    retire = STORE._retire
+
+    def replaced(raw, data, **kwargs):
+        path = raw.with_suffix(".zip")
+        replacement = path.with_suffix(".replacement")
+        replacement.write_bytes(path.read_bytes())
+        os.replace(replacement, path)
+        return retire(raw, data, **kwargs)
+
+    monkeypatch.setattr(STORE, "_retire", replaced)
+    with pytest.raises(STORE.OrthoFinderStorageError, match="Recovery archive changed"):
+        STORE.convert(root, directories=["Orthogroup_Sequences"])
+    assert (root / "Orthogroup_Sequences/OG0000001.fa").is_file()
+
+
+def test_raw_change_during_restore_commit_preserves_recovery_zip(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    STORE.convert(root, directories=[raw.name])
+    sync = STORE._sync_directory
+
+    def changed(directory):
+        if directory == raw:
+            (raw / "OG9999999.fa").write_bytes(b"concurrent writer")
+        return sync(directory)
+
+    monkeypatch.setattr(STORE, "_sync_directory", changed)
+    with pytest.raises(STORE.OrthoFinderStorageError, match="inventory changed"):
+        STORE.convert(root, to="raw", directories=[raw.name])
+    assert raw.with_suffix(".zip").is_file()
+
+
+def test_audit_reports_leftover_restore_files(tmp_path):
+    root = result(tmp_path)
+    partial = root / ".Orthogroup_Sequences.restore.interrupted"
+    partial.write_bytes(b"partial restored member")
+    args = WORKSPACE.build_parser().parse_args([
+        "audit", "--workspace", str(root.parents[1]), "--target", "orthofinder",
+    ])
+    code, report, _, _ = WORKSPACE.run(args)
+    assert code == 1 and str(partial) in report["targets"][0]["preflight"]["partial_paths"]
+
+
+def test_resumed_retirement_requires_a_durable_recovery_zip(tmp_path, monkeypatch):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    with monkeypatch.context() as scoped:
+        def interrupt(*args, **kwargs):
+            raise OSError("retirement interrupted")
+        scoped.setattr(STORE, "_retire", interrupt)
+        with pytest.raises(OSError, match="retirement interrupted"):
+            STORE.convert(root, directories=[raw.name])
+
+    def fail_sync(path):
+        raise OSError("recovery publication not synced")
+
+    monkeypatch.setattr(STORE, "_sync_directory", fail_sync)
+    with pytest.raises(OSError, match="not synced"):
+        STORE.convert(root, directories=[raw.name])
+    assert (raw / "OG9999999.fa").is_file() and raw.with_suffix(".zip").is_file()
+
+
+@pytest.mark.parametrize("member", ["OG0000001.fa", "OG9999999.fa"])
+def test_member_reader_rejects_mixed_raw_and_zip_sources(tmp_path, member):
+    root = result(tmp_path)
+    STORE.convert(root, directories=["Orthogroup_Sequences"])
+    raw = root / "Orthogroup_Sequences"
+    raw.mkdir()
+    (raw / "OG9999999.fa").write_bytes(b"unverified raw member")
+    with pytest.raises(STORE.OrthoFinderStorageError, match="Incomplete conversion"):
+        with STORE.open_binary(root, raw.name + "/" + member):
+            pytest.fail("mixed member was exposed")
+
+
+def test_unmarked_zip_named_directory_remains_an_ordinary_provenance_tree(tmp_path):
+    root = result(tmp_path)
+    unrelated = root / "unrelated/Orthogroup_Sequences.zip"
+    unrelated.mkdir(parents=True)
+    (unrelated / "ordinary.txt").write_bytes(b"ordinary directory contents")
+    before = PROVENANCE.sha256_path(root)
+    STORE.convert(root)
+    assert PROVENANCE.sha256_path(root) == before
+
+
+def test_cached_logical_zip_digest_cannot_hide_a_new_raw_zip_conflict(tmp_path):
+    root = result(tmp_path)
+    raw = root / "Orthogroup_Sequences"
+    contents = {p.name: p.read_bytes() for p in raw.glob("*.fa")}
+    PROVENANCE.configure_digest_cache(tmp_path / "digests.sqlite")
+    try:
+        before = PROVENANCE.raw_or_zip_directory_digest(raw)
+        STORE.convert(root, directories=[raw.name])
+        assert PROVENANCE.raw_or_zip_directory_digest(raw) == before  # Populate the archive cache.
+        raw.mkdir()
+        for name, value in contents.items():
+            (raw / name).write_bytes(value)
+        with pytest.raises(PROVENANCE.ProvenanceError, match="Incomplete conversion"):
+            PROVENANCE.raw_or_zip_directory_digest(raw)
+    finally:
+        PROVENANCE.configure_digest_cache(None)

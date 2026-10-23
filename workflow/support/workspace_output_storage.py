@@ -325,7 +325,7 @@ def _orthofinder_preflight(spec: dict, args: argparse.Namespace) -> dict:
     names = args.orthofinder_directory or ORTHOFINDER.MANAGED_DIRECTORIES
     records = ORTHOFINDER.status(root, names)
     issues = []
-    if args.command == "convert" and args.to == "zip" and any(row["raw_files"] for row in records):
+    if args.command == "convert" and args.to == "zip" and any(row["state"] in {"raw", "mixed"} for row in records):
         ORTHOFINDER.require_completed(root)
     for record in records:
         record.update(_available_space_fields(root, args.available_bytes))
@@ -334,7 +334,7 @@ def _orthofinder_preflight(spec: dict, args: argparse.Namespace) -> dict:
         record["temporary_space_sufficient"] = required <= record["effective_available_bytes"]
     if args.command == "audit" and any(row["state"] == "mixed" for row in records):
         issues.append("incomplete-conversion")
-    partials = sorted(str(p) for p in root.glob("**/.*.zip.partial.*"))
+    partials = sorted(str(p) for pattern in ("**/.*.zip.partial.*", "**/.*.restore.*") for p in root.glob(pattern))
     if partials:
         issues.append("partial-zip-files")
     return {"directories": records, "partial_paths": partials, "issues": issues}
@@ -885,8 +885,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
     specs = _target_specs(output_root, selected)
     if not specs:
         raise WorkspaceStorageError(f"No selected managed output roots were found below {output_root}")
-    query_dir = discover_query_dir(input_root, args.query_dir)
-    genecount = discover_genecount(output_root, args.genecount)
+    query_dir = discover_query_dir(input_root, args.query_dir) if any(spec["name"] == "query2family" for spec in specs) else None
+    genecount = discover_genecount(output_root, args.genecount) if any(spec["name"] == "orthogroup" for spec in specs) else None
     started = time.monotonic()
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,

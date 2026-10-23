@@ -15,6 +15,8 @@ from typing import Optional
 import pandas
 import pytest
 
+from workflow.support.shared_namespace_lock import inspect_lock
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
 CORE_PATH = WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh"
@@ -1221,6 +1223,8 @@ def test_orthofinder_completion_removes_working_data_and_reuses_retained_results
     assert (tmp_path / "capture/orthofinder_args.txt").read_bytes() == calls
     assert foreign.read_bytes() == b"keep unrelated data\n"
     assert sorted(workspace.rglob("WorkingDirectory")) == [foreign.parent]
+    fence = inspect_lock(workspace / "output/.gg_orthofinder_storage.lock")
+    assert not fence["gate_exists"] and not fence["shared"]
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
@@ -1239,6 +1243,8 @@ def test_orthofinder_failure_retains_working_data(tmp_path: Path, core_limit, fa
 
     assert failed.returncode != 0
     assert "Removing OrthoFinder WorkingDirectory" not in failed.stdout
+    fence = inspect_lock(workspace / "output/.gg_orthofinder_storage.lock")
+    assert not fence["gate_exists"] and not fence["shared"]
     assert not (workspace / "output/orthofinder/hog2og/README.txt").exists()
     assert not (workspace / "output/orthofinder/Orthogroups/Orthogroups.tsv").exists()
     working_dirs = list(workspace.rglob("WorkingDirectory"))

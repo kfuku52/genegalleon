@@ -1,0 +1,277 @@
+{
+  "baseline_commit": "4930a484d98c6095529c802f59995c2721e190ba",
+  "runtime": {
+    "image_id": "sha256:ffdb1ab64997f0746620ed6c2e1ffde4b2ec9808316d949ebc3a9292be08f0c0",
+    "architecture": "arm64",
+    "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+    "filesystem": "Docker /tmp"
+  },
+  "warmups_per_variant": 1,
+  "repetitions": 3,
+  "end_to_end": {
+    "files_per_directory": 2048,
+    "logical_sha256": "b1db2fa34aab2361df1f32c175444a254a68bdab5324ea45a0658b40c98146f7",
+    "before": {
+      "1": {
+        "raw_read_seconds": 0.25298508299999867,
+        "conversion_seconds": 1.0362732509999972,
+        "zip_read_seconds": 0.19447187499999075,
+        "peak_rss_kib": 62664
+      },
+      "2": {
+        "raw_read_seconds": 0.2538369590000116,
+        "conversion_seconds": 1.7772946259999998,
+        "zip_read_seconds": 0.20194508299999825,
+        "peak_rss_kib": 66004
+      },
+      "4": {
+        "raw_read_seconds": 0.2540290419999991,
+        "conversion_seconds": 4.470636960000007,
+        "zip_read_seconds": 0.21166758399999708,
+        "peak_rss_kib": 90816
+      }
+    },
+    "after": {
+      "1": {
+        "raw_read_seconds": 0.2429677919999449,
+        "conversion_seconds": 0.9837942509999493,
+        "zip_read_seconds": 0.1889672500000188,
+        "peak_rss_kib": 49552.0
+      },
+      "2": {
+        "raw_read_seconds": 0.25809749999996257,
+        "conversion_seconds": 1.6717817090000153,
+        "zip_read_seconds": 0.18734395899991796,
+        "peak_rss_kib": 57004.0
+      },
+      "4": {
+        "raw_read_seconds": 0.25480850000008104,
+        "conversion_seconds": 4.183207543000094,
+        "zip_read_seconds": 0.17784541599996828,
+        "peak_rss_kib": 82536.0
+      }
+    },
+    "output_equivalence": true
+  },
+  "zip_writer": {
+    "local": {
+      "summary": {
+        "seekable": {
+          "seconds": 0.1105542919999607,
+          "peak_rss_kib": 30832,
+          "zip_bytes": 1579954
+        },
+        "streaming": {
+          "seconds": 0.07297691700000541,
+          "peak_rss_kib": 30796,
+          "zip_bytes": 1776562
+        }
+      },
+      "trials": [
+        {
+          "writer": "seekable",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.11041295799998352,
+          "peak_rss_kib": 30848,
+          "io": {
+            "write": 16464,
+            "seek": 24581
+          },
+          "zip_bytes": 1579954,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 1
+        },
+        {
+          "writer": "streaming",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.07318429100007506,
+          "peak_rss_kib": 30796,
+          "io": {
+            "write": 2,
+            "seek": 0
+          },
+          "zip_bytes": 1776562,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 1
+        },
+        {
+          "writer": "seekable",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.1105542919999607,
+          "peak_rss_kib": 30784,
+          "io": {
+            "write": 16464,
+            "seek": 24581
+          },
+          "zip_bytes": 1579954,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 2
+        },
+        {
+          "writer": "streaming",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.07265366700005416,
+          "peak_rss_kib": 30740,
+          "io": {
+            "write": 2,
+            "seek": 0
+          },
+          "zip_bytes": 1776562,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 2
+        },
+        {
+          "writer": "seekable",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.11350216699997873,
+          "peak_rss_kib": 30832,
+          "io": {
+            "write": 16464,
+            "seek": 24581
+          },
+          "zip_bytes": 1579954,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 3
+        },
+        {
+          "writer": "streaming",
+          "files": 8192,
+          "latency_ms": 0.0,
+          "seconds": 0.07297691700000541,
+          "peak_rss_kib": 30848,
+          "io": {
+            "write": 2,
+            "seek": 0
+          },
+          "zip_bytes": 1776562,
+          "logical_sha256": "abfd3a8392f2b9ee2f7b14d30f2054981a3ebf84db93961a6b1acb4c8a49f4d0",
+          "warmup": false,
+          "repetition": 3
+        }
+      ],
+      "output_equivalence": true
+    },
+    "latency_model": {
+      "summary": {
+        "seekable": {
+          "seconds": 1.397547626000005,
+          "peak_rss_kib": 24768,
+          "zip_bytes": 394174
+        },
+        "streaming": {
+          "seconds": 0.0180360000000519,
+          "peak_rss_kib": 24772,
+          "zip_bytes": 443326
+        }
+      },
+      "trials": [
+        {
+          "writer": "seekable",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 1.397547626000005,
+          "peak_rss_kib": 24768,
+          "io": {
+            "write": 4116,
+            "seek": 6149
+          },
+          "zip_bytes": 394174,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 1
+        },
+        {
+          "writer": "streaming",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 0.0180360000000519,
+          "peak_rss_kib": 24828,
+          "io": {
+            "write": 1,
+            "seek": 0
+          },
+          "zip_bytes": 443326,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 1
+        },
+        {
+          "writer": "seekable",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 1.3990662500000326,
+          "peak_rss_kib": 24848,
+          "io": {
+            "write": 4116,
+            "seek": 6149
+          },
+          "zip_bytes": 394174,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 2
+        },
+        {
+          "writer": "streaming",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 0.017739042000016525,
+          "peak_rss_kib": 24772,
+          "io": {
+            "write": 1,
+            "seek": 0
+          },
+          "zip_bytes": 443326,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 2
+        },
+        {
+          "writer": "seekable",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 1.3941319169999815,
+          "peak_rss_kib": 24748,
+          "io": {
+            "write": 4116,
+            "seek": 6149
+          },
+          "zip_bytes": 394174,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 3
+        },
+        {
+          "writer": "streaming",
+          "files": 2048,
+          "latency_ms": 0.05,
+          "seconds": 0.01831904100004067,
+          "peak_rss_kib": 24768,
+          "io": {
+            "write": 1,
+            "seek": 0
+          },
+          "zip_bytes": 443326,
+          "logical_sha256": "458f753c9b1ba248f76b4085ac26f4717faad77108e2163d4149224b3a5d74db",
+          "warmup": false,
+          "repetition": 3
+        }
+      ],
+      "output_equivalence": true
+    }
+  },
+  "limitations": [
+    "Synthetic small FASTA fixture; production QNAP/NFS throughput was not measured.",
+    "The latency model adds a requested 0.05 ms sleep to each raw write/seek; scheduler overhead is included.",
+    "Streaming adds standard ZIP64 data descriptors: 24 bytes per data member."
+  ]
+}

@@ -40,7 +40,7 @@ def trial(work_root, files, workers):
             raise RuntimeError("Logical output differs")
         return dict(workers=workers, files_per_directory=files, raw_read_seconds=raw_read,
                     conversion_seconds=conversion, zip_read_seconds=zip_read,
-                    peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                    peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 if sys.platform == "darwin" else 1),
                     logical_sha256=before[0], logical_bytes=before[1],
                     raw_files=files * 4 + 1, zip_files=sum(p.is_file() for p in root.rglob("*")))
 
