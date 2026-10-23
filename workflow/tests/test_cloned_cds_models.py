@@ -550,7 +550,7 @@ def test_manifest_signature_and_frozen_plan_include_only_explicit_selected_clone
 
 
 @pytest.mark.parametrize("mode", ["single", "array"])
-@pytest.mark.parametrize("curation_mode", ["genomic", "sequence", "experimental", "experimental_new_locus"])
+@pytest.mark.parametrize("curation_mode", ["genomic", "sequence", "sequence_reviewed", "sequence_unplaced", "experimental", "experimental_new_locus"])
 def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode, curation_mode):
     from test_gg_input_generation_end_to_end import (
         CORE_PATH,
@@ -584,10 +584,24 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
         genome_url=paths["genome"].as_uri(),
         cloned_cds_ids='["experimental/clone:1"]',
     )
-    if curation_mode == 'sequence':
+    if curation_mode.startswith('sequence'):
         row.pop('gff_url')
         row.pop('genome_url')
         row['cloned_cds_mode'] = 'sequence'
+        if curation_mode != 'sequence':
+            ids = ['experimental/clone:1']
+            sources = ['N_fragment.t1', 'C_fragment.t1']
+            if curation_mode == 'sequence_reviewed':
+                changed = sequence[:450] + ('GCT' if sequence[450:453] != 'GCT' else 'GGT') + sequence[453:]
+                paths['clone'].write_text(paths['clone'].read_text() + '>alternative_clone\n' + changed + '\n')
+                row['cloned_cds_sha256'] = hashlib.sha256(paths['clone'].read_bytes()).hexdigest()
+                ids.append('alternative_clone')
+            else:
+                paths['cds'].write_text('>neighbour.t1\nATGAAACCCTAA\n')
+                sources = []
+            row['cloned_cds_ids'] = json.dumps(ids)
+            row['cloned_cds_sequence_groups'] = json.dumps({'candidate': dict(clone_ids=ids,
+                source_cds_ids=sources, unplaced=not sources)})
     manifest = tmp_path / "cloned_inputs.tsv"
     with manifest.open("w") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(row), delimiter="\t")
@@ -601,7 +615,7 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     def run(phase, index=None, success=True, force=False):
         env = _core_env(
             workspace, None, fake_bin, phase, index, require_cds=True,
-            require_gff=curation_mode != 'sequence', require_genome=curation_mode != 'sequence'
+            require_gff=not curation_mode.startswith('sequence'), require_genome=not curation_mode.startswith('sequence')
         )
         env.update(
             provider="all",
@@ -637,9 +651,12 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     clone_audit = Path(summary[0]["cloned_model_audit_path"])
     assert clone_audit.is_file()
     audit = json.loads(clone_audit.read_text())
-    assert summary[0]['cloned_cds_mode'] == ('experimental' if curation_mode.startswith('experimental') else curation_mode)
-    if curation_mode == 'sequence':
-        assert audit['decisions'][0]['status'] == 'replace'
+    assert summary[0]['cloned_cds_mode'] == ('experimental' if curation_mode.startswith('experimental') else 'sequence' if curation_mode.startswith('sequence') else curation_mode)
+    if curation_mode.startswith('sequence'):
+        assert audit['decisions'][0]['status'] == ('add_unplaced' if curation_mode == 'sequence_unplaced' else 'replace')
+        if curation_mode == 'sequence_reviewed':
+            assert audit['decisions'][1]['status'] == 'alternative_clone'
+            assert (clone_audit.parent / audit['outputs']['alternative_cloned_cds']).is_file()
     else:
         assert len(audit["replacements"]) == 1
     cds = Path(summary[0]["cds_output_path"])
