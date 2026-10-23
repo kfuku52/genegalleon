@@ -120,7 +120,7 @@ def test_workspace_convert_zip_and_raw_roundtrip(tmp_path: Path):
     ).is_file()
     assert not (workspace / "output" / "orthogroup" / "mafft").exists()
     assert genecount.read_bytes() == original_genecount
-    assert str((workspace / "output" / "orthofinder").resolve()) in report["excluded_paths"]
+    assert str((workspace / "output" / "orthofinder").resolve()) not in report["excluded_paths"]
     orthogroup_report = next(
         target for target in report["targets"] if target["name"] == "orthogroup"
     )

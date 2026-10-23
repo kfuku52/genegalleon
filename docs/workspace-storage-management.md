@@ -42,17 +42,74 @@ The command detects these workspace layouts:
 - `workspace/output` or `gfe_data` supplied directly as `--workspace`.
 
 Within the detected output root, it manages only `query2family/`,
-`orthogroup/`, and the five documented high-file-count directories below
+`orthogroup/`, the four OrthoFinder sequence directories listed below, and the five documented high-file-count directories below
 `species_tree/`: `single_copy_cds_fasta`, `single_copy_mafft`,
 `single_copy_trimal`, `single_copy_iqtree_pep`, and
 `single_copy_iqtree_dna`.
 
-It never converts or edits `orthofinder/`, `genome_evolution/busco_*`,
+Below `orthofinder/`, it manages only `Orthogroup_Sequences`,
+`MultipleSequenceAlignments`, `core/Orthogroup_Sequences`, and
+`core/MultipleSequenceAlignments`. Each directory becomes one ZIP64 file next
+to its original path. All OGs are retained, including those absent from the
+selected-family catalog. Tables, trees, logs and other OrthoFinder results stay
+raw. A native completed all-species `Log.txt` is required before packing.
+
+It never converts or edits other OrthoFinder paths, `genome_evolution/busco_*`,
 unrecognized files or subdirectories below a gene-family output root, or small
 shared species-tree summary directories outside the managed list. Excluded
 top-level paths and unmatched gene-family file counts are recorded in the
 report. At most 20 unmatched path examples are included so a report cannot
 itself become a high-file-count artifact.
+
+### OrthoFinder sequence storage
+
+Successful `gg_genome_evolution` inference archives these four directories after
+publication, completion recording and WorkingDirectory cleanup. Core results
+remain raw until the all-species `--assign` run has completed. Failed inference
+is never archived by exit cleanup. Reusing a completed result audits existing
+ZIP metadata without decompressing every payload again.
+
+To migrate an idle legacy workspace in two steps:
+
+```bash
+bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
+  --target orthofinder --to zip --dry-run --workers 2
+bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
+  --target orthofinder --to zip --workers 2 \
+  --orthofinder-directory Orthogroup_Sequences \
+  --orthofinder-directory MultipleSequenceAlignments
+bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
+  --target orthofinder --to zip --workers 2 \
+  --orthofinder-directory core/Orthogroup_Sequences \
+  --orthofinder-directory core/MultipleSequenceAlignments
+bash workflow/gg_workspace_storage.sh audit --workspace /path/to/workspace \
+  --target orthofinder --verification deep
+```
+
+New archives contain a versioned manifest of every file's relative path, size,
+SHA256, mode and modification time, plus empty-directory metadata. Conversion
+reads back every ZIP member (CRC and SHA256), checks source membership/identity,
+and rereads source contents before deleting only verified files. Interrupted
+deletion can resume from an equal remaining subset. Changed or extra files stop
+conversion and retain both forms. Publication is atomic; a project-local
+OrthoFinder namespace lock excludes participating producers/converters without
+blocking other projects. Old runtimes do not participate: stop them first.
+
+GeneGalleon's directory provenance uses the original logical paths and actual
+member contents, preserving existing raw-tree digests and summary freshness.
+Use the updated GeneGalleon readers for subsequent runs; old readers hash the
+physical ZIP layout. No scientific provenance manifest is rewritten merely to
+hide a storage change. Incomplete mixed raw/ZIP trees fail the logical audit.
+
+`convert --target orthofinder --to raw` restores all four directories and checks
+every restored file before removing each ZIP. Native tools need real paths;
+the Python `materialized_directory(root, name, scratch)` context restores one
+directory into caller-owned scratch and removes that temporary copy afterward.
+It preserves the source ZIP. `open_binary(root, relative)` reads a member without
+creating expanded files. Existing WorkingDirectory deletion policy is unchanged:
+these archives preserve retained results and cannot recreate a previously
+deleted native restart checkpoint. Check the native restart's required files
+before using `--assign`, `-b`, `-fg`, or `-ft`.
 
 ## Before running a conversion
 

@@ -1197,8 +1197,12 @@ def test_orthofinder_completion_removes_working_data_and_reuses_retained_results
     for directory in result_dirs:
         assert not (directory / "WorkingDirectory").exists()
         assert (directory / "Orthogroups/Orthogroups.tsv").is_file()
-        assert (directory / "Orthogroup_Sequences/OG0000001.fa").read_bytes() == b">gene1\nMPEP\n"
-        assert (directory / "MultipleSequenceAlignments/OG0000001.fa").read_bytes() == b">gene1\nM-PEP\n"
+        assert not (directory / "Orthogroup_Sequences").exists()
+        assert not (directory / "MultipleSequenceAlignments").exists()
+        with zipfile.ZipFile(directory / "Orthogroup_Sequences.zip") as archive:
+            assert archive.read("Orthogroup_Sequences/OG0000001.fa") == b">gene1\nMPEP\n"
+        with zipfile.ZipFile(directory / "MultipleSequenceAlignments.zip") as archive:
+            assert archive.read("MultipleSequenceAlignments/OG0000001.fa") == b">gene1\nM-PEP\n"
         assert (directory / "Resolved_Gene_Trees/OG0000001_tree.txt").read_bytes() == b"(gene1:1,gene2:1);\n"
         assert (directory / "Species_Tree/SpeciesTree_rooted.txt").read_bytes() == b"(species1:1,species2:1);\n"
     assert (public / "hog2og/README.txt").is_file()

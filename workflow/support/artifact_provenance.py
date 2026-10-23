@@ -49,6 +49,7 @@ from gene_family_output_store import (
     query_id_matchers,
     read_only_observation,
 )
+from orthofinder_output_store import logical_records as orthofinder_logical_records
 from safe_zip_extract import extract_expected_prefix, validated_members
 from workflow_observation import observe_path, observing_files, strict_json_loads
 
@@ -327,7 +328,18 @@ def _directory_digest(path: Path) -> tuple[str, int, int]:
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
-    for child in sorted(path.rglob("*")):
+    children = sorted(path.rglob("*"))
+    logical = orthofinder_logical_records(path, observe=observe_path, children=children)
+    if logical is not None:
+        for relative, child_digest, child_size in logical:
+            relative_bytes = relative.encode("utf-8")
+            digest.update(len(relative_bytes).to_bytes(8, "big"))
+            digest.update(relative_bytes)
+            digest.update(bytes.fromhex(child_digest))
+            digest.update(child_size.to_bytes(8, "big"))
+            total_size += child_size
+        return digest.hexdigest(), total_size, len(logical)
+    for child in children:
         observe_path(child)
         if child.is_symlink():
             raise ProvenanceError(f"Symlinked directory members are unsupported: {child}")

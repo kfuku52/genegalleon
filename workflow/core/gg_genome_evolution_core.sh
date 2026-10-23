@@ -2965,13 +2965,24 @@ shared_busco_summary_stage_done=0
 shared_species_omark_stage_done=0
 shared_omark_summary_stage_done=0
 
+orthofinder_storage_lock_release() {
+  if [[ -n "${orthofinder_storage_lock_token:-}" ]]; then
+    python "${gg_support_dir}/shared_namespace_lock.py" release-exclusive \
+      "${orthofinder_storage_lock_file}" --token "${orthofinder_storage_lock_token}" || return $?
+    orthofinder_storage_lock_token=""
+  fi
+}
+
 cleanup_genome_evolution_on_exit() {
   local exit_status=$?
   local cleanup_status=0
   local archive_status=0
+  local orthofinder_lock_status=0
   local active_background_jobs=""
   trap - EXIT
   set +e
+  orthofinder_storage_lock_release
+  orthofinder_lock_status=$?
   cleanup_species_protein_tmp
   cleanup_status=$?
   active_background_jobs=$(jobs -pr)
@@ -2984,6 +2995,8 @@ cleanup_genome_evolution_on_exit() {
   if [[ ${exit_status} -eq 0 ]]; then
     if [[ ${cleanup_status} -ne 0 ]]; then
       exit_status=${cleanup_status}
+    elif [[ ${orthofinder_lock_status} -ne 0 ]]; then
+      exit_status=${orthofinder_lock_status}
     elif [[ ${archive_status} -ne 0 ]]; then
       exit_status=${archive_status}
     fi
@@ -4771,6 +4784,14 @@ fi
 
 # Orthogroup inference
 
+# One project-local native producer/conversion fence; no cross-project lock.
+orthofinder_storage_lock_file="${gg_workspace_output_dir}/.gg_orthofinder_storage.lock"
+orthofinder_storage_lock_token=""
+if [[ ${run_orthofinder} -eq 1 || "${genome_evolution_mode}" == "orthogroups" ]]; then
+  orthofinder_storage_lock_token=$(python "${gg_support_dir}/shared_namespace_lock.py" acquire-exclusive \
+    "${orthofinder_storage_lock_file}" --owner-pid "$$") || exit $?
+fi
+
 if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
   artifact_stale_policy="${orthogroup_requested_stale_policy}"
   artifact_legacy_policy="${orthogroup_requested_legacy_policy}"
@@ -5322,6 +5343,13 @@ else
     orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}" || exit $?
   fi
   gg_step_skip "${task}"
+fi
+
+orthofinder_storage_lock_release || exit $?
+if [[ ${run_orthofinder} -eq 1 && -s "${file_orthofinder_done_marker}" ]]; then
+  # The all-species result is published and audited; core --assign has finished.
+  # Do not archive from EXIT cleanup or while native inference is still running.
+  python "${gg_support_dir}/orthofinder_output_store.py" pack --root "${dir_orthofinder}" || exit $?
 fi
 
 task="OMArk analysis of species-wise protein input files"
