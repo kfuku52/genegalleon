@@ -3345,6 +3345,8 @@ if [[ ${run_trimal} -eq 1 ]]; then
 fi
 
 task="ClipKIT"
+clipkit_binary="${clipkit_binary:-clipkit}"
+clipkit_source_manifest="${clipkit_source_manifest:-}"
 disable_if_no_input_file "run_clipkit" "${file_og_untrimmed_aln_analysis}"
 clipkit_needs_update=0
 clipkit_provenance_args=(
@@ -3360,6 +3362,21 @@ clipkit_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "mode=smart-gap"
 )
+if [[ ${run_clipkit} -eq 1 && ( "${clipkit_binary}" != "clipkit" || -n "${clipkit_source_manifest}" ) ]]; then
+  clipkit_executable=$(command -v -- "${clipkit_binary}" || true)
+  if [[ ! -f "${clipkit_executable}" || ! -s "${clipkit_executable}" || ! -x "${clipkit_executable}" ]]; then
+    echo "Missing executable ClipKIT runtime: ${clipkit_binary}" >&2
+    exit 1
+  fi
+  clipkit_provenance_args+=(--input "clipkit_executable=${clipkit_executable}")
+  if [[ -n "${clipkit_source_manifest}" ]]; then
+    if [[ ! -f "${clipkit_source_manifest}" || ! -s "${clipkit_source_manifest}" ]]; then
+      echo "Missing ClipKIT source manifest: ${clipkit_source_manifest}" >&2
+      exit 1
+    fi
+    clipkit_provenance_args+=(--input "clipkit_source_manifest=${clipkit_source_manifest}")
+  fi
+fi
 gg_artifact_prepare_stage clipkit_needs_update run_clipkit "${clipkit_provenance_args[@]}" || exit $?
 if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -3369,7 +3386,7 @@ if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.cds.clipkit.input.fasta"
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
-    clipkit \
+    "${clipkit_binary}" \
       "${og_id}.cds.clipkit.input.fasta" \
       --mode smart-gap \
       --sequence_type aa \
@@ -3378,7 +3395,7 @@ if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
       --output "${og_id}.cds.clipkit.hammer.fasta" \
       --log
   else
-    clipkit \
+    "${clipkit_binary}" \
       "${og_id}.cds.clipkit.input.fasta" \
       --mode smart-gap \
       --sequence_type nt \

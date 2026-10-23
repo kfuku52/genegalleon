@@ -1,5 +1,15 @@
 # Workflow helper efficiency
 
+## Complete native ClipKIT runtimes
+
+`gg_gene_evolution` accepts `clipkit_binary` and an optional
+`clipkit_source_manifest` for a complete external native runtime. Its executable
+and source inventory become hashed ClipKIT-stage inputs, so changing either
+invalidates that stage's cached result. Missing selected files stop before prior
+outputs are removed. Defaults keep using the installed `clipkit` command and
+the existing provenance inputs. Trimming mode, codon handling and cutoffs stay
+unchanged; qualify an external runtime in the actual execution container.
+
 ## OrthoFinder ZIP publication
 
 The ZIP writer buffers 1 MiB and uses standard ZIP64 data descriptors. It no
