@@ -19,8 +19,26 @@ if str(SCRIPT_DIR) not in sys.path:
 from input_generation_array_state import FreshDigestBatch
 
 
+def _topology_splits(tree, leaf_bits, leaf_mask):
+    """Encode each unrooted edge using a shared, unique tip-to-bit mapping."""
+    descendants = {}
+    splits = set()
+    for node in tree.traverse(strategy="postorder"):
+        if node.is_leaf:
+            mask = leaf_bits[node.name]
+        else:
+            mask = 0
+            for child in node.children:
+                mask |= descendants[child]
+        descendants[node] = mask
+        if not node.is_root:
+            # Either side identifies the same unordered edge bipartition.
+            splits.add(min(mask, leaf_mask ^ mask))
+    return splits
+
+
 def select_root(args):
-    from nwkit.clade_mapping import canonical_split, projected_root_split
+    from nwkit.clade_mapping import projected_root_split
     from nwkit.cli import parser as nwkit_parser
     from nwkit.file_paths import validate_outputs_do_not_replace_inputs
     from nwkit.output_transaction import output_transaction, validate_output_targets
@@ -77,19 +95,15 @@ def select_root(args):
         native_splits = {method: projected_root_split(tree, leaves) for method, tree in native_trees.items()}
         if any(split is None for split in native_splits.values()):
             raise ValueError("NWKIT did not produce a resolved root edge.")
-        def topology_splits(tree):
-            descendants = tree.get_cached_content()
-            return {canonical_split(frozenset(leaf.name for leaf in tips),
-                                    leaves - frozenset(leaf.name for leaf in tips))
-                    for node, tips in descendants.items() if not node.is_root}
-
-        expected_topology = topology_splits(native_trees["mad"])
+        leaf_bits = {name: 1 << index for index, name in enumerate(sorted(leaves))}
+        leaf_mask = (1 << len(leaves)) - 1
+        expected_topology = _topology_splits(native_trees["mad"], leaf_bits, leaf_mask)
         reconciliation_splits = []
         for path in candidates:
             candidate = read_tree(str(path), "auto", True)
             if len(candidate) != len(leaves) or frozenset(candidate.leaf_names()) != leaves:
                 raise ValueError(f"Reconciliation candidate tips are duplicated or differ from the input tree: {path}")
-            if topology_splits(candidate) != expected_topology:
+            if _topology_splits(candidate, leaf_bits, leaf_mask) != expected_topology:
                 raise ValueError(f"Reconciliation candidate has a different unrooted topology: {path}")
             split = projected_root_split(candidate, leaves)
             if split is None:

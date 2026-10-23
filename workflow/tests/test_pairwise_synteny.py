@@ -1,5 +1,6 @@
 import argparse
 import csv
+import gzip
 import importlib
 import itertools
 import json
@@ -853,6 +854,61 @@ def test_dotplot_genome_lengths_use_full_sequence_not_gene_extent(tmp_path):
     path.write_text(">chr1 comment\n" + "N" * 999999 + "\nA\n")
     lengths, _ = dotplot.chromosome_lengths({"kind": "genome", "path": str(path)}, display_genes("t", (("chr1", 1),)), 1000000)
     assert lengths == {"chr1": 1000000}
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("width", [64, 80, 1000000])
+def test_dotplot_genome_lengths_accept_folded_mixed_iupac_and_u(tmp_path, compressed, width):
+    path = tmp_path / ("genome.fa.gz" if compressed else "genome.fa")
+    sequence = "ACGTURYSWKMBDHVNacgturyswkmbdhvn" * 100
+    text = ">chr1 description\r\n\r\n" + "".join(
+        " \t" + sequence[offset:offset + width] + "\t \r\n"
+        for offset in range(0, len(sequence), width))
+    opener = gzip.open if compressed else open
+    with opener(path, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    lengths, metadata = dotplot.chromosome_lengths(
+        {"kind": "genome", "path": str(path)}, [SimpleNamespace(seqid="chr1", end=len(sequence))], 1)
+    assert lengths == {"chr1": len(sequence)}
+    assert metadata == {"kind": "genome", "path": str(path), "unknown_seqids": []}
+    assert type(lengths["chr1"]) is int
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("character", [
+    chr(codepoint) for codepoint in range(128)
+    if chr(codepoint) not in "ACGTURYSWKMBDHVNacgturyswkmbdhvn\r\n"
+] + ["İ", "ı", "ſ", "K", "Ａ", "é", "\u00a0", "\u2003", "\u2028", "\ufeff", "🧬"])
+def test_dotplot_genome_lengths_reject_internal_non_iupac_character(tmp_path, compressed, character):
+    path = tmp_path / ("genome.fa.gz" if compressed else "genome.fa")
+    opener = gzip.open if compressed else open
+    with opener(path, "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nAC" + character + "GT\n")
+    with pytest.raises(ValueError, match="^Invalid genome FASTA sequence: chr1$"):
+        dotplot.chromosome_lengths({"kind": "genome", "path": str(path)}, (), 0)
+
+
+@pytest.mark.parametrize("text,message", [
+    ("ACGT\n", "Genome sequence precedes FASTA header"),
+    ("> \t\nACGT\n", "Empty genome FASTA identifier"),
+    (">chr1\n", "Duplicate or invalid chromosome length: chr1"),
+    (">chr1\n>chr2\nACGT\n", "Duplicate or invalid chromosome length: chr1"),
+    (">chr1\nACGT\n>chr1 other description\nACGT\n", "Duplicate or invalid chromosome length: chr1"),
+])
+def test_dotplot_genome_lengths_preserve_fasta_structure_errors(tmp_path, text, message):
+    path = tmp_path / "genome.fa"
+    path.write_text(text)
+    with pytest.raises(ValueError) as error:
+        dotplot.chromosome_lengths({"kind": "genome", "path": str(path)}, (), 0)
+    assert str(error.value) == message
+
+
+def test_dotplot_genome_lengths_reject_coordinates_beyond_assembly(tmp_path):
+    path = tmp_path / "genome.fa"
+    path.write_text(">chr1\nACGT\n")
+    with pytest.raises(ValueError, match="^An annotation coordinate exceeds the declared chromosome length$"):
+        dotplot.chromosome_lengths(
+            {"kind": "genome", "path": str(path)}, [SimpleNamespace(seqid="chr1", end=5)], 1)
 
 
 def test_dotplot_2x2_sort_groups_both_tracks_preserves_weak_connections_and_deduplicates(tmp_path):

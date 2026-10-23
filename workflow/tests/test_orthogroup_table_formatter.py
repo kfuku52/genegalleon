@@ -151,3 +151,68 @@ def test_empty_hog_identity_does_not_create_output_directory(tmp_path):
     with pytest.raises(ValueError, match="empty family identity"):
         mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode="hog2og", dir_out=str(out)))
     assert not out.exists()
+
+
+@pytest.mark.parametrize("duplicate_index", [False, True])
+def test_gene_counts_preserve_cell_semantics_index_and_column_order(duplicate_index):
+    mod = load_module()
+    cells = [
+        None,
+        float("nan"),
+        pandas.NA,
+        "",
+        "NA",
+        " ",
+        ",",
+        ",gene,,",
+        101,
+        0,
+        True,
+        -2.5,
+        "gene1, gene2",
+        "gene1\ngene2",
+    ]
+    index = pandas.Index([i % 3 for i in range(len(cells))], name="row") if duplicate_index else None
+    families = [f"OG{i}" for i in range(len(cells))]
+    source = pandas.DataFrame({"speciesA": cells, "Orthogroup": families, "speciesB": "gene"}, index=index)
+    original = source.copy(deep=True)
+    counts = [0, 0, 0, 0, 1, 1, 2, 4, 1, 1, 1, 1, 2, 1]
+    expected = pandas.DataFrame(
+        {"Orthogroup": families, "speciesB": 1, "speciesA": counts, "Total": [value + 1 for value in counts]},
+        index=index,
+    )
+
+    actual = mod.build_gene_count_table(source, ["speciesB", "speciesA"])
+
+    pandas.testing.assert_frame_equal(actual, expected)
+    pandas.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.parametrize("dtype", ["object", "string"])
+def test_gene_counts_keep_integer_columns_for_empty_tables(dtype):
+    mod = load_module()
+    source = pandas.DataFrame({"Orthogroup": pandas.Series(dtype=dtype), "speciesA": pandas.Series(dtype=dtype)})
+    expected = pandas.DataFrame(
+        {"Orthogroup": source["Orthogroup"], "speciesA": pandas.Series(dtype=int), "Total": pandas.Series(dtype=int)}
+    )
+    pandas.testing.assert_frame_equal(mod.build_gene_count_table(source, ["speciesA"]), expected)
+
+
+def test_gene_counts_without_species_keep_family_index():
+    mod = load_module()
+    source = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"]}, index=[9, 9])
+    expected = source.assign(Total=0)
+    pandas.testing.assert_frame_equal(mod.build_gene_count_table(source, []), expected)
+
+
+def test_sp2og_preserves_formatted_genes_and_integer_counts(tmp_path):
+    mod = load_module()
+    source = tmp_path / "sonicparanoid.tsv"
+    source.write_text("group_id\tspA.fa\tspB.faa\n1\tg*1,g2*\t\n12\tNA\t007\n", encoding="utf-8")
+    out = tmp_path / "output"
+    mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode="sp2og", dir_out=str(out)))
+
+    assert (out / "Orthogroups.tsv").read_text() == ("Orthogroup\tspA\tspB\nSP0000001\tg1, g2\t\nSP0000012\tNA\t007\n")
+    assert (out / "Orthogroups.GeneCount.tsv").read_text() == (
+        "Orthogroup\tspA\tspB\tTotal\nSP0000001\t2\t0\t2\nSP0000012\t1\t1\t2\n"
+    )

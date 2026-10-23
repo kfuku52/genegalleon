@@ -103,12 +103,17 @@ def read_uniprot_descriptions(path, accessions=None):
                 parts = header.split(None, 1)
                 identifier = parts[0]
                 acc = uniprot_accession(identifier)
+                if accessions is None:
+                    keys = (acc,)
+                else:
+                    keys = {acc, identifier} & accessions
+                    if not keys:
+                        continue
                 text = parts[1] if len(parts) > 1 else ''
                 if acc != identifier:
                     # Official UniProt FASTA headers carry accession and entry
                     # name; search tools commonly return only the accession.
                     text = re.split(r'\s(?:OS|OX|GN|PE|SV)=', text, maxsplit=1)[0]
-                keys = (acc,) if accessions is None else {acc, identifier} & accessions
                 for key in keys:
                     desc[key] = text
     return desc

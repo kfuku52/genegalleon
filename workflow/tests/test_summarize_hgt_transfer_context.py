@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import sys
 from pathlib import Path
 
@@ -229,3 +230,41 @@ def test_clade_correspondence_never_uses_pruning_or_ambiguous_ancestral_aliases(
     assert events[0]['mapping_reason'] == 'external_tree_mismatch'
     assert 'analysis_recipient_node' not in events[0]
     assert links == []
+
+
+@pytest.mark.parametrize("empty_stat", [False, True])
+def test_event_source_hashes_follow_family_bytes_and_fresh_calls(tmp_path, empty_stat):
+    root, branch, genes = fixture(tmp_path, transfer="Y@D_species@007; invalid")
+    xml = root / "generax_xml/OG0001_generax.xml"
+    xml.write_text(xml.read_text().replace("</recPhylo>", "<!-- source β --></recPhylo>"))
+    other_xml = xml.with_name("OG0002_generax.xml")
+    other_xml.write_bytes(xml.read_bytes() + b"\n")
+    stat = root / "stat_branch/OG0001_stat.branch.tsv"
+    if empty_stat:
+        stat.with_name("OG0002_stat.branch.tsv").write_text("")
+    branches = [branch, dict(branch, orthogroup="OG0002")]
+    genes += [dict(row, orthogroup="OG0002") for row in genes]
+    store = GeneFamilyOutputStore(root)
+
+    first, first_links = summarize(branches, genes, store)
+    assert len(first) == 4
+    assert [event["mapping_status"] for event in first] == ["matched", "unresolved"] * 2
+    for event in first:
+        expected_xml = xml if event["orthogroup"] == "OG0001" else other_xml
+        assert event["generax_xml_sha256"] == hashlib.sha256(expected_xml.read_bytes()).hexdigest()
+        assert event["stat_branch_sha256"] == (
+            hashlib.sha256(stat.read_bytes()).hexdigest() if event["orthogroup"] == "OG0001" else "")
+
+    xml.write_bytes(xml.read_bytes() + b"\n")
+    stat.write_bytes(stat.read_bytes().replace(b"\t90\t", b"\t91\t"))
+    second, second_links = summarize(branches, genes, store)
+    assert second_links == first_links
+    for old, new in zip(first, second, strict=True):
+        if new["orthogroup"] == "OG0001":
+            assert new["generax_xml_sha256"] == hashlib.sha256(xml.read_bytes()).hexdigest()
+            assert new["stat_branch_sha256"] == hashlib.sha256(stat.read_bytes()).hexdigest()
+            assert old["generax_xml_sha256"] != new["generax_xml_sha256"]
+            assert old["stat_branch_sha256"] != new["stat_branch_sha256"]
+            assert new["support_generax_ufboot"] == 91
+        else:
+            assert new == old

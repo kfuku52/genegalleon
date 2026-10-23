@@ -212,8 +212,11 @@ def sign_flip(sums, rng, replicates, exact_max_states):
         return {"p_value": extreme / (1 << n), "test_method": "exact_meet_in_middle", "null_draws": 1 << n}
     extreme = 0
     batch_size = max(1, min(4096, 1000000 // n))
+    # Choice consumes the same random indices for this smaller population dtype;
+    # multiplication still promotes to float64, without an int64 sign matrix.
+    signs = np.array([-1, 1], dtype=np.int8)
     for start in range(0, replicates, batch_size):
-        null = abs((rng.choice([-1, 1], (min(batch_size, replicates - start), n)) * sums).sum(axis=1))
+        null = abs((rng.choice(signs, (min(batch_size, replicates - start), n)) * sums).sum(axis=1))
         extreme += int(np.count_nonzero(null >= threshold))
     # Wilson interval for the sampled null tail probability, not biological uncertainty.
     tail, z = extreme / replicates, 1.959963984540054

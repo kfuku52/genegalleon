@@ -294,6 +294,8 @@ def summarize(branches, gene_rows, store, species_tree=""):
                 if stat["branch_id"] in stats:
                     raise ValueError(f"Duplicate stat_branch key in {family}")
                 stats[stat["branch_id"]] = stat
+        xml_sha = hashlib.sha256(xml_text.encode()).hexdigest() if xml_text else ""
+        stat_sha = hashlib.sha256(stat_text.encode()).hexdigest() if stat_text else ""
         for branch in rows:
             branch_genes = labels(branch.get("candidate_genes", branch.get("gene_labels", "")))
             stat = stats.get(branch["branch_id"])
@@ -304,8 +306,7 @@ def summarize(branches, gene_rows, store, species_tree=""):
                          "generax_donor_node": "", "generax_recipient_node": "",
                          "mapping_status": "unresolved", "mapping_reason": "",
                          "support_status": "missing_stat_branch", "support_source": "",
-                         "generax_xml_sha256": hashlib.sha256(xml_text.encode()).hexdigest() if xml_text else "",
-                         "stat_branch_sha256": hashlib.sha256(stat_text.encode()).hexdigest() if stat_text else ""}
+                         "generax_xml_sha256": xml_sha, "stat_branch_sha256": stat_sha}
                 events.append(event)
                 stat_matches = stat is not None and labels(stat.get("gene_labels", "")) == branch_genes
                 if stat is not None:

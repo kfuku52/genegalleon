@@ -527,6 +527,10 @@ shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 
 ## Database memory and timing comparisons
 
+The [2026-10-23 workflow helper review](performance-review-2026-10-23.md)
+records ten candidate optimizations, accepted and rejected measurements, exact
+output comparisons, and reproducible benchmark commands.
+
 `benchmark_orthogroup_database.py` creates deterministic many-family and
 single-large-file workloads (131,072 branch rows each), runs each build in a
 fresh process, and records wall time, Linux peak RSS, row counts, and a digest

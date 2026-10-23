@@ -154,6 +154,36 @@ def _annotate_blast_coverage_serial(out):
     agg_rows = []
     grouped_indices = out.groupby(["qacc", "sacc"], sort=False).indices
     for (qacc, sacc), idx in grouped_indices.items():
+        if idx.size == 1:
+            # A single HSP is already its interval union; avoid per-group arrays
+            # and reductions while retaining the multi-HSP output contract.
+            position = idx[0]
+            qlen = float(qlen_arr[position])
+            slen = float(slen_arr[position])
+            qcovered = int(q_hi_arr[position]) - int(q_lo_arr[position]) + 1
+            scovered = int(s_hi_arr[position]) - int(s_lo_arr[position]) + 1
+            row = {
+                "qacc": qacc,
+                "sacc": sacc,
+                "qlen": qlen,
+                "slen": slen,
+                "num_hits": 1,
+                "qhitcov": f"{float(qhitcov_arr[position]):.15g}",
+                "shitcov": f"{float(shitcov_arr[position]):.15g}",
+                "qjointcov": 0.0 if qlen <= 0 else qcovered / qlen,
+                "sjointcov": 0.0 if slen <= 0 else scovered / slen,
+            }
+            if evalue_arr is not None:
+                evalue = evalue_arr[position]
+                row["min_evalue"] = numpy.nan if numpy.isnan(evalue) else float(evalue)
+            if bitscore_arr is not None:
+                bitscore = bitscore_arr[position]
+                row["max_bitscore"] = numpy.nan if numpy.isnan(bitscore) else float(bitscore)
+            for col, arr in hit_arrays.items():
+                row[col] = ";".join((arr[position],))
+            agg_rows.append(row)
+            continue
+
         idx = numpy.asarray(idx, dtype=numpy.int64)
         q_lo = q_lo_arr[idx]
         q_hi = q_hi_arr[idx]

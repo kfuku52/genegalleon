@@ -1,6 +1,7 @@
 import csv
 import itertools
 import json
+import math
 
 import numpy as np
 import pytest
@@ -381,3 +382,42 @@ def test_batched_bootstrap_matches_complete_draws_and_rng_state(blocks, bit_gene
     np.testing.assert_array_equal(sd.bootstrap_estimates(sums, counts, 201, actual_rng), expected)
     assert json.dumps(actual_rng.bit_generator.state, default=lambda v: v.tolist()) == json.dumps(
         expected_rng.bit_generator.state, default=lambda v: v.tolist())
+
+
+@pytest.mark.parametrize('blocks,replicates', [(17, 4097), (1001, 1103)])
+@pytest.mark.parametrize('bit_generator', [np.random.PCG64, np.random.PCG64DXSM,
+                                        np.random.MT19937, np.random.Philox, np.random.SFC64])
+def test_monte_carlo_matches_complete_draws_and_rng_state(blocks, replicates, bit_generator):
+    # The independent full draw matrix checks both sides of a batch boundary,
+    # including the exact random stream consumed after this contrast.
+    sums = np.linspace(-.73, .77, blocks)
+    saved = sums.copy()
+    expected_rng = np.random.Generator(bit_generator(931))
+    actual_rng = np.random.Generator(bit_generator(931))
+    scaled = sums / max(abs(sums))
+    observed = abs(math.fsum(scaled))
+    threshold = max(0, observed * (1 - 100 * np.finfo(float).eps))
+    null = abs((expected_rng.choice([-1, 1], (replicates, blocks)) * scaled).sum(axis=1))
+    expected = (1 + np.count_nonzero(null >= threshold)) / (replicates + 1)
+    actual = sd.sign_flip(sums, actual_rng, replicates, 1)
+    assert actual['test_method'] == 'monte_carlo'
+    assert actual['p_value'] == expected
+    np.testing.assert_array_equal(sums, saved)
+    assert json.dumps(actual_rng.bit_generator.state, default=lambda v: v.tolist()) == json.dumps(
+        expected_rng.bit_generator.state, default=lambda v: v.tolist())
+
+
+@pytest.mark.parametrize('dtype', [np.int64, np.float32, np.float64])
+def test_monte_carlo_preserves_randomstate_and_strided_inputs(dtype):
+    sums = (np.arange(202, dtype=dtype) % 17 - 8)[::2]
+    original = sums.copy()
+    expected_rng, actual_rng = np.random.RandomState(931), np.random.RandomState(931)
+    scaled = np.asarray(sums, dtype=float) / max(abs(sums))
+    threshold = max(0, abs(math.fsum(scaled)) * (1 - 100 * np.finfo(float).eps))
+    draws = 10007
+    null = abs((expected_rng.choice([-1, 1], (draws, len(sums))) * scaled).sum(axis=1))
+    actual = sd.sign_flip(sums, actual_rng, draws, 1)
+    assert actual['test_method'] == 'monte_carlo'
+    assert actual['p_value'] == (1 + np.count_nonzero(null >= threshold)) / (draws + 1)
+    np.testing.assert_equal(actual_rng.get_state(), expected_rng.get_state())
+    np.testing.assert_array_equal(sums, original)

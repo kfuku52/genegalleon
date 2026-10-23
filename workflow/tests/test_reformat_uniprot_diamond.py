@@ -168,6 +168,45 @@ def test_filtered_descriptions_keep_last_duplicate_and_ignore_empty_headers(tmp_
     assert read_uniprot_descriptions(str(path), set()) == {}
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+def test_filtered_descriptions_preserve_official_duplicates_and_literal_ids(tmp_path, compressed):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+
+    path = tmp_path / ('reference.fa.gz' if compressed else 'reference.fa')
+    text = ('>sp|P1|FIRST β protein OS=First organism\nM\n'
+            '>unrelated Background OS=literal\nM\n'
+            '>tr|P1|LAST Final product\tOX=123\nM\n'
+            '>custom|P1|ENTRY Literal product OS=retain text\nM\n'
+            '>sp|P1| Malformed official token OS=retain text\nM\n')
+    path.write_bytes(gzip.compress(text.encode()) if compressed else text.encode())
+    expected = {'P1': 'Final product', 'sp|P1|FIRST': 'β protein', 'tr|P1|LAST': 'Final product',
+                'custom|P1|ENTRY': 'Literal product OS=retain text',
+                'sp|P1|': 'Malformed official token OS=retain text'}
+    assert read_uniprot_descriptions(str(path), set(expected)) == expected
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('selected', [set(), {'P1'}])
+def test_filtered_descriptions_still_decode_unselected_tail(tmp_path, compressed, selected):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+
+    path = tmp_path / ('reference.fa.gz' if compressed else 'reference.fa')
+    payload = b'>sp|P1|FIRST Product OS=Organism\nM\n' + b'A' * 20000 + b'\n>other Invalid \xff\nM\n'
+    path.write_bytes(gzip.compress(payload) if compressed else payload)
+    with pytest.raises(UnicodeDecodeError):
+        read_uniprot_descriptions(str(path), selected)
+
+
+@pytest.mark.parametrize('selected', [set(), {'P1'}])
+def test_filtered_descriptions_still_validate_gzip_tail(tmp_path, selected):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+
+    path = tmp_path / 'reference.fa.gz'
+    path.write_bytes(gzip.compress(b'>sp|P1|FIRST Product OS=Organism\nM\n')[:-7])
+    with pytest.raises(EOFError):
+        read_uniprot_descriptions(str(path), selected)
+
+
 def test_reformat_uniprot_diamond_adds_metadata_columns_except_rnammer(tmp_path):
     query_fasta = tmp_path / "query.fa"
     query_fasta.write_text(">gene1\nMKT\n>gene2\nAAA\n", encoding="utf-8")

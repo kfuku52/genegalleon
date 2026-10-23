@@ -395,3 +395,70 @@ def test_cli_frame_filter_requires_frames_column(tmp_path):
 
     assert completed.returncode != 0
     assert "'frames' column was not found" in completed.stderr
+
+
+@pytest.mark.parametrize("optional_columns", [False, True])
+def test_single_hsp_matches_identical_repeated_interval_contract(optional_columns):
+    mod = load_module()
+    lengths = [100.0, 0.0, -100.0, numpy.nan, numpy.inf, -numpy.inf, 3.0]
+    df = pandas.DataFrame({
+        "qacc": ["NA", "q2", "NULL", "q4", "nan", "001", "wide"],
+        "sacc": ["s1", "s2", "s1", "s2", "s1", "s2", "s3"],
+        "qstart": [10, 2, 12, 5, 7, 9, -(2**63)],
+        "qend": [1, 2, 3, 15, 1, 20, 2**63 - 1],
+        "sstart": [1, 12, 2, 15, 5, 20, -(2**63)],
+        "send": [10, 2, 3, 5, 7, 9, 2**63 - 1],
+        "qlen": lengths,
+        "slen": lengths[::-1],
+    })
+    if optional_columns:
+        df["pident"] = [90.0, numpy.nan, 0.0, 0.1, 99.0, 20.0, 100.0]
+        df["length"] = [10, 1, 10, 11, 7, 12, 1]
+        df["gapopen"] = [0, 1, 2, 3, 4, 5, 0]
+        df["evalue"] = ["1e-20", "invalid", None, "", "0.0", "-0.0", "nan"]
+        df["bitscore"] = [100.0, numpy.nan, -0.0, numpy.inf, -numpy.inf, 0.0, 20.5]
+        df["frames"] = ["0/1", "0/-1", None, "0/1", "0/1", "0/-1", "0/1"]
+    missing = df.iloc[[0, 1]].copy()
+    missing.loc[missing.index[0], "qacc"] = None
+    missing.loc[missing.index[1], "sacc"] = None
+    df = pandas.concat([df, missing], ignore_index=True)
+
+    # Repeating an HSP keeps its interval union and numeric extrema unchanged.
+    # It also provides a reference using the general multi-HSP aggregation path.
+    with numpy.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        single = mod.annotate_blast_coverage(df)
+        repeated = mod.annotate_blast_coverage(pandas.concat([df, df], ignore_index=True))
+    assert single["qacc"].tolist() == ["NA", "q2", "NULL", "q4", "nan", "001", "wide"]
+    assert single.dtypes.equals(repeated.dtypes)
+    repeated["num_hits"] = 1
+    for column in (*mod.HIT_COLUMNS_TO_CONCAT, "qhitcov", "shitcov"):
+        if column in repeated:
+            dtype = repeated[column].dtype
+            repeated[column] = repeated[column].str.split(";", n=1).str[0].astype(dtype)
+    pandas.testing.assert_frame_equal(single, repeated, check_exact=True)
+    assert single.to_csv(sep="\t", index=False) == repeated.to_csv(sep="\t", index=False)
+
+
+def test_mixed_hsp_groups_keep_input_tokens_union_and_group_order():
+    mod = load_module()
+    df = pandas.DataFrame({
+        "qacc": ["q2", "q1", "q2", "q3", "q2", "q1"],
+        "sacc": ["s1", "s2", "s1", "s3", "s1", "s4"],
+        "qstart": [1, 30, 10, 20, 50, 5],
+        "qend": [10, 21, 20, 11, 41, 14],
+        "sstart": [50, 1, 41, 40, 100, 10],
+        "send": [41, 10, 31, 31, 91, 1],
+        "qlen": [100, 100, 200, 100, 100, 100],
+        "slen": [200, 200, 200, 200, 200, 200],
+        "evalue": ["1e-5", None, "1e-10", "invalid", "1e-8", "1e-7"],
+        "frames": ["0/1", "0/-1", "0/1", "0/-1", "0/1", "0/1"],
+    })
+    out = mod.annotate_blast_coverage(df)
+    assert list(zip(out.qacc, out.sacc, strict=True)) == [("q2", "s1"), ("q1", "s2"), ("q1", "s4"), ("q3", "s3")]
+    assert out.num_hits.tolist() == [3, 1, 1, 1]
+    assert out.qstart.tolist() == ["1;10;50", "30", "5", "20"]
+    assert out.evalue.tolist() == ["1e-5;1e-10;1e-8", "", "1e-7", "invalid"]
+    assert out.frames.tolist() == ["0/1;0/1;0/1", "0/-1", "0/1", "0/-1"]
+    assert out.qjointcov.tolist() == [0.15, 0.1, 0.1, 0.1]
+    assert out.sjointcov.tolist() == [0.15, 0.05, 0.05, 0.05]
+    assert out.qhitcov.tolist() == ["0.1;0.055;0.1", "0.1", "0.1", "0.1"]

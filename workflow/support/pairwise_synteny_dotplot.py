@@ -1,6 +1,7 @@
 """Physical-length selection and reproducible chromosome ordering for dotplots."""
 
 import csv
+import re
 from collections import Counter
 from fractions import Fraction
 from itertools import combinations
@@ -12,6 +13,8 @@ try:
 except ImportError:
     from .fasta_sequence_store import open_text
     from .pairwise_synteny_style import SOFT_COLORS, STYLE, style_text
+
+GENOME_SEQUENCE = re.compile(r"[ACGTURYSWKMBDHVNacgturyswkmbdhvn]+")
 
 
 def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None, fmt="pdf", missing_legend=None,
@@ -197,7 +200,7 @@ def chromosome_lengths(source, genes, minimum):
                     if seqid is None:
                         raise ValueError("Genome sequence precedes FASTA header")
                     sequence = line.strip()
-                    if not sequence.isascii() or set(sequence.upper()) - set("ACGTURYSWKMBDHVN"):
+                    if not sequence.isascii() or GENOME_SEQUENCE.fullmatch(sequence) is None:
                         raise ValueError(f"Invalid genome FASTA sequence: {seqid}")
                     length += len(sequence)
             if seqid is not None:

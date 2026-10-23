@@ -753,3 +753,58 @@ def test_root_reuse_rejects_input_replacement_before_publishing_bundle(tmp_path,
         select_root(SimpleNamespace(in_tree=source, candidate_trees=candidates,
                     out_tree=outputs[0], comparison_table=outputs[1], comparison_plot=outputs[2], species_parser='taxonomic'))
     assert all(path.read_bytes() == b'previous output' for path in outputs)
+
+
+@pytest.mark.parametrize('text', [
+    '(A:1,B:2);',
+    '((A:1,B:2):3,(C:2,D:4):5);',
+    '(((A:1):2,B:4):3,(C:2,D:4):5);',
+    '(A:1,B:2,C:3,D:4);',
+    "(('A one':1,'B two':2):3,('C three':4,'D four':5):6);",
+])
+def test_root_candidate_masks_preserve_every_unrooted_split(text):
+    from nwkit.clade_mapping import canonical_split
+    from nwkit.util import read_tree
+
+    from workflow.support.species_tree_guided_gene_tree_rooting import _topology_splits
+
+    tree = read_tree(text, 'auto', True, quiet=True)
+    leaves = frozenset(tree.leaf_names())
+    leaf_bits = {name: 1 << index for index, name in enumerate(sorted(leaves))}
+    full_mask = (1 << len(leaves)) - 1
+    expected = set()
+    for node in tree.traverse():
+        if not node.is_root:
+            side = frozenset(node.leaf_names())
+            expected.add(canonical_split(side, leaves - side))
+    observed = _topology_splits(tree, leaf_bits, full_mask)
+    restored = set()
+    for mask in observed:
+        side = frozenset(name for name, bit in leaf_bits.items() if mask & bit)
+        restored.add(canonical_split(side, leaves - side))
+    assert restored == expected
+    for node in list(tree.traverse()):
+        if node.is_root:
+            continue
+        copy = tree.copy(method='deepcopy')
+        # Copies preserve traversal order, including internal singleton nodes.
+        index = list(tree.traverse()).index(node)
+        copy.set_outgroup(list(copy.traverse())[index])
+        assert _topology_splits(copy, leaf_bits, full_mask) == observed
+
+
+def test_root_selection_rejects_different_topology_after_compatible_candidate(tmp_path):
+    source, first, candidates = (tmp_path / name for name in ('source.nwk', 'first.nwk', 'candidates.nwk'))
+    source.write_text('((A:7.8,B:0.949):0.244,(C:7.8,D:1.439):2.87);')
+    result = run('nwkit', 'root', '--method', 'mad', '--infile', source, '--outfile', first)
+    assert result.returncode == 0, result.stderr
+    candidates.write_text(first.read_text().rstrip() + '\n((A:1,C:1):1,(B:1,D:1):1);\n')
+    outputs = [tmp_path / name for name in ('selected.nwk', 'roots.tsv', 'roots.pdf')]
+    for path in outputs:
+        path.write_bytes(b'previous output')
+    result = run(sys.executable, SUPPORT / 'species_tree_guided_gene_tree_rooting.py',
+                 '--in-tree', source, '--candidate-trees', candidates, '--out-tree', outputs[0],
+                 '--comparison-table', outputs[1], '--comparison-plot', outputs[2])
+    assert result.returncode != 0
+    assert 'different unrooted topology' in result.stderr
+    assert all(path.read_bytes() == b'previous output' for path in outputs)

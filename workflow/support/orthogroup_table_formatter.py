@@ -7,6 +7,7 @@ import os
 import sys
 import time
 
+import numpy
 import pandas
 
 
@@ -36,23 +37,23 @@ def build_arg_parser():
 
 
 def build_gene_count_table(df, sp_cols):
-    gc = pandas.DataFrame({"Orthogroup": df["Orthogroup"]})
-    if len(sp_cols) == 0:
-        gc["Total"] = 0
-        return gc
+    columns = {"Orthogroup": df["Orthogroup"]}
+    total = numpy.zeros(len(df), dtype=int)
 
-    gene_counts = {}
     for sp_col in sp_cols:
-        # Count one column at a time so giant cells do not force a single
-        # fixed-width NumPy Unicode array for the full orthogroup table.
+        # Materialize one object column to avoid per-scalar Arrow lookups,
+        # without creating fixed-width Unicode arrays for giant cells.
         series = df.loc[:, sp_col].fillna("").astype(str)
-        comma_counts = series.str.count(",")
-        gene_counts[sp_col] = (comma_counts + series.ne("")).astype(int)
+        counts = numpy.fromiter(
+            (value.count(",") + bool(value) for value in series.to_numpy(dtype=object)),
+            dtype=int,
+            count=len(series),
+        )
+        columns[sp_col] = counts
+        total += counts
 
-    gene_counts = pandas.DataFrame(gene_counts, index=df.index)
-    gc.loc[:, sp_cols] = gene_counts
-    gc["Total"] = gene_counts.sum(axis=1)
-    return gc
+    columns["Total"] = total
+    return pandas.DataFrame(columns, index=df.index)
 
 
 def run(args):
