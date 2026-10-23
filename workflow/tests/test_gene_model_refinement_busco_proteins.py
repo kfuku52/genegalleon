@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +21,8 @@ reuse_api = import_module("refinement_busco_reuse")
 inputs_api = import_module("refinement_busco_inputs")
 
 
-def test_version_probe_isolates_import_time_writes_and_preserves_caller(tmp_path, monkeypatch):
+@pytest.mark.parametrize("inherited_mode", [False, True])
+def test_version_probe_isolates_import_time_writes_and_preserves_caller(tmp_path, monkeypatch, inherited_mode):
     """An actual child reproduces BUSCO's logger on a read-only launch cwd."""
     executable = tmp_path / "busco"
     executable.write_text("#!/bin/sh\nmkdir -p \"$MPLCONFIGDIR/cache\"\nprintf log > busco.log\nprintf 'BUSCO fixture\\n'\n")
@@ -32,7 +34,15 @@ def test_version_probe_isolates_import_time_writes_and_preserves_caller(tmp_path
     monkeypatch.setenv("MPLCONFIGDIR", str(caller / "no-cache"))
     original = dict(os.environ)
     real = subprocess.check_output
+    factory = busco.tempfile.TemporaryDirectory
     scratch = []
+
+    @contextmanager
+    def temporary(*args, **kwargs):
+        with factory(*args, **kwargs) as directory:
+            if inherited_mode:
+                Path(directory).chmod(0o777)
+            yield directory
 
     def observe(command, **options):
         scratch.append(Path(options["cwd"]))
@@ -42,9 +52,42 @@ def test_version_probe_isolates_import_time_writes_and_preserves_caller(tmp_path
         return real(command, **options)
 
     monkeypatch.setattr(busco.subprocess, "check_output", observe)
+    monkeypatch.setattr(busco.tempfile, "TemporaryDirectory", temporary)
     assert busco.busco_version() == "BUSCO fixture"
     assert Path.cwd() == caller and not list(caller.iterdir())
     assert dict(os.environ) == original and all(not path.exists() for path in scratch)
+
+
+@pytest.mark.parametrize("failure", ["owner", "mode", "changed_path_mode"])
+def test_version_probe_rejects_unsafe_scratch_before_starting_tool(monkeypatch, failure):
+    factory = busco.tempfile.TemporaryDirectory
+    scratch = []
+
+    @contextmanager
+    def temporary(*args, **kwargs):
+        with factory(*args, **kwargs) as directory:
+            Path(directory).chmod(0o777)
+            scratch.append(Path(directory))
+            yield directory
+
+    monkeypatch.setattr(busco.tempfile, "TemporaryDirectory", temporary)
+    monkeypatch.setattr(busco.subprocess, "check_output", lambda *a, **k: pytest.fail("unsafe tool start"))
+    if failure == "owner":
+        monkeypatch.setattr(os, "getuid", lambda: -1)
+    elif failure == "mode":
+        monkeypatch.setattr(os, "fchmod", lambda *a: None)
+    else:
+        original = os.stat
+
+        def changed(path, **options):
+            if scratch and str(path) == str(scratch[0]) and options.get("follow_symlinks") is False:
+                scratch[0].chmod(0o777)
+            return original(path, **options)
+
+        monkeypatch.setattr(os, "stat", changed)
+    with pytest.raises(OSError, match="scratch"):
+        busco.busco_version()
+    assert len(scratch) == 1 and not scratch[0].exists()
 
 
 @pytest.mark.parametrize("failure", [subprocess.CalledProcessError(1, ["busco"]),

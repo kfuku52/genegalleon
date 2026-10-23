@@ -1491,6 +1491,21 @@ def busco_version():
     import os
 
     with tempfile.TemporaryDirectory(prefix="gg-busco-version-") as directory:
+        # NFS can inherit 0777 despite mkdtemp's requested 0700. Establish the
+        # owned scratch boundary before the tool creates its logger/cache.
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(descriptor)
+            if before.st_uid != os.getuid():
+                raise OSError("BUSCO version scratch owner changed")
+            os.fchmod(descriptor, 0o700)
+            after, current = os.fstat(descriptor), os.stat(directory, follow_symlinks=False)
+            if (after.st_mode & 0o7777 != 0o700 or after.st_uid != before.st_uid
+                    or (current.st_dev, current.st_ino, current.st_uid, current.st_mode)
+                    != (before.st_dev, before.st_ino, before.st_uid, after.st_mode)):
+                raise OSError("BUSCO version scratch boundary changed")
+        finally:
+            os.close(descriptor)
         environment = dict(os.environ, MPLCONFIGDIR=directory)
         return subprocess.check_output(["busco", "--version"], text=True,
                                        cwd=directory, env=environment, timeout=30).strip()

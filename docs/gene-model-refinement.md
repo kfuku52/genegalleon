@@ -393,7 +393,9 @@ temporary working directory with a 30-second timeout and a child-only writable
 Matplotlib cache. BUSCO initialises its logger even for `--version`, so the probe
 does not depend on a writable scheduler package or home. Errors propagate without
 retry, the scratch directory is removed, and the numerical evaluation/reuse
-contract is unchanged. Execution adapters should use this API rather than invoke
+contract is unchanged. The probe verifies the directory owner and no-follow
+descriptor, then establishes 0700 explicitly even when NFS inherits 0777.
+Execution adapters should use this API rather than invoke
 the tool from a sealed launch directory.
 
 Completed admitted-protein evaluations can be reused across separate reports
