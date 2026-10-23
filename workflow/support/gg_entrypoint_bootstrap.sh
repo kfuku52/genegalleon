@@ -46,7 +46,7 @@ gg_validate_explicit_runtime_release() {
     return 1
   }
 
-  python - "${release_root}" "${expected_workflow}" "${bootstrap_path}" "${snapshot_sha256}" <<'PY'
+  "${GG_BOOTSTRAP_PYTHON:-python}" - "${release_root}" "${expected_workflow}" "${bootstrap_path}" "${snapshot_sha256}" <<'PY'
 import hashlib
 import json
 import os

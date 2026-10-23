@@ -2,6 +2,11 @@
 
 ## Routine configuration
 
+For host-side validation of an explicit runtime release, `GG_BOOTSTRAP_PYTHON`
+may name the Python executable. It defaults to `python`; an invalid explicit
+selection fails without a fallback. This host startup setting does not select
+the Python interpreter used by scientific tools inside the container.
+
 For compatible species-tree calibration auditing, reviewed calibration inputs and
 opt-in prior-only/sensitivity runs, see [species-tree calibrations](species-tree-calibrations.md).
 
