@@ -1,3 +1,4 @@
+import csv
 import gzip
 import hashlib
 import importlib
@@ -278,6 +279,43 @@ def test_explicit_unplaced_clone_is_added_without_removing_unknown_models_or_inv
     assert task['genome_path'] is None and task['gff_path'] is None
 
 
+@pytest.mark.parametrize('unplaced', [False, True])
+def test_all_clones_remain_in_analysis_with_unknown_copy_number_and_unrelated_cds_unchanged(tmp_path, unplaced):
+    task, sequence, source, incoming, row = fixture(tmp_path / 'inputs')
+    changed = sequence[:450] + ('GCT' if sequence[450:453] != 'GCT' else 'GGT') + sequence[453:]
+    neighbour = 'ATG' + 'AAA' * 100 + 'TAA'
+    source.write_text('>neighbour\n' + neighbour + '\n' + ('' if unplaced else '>old\n' + sequence[-306:] + '\n'))
+    incoming.write_text('>clone\n' + sequence + '\n>other_clone\n' + changed + '\n')
+    row['cloned_cds_sha256'] = hashlib.sha256(incoming.read_bytes()).hexdigest()
+    row = group_row(row, ['clone', 'other_clone'], [] if unplaced else ['old'], unplaced=unplaced)
+    groups = json.loads(row['cloned_cds_sequence_groups'])
+    groups['candidate']['analysis_policy'] = 'all_clones'
+    row['cloned_cds_sequence_groups'] = json.dumps(groups)
+    cloned.attach(task, row, tmp_path)
+    before = source.read_bytes(), incoming.read_bytes()
+    output = tmp_path / 'formatted'
+    output.mkdir()
+    result = fsi.format_cds(task, output, False, False)
+    records = {h.split()[0]: s for h, s in fsi.iter_fasta_records(result['output_path'])}
+    assert len(records) == 3 and set(records.values()) == {neighbour, sequence, changed}
+    audit_path = Path(task['cloned_model_audit'])
+    audit = json.loads(audit_path.read_text())
+    assert audit['removed_CDS_ids'] == ([] if unplaced else ['old'])
+    assert [d['status'] for d in audit['decisions']] == ['add_unplaced' if unplaced else 'replace', 'retain_unresolved_clone']
+    for d in audit['decisions']:
+        assert d['analysis_included'] and d['copy_number_status'] == 'unresolved'
+        assert d['confirmed_gene_copy_count'] is None and d['gene_identity_status'] == 'unresolved_candidate_group'
+        assert records[d['formatted_output_id']] == (sequence if d['clone_id'] == 'clone' else changed)
+        assert d['genomic_coordinates'] is None
+    group = audit['reviewed_sequence_groups'][0]
+    assert group['analysis_clones'] == ['clone', 'other_clone'] and group['confirmed_gene_copy_count'] is None
+    members = list(csv.DictReader((audit_path.parent / audit['outputs']['sequence_group_members']).open(), delimiter='\t'))
+    assert {m['formatted_output_id'] for m in members} <= records.keys()
+    assert all(m['analysis_included'] == 'True' and m['confirmed_gene_copy_count'] == '' for m in members)
+    assert list(fsi.iter_fasta_records(audit_path.parent / audit['outputs']['alternative_cloned_cds']))[0][1] == changed
+    assert before == (source.read_bytes(), incoming.read_bytes())
+
+
 @pytest.mark.parametrize('groups,selected', [
     ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, []),
     ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, ['other']),
@@ -288,6 +326,8 @@ def test_explicit_unplaced_clone_is_added_without_removing_unknown_models_or_inv
     ({'group': dict(clone_ids=['clone'], source_cds_ids=['old'], unplaced=False),
       'other': dict(clone_ids=['other'], source_cds_ids=['old'], unplaced=False)}, ['clone', 'other']),
     ({'bad\nname': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True)}, ['clone']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True, analysis_policy='infer_alleles')}, ['clone']),
+    ({'group': dict(clone_ids=['clone'], source_cds_ids=[], unplaced=True, analysis_policy=[])}, ['clone']),
 ])
 def test_reviewed_sequence_group_schema_rejects_incomplete_or_overlapping_ownership(groups, selected):
     module = importlib.import_module('cloned_cds_sequences')
@@ -336,5 +376,12 @@ def test_reviewed_group_identity_and_representative_order_are_bound_to_the_nativ
     assert forwarded['cloned_cds_sequence_groups'] == task['cloned_cds_sequence_groups']
     cloned.attach(task, group_row(row, ['other', 'clone'], ['N_fragment', 'C_fragment']), tmp_path)
     assert cloned.binding_signature(task) != first
+    reverse = cloned.binding_signature(task)
+    changed = group_row(row, ['other', 'clone'], ['N_fragment', 'C_fragment'])
+    groups = json.loads(changed['cloned_cds_sequence_groups'])
+    groups['candidate']['analysis_policy'] = 'all_clones'
+    changed['cloned_cds_sequence_groups'] = json.dumps(groups)
+    cloned.attach(task, changed, tmp_path)
+    assert cloned.binding_signature(task) != reverse
     cloned.attach(task, row, tmp_path)
     assert 'cloned_cds_sequence_groups' not in task

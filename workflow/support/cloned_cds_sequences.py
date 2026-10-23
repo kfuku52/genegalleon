@@ -1,5 +1,6 @@
 """Audited clone-priority sequence replacement for inputs without genomic annotation."""
 
+import csv
 import gzip
 import hashlib
 import json
@@ -26,8 +27,11 @@ def reviewed_groups(row, selected):
     clones, sources = set(), set()
     for name, group in groups.items():
         if (not isinstance(name, str) or re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*', name) is None
-                or not isinstance(group, dict) or set(group) != {'clone_ids', 'source_cds_ids', 'unplaced'}
-                or type(group['unplaced']) is not bool):
+                or not isinstance(group, dict) or not {'clone_ids', 'source_cds_ids', 'unplaced'} <= set(group)
+                or set(group) - {'clone_ids', 'source_cds_ids', 'unplaced', 'analysis_policy'}
+                or type(group['unplaced']) is not bool
+                or not isinstance(group.get('analysis_policy', 'representative_only'), str)
+                or group.get('analysis_policy', 'representative_only') not in {'representative_only', 'all_clones'}):
             raise ValueError('Invalid reviewed sequence group')
         for field, seen in (('clone_ids', clones), ('source_cds_ids', sources)):
             values = group[field]
@@ -44,7 +48,7 @@ def reviewed_groups(row, selected):
 
 
 def apply_reviewed_groups(clones, decisions, groups, seen):
-    """Select one representative; retain other clones as unresolved alternatives."""
+    """Apply reviewed analysis inclusion without deciding allele versus paralog."""
     rows = {r['clone_id']: r for r in decisions}
     if groups and {c for g in groups.values() for c in g['clone_ids']} != set(clones):
         raise ValueError('Reviewed sequence group selection changed')
@@ -61,16 +65,24 @@ def apply_reviewed_groups(clones, decisions, groups, seen):
                                                   or targets != source_ids)):
                 raise ValueError('Reviewed sequence group conflicts with current search evidence: ' + clone)
         representative = ids[0]
+        policy = group.get('analysis_policy', 'representative_only')
+        analysis_clones = ids if policy == 'all_clones' else ids[:1]
         for clone in ids:
             row = rows[clone]
             row.update(search_status=row['status'], candidate_group=name, representative_clone=representative,
                        clone_sha256=hashlib.sha256(clones[clone].encode()).hexdigest(),
                        genomic_origin_status='not_assessed_no_genome', genomic_coordinates=None,
+                       analysis_policy=policy, analysis_included=clone in analysis_clones,
+                       copy_number_status='unresolved', confirmed_gene_copy_count=None,
                        source_catalog_status='no_supported_match_in_sequence_catalog' if group['unplaced'] else 'matched_sequence',
                        gene_identity_status='unresolved_candidate_group' if len(ids) > 1 else 'unresolved_unplaced' if group['unplaced'] else 'sequence_only')
             row['status'] = ('add_unplaced' if group['unplaced'] else 'replace') if clone == representative else 'alternative_clone'
+            if clone != representative and policy == 'all_clones':
+                row['status'] = 'retain_unresolved_clone'
         evidence.append(dict(candidate_group=name, representative_clone=representative,
                              alternative_clones=ids[1:], source_cds_ids=sorted(source_ids), unplaced=group['unplaced'],
+                             analysis_policy=policy, analysis_clones=analysis_clones,
+                             copy_number_status='unresolved', confirmed_gene_copy_count=None,
                              representative_selection='explicit_clone_order; no functional or genomic priority inferred'))
     return evidence
 
@@ -178,7 +190,7 @@ def choose_replacements(clones, grouped, longer_only):
 def build_sequence(task, directory):
     from cloned_cds_models import cloned_records
     from format_species_annotation.common import iter_fasta_records
-    from format_species_annotation.tasks import iter_task_cds_records
+    from format_species_annotation.tasks import build_gene_aggregate_id, iter_task_cds_records
     from transcriptome_orfs import write_audit
 
     clones = cloned_records(Path(task['cloned_cds_path']), task.get('cloned_cds_ids', []), int(task.get('genetic_code', 1)))
@@ -224,7 +236,7 @@ def build_sequence(task, directory):
     if any(g['unplaced'] and longer.intersection(g['clone_ids']) for g in groups.values()):
         raise ValueError('Unplaced sequence cannot establish a longer-only comparison')
     group_evidence = apply_reviewed_groups(clones, decisions, groups, seen)
-    accepted = [r for r in decisions if r['status'] in {'replace', 'add_unplaced'}]
+    accepted = [r for r in decisions if r['status'] in {'replace', 'add_unplaced', 'retain_unresolved_clone'}]
     removed = {m['target_id'] for r in accepted for m in r['matches']}
     additions = {'gg_clone_' + hashlib.sha256(r['clone_id'].encode()).hexdigest()[:16] + '.t1': r for r in accepted}
     if additions.keys() & seen:
@@ -239,6 +251,7 @@ def build_sequence(task, directory):
         for identifier, row in additions.items():
             retained.write('>' + identifier + '\n' + clones[row['clone_id']] + '\n')
             row['output_id'] = identifier
+            row['formatted_output_id'] = build_gene_aggregate_id(task, identifier, identifier)
     outputs = dict(cds=output.name, alignments=alignments.name)
     if groups:
         received = directory / 'received_cloned_cds.fa'
@@ -246,7 +259,15 @@ def build_sequence(task, directory):
         outputs['received_cloned_cds'] = received.name
         atomic_json(directory / 'reviewed_sequence_groups.json', groups)
         outputs['reviewed_sequence_groups'] = 'reviewed_sequence_groups.json'
-        alternatives = [r for r in decisions if r['status'] == 'alternative_clone']
+        members = directory / 'sequence_group_members.tsv'
+        fields = ['clone_id', 'candidate_group', 'output_id', 'formatted_output_id', 'analysis_policy',
+                  'analysis_included', 'gene_identity_status', 'copy_number_status', 'confirmed_gene_copy_count']
+        with members.open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields, delimiter='\t', extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(r for r in decisions if 'candidate_group' in r)
+        outputs['sequence_group_members'] = members.name
+        alternatives = [r for r in decisions if r['status'] in {'alternative_clone', 'retain_unresolved_clone'}]
         if alternatives:
             path = directory / 'alternative_cloned_cds.fa'
             path.write_text(''.join('>' + r['clone_id'] + ' candidate_group=' + r['candidate_group']
