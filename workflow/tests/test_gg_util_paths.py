@@ -6,6 +6,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -1159,6 +1160,35 @@ def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path)
     tampered = run_bash(command, cwd=tmp_path)
     assert tampered.returncode != 0
     assert "Explicit runtime release file changed" in tampered.stderr
+
+
+def test_explicit_runtime_bootstrap_can_bind_a_host_python_without_changing_default(tmp_path):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(release, "gg_genome_evolution")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    called = tmp_path / "default-called"
+    python = tools / "python"
+    python.write_text(f"#!/bin/sh\nprintf called > {shlex.quote(str(called))}\nexit 39\n")
+    python.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"export PATH={shlex.quote(str(tools))}:/usr/bin:/bin; "
+               "unset GG_BOOTSTRAP_PYTHON; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_genome_evolution")
+    default = run_bash(command, cwd=tmp_path)
+    assert default.returncode == 39 and called.exists()
+    called.unlink()
+    explicit = run_bash(command.replace("unset GG_BOOTSTRAP_PYTHON;",
+                        f"export GG_BOOTSTRAP_PYTHON={shlex.quote(sys.executable)};"), cwd=tmp_path)
+    assert explicit.returncode == 0, explicit.stderr
+    assert not called.exists()
+    invalid = str(tmp_path / "missing-python; touch unexpected")
+    rejected = run_bash(command.replace("unset GG_BOOTSTRAP_PYTHON;",
+                        f"export GG_BOOTSTRAP_PYTHON={shlex.quote(invalid)};"), cwd=tmp_path)
+    assert rejected.returncode != 0 and not called.exists()
+    assert not (tmp_path / "unexpected").exists()
 
 
 @pytest.mark.parametrize(
