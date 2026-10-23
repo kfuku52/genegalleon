@@ -1294,34 +1294,12 @@ def main():
         max_seqlen = max([len(seq) for seq in seqs])
         out = list()
         for i in range(len(seqs)):
-            N_positions = [nuc.span()[1] for nuc in re.finditer("[Nn]", seqs[i])]
-            if len(N_positions) == 0:
-                N_slices = [
-                    "",
-                ]
-            elif len(N_positions) == 1:
-                N_slices = [
-                    str(N_positions[0]),
-                ]
-            else:
-                N_slices = [
-                    str(N_positions[0]),
-                ]
-                N_extension_flag = False
-                for j in range(1, len(N_positions)):
-                    if N_positions[j - 1] == (N_positions[j] - 1):
-                        N_extension_flag = True
-                        N_extension_until = str(N_positions[j])
-                    else:
-                        if N_extension_flag:
-                            new_slice = N_slices[len(N_slices) - 1] + ":" + N_extension_until
-                            N_slices[len(N_slices) - 1] = new_slice
-                        N_slices.append(str(N_positions[j]))
-                        N_extension_flag = False
-                # Flush the final contiguous N-run when it reaches the sequence end.
-                if N_extension_flag:
-                    new_slice = N_slices[len(N_slices) - 1] + ":" + N_extension_until
-                    N_slices[len(N_slices) - 1] = new_slice
+            N_slices = []
+            # Avoid the run regex scan when the promoter has no unknown bases.
+            if "N" in seqs[i] or "n" in seqs[i]:
+                for match in re.finditer("[Nn]+", seqs[i]):
+                    start, end = match.span()
+                    N_slices.append(str(end) if end == start + 1 else f"{start + 1}:{end}")
             if len(seqs[i]) < max_seqlen:
                 slice_outside_scaffold = str(len(seqs[i])) + ":" + str(max_seqlen)
                 N_slices.append(slice_outside_scaffold)

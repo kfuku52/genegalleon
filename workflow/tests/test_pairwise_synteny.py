@@ -940,6 +940,69 @@ def test_dotplot_2x2_sort_does_not_invent_groups_from_two_diagonal_matches(tmp_p
     assert metadata["groups"] == []
 
 
+def homoeolog_anchor_fixture(tmp_path, counts):
+    genomes, lines = [[], []], []
+    for (target, query), count in counts.items():
+        for index in range(count):
+            ids = [f"T{target}_{query}_{index}", f"Q{target}_{query}_{index}"]
+            for side, seqid in enumerate((target, query)):
+                genomes[side].append(SimpleNamespace(gene_id=ids[side], seqid=seqid))
+            lines.append(f"{ids[0]} {ids[1]} 10")
+    path = tmp_path / "anchors"
+    path.write_text("###\n" + "\n".join(reversed(lines)) + "\n")
+    return genomes, path
+
+
+@pytest.mark.parametrize("selected,expected", [
+    ([["t1", "t1", "t2"], ["q1", "q2"]], [["t1", "t1", "t2"], ["q1", "q2"]]),
+    ([["t1", "t2", "t1", "t3"], ["q1", "q2"]], [["t2", "t1", "t3"], ["q1", "q2"]]),
+    ([["t1", "t2"], ["q1", "q2", "q1"]], [["t1", "t2"], ["q2", "q1"]]),
+])
+def test_dotplot_2x2_sort_preserves_duplicate_selected_positions(tmp_path, selected, expected):
+    genomes, path = homoeolog_anchor_fixture(
+        tmp_path, {(target, query): 1 for target in selected[0] for query in selected[1]})
+    ordered, metadata = dotplot.homoeolog_order(selected, genomes, path)
+    assert ordered == expected
+    assert metadata["groups"] == [{"target": expected[0][:2], "query": expected[1][:2],
+                                   "anchor_counts_2x2": [1, 1, 1, 1], "harmonic_support": 1.0,
+                                   "unique_anchor_count": 4}]
+
+
+@pytest.mark.parametrize("support,winning_target,winning_query", [
+    ([1, 3, 3, 3], ["t1", "t3"], ["q3", "q4"]),
+    ([2, 2, 2, 2], ["t1", "t2"], ["q1", "q2"]),
+])
+def test_dotplot_2x2_equal_harmonic_uses_total_then_track_ranks(
+        tmp_path, support, winning_target, winning_query):
+    counts = {(target, query): 2 for target in ("t1", "t2") for query in ("q1", "q2")}
+    counts.update(dict(zip(itertools.product(("t1", "t3"), ("q3", "q4")), support, strict=True)))
+    genomes, path = homoeolog_anchor_fixture(tmp_path, counts)
+    ordered, metadata = dotplot.homoeolog_order(
+        [["t1", "t2", "t3"], ["q1", "q2", "q3", "q4"]], genomes, path)
+    assert ordered[0][:2] == winning_target
+    assert ordered[1][:2] == winning_query
+    assert metadata["groups"][0]["harmonic_support"] == 2.0
+    assert metadata["groups"][0]["unique_anchor_count"] == (10 if support[0] == 1 else 8)
+
+
+def test_dotplot_2x2_sort_requires_two_shared_query_partners(tmp_path):
+    selected = [["t1", "t2"], ["q1", "q2", "q3"]]
+    counts = {("t1", "q1"): 8, ("t1", "q2"): 8, ("t2", "q2"): 8, ("t2", "q3"): 8}
+    genomes, path = homoeolog_anchor_fixture(tmp_path, counts)
+    ordered, metadata = dotplot.homoeolog_order(selected, genomes, path)
+    assert ordered == selected
+    assert metadata["groups"] == []
+
+
+@pytest.mark.parametrize("line", ["missing unknown 10", "onefield", "  missing known 10  "])
+def test_dotplot_2x2_sort_validates_anchors_with_no_possible_groups(tmp_path, line):
+    path = tmp_path / "anchors"
+    path.write_text(line + "\n")
+    with pytest.raises(ValueError) as error:
+        dotplot.homoeolog_order([[], []], [[], []], path)
+    assert str(error.value) == f"Invalid dotplot anchor: {line.rstrip()}"
+
+
 def test_dotplot_sort_preserves_original_within_chromosome_bed_ranks(tmp_path):
     genes = [SimpleNamespace(seqid="chr", gene_id="g2", start=0, end=10),
              SimpleNamespace(seqid="chr", gene_id="g10", start=0, end=20)]

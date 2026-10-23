@@ -2035,15 +2035,6 @@ def test_gg_util_python_package_check_uses_importlib_with_argv():
     assert "importlib.import_module(sys.argv[1])" in body
 
 
-def test_orthogroup_statistics_flushes_terminal_contiguous_n_run():
-    script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
-    text = _read_text(script)
-    assert "# Flush the final contiguous N-run when it reaches the sequence end." in text
-    assert 'new_slice = N_slices[len(N_slices) - 1] + ":" + N_extension_until' in text
-    assert 're.finditer("[Nn]", seqs[i])' in text
-    assert 'if len(seqs) == 0 or all((s.strip() == "") for s in seqs):' in text
-
-
 def test_orthogroup_statistics_handles_ete4_root_support_assertion_on_reroot():
     script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
     text = _read_text(script)

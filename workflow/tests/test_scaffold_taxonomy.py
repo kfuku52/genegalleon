@@ -222,12 +222,23 @@ def test_missing_input_is_not_zero_support(tmp_path):
     pd.Index(['a', 'a', 'b', 'c', 'a'], name='gene_row'),
     pd.Index([float('nan'), float('nan'), 1, 2, float('nan')], name='gene_row'),
     pd.MultiIndex.from_tuples([('a', 1), ('a', 2), ('b', 2), ('c', 3), ('a', 3)], names=['x', 'y']),
+    pd.Index([None, None, 'b', 'c', None], name='row'),
+    pd.CategoricalIndex(['a', 'a', 'b', 'c', 'a'], categories=['a', 'b', 'c', 'unused'], name='row'),
+    pd.Index([None, float('nan'), None, pd.NA, pd.NaT], dtype=object, name='row'),
+    pd.Index([1, 1, pd.NA, 2, pd.NA], dtype='Int64', name='row'),
+    pd.DatetimeIndex(['2020-01-01', None, '2020-01-01', '2020-01-02', None], name='row'),
 ])
-def test_bulk_gene_context_preserves_ordered_scalar_update_semantics(tmp_path, monkeypatch, index):
+@pytest.mark.parametrize('target', ['genes', 'branches'])
+def test_bulk_context_preserves_ordered_scalar_update_semantics(tmp_path, monkeypatch, index, target):
     branches, genes, tree = fixture_context(tmp_path)
-    genes.index = index
-    genes['host_scaffold_status'] = 'stale'
-    original = genes.copy(deep=True)
+    if target == 'branches':
+        # Repeated labels receive full measured rows interleaved with partial
+        # recipient-unresolved updates; earlier metric values must survive.
+        branches = branches.iloc[[0, 2, 1, 0, 2]].copy()
+    frame = genes if target == 'genes' else branches
+    frame.index = index
+    frame['host_scaffold_status'] = 'stale'
+    originals = [frame.copy(deep=True) for frame in (branches, genes)]
 
     def scalar_updates(frame, rows, columns):
         for label, row in zip(frame.index, rows, strict=True):
@@ -240,12 +251,16 @@ def test_bulk_gene_context_preserves_ordered_scalar_update_semantics(tmp_path, m
     actual = scaffold.attach_context(branches, genes, tmp_path, tree)
     for before, after in zip(expected, actual, strict=True):
         pd.testing.assert_frame_equal(before, after)
-    pd.testing.assert_frame_equal(genes, original)
+    for original, frame in zip(originals, (branches, genes), strict=True):
+        pd.testing.assert_frame_equal(frame, original)
 
 
-def test_bulk_context_retains_rejection_of_nonunique_tuple_index(tmp_path):
+@pytest.mark.parametrize('target', ['genes', 'branches'])
+def test_bulk_context_retains_rejection_of_nonunique_tuple_index(tmp_path, target):
     branches, genes, tree = fixture_context(tmp_path)
-    genes.index = pd.MultiIndex.from_tuples([('a', 1), ('a', 1), ('b', 2), ('c', 3), ('a', 1)])
+    frame = genes if target == 'genes' else branches
+    labels = [('a', 1), ('a', 1), ('b', 2), ('c', 3), ('a', 1)][:len(frame)]
+    frame.index = pd.MultiIndex.from_tuples(labels)
     with pytest.raises(ValueError, match='Invalid call for scalar access'):
         scaffold.attach_context(branches, genes, tmp_path, tree)
 

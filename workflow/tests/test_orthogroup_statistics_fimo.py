@@ -616,3 +616,31 @@ def test_load_asr_intron_rejects_internally_inconsistent_observations(tmp_path, 
     df.to_csv(table, sep="\t", index=False)
     with pytest.raises(ValueError, match=message):
         mod.load_asr_intron_branch_table(str(table), str(tree))
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_promoter_coordinates_join_to_branch_annotations(tmp_path, compressed):
+    import gzip
+
+    rooted_tree = tmp_path / "rooted.nwk"
+    rooted_tree.write_text("(terminal:1,isolated:1,short:1,noNs:1,empty:1)n0;\n")
+    promoter = tmp_path / ("promoters.fa.gz" if compressed else "promoters.fa")
+    text = ">terminal\nACNNnN\n>isolated\nNAnCNN\n>short\nN\n>noNs\nACG\n>empty\n"
+    if compressed:
+        with gzip.open(promoter, "wt") as handle:
+            handle.write(text)
+    else:
+        promoter.write_text(text)
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(rooted_tree),
+        "--promoter_fasta", str(promoter),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t", keep_default_na=False).set_index("node_name")
+    expected = {"terminal": "3:6", "isolated": "1,3,5:6", "short": "1,1:6", "noNs": "3:6", "empty": "0:6"}
+    assert branches.loc[list(expected), "promoter_N"].to_dict() == expected
+    assert branches.loc[list(expected), "promoter_available"].tolist() == ["Y"] * len(expected)

@@ -299,9 +299,9 @@ def _apply_context_rows(frame, rows, columns):
         if any(not pd.api.types.is_scalar(label) for label in frame.index):
             raise ValueError("Invalid call for scalar access (setting)!")
         # Scalar .at updates affect every row with the same index label. Merge
-        # in input order so partial updates retain earlier values, including NA
-        # index labels, before applying the same result to all matching rows.
-        codes, _ = pd.factorize(frame.index, sort=False, use_na_sentinel=False)
+        # in input order so partial updates retain earlier values. Index lookup
+        # keeps distinct missing labels (None, NaN, NA, NaT) separate, as .at does.
+        codes = frame.index.unique().get_indexer(frame.index)
         merged = {}
         for code, row in zip(codes, rows, strict=True):
             merged.setdefault(code, {}).update(row)
@@ -374,26 +374,32 @@ def attach_context(branches, genes, directory, tree_path):
     recipients = recipient_species(tree_path)
     tree_species = set().union(*recipients.values())
     gene_groups = {key: group for key, group in genes.groupby("orthogroup")}
-    for index, branch in branches.iterrows():
+    branch_contexts = []
+    for _, branch in branches.iterrows():
+        context = {}
+        branch_contexts.append(context)
         transfer = str(branch.generax_transfer).split("@")
         taxa = recipients.get(species_key(transfer[2])) if len(transfer) == 3 and transfer[0] == "Y" else None
         if taxa is None:
-            branches.at[index, "host_scaffold_status"] = "recipient_unresolved"
+            context["host_scaffold_status"] = "recipient_unresolved"
             continue
         group = gene_groups.get(branch.orthogroup, genes.iloc[:0])
         ids = {g.strip() for g in str(branch.candidate_genes).split(";")}
         candidates = group.loc[group.gene_id.isin(ids)]
         unknown_taxa = int((~candidates.gene_taxon.map(species_key).isin(tree_species)).sum())
         selected = candidates.loc[candidates.gene_taxon.map(species_key).isin(taxa)]
-        mapped = [lookup[(species_key(g.gene_taxon), str(g.gene_id))] for g in selected.itertuples()
-                  if (species_key(g.gene_taxon), str(g.gene_id)) in lookup]
+        mapped = []
+        for taxon, gene_id in zip(selected.gene_taxon, selected.gene_id, strict=True):
+            record = lookup.get((species_key(taxon), str(gene_id)))
+            if record is not None:
+                mapped.append(record)
         keys = {(r.species, r.scaffold) for r in mapped}
-        branches.at[index, "host_scaffold_recipient_gene_count"] = len(selected)
-        branches.at[index, "host_scaffold_unresolved_taxon_gene_count"] = unknown_taxa
-        branches.at[index, "host_scaffold_mapped_gene_count"] = len(mapped)
-        branches.at[index, "host_scaffold_count"] = len(keys)
+        context["host_scaffold_recipient_gene_count"] = len(selected)
+        context["host_scaffold_unresolved_taxon_gene_count"] = unknown_taxa
+        context["host_scaffold_mapped_gene_count"] = len(mapped)
+        context["host_scaffold_count"] = len(keys)
         complete = len(mapped) == len(selected) and unknown_taxa == 0
-        branches.at[index, "host_scaffold_status"] = ("measured" if complete else "partial") if keys else "no_recipient_scaffold"
+        context["host_scaffold_status"] = ("measured" if complete else "partial") if keys else "no_recipient_scaffold"
         if not keys:
             continue
         for background in ("", "background_"):
@@ -406,7 +412,8 @@ def attach_context(branches, genes, directory, tree_path):
                               compatible_fraction=c / (c + i) if c + i else None,
                               compatible_all_fraction=c / n if n else None)
                 for name, value in totals.items():
-                    branches.at[index, prefix + name] = value
+                    context[prefix + name] = value
+    _apply_context_rows(branches, branch_contexts, BRANCH_COLUMNS)
     return branches, genes
 
 

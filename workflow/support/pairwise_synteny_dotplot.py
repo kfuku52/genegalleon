@@ -255,15 +255,34 @@ def homoeolog_order(selected, genomes, anchors):
             if all(seqids[i] in allowed[i] for i in (0, 1)):
                 counts[seqids] += 1
     ranks = [{seqid: i for i, seqid in enumerate(track)} for track in selected]
-    # Enumerate only pairs sharing partners, not all combinations of unplaced scaffolds.
-    partners = {a: {b for (x, b), count in counts.items() if x == a and count} for a in selected[0]}
+    target_track = list(selected[0])
+    partners = {a: set() for a in target_track}
+    for (a, b), count in counts.items():
+        if count:
+            partners[a].add(b)
+    target_positions = {}
+    for position, a in enumerate(target_track):
+        for b in partners[a]:
+            target_positions.setdefault(b, set()).add(position)
     candidates = []
-    for a, b in combinations(selected[0], 2):
-        common = sorted(partners[a] & partners[b], key=ranks[1].__getitem__)
-        for c, d in combinations(common, 2):
-            support = [counts[(x, y)] for x in (a, b) for y in (c, d)]
-            score = 4 / sum((Fraction(1, n) for n in support), Fraction())
-            candidates.append((score, sum(support), (a, b), (c, d), support))
+    for position, a in enumerate(target_track):
+        if len(partners[a]) < 2:
+            continue
+        once, eligible = set(), set()
+        for query in partners[a]:
+            others = target_positions[query]
+            eligible.update(once & others)
+            once.update(others)
+        # Positions preserve combination order even when selected repeats a seqid.
+        for other in sorted(eligible):
+            if other <= position:
+                continue
+            b = target_track[other]
+            common = sorted(partners[a] & partners[b], key=ranks[1].__getitem__)
+            for c, d in combinations(common, 2):
+                support = [counts[(x, y)] for x in (a, b) for y in (c, d)]
+                score = 4 / sum((Fraction(1, n) for n in support), Fraction())
+                candidates.append((score, sum(support), (a, b), (c, d), support))
     candidates.sort(key=lambda item: (-item[0], -item[1],
                                      tuple(ranks[0][x] for x in item[2]), tuple(ranks[1][x] for x in item[3])))
     used = [set(), set()]
