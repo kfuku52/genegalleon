@@ -130,6 +130,65 @@ def test_load_busco_aggregates_by_gene_id_and_indexes(tmp_path):
     assert out.loc["geneB", "busco_sequence"] == "geneB"
 
 
+@pytest.mark.parametrize('genes', [
+    ['geneC', '001', 'NA', 'nan'],
+    ['geneC', '001', 'geneC', 'NA', '001', 'nan'],
+    ['geneC', '001', 'geneC', '001'],
+])
+def test_busco_annotation_preserves_singletons_duplicates_order_and_dtypes(tmp_path, genes):
+    """Single records and interleaved duplicate groups share the same schema."""
+    mod = load_module()
+    path = tmp_path / 'busco.tsv'
+    rows = [[f'B{i}', 'Complete', f'{gene}:cds{i}', '100', '200', f'url{i}', f'desc{i}']
+            for i, gene in enumerate(genes)]
+    path.write_text(''.join('\t'.join(row) + '\n' for row in rows), encoding='utf-8')
+    grouped = {}
+    for gene, row in zip(genes, rows, strict=True):
+        grouped.setdefault(gene, []).append(row)
+    expected_rows = [[gene, *('; '.join(row[column] for row in records) for column in range(7))]
+                     for gene, records in grouped.items()]
+    expected = pandas.DataFrame(expected_rows, columns=[
+        'gene_id', 'busco_id', 'busco_status', 'busco_sequence', 'busco_score', 'busco_length',
+        'busco_orthodb_url', 'busco_description',
+    ]).astype(str).set_index('gene_id')
+
+    pandas.testing.assert_frame_equal(mod.load_busco(str(path)), expected)
+
+
+def test_busco_annotation_preserves_quoted_metadata_and_missing_numeric_spelling(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'busco.tsv'
+    path.write_text('B1\tComplete\tgeneC:one\t100\t200\tu\t"説明 α\tfield\ncontinued"\n'
+                    'B2\tFragmented\tgeneA:two\t\t\t\t\n'
+                    'B3\tDuplicated\tgeneC:three\t101\t201\tNA\tnan\n', encoding='utf-8')
+    result = mod.load_busco(str(path))
+    assert result.index.tolist() == ['geneC', 'geneA']
+    assert result.loc['geneC', 'busco_description'] == '説明 α\tfield\ncontinued; nan'
+    assert result.loc['geneC', 'busco_score'] == '100.0; 101.0'
+    assert result.loc['geneA', 'busco_score'] == 'nan'
+    assert result.loc['geneA', 'busco_length'] == 'nan'
+    assert result.loc['geneA', 'busco_orthodb_url'] == 'nan'
+
+
+@pytest.mark.parametrize('invalid_tail', [
+    b'B2\tComplete\tgeneB\t100\t200\tu\t\xff\n',
+    b'B2\tComplete\tgeneB\t100\t200\tu\td\textra\n',
+    b'B2\tComplete\tgeneB\t100\t200\tu\t"unterminated\n',
+])
+def test_merge_cli_reads_complete_busco_before_replacing_output(tmp_path, invalid_tail):
+    fasta = tmp_path / 'cds.fa'
+    fasta.write_text('>geneA\nATG\n')
+    busco = tmp_path / 'busco.tsv'
+    busco.write_bytes(b'B1\tComplete\tgeneA\t100\t200\tu\td\n' + invalid_tail)
+    output = tmp_path / 'annotation.tsv'
+    output.write_bytes(b'previous complete annotation\n')
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), '--cds_fasta', str(fasta),
+                             '--busco_tsv', str(busco), '--out_tsv', str(output)],
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert output.read_bytes() == b'previous complete annotation\n'
+
+
 def test_load_cdskit_localize_prefixes_columns_and_indexes(tmp_path):
     mod = load_module()
     infile = tmp_path / "cdskit_localize.tsv"

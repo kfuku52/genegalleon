@@ -63,6 +63,37 @@ def test_adjustments_use_reset_positions_and_replace_previous_results():
     assert str(out.p_value_global_bh.dtype) == "float64"
 
 
+@pytest.mark.parametrize("categorical", [False, True])
+def test_interleaved_wide_families_preserve_diagnostics_and_adjustment_scopes(categorical):
+    import numpy as np
+
+    frame = pd.concat([
+        rows().assign(tree_id=lambda group, batch=batch: f"batch_{batch}_" + group.tree_id,
+                      source_row=np.arange(5) + batch * 5)
+        for batch in range(8)
+    ], ignore_index=True)
+    frame["nullable_count"] = pd.array([None, 1, 2, 3, 4] * 8, dtype="Int64")
+    frame["diagnostic_label"] = pd.Categorical(["α", "β", "γ", "δ", "ε"] * 8)
+    for number in range(24):
+        frame[f"diagnostic_{number}"] = np.arange(len(frame)) / (number + 1)
+    if categorical:
+        for column in ("tree_id", "analysis_method", "response", "source_term"):
+            frame[column] = pd.Categorical(frame[column], categories=[*frame[column].unique(), "unrepresented"])
+    frame = frame.sample(frac=1, random_state=19)
+    frame.index = [7, 7, -1, 3] * 10
+    original = frame.copy(deep=True)
+    actual = adjust_associations(frame)
+    pd.testing.assert_frame_equal(frame, original, check_exact=True)
+    assert actual.index.equals(pd.RangeIndex(40))
+    pd.testing.assert_frame_equal(actual[frame.columns], frame.reset_index(drop=True), check_exact=True)
+    actual = actual.sort_values("source_row")
+    assert actual.p_value_global_bh.tolist() == pytest.approx([.04, .08, .2 * 4 / 3, np.nan, .02] * 8, nan_ok=True)
+    assert actual.p_value_family_holm.tolist() == pytest.approx([.02, .04, .2, np.nan, .02] * 8, nan_ok=True)
+    assert actual.p_value_family_bh.tolist() == pytest.approx([.02, .04, .2, np.nan, .02] * 8, nan_ok=True)
+    assert actual.global_n_associations.tolist() == [32, 32, 32, 32, 8] * 8
+    assert actual.global_n_usable.tolist() == [24, 24, 24, 24, 8] * 8
+
+
 def test_all_failed_associations_keep_global_denominators_and_missing_adjustments():
     frame = rows()
     frame["inference_status"] = "failed"

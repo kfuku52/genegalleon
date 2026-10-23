@@ -109,8 +109,17 @@ def load_busco(path):
     # Make the serialized missing-value spelling explicit before string joins;
     # pandas string dtype can retain a missing scalar after astype(str).
     tmp_agg = tmp.loc[:, ["gene_id"] + agg_cols].astype(str).fillna("nan")
-    tmp_agg = tmp_agg.groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
-    return dedupe_gene_id_index(tmp_agg)
+    # Most BUSCO genes have one row. Only repeated genes need string joins.
+    repeated = tmp_agg["gene_id"].duplicated(keep=False)
+    if not repeated.any():
+        return dedupe_gene_id_index(tmp_agg)
+    if repeated.all():
+        tmp_agg = tmp_agg.groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
+        return dedupe_gene_id_index(tmp_agg)
+    gene_order = tmp_agg["gene_id"].drop_duplicates()
+    duplicates = tmp_agg.loc[repeated].groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
+    tmp_agg = pandas.concat([tmp_agg.loc[~repeated], duplicates], ignore_index=True)
+    return dedupe_gene_id_index(tmp_agg).reindex(gene_order)
 
 
 def load_fx2tab(path):

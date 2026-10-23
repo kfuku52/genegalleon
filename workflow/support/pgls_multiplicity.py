@@ -50,12 +50,18 @@ def adjust_associations(frame):
     global_bh = np.full(len(out), np.nan)
     global_n_associations = np.zeros(len(out), dtype=np.int64)
     global_n_usable = np.zeros(len(out), dtype=np.int64)
-    for _, group in out.loc[valid].groupby(["tree_id", "analysis_method"], sort=False):
-        holm, bh = _adjust_association_p_values(group["p_value"])
-        family_holm[group.index] = holm
-        family_bh[group.index] = bh
-    for _, group in out.groupby(["response", "source_term"], sort=False):
-        idx = group.index
+    # Wide model diagnostics need not be copied into every family group.
+    # Positions in the filtered key table map back to the reset output index.
+    usable_positions = out.index[valid]
+    family_groups = out.loc[valid, ["tree_id", "analysis_method"]].groupby(
+        ["tree_id", "analysis_method"], sort=False,
+    ).indices
+    for positions in family_groups.values():
+        idx = usable_positions[positions]
+        holm, bh = _adjust_association_p_values(raw.iloc[idx])
+        family_holm[idx] = holm
+        family_bh[idx] = bh
+    for idx in out.groupby(["response", "source_term"], sort=False).indices.values():
         values = raw.loc[idx].where(valid.loc[idx], 1.0)
         _, bh = _adjust_association_p_values(values)
         global_bh[idx] = np.where(valid.loc[idx], bh, np.nan)

@@ -1340,25 +1340,65 @@ def main():
     def compute_min_expression_corr_by_node(gene_tree, exp_index_locs, corr_matrix):
         min_cor_by_label = {}
         exp_leaf_locs = {}
+        reusable_minima = {}
+        can_reuse = (
+            type(corr_matrix) is numpy.ndarray
+            and corr_matrix.dtype == numpy.dtype("float64")
+            and corr_matrix.ndim == 2
+            and corr_matrix.shape[0] == corr_matrix.shape[1]
+            and corr_matrix.flags.c_contiguous
+        )
         for node in gene_tree.traverse(strategy="postorder"):
             nlabel = get_node_label(node)
             if node_is_leaf(node):
                 idx = exp_index_locs.get(node.name)
                 exp_leaf_locs[nlabel] = None if idx is None else [idx]
+                if can_reuse:
+                    reusable_minima[nlabel] = (
+                        corr_matrix[idx, idx]
+                        if type(idx) is int and 0 <= idx < corr_matrix.shape[0] else None
+                    )
                 continue
             child_locs = []
+            child_groups = []
+            child_minima = []
             has_missing = False
             for child in node.get_children():
-                locs = exp_leaf_locs.get(get_node_label(child))
+                child_label = get_node_label(child)
+                locs = exp_leaf_locs.get(child_label)
                 if locs is None:
                     has_missing = True
                     break
                 child_locs.extend(locs)
+                if can_reuse:
+                    child_groups.append(locs)
+                    child_minima.append(reusable_minima.get(child_label))
             if has_missing or (len(child_locs) == 0):
                 exp_leaf_locs[nlabel] = None
+                if can_reuse:
+                    reusable_minima[nlabel] = None
                 continue
             exp_leaf_locs[nlabel] = child_locs
-            min_cor_by_label[nlabel] = corr_matrix[numpy.ix_(child_locs, child_locs)].min()
+            children_reusable = can_reuse and all(value is not None for value in child_minima)
+            minimum = None
+            # A single reduction is cheaper for small clades than separate
+            # child/cross-block reductions.
+            if children_reusable and len(child_groups) == 2 and len(child_locs) >= 64:
+                left, right = child_groups
+                minimum = numpy.minimum.reduce([
+                    *child_minima,
+                    corr_matrix[numpy.ix_(left, right)].min(),
+                    corr_matrix[numpy.ix_(right, left)].min(),
+                ])
+                # Regrouping can select another NaN payload or signed zero.
+                # Retain the original reduction whenever its minimum is special.
+                if not numpy.isfinite(minimum) or minimum == 0:
+                    minimum = None
+            if minimum is None:
+                minimum = corr_matrix[numpy.ix_(child_locs, child_locs)].min()
+            min_cor_by_label[nlabel] = minimum
+            if can_reuse:
+                reusable_minima[nlabel] = minimum if children_reusable else None
         return min_cor_by_label
 
     def build_hyphy_relax_branch_table(task):
