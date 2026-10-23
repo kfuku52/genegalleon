@@ -1,5 +1,12 @@
 suppressPackageStartupMessages(library(genegalleon.treevis))
 suppressPackageStartupMessages(library(ggplot2))
+similarity_source = Sys.getenv('GG_TREEVIS_SIMILARITY_SOURCE', '')
+if (nzchar(similarity_source)) {
+    implementation = new.env(parent=asNamespace('genegalleon.treevis'))
+    sys.source(similarity_source, envir=implementation)
+    add_sequence_similarity_column = implementation$add_sequence_similarity_column
+}
+sequence_add = add_sequence_similarity_column
 g=list(tree=ggtree::ggtree(ape::read.tree(text='((a:1,b:1):1,c:2,d:2);')))
 args=list(font_size=6)
 tips=as.character(get_df_tip(g$tree)$label)
@@ -92,6 +99,90 @@ writeLines(c('not a fasta alignment'),f)
 stopifnot(inherits(try(add_sequence_similarity_column(g,args,f),silent=TRUE),'try-error'))
 unlink(c(f,pr))
 cat('Exact motif IDs and invalid q-value/FASTA checks passed.\n')
+
+# A position-wise oracle classifies each residue independently. Compare every
+# panel row and built drawing layer, including the zero/NA distinction, rather
+# than checking only a few displayed pairs.
+pairwise_panel = getFromNamespace('treevis_pairwise_column','genegalleon.treevis')
+read_similarity_fasta = getFromNamespace('treevis_similarity_fasta','genegalleon.treevis')
+oracle_sequence_values = function(tips, sequences) {
+    pairs = utils::combn(as.character(tips$label),2)
+    vapply(seq_len(ncol(pairs)),function(k) {
+        a = sequences[[pairs[1,k]]]; b = sequences[[pairs[2,k]]]
+        if (is.null(a) || is.null(b)) return(NA_real_)
+        a = strsplit(a,'',fixed=TRUE)[[1]]
+        b = strsplit(b,'',fixed=TRUE)[[1]]
+        valid = which(grepl('^[ACDEFGHIKLMNPQRSTVWY]$',a) &
+                      grepl('^[ACDEFGHIKLMNPQRSTVWY]$',b))
+        if (!length(valid)) return(NA_real_)
+        mean(a[valid] == b[valid])
+    },numeric(1))
+}
+render_similarity = function(plot) {
+    path = tempfile(fileext='.png')
+    grDevices::png(path,width=700,height=500)
+    grob = ggplotGrob(plot)
+    bbox_mm = c(grid::convertWidth(sum(grob$widths),'mm',valueOnly=TRUE),
+                grid::convertHeight(sum(grob$heights),'mm',valueOnly=TRUE))
+    print(plot)
+    grDevices::dev.off()
+    bytes = readBin(path,'raw',n=file.info(path)$size)
+    unlink(path)
+    list(bytes=bytes,bbox_mm=bbox_mm)
+}
+check_sequence_panel = function(sequences, render=FALSE) {
+    path = tempfile(fileext='.fa')
+    writeLines(as.vector(rbind(paste0('>',names(sequences),' descriptions'),unlist(sequences))),path)
+    actual = sequence_add(g,args,path,'protein')
+    tips = get_df_tip(g$tree); tips = tips[order(tips$y),,drop=FALSE]
+    expected = pairwise_panel(g,args,tips,
+        oracle_sequence_values(tips,as.list(read_similarity_fasta(path))),
+        'sequence_similarity','Sequence\nidentity\n(amino acid)',15)
+    stopifnot(identical(names(actual),names(expected)))
+    for (name in c('pairwise_tip_suffix','sequence_similarity')) {
+        stopifnot(identical(actual[[name]]$data,expected[[name]]$data),
+            identical(actual[[name]]$labels,expected[[name]]$labels),
+            identical(attr(actual[[name]],'treevis_width_mm'),attr(expected[[name]],'treevis_width_mm')),
+            identical(ggplot_build(actual[[name]])$data,ggplot_build(expected[[name]])$data))
+        if (render) stopifnot(identical(render_similarity(actual[[name]]),render_similarity(expected[[name]])))
+    }
+    unlink(path)
+}
+check_sequence_panel(list(c='XXXXXXXXXXXXXXXXXXXX',b='ACDEFGHIKLMNPQRSTVWY',
+                          a='ACDEFGHIKLMNPQRSTVWY'),render=TRUE)
+check_sequence_panel(list(a='ACDEFGHIKLMNPQRSTVWYXBZJOU*-?é',
+                          c=strrep('-',30),
+                          b='YWVTSRQPNMLKIHGFEDCAXXXXXXX??X'),render=TRUE)
+check_sequence_panel(list(c='acdx-',a='ACDX-',b='ACEAA'))
+set.seed(3714)
+for (trial in seq_len(12)) {
+    alphabet = strsplit('ACDEFGHIKLMNPQRSTVWYXBZJOU*-?','',fixed=TRUE)[[1]]
+    sequences = setNames(lapply(seq_len(4),function(i) paste0(sample(alphabet,83,replace=TRUE),collapse='')),
+                         sample(c('a','b','c','d')))
+    check_sequence_panel(sequences)
+}
+cat('Complete sequence panel data, drawing layers and raster equivalence passed.\n')
+
+# Check exact failures as well as successful values. These inputs fail before
+# translation or drawing, so no external tool message is part of the contract.
+check_sequence_error = function(lines,message,mode='protein') {
+    path = tempfile(fileext='.fa')
+    writeLines(lines,path)
+    failure = tryCatch(sequence_add(g,args,path,mode),error=function(error) error)
+    unlink(path)
+    stopifnot(inherits(failure,'simpleError'),identical(conditionMessage(failure),message))
+}
+check_sequence_error(c('>a','ACD','>b','ACD'),'Sequence similarity mode must be cds or protein.','unknown')
+check_sequence_error('ACDEFG','Nonempty FASTA input has no record headers.')
+check_sequence_error(c('ACD','>a','ACD','>b','ACD'),'FASTA sequence appeared before its header.')
+check_sequence_error(c('>a first','ACD','>a second','ACD'),'FASTA IDs must be nonempty and unique.')
+check_sequence_error(c('>a','','>b','ACD'),
+    'Sequence similarity requires a nonempty, equal-length alignment; raw unaligned FASTA is not valid.')
+check_sequence_error(c('>a','ACD','>b','ACDE'),
+    'Sequence similarity requires a nonempty, equal-length alignment; raw unaligned FASTA is not valid.')
+check_sequence_error(c('>a','ACGT','>b','ACGT'),
+    'Amino-acid identity requires a codon alignment with length divisible by three.','cds')
+cat('Exact sequence similarity validation failures passed.\n')
 
 # Read the installed FIMO's real output, including its header and footer.
 run_dir=tempfile('cis-fimo-integration-');dir.create(run_dir)

@@ -239,13 +239,12 @@ def enrich_hgt_tables(
             )
             writer.writeheader()
             count = 0
+            records_by_orthogroup: Dict[str, List[Dict[str, object]]] = {}
+            for (orthogroup, _gene_id), record in gene_records_by_key.items():
+                records_by_orthogroup.setdefault(orthogroup, []).append(record)
             for row in reader:
                 orthogroup = nonempty(row.get("orthogroup"))
-                records = [
-                    record
-                    for (record_orthogroup, _gene_id), record in gene_records_by_key.items()
-                    if record_orthogroup == orthogroup
-                ]
+                records = records_by_orthogroup.get(orthogroup, [])
                 taxonomy_values = aggregate_taxonomy_fields(records)
                 write_row(
                     writer,

@@ -144,11 +144,12 @@ add_sequence_similarity_column = function(g, args, path_alignment, sequence_mode
         chars = lapply(seqs, function(x) strsplit(x,'',fixed=TRUE)[[1]])
     }
     alphabet = strsplit('ACDEFGHIKLMNPQRSTVWY','')[[1]]
+    valid_chars = lapply(chars,function(x) x %in% alphabet)
     pairs = utils::combn(as.character(tips[['label']]),2)
     values = vapply(seq_len(ncol(pairs)),function(k) {
         a = chars[[pairs[1,k]]]; b = chars[[pairs[2,k]]]
         if (is.null(a) || is.null(b)) return(NA_real_)
-        valid = a %in% alphabet & b %in% alphabet
+        valid = valid_chars[[pairs[1,k]]] & valid_chars[[pairs[2,k]]]
         if (!any(valid)) return(NA_real_)
         mean(a[valid] == b[valid])
     },numeric(1))

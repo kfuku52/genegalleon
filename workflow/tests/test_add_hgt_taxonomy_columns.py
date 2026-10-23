@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT_DIR))
 
@@ -209,3 +211,75 @@ def test_migration_appends_all_taxonomy_columns_and_preserves_existing_values(tm
     assert orthogroups[0]["recipient_orders"] == "Brassicales"
     assert orthogroups[0]["donor_families"] == "Enterobacteriaceae; Bacillaceae"
     assert "species:Escherichia coli" in orthogroups[0]["donor_taxonomies"]
+
+
+def test_migration_groups_interleaved_genes_after_first_key_deduplication(tmp_path, monkeypatch):
+    paths = {name: tmp_path / f"{name}.tsv" for name in ("gene", "branch", "orthogroup")}
+    resolver = migration.TaxonomyResolver("")
+    resolver.enabled = True
+    resolver.ncbi = _FakeNcbi()
+    monkeypatch.setattr(migration, "TaxonomyResolver", lambda _dbfile: resolver)
+
+    def gene(orthogroup, gene_id, phylum):
+        return dict(orthogroup=orthogroup, gene_id=gene_id, gene_taxon="Example species",
+                    besthit_organism="Example species", besthit_taxid="7", donor_phylum=phylum)
+
+    _write_table(paths["gene"],
+                 ["orthogroup", "gene_id", "gene_taxon", "besthit_organism", "besthit_taxid", "donor_phylum"],
+                 [gene("OG_B", "shared", "B first"), gene("OG_A", "first", "A first"),
+                  gene("OG_B", "second", "B second"), gene("OG_A", "shared", "A shared"),
+                  gene("OG_B", "shared", "duplicate ignored by summaries"),
+                  gene("  ", "unassigned", "Blank group")])
+    _write_table(paths["branch"], ["orthogroup", "candidate_genes", "branch_id"],
+                 [dict(orthogroup="OG_B", candidate_genes="second; shared", branch_id="1"),
+                  dict(orthogroup="OG_missing", candidate_genes="shared", branch_id="2")])
+    _write_table(paths["orthogroup"], ["orthogroup", "old_value", "donor_phyla"],
+                 [dict(orthogroup="OG_A", old_value="first output"),
+                  dict(orthogroup="OG_B", old_value="second output"),
+                  dict(orthogroup="OG_B", old_value="duplicate output", donor_phyla="existing value"),
+                  dict(orthogroup="OG_missing", old_value="no genes"),
+                  dict(orthogroup="", old_value="blank group")])
+
+    counts = migration.enrich_hgt_tables(paths["branch"], paths["gene"], paths["orthogroup"], "fake")
+
+    assert counts == {"gene": 6, "branch": 2, "orthogroup": 5}
+    genes = _read_table(paths["gene"])
+    assert len(genes) == 6  # Input duplicates remain in the gene output.
+    assert genes[4]["donor_phylum"] == "duplicate ignored by summaries"
+    assert all(row["recipient_phylum"] == "Streptophyta" for row in genes)
+    assert all("species:Example species" in row["donor_taxonomy"] for row in genes)
+    assert resolver.lineage_cache[7] == resolver.ncbi.lineage_ids
+
+    branches = _read_table(paths["branch"])
+    assert branches[0]["donor_phyla"] == "B second; B first"
+    assert branches[1]["donor_phyla"] == ""
+    groups = _read_table(paths["orthogroup"])
+    assert [row["old_value"] for row in groups] == [
+        "first output", "second output", "duplicate output", "no genes", "blank group"]
+    assert [row["donor_phyla"] for row in groups] == [
+        "A first; A shared", "B first; B second", "existing value", "", "Blank group"]
+
+
+def test_migration_failure_during_orthogroup_aggregation_preserves_all_inputs(tmp_path, monkeypatch):
+    paths = {name: tmp_path / f"{name}.tsv" for name in ("gene", "branch", "orthogroup")}
+    monkeypatch.setattr(migration, "TaxonomyResolver", lambda _dbfile: SimpleNamespace(enabled=False))
+    _write_table(paths["gene"], ["orthogroup", "gene_id", "gene_taxon", "besthit_organism", "besthit_taxid"],
+                 [dict(orthogroup="OG_good", gene_id="good"), dict(orthogroup="OG_bad", gene_id="bad")])
+    _write_table(paths["branch"], ["orthogroup", "candidate_genes"],
+                 [dict(orthogroup="OG_good", candidate_genes="good")])
+    _write_table(paths["orthogroup"], ["orthogroup"],
+                 [dict(orthogroup="OG_good"), dict(orthogroup="OG_bad")])
+    before = {name: path.read_bytes() for name, path in paths.items()}
+    aggregate = migration.aggregate_taxonomy_fields
+
+    def fail_on_bad_gene(records):
+        if any(record.get("gene_id") == "bad" for record in records):
+            raise RuntimeError("aggregation failed")
+        return aggregate(records)
+
+    monkeypatch.setattr(migration, "aggregate_taxonomy_fields", fail_on_bad_gene)
+    with pytest.raises(RuntimeError, match="aggregation failed"):
+        migration.enrich_hgt_tables(paths["branch"], paths["gene"], paths["orthogroup"], "")
+
+    assert {name: path.read_bytes() for name, path in paths.items()} == before
+    assert set(tmp_path.iterdir()) == set(paths.values())

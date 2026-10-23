@@ -157,10 +157,7 @@ def main():
         merged_metadata.loc[:, ["orthodb_url", "description"]] = merged_metadata.loc[
             :, ["orthodb_url", "description"]
         ].replace("-", pd.NA)
-        merged_metadata = merged_metadata.groupby("busco_id", as_index=False, sort=False).agg(
-            orthodb_url=("orthodb_url", first_non_missing),
-            description=("description", first_non_missing),
-        )
+        merged_metadata = merged_metadata.groupby("busco_id", as_index=False, sort=False).first().fillna("-")
     else:
         merged_metadata = pd.DataFrame(columns=["busco_id", "orthodb_url", "description"])
 
