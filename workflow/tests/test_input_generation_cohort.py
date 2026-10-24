@@ -1,4 +1,5 @@
 """Native cohort handoff keeps IDs, source evidence and independent QC."""
+import errno
 import gzip
 import json
 import sys
@@ -245,3 +246,53 @@ def test_cohort_rederives_historical_orfs_and_preserves_the_original_audit(tmp_p
     assert proof['gene_grouping'] == 'historical-header-groups-v1'
     assert not proof['audit_rewritten'] and not proof['biological_gene_uniqueness_established']
     assert audit.read_bytes() == before
+
+
+def test_prepare_hashes_each_physical_source_once_after_link_creation(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path)
+    task = cohort.load_cohort(plan)['tasks'][0]
+    sources = [Path(task['summary'][key]) for key in ['cds_input_path', 'cds_output_path']]
+    calls = []
+    original = state.digest
+    def counted(path):
+        calls.append(Path(path).stat().st_ino)
+        return original(path)
+    monkeypatch.setattr(state, 'digest', counted)
+    cohort.prepare(workspace, plan)
+    assert all(calls.count(source.stat().st_ino) == 1 for source in sources)
+    assert Path(task['summary']['cds_output_path']).samefile(workspace / 'input/species_cds' / sources[1].name)
+
+
+def test_failed_cross_filesystem_copy_cannot_publish_a_verified_view(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path)
+    def cross_device(*args, **kwargs):
+        raise OSError(errno.EXDEV, 'different filesystem')
+    def corrupt_copy(source, destination, _buffer):
+        destination.write(source.read() + b'corrupted')
+    monkeypatch.setattr(cohort.os, 'link', cross_device)
+    monkeypatch.setattr(cohort.shutil, 'copyfileobj', corrupt_copy)
+    with pytest.raises(ValueError, match='hash mismatch'):
+        cohort.prepare(workspace, plan)
+    assert not (workspace / 'cohort_view.json').exists()
+
+
+def test_partial_view_with_an_extra_species_cannot_be_published(tmp_path):
+    plan, workspace, _ = fixture(tmp_path)
+    foreign = workspace / 'input/species_cds/Foreign_species.fa'
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text('>foreign\nATGTAA\n')
+    with pytest.raises(ValueError, match='Unexpected cohort species'):
+        cohort.prepare(workspace, plan)
+    assert not (workspace / 'cohort_view.json').exists()
+
+
+def test_cohort_plan_mutation_during_staging_prevents_publication(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path)
+    original = cohort.os.link
+    def change_plan(*args, **kwargs):
+        plan.write_bytes(plan.read_bytes() + b' ')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(cohort.os, 'link', change_plan)
+    with pytest.raises(OSError, match='changed'):
+        cohort.prepare(workspace, plan)
+    assert not (workspace / 'cohort_view.json').exists()

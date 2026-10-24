@@ -192,6 +192,15 @@ def verify_view(workspace, plan, *, indices=None, batch=None):
             'Cohort view identity changed')
     expected_links = {k: v for t in doc['tasks'] for k, v in links_for(t).items()}
     require(saved['links'] == expected_links, 'Cohort view membership changed')
+    for task in chosen:
+        require(saved['summaries'][task['species']] == task['summary'], 'Cohort source summary changed')
+    verify_prepared_files(workspace, doc, chosen, expected_links, batch=batch)
+    return doc
+
+
+def verify_prepared_files(workspace, doc, chosen, expected_links, *, batch=None):
+    """Verify sources, copied/linked outputs and membership before publication."""
+    batch = batch or FreshDigestBatch()
     require([{k: v for k, v in r.items() if v} for r in read_table(workspace / 'output/input_generation/gg_input_generation_species.tsv')] ==
             [{k: v for k, v in t['summary'].items() if v} for t in doc['tasks']], 'Cohort summary changed')
     for role in OUTPUTS.values():
@@ -202,7 +211,6 @@ def verify_view(workspace, plan, *, indices=None, batch=None):
                         {k for k in expected_links if Path(k).parent == Path(base + role)}, 'Unexpected cohort species files')
     view_hashes = {}
     for task in chosen:
-        require(saved['summaries'][task['species']] == task['summary'], 'Cohort source summary changed')
         for relative, source in links_for(task).items():
             target = workspace / relative
             require(target.is_file() and not target.is_symlink(), 'Cohort view file changed: ' + str(target))
@@ -215,13 +223,15 @@ def verify_view(workspace, plan, *, indices=None, batch=None):
     verify_tasks(chosen, batch=batch)
     batch.read(view_hashes, expected=view_hashes)
     batch.check()
-    return doc
 
 
 def prepare(workspace, plan):
     """Make a byte-preserving input view; donors remain required and unchanged."""
     workspace, plan = Path(workspace), Path(plan)
+    batch = FreshDigestBatch()
+    plan_sha = batch.read([plan])[str(plan)]
     doc = load_cohort(plan)
+    batch.check()
     require(workspace.is_absolute() and workspace.resolve() == workspace and not workspace.is_symlink(), 'Unsafe cohort workspace')
     require(all(not workspace.is_relative_to(t['source_workspace']) and
                 not Path(t['source_workspace']).is_relative_to(workspace) for t in doc['tasks']), 'Cohort overlaps a donor')
@@ -229,18 +239,18 @@ def prepare(workspace, plan):
     with namespace_lock(workspace / '.cohort.lock', exclusive=True, nonblocking=True) as acquired:
         require(acquired, 'Cohort has an active owner')
         if (workspace / 'cohort_view.json').exists():
-            verify_view(workspace, plan)
+            verify_view(workspace, plan, batch=batch)
             return
         for path in workspace.rglob('*'):
             require(not path.is_symlink(), 'Unsafe existing cohort symlink')
-        # Validate all donor namespaces before publishing any links. Retain read
-        # ownership until the full content boundary and publication both finish.
+        # Hold every donor namespace while staging the unpublished view. All
+        # sources and outputs must pass the fresh final content boundary before
+        # publishing cohort_view.json, including cross-filesystem copies.
         with contextlib.ExitStack() as stack:
             for root in sorted({t['source_workspace'] for t in doc['tasks']}):
                 acquired = stack.enter_context(namespace_lock(Path(root) / 'output/input_generation/.array-phase.lock',
                                                              exclusive=True, nonblocking=True))
                 require(acquired, 'Native donor has an active owner: ' + root)
-            verify_tasks(doc['tasks'])
             all_links = {}
             for task in doc['tasks']:
                 for relative, source in links_for(task).items():
@@ -250,8 +260,7 @@ def prepare(workspace, plan):
                 target = workspace / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists():
-                    require(stat.S_ISREG(target.lstat().st_mode) and digest(target) ==
-                            next(t['files'][source] for t in doc['tasks'] if source in t['files']), 'Partial cohort file changed')
+                    require(stat.S_ISREG(target.lstat().st_mode), 'Partial cohort file is not regular')
                 else:
                     try:
                         os.link(source, target, follow_symlinks=False)
@@ -271,10 +280,10 @@ def prepare(workspace, plan):
                     data = Path(source).read_bytes()
                     require(hashlib.sha256(data).hexdigest() == task['files'][source], 'Clone history changed')
                     target.write_bytes(data)
-            # Creating hardlinks changes donor ctime. Start a fresh content
-            # boundary after publication; no earlier digest authorizes a write.
-            verify_tasks(doc['tasks'])
-            atomic_json(workspace / 'cohort_view.json', dict(kind=KIND, plan_sha256=digest(plan), task_count=doc['task_count'],
+            # Link creation changes donor ctime. Hash every physical source and
+            # output once after staging; never reuse a digest across writes.
+            verify_prepared_files(workspace, doc, doc['tasks'], all_links, batch=batch)
+            atomic_json(workspace / 'cohort_view.json', dict(kind=KIND, plan_sha256=plan_sha, task_count=doc['task_count'],
                         summaries={t['species']: t['summary'] for t in doc['tasks']}, links=all_links,
                         donor_retention_required=True, sequence_identifiers_rewritten=False), immutable=True)
 

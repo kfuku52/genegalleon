@@ -20,9 +20,12 @@ python workflow/support/input_generation_cohort.py prepare \
   --plan cohort_plan.json --workspace /data/project/cohort/workspace
 ```
 
-Prepare takes native donor locks, freshly verifies every receipt-bound file,
-and creates regular-file views using hardlinks where supported and bounded
-streaming copies across filesystems. It verifies content again after publication.
+Prepare takes native donor locks and stages an unpublished regular-file view
+using hardlinks where supported and bounded streaming copies across filesystems.
+After staging, it freshly verifies every receipt-bound source, linked/copied
+output, summary and cloned audit snapshot before publishing `cohort_view.json`.
+Each physical file is hashed once within that boundary. Failed copies, unexpected
+species files and plan/source changes cannot publish a successful view.
 Donor metadata and evidence remain required: retain those workspaces and treat
 all linked inputs as read-only. No stat-only or persisted checksum establishes
 success. A partially prepared identical view can resume; conflicting files or
@@ -87,3 +90,12 @@ To reproduce with a saved baseline module visible inside the container:
 bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_input_cohort_verification.py \
   --baseline /data/benchmark/baseline_input_generation_cohort.py
 ```
+
+Preparation uses the same final content boundary after link creation. Compared
+with v0.8.394, the same warmup/three-repetition Docker fixture produced identical
+view manifests with median preparation time 0.133 s → 0.081 s and hashed bytes
+256 MiB → 128 MiB. Peak Python allocations stayed about 2.04 MiB. Copied outputs
+are now explicitly hashed before publication as well; distinct physical copies
+still require their own content read. This measures assembly only, excluding
+biological QC. Reproduce with the same command plus `--phase prepare` and a saved
+v0.8.394 baseline module.

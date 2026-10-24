@@ -1,4 +1,4 @@
-"""Compare the same native view verification, including current hash read counts."""
+"""Compare native view preparation/verification, including current hash reads."""
 
 import argparse
 import hashlib
@@ -34,6 +34,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
     m = module(Path(sys.argv[1]))
     workspace = Path(sys.argv[2])
     plan = Path(sys.argv[3])
+    phase = sys.argv[4]
     calls = []
     original = state.digest
 
@@ -45,7 +46,11 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
     m.digest = counted
     tracemalloc.start()
     started = time.perf_counter()
-    doc = m.verify_view(workspace, plan)
+    if phase == 'prepare':
+        m.prepare(workspace, plan)
+        doc = json.loads((workspace / 'cohort_view.json').read_text())
+    else:
+        doc = m.verify_view(workspace, plan)
     seconds = time.perf_counter() - started
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
@@ -65,6 +70,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--baseline", type=Path, required=True, help="Saved baseline input_generation_cohort.py")
+parser.add_argument('--phase', choices=['verify', 'prepare'], default='verify')
 args = parser.parse_args()
 BASE = args.baseline.resolve(strict=True)
 m = module(BASE)
@@ -124,12 +130,14 @@ with tempfile.TemporaryDirectory(prefix="cohort-benchmark-") as tmp:
     plan = tmp / "plan.json"
     atomic_json(plan, m.freeze(selection, 2))
     view = tmp / "view"
-    m.prepare(view, plan)
+    if args.phase == 'verify':
+        m.prepare(view, plan)
     results = {name: [] for name in ["baseline", "candidate"]}
     for repeat in range(4):
         for name, path in [("baseline", BASE), ("candidate", CANDIDATE)]:
+            target = view if args.phase == 'verify' else tmp / ('view-' + name + '-' + str(repeat))
             output = subprocess.check_output(
-                [sys.executable, str(Path(__file__).resolve()), "--worker", str(path), str(view), str(plan)], text=True
+                [sys.executable, str(Path(__file__).resolve()), "--worker", str(path), str(target), str(plan), args.phase], text=True
             )
             value = json.loads(output)
             if repeat:
@@ -137,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix="cohort-benchmark-") as tmp:
     all_rows = [v for group in results.values() for v in group]
     assert len({v["output_sha256"] for v in all_rows}) == 1
     report = dict(
-        workload="Two 64 MiB FASTA payloads; three hardlinked names per genome; verification only, no biological QC timing",
+        workload="Two 64 MiB FASTA payloads; three hardlinked names per genome; " + args.phase + ", no biological QC timing",
         runtime=sys.version,
         platform=sys.platform,
         repetitions=3,
