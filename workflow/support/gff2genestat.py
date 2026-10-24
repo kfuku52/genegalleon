@@ -1074,9 +1074,13 @@ def read_gff_table(gff_path, *, coding_only=False):
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
     except (pandas.errors.ParserError, ValueError):
-        opener = gzip.open if gff_path.endswith(".gz") else open
+        opener = gzip.open if str(gff_path).endswith(".gz") else open
         rows = []
-        with opener(gff_path, "rt", encoding="utf-8") as handle:
+        if hasattr(gff_path, "read"):
+            gff_path.seek(0)
+        import contextlib
+        context = contextlib.nullcontext(gff_path) if hasattr(gff_path, "read") else opener(gff_path, "rt", encoding="utf-8")
+        with context as handle:
             for raw_line in handle:
                 if raw_line.startswith("#") or raw_line.strip() == "":
                     continue
@@ -1093,45 +1097,9 @@ def read_coding_gff_table(gff_path):
     GFF output itself stays intact. Explicit parent/Derives_from links, including
     links through alignment features, are resolved to closure before tabulation.
     """
-    import tempfile
-    alignment_types = {"match", "match_part", "protein_match", "nucleotide_match", "translated_nucleotide_match"}
-    opener = gzip.open if str(gff_path).endswith(".gz") else open
-    known, wanted = set(), set()
-    with tempfile.TemporaryDirectory(prefix="gg-coding-gff-") as directory:
-        filtered = os.path.join(directory, "coding.gff")
-        with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "w", encoding="utf-8") as target:
-            for line in source:
-                if line.startswith("##FASTA"):
-                    break
-                parts = line.rstrip("\r\n").split("\t")
-                if line.startswith("#") or len(parts) < 9:
-                    target.write(line)
-                    continue
-                if parts[2].lower() in alignment_types:
-                    continue
-                target.write(line)
-                attrs = _parse_gff_attributes(parts[8])
-                known.update(attrs.get("ID", ()))
-                for key in ("Parent", "Derives_from", "derives_from"):
-                    wanted.update(attrs.get(key, ()))
-        inspected = set()
-        while wanted - known - inspected:
-            pending = wanted - known - inspected
-            with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "a", encoding="utf-8") as target:
-                for line in source:
-                    if line.startswith("##FASTA"):
-                        break
-                    parts = line.rstrip("\r\n").split("\t")
-                    if line.startswith("#") or len(parts) < 9 or parts[2].lower() not in alignment_types:
-                        continue
-                    attrs = _parse_gff_attributes(parts[8])
-                    if not set(attrs.get("ID", ())) & pending:
-                        continue
-                    target.write(line)
-                    for key in ("Parent", "Derives_from", "derives_from"):
-                        wanted.update(attrs.get(key, ()))
-            inspected.update(pending)
-        return read_gff_table(filtered)
+    from coding_gff_stream import CodingGffStream
+    with CodingGffStream(gff_path, _parse_gff_attributes) as stream:
+        return read_gff_table(stream)
 
 
 def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None):

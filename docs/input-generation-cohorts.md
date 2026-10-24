@@ -99,3 +99,18 @@ are now explicitly hashed before publication as well; distinct physical copies
 still require their own content read. This measures assembly only, excluding
 biological QC. Reproduce with the same command plus `--phase prepare` and a saved
 v0.8.394 baseline module.
+
+For a code-fix retry, `qc` and `finalize` accept `--qc-directory` beneath the
+same cohort workspace. Use the same directory for every member and its finalizer;
+previous QC records stay intact. This does not skip validation or rebuild inputs.
+The finalizer still checks every selected species and freshly verifies all inputs.
+
+Coding-GFF validation streams the filtered rows directly to the table reader,
+retaining alignment-ancestor closure and historical row order. It no longer
+writes an expanded GFF to temporary storage. In a Linux/arm64 Docker fixture
+with 250,000 CDS rows, three alternating runs after a warmup produced identical
+rows, dtypes and checksums: expanded temporary writes fell from 14,314,862 bytes
+to zero, median peak RSS from 205,636 to 182,692 KiB. Median parsing times were
+0.566 and 0.537 s; this small fixture does not establish whole-workflow speedup.
+Reproduce with `workflow/benchmarks/benchmark_coding_gff_stream.py --baseline`
+pointing to the previous `gff2genestat.py`, inside the GeneGalleon runtime.

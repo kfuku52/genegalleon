@@ -288,7 +288,15 @@ def prepare(workspace, plan):
                         donor_retention_required=True, sequence_identifiers_rewritten=False), immutable=True)
 
 
-def qc_one(workspace, plan, index):
+def qc_directory(workspace, directory=None):
+    path = Path(directory) if directory is not None else Path(workspace) / 'qc'
+    require(path.resolve().is_relative_to(Path(workspace).resolve()) and path.resolve() != Path(workspace).resolve(),
+            'QC directory must be inside the cohort workspace')
+    require(not any(p.is_symlink() for p in (path, *path.parents)), 'Unsafe QC directory symlink')
+    return path
+
+
+def qc_one(workspace, plan, index, *, directory=None):
     from busco_quality_metadata import read_short_summary
     from validate_cds_gff_mapping import validate_single_species as mapping
     from validate_longest_cds_selection import validate_single_species as ownership
@@ -296,7 +304,8 @@ def qc_one(workspace, plan, index):
     doc = load_cohort(plan)
     require(1 <= index <= doc['task_count'], 'Cohort task index is out of bounds')
     task = doc['tasks'][index - 1]
-    lock = workspace / 'qc' / (str(index) + '.lock')
+    directory = qc_directory(workspace, directory)
+    lock = directory / (str(index) + '.lock')
     with namespace_lock(workspace / '.cohort.lock', exclusive=False, timeout=30) as reader, \
             namespace_lock(lock, exclusive=True, nonblocking=True) as acquired:
         require(reader and acquired, 'Cohort QC has an active owner')
@@ -335,19 +344,20 @@ def qc_one(workspace, plan, index):
         # Native QC only reads input files. Keep this one fresh content
         # boundary fenced until publication instead of hashing it a second time.
         batch.check()
-        atomic_json(workspace / 'qc' / (str(index) + '.json'), record)
+        atomic_json(directory / (str(index) + '.json'), record)
         require(record['passed'], 'Native cohort QC failed: ' + sp)
         return record
 
 
-def finalize(workspace, plan):
+def finalize(workspace, plan, *, directory=None):
     workspace, plan = Path(workspace), Path(plan)
     with namespace_lock(workspace / '.cohort.lock', exclusive=True, nonblocking=True) as acquired:
         require(acquired, 'Cohort QC workers are still active')
         doc = verify_view(workspace, plan)
+        directory = qc_directory(workspace, directory)
         results = []
         for index, task in enumerate(doc['tasks'], 1):
-            value = json.loads((workspace / 'qc' / (str(index) + '.json')).read_text())
+            value = json.loads((directory / (str(index) + '.json')).read_text())
             require(value['kind'] == KIND and value['plan_sha256'] == digest(plan) and value['index'] == index
                     and value['species'] == task['species'] and value['passed'] is True, 'Missing/failed/mismatched native QC')
             results.append(value)
@@ -377,6 +387,7 @@ def main():
     p.add_argument('--plan', type=Path, required=True)
     p.add_argument('--workspace', type=Path)
     p.add_argument('--task-index', type=int)
+    p.add_argument('--qc-directory', type=Path, help='Separate QC attempt directory inside the cohort workspace; retains earlier records')
     a = p.parse_args()
     if a.phase == 'plan':
         aliases = json.loads(a.source_aliases.read_text()) if a.source_aliases else None
@@ -389,9 +400,9 @@ def main():
         doc = verify_view(a.workspace, a.plan)
         result = dict(verified=True, species=doc['task_count'], plan_sha256=digest(a.plan))
     elif a.phase == 'qc':
-        result = qc_one(a.workspace, a.plan, a.task_index)
+        result = qc_one(a.workspace, a.plan, a.task_index, directory=a.qc_directory)
     else:
-        result = finalize(a.workspace, a.plan)
+        result = finalize(a.workspace, a.plan, directory=a.qc_directory)
     print(json.dumps(result))
 
 
