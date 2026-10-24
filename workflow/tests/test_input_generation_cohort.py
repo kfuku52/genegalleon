@@ -296,3 +296,24 @@ def test_cohort_plan_mutation_during_staging_prevents_publication(tmp_path, monk
     with pytest.raises(OSError, match='changed'):
         cohort.prepare(workspace, plan)
     assert not (workspace / 'cohort_view.json').exists()
+
+
+def test_optional_qc_telemetry_keeps_native_results_and_failed_content_checks(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path, clones=True)
+    cohort.prepare(workspace, plan)
+    metrics = tmp_path / 'performance'
+    monkeypatch.setenv('GG_PERFORMANCE_DIR', str(metrics))
+    result = cohort.qc_one(workspace, plan, 1)
+    assert result['passed'] and result['ownership']['ok']
+    assert json.loads((workspace / 'qc/1.json').read_text()) == result
+    task = cohort.load_cohort(plan)['tasks'][1]
+    Path(task['summary']['cds_input_path']).write_text('>changed\nATGTAA\n')
+    with pytest.raises(ValueError, match='hash mismatch'):
+        cohort.qc_one(workspace, plan, 2)
+    assert not (workspace / 'qc/2.json').exists()
+    rows = [json.loads(line) for path in metrics.glob('*.jsonl') for line in path.read_text().splitlines()]
+    content = [row for row in rows if row['phase'] == 'cohort.qc.content']
+    selection = [row for row in rows if row['phase'] == 'cohort.qc.cds_selection']
+    assert [row['status'] for row in content] == ['ok', 'failed']
+    assert len(selection) == 1 and selection[0]['status'] == 'ok'
+    assert all(row['seconds'] >= 0 and row['process_peak_rss_bytes'] > 0 for row in content + selection)

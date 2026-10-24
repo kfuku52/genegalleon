@@ -783,6 +783,22 @@ def _phase_column_values(column, dtype):
     return column.astype(dtype)
 
 
+def _structure_arrays(frame):
+    """Use native columns without constructing a DataFrame for every gene.
+
+    Unusual types keep the original gene-local conversions and error order.
+    """
+    names = ("sequence", "strand", "start", "end", "attributes", "phase", "selected_transcript")
+    if not frame.columns.is_unique or not all(name in frame for name in names):
+        return None
+    if any(frame[name].dtype != numpy.dtype(int) for name in ("start", "end")):
+        return None
+    if any(not all(type(value) is str for value in frame[name])
+           for name in ("sequence", "strand", "attributes", "selected_transcript")):
+        return None
+    return {name: frame[name].to_numpy(copy=False) for name in names}
+
+
 def attach_transcript_structure(selected_cds, gff, phase_policy="strict", structure_policy="strict"):
     """Attach only explicit UTRs from the exact transcript selected for CDS."""
     selected_cds = selected_cds.copy()
@@ -797,15 +813,26 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
     first_phase = {}
     phase_status = {}
     utr_status = {}
-    for gene_id, cds in selected_cds.groupby("gene_id", sort=False):
-        transcript = cds["selected_transcript"].unique()
+    arrays = _structure_arrays(selected_cds)
+    groups = selected_cds.groupby("gene_id", sort=False)
+    for gene_id, cds in (groups.indices.items() if arrays is not None else groups):
+        transcript = (pandas.unique(arrays["selected_transcript"][cds]) if arrays is not None
+                      else cds["selected_transcript"].unique())
         if len(transcript) != 1:
             raise ValueError(f"Multiple selected transcripts for {gene_id}")
-        cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
+        if arrays is not None:
+            attributes = arrays["attributes"][cds]
+            coordinates = [(arrays["sequence"][i], arrays["strand"][i], arrays["start"][i], arrays["end"][i])
+                           for i in cds]
+            cds_blocks, splice_mode = ordered_annotated_blocks(
+                ((*block, attr) for block, attr in zip(coordinates, attributes, strict=True)), gene_id)
+        else:
+            attributes = cds["attributes"]
+            cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
         utr_rows = utr_by_transcript.get(transcript[0], [])
         utr_status[gene_id] = "available"
         if transcript[0].startswith("protein_id:"):
-            parent_ids = {parent for attr in cds["attributes"]
+            parent_ids = {parent for attr in attributes
                           for parent in transcript_ids(attr, gene_id)}
             if any(utr_by_transcript.get(parent) for parent in parent_ids):
                 if structure_policy != "report":
@@ -841,10 +868,12 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         # Build the coordinate lookup once, retaining every duplicate phase row.
         # Recasting and scanning all CDS rows for each block is unnecessary.
         phases_by_block = {}
-        for sequence, strand, start, end, phase in zip(
+        phase_rows = (((*block, phase) for block, phase in zip(coordinates, arrays["phase"][cds], strict=True))
+                      if arrays is not None else zip(
                 _phase_column_values(cds["sequence"], str), _phase_column_values(cds["strand"], str),
                 _phase_column_values(cds["start"], int), _phase_column_values(cds["end"], int),
-                cds["phase"], strict=True):
+                cds["phase"], strict=True))
+        for sequence, strand, start, end, phase in phase_rows:
             phases_by_block.setdefault((sequence, strand, start, end), []).append(phase)
         for block in cds_blocks:
             for value in phases_by_block.get(block, []):

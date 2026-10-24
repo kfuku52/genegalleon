@@ -114,3 +114,34 @@ to zero, median peak RSS from 205,636 to 182,692 KiB. Median parsing times were
 0.566 and 0.537 s; this small fixture does not establish whole-workflow speedup.
 Reproduce with `workflow/benchmarks/benchmark_coding_gff_stream.py --baseline`
 pointing to the previous `gff2genestat.py`, inside the GeneGalleon runtime.
+
+CDS phase/UTR checks use positional column arrays for ordinary string IDs and
+native integer coordinates, avoiding a new DataFrame per gene. Other column
+types retain the original gene-local conversions and error order. Every CDS
+phase, including duplicate-coordinate rows, still participates; UTR, strand,
+splice exceptions, policies and returned rows remain unchanged.
+
+On 2026-10-24, Linux/arm64 Docker, Python 3.12.15 and pandas 3.0.6, one warmup
+and five alternating fresh-process trials compared v0.8.398 with this change.
+For 10,000 genes with four CDS blocks each, median phase/UTR validation time
+was 1.164 / 0.318 seconds (72.7% less). Including locus matching, transcript
+selection and feature summarization gave 1.724 / 0.899 seconds (47.9% less).
+Complete output rows, order, dtypes and checksums matched. Peak process RSS
+was essentially unchanged: 107,724 / 107,852 KiB for phase/UTR checks and
+126,044 / 126,068 KiB for the combined fixture. These warm synthetic measurements
+exclude GFF/FASTA reads, content hashes, ORF rederivation and scheduler time;
+they do not establish a whole-cohort speedup. A control with 100 genes and
+400 blocks each retained identical outputs at 0.186 / 0.148 seconds;
+the benefit therefore depends on gene/block distribution. Reproduce in the runtime:
+
+```bash
+python workflow/benchmarks/benchmark_transcript_structure.py \
+  --baseline /data/baseline/gff2genestat.py --genes 10000 --blocks 4 --repeats 5
+```
+
+Add `--pipeline` for the combined fixture. `--profile` records a separate profiled
+warmup, excluded from the timing trials. The benchmark prints its
+JSON report last. Set `GG_PERFORMANCE_DIR` inside the analysis container to
+enable the existing optional telemetry for cohort content checks, CDS selection,
+CDS/GFF mapping and final content verification. Metrics stay in separate JSONL
+files; they never establish scientific success or change QC receipts.

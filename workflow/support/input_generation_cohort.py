@@ -22,6 +22,7 @@ from input_generation_array_state import (
     receipt_path,
     safe_component,
 )
+from performance_metrics import measure
 from shared_namespace_lock import namespace_lock
 
 KIND = 'native-formatted-input-cohort-v1'
@@ -310,19 +311,22 @@ def qc_one(workspace, plan, index, *, directory=None):
             namespace_lock(lock, exclusive=True, nonblocking=True) as acquired:
         require(reader and acquired, 'Cohort QC has an active owner')
         batch = FreshDigestBatch()
-        verify_view(workspace, plan, indices=[index], batch=batch)
+        with measure('cohort.qc.content'):
+            verify_view(workspace, plan, indices=[index], batch=batch)
         row, sp = task.get('qc_summary', task['source_summary']), task['species']
         if any(value.startswith('/workspace/') for value in row.values()):
             require(Path('/workspace').is_dir() and Path('/workspace').samefile(task['source_workspace']),
                     'Native donor /workspace namespace is required for QC')
         shared = dict(index=index, species_prefix=sp, cds_file=Path(row['cds_output_path']), summary_row=row,
                       revalidate_historical_orfs=True)
-        result = ownership(shared, 10)
+        with measure('cohort.qc.cds_selection'):
+            result = ownership(shared, 10)
         mapping_result = None
         if row.get('gff_output_path'):
-            mapping_result = mapping({**shared, 'gff_file': Path(row['gff_output_path']),
-                                      'genome_file': Path(row['genome_output_path']) if row.get('genome_output_path') else None,
-                                      'strict': True}, 10)
+            with measure('cohort.qc.cds_gff_mapping'):
+                mapping_result = mapping({**shared, 'gff_file': Path(row['gff_output_path']),
+                                          'genome_file': Path(row['genome_output_path']) if row.get('genome_output_path') else None,
+                                          'strict': True}, 10)
         quality_path = Path(task['source_workspace']) / 'output/input_generation/species_cds_busco_short' / (sp + '.busco.short.txt')
         quality = read_short_summary(quality_path) if str(quality_path) in task['files'] else None
         full = Path(task['source_workspace']) / 'output/input_generation/species_cds_busco_full' / (sp + '.busco.full.tsv')
@@ -353,7 +357,8 @@ def finalize(workspace, plan, *, directory=None):
     workspace, plan = Path(workspace), Path(plan)
     with namespace_lock(workspace / '.cohort.lock', exclusive=True, nonblocking=True) as acquired:
         require(acquired, 'Cohort QC workers are still active')
-        doc = verify_view(workspace, plan)
+        with measure('cohort.finalize.content'):
+            doc = verify_view(workspace, plan)
         directory = qc_directory(workspace, directory)
         results = []
         for index, task in enumerate(doc['tasks'], 1):

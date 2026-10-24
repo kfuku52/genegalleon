@@ -279,6 +279,43 @@ def test_phase_validation_keeps_gene_local_error_order():
         attach_transcript_structure(frame, frame)
 
 
+def test_native_structure_groups_keep_positional_rows_and_every_phase():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({
+        'gene_id': ['second', 'first', 'second', 'first', 'second'],
+        'selected_transcript': ['t2', 't1', 't2', 't1', 't2'],
+        'sequence': ['chr1'] * 5, 'strand': ['-', '+', '-', '+', '-'],
+        'start': [201, 1, 301, 101, 201], 'end': [209, 9, 309, 109, 209],
+        'feature': ['CDS'] * 5, 'phase': ['0', '0', '0', '0', '1'],
+        'attributes': ['Parent=t2', 'Parent=t1', 'Parent=t2', 'Parent=t1', 'Parent=t2'],
+    }, index=[90, 3, 90, -7, 8])
+    original = frame.copy(deep=True)
+    with pytest.raises(ValueError, match='Conflicting CDS phases for second'):
+        attach_transcript_structure(frame, frame)
+    result = attach_transcript_structure(frame, frame, phase_policy='report')
+    assert result.phase_status.tolist() == ['conflicting', 'consistent', 'conflicting', 'consistent', 'conflicting']
+    assert result.cds_first_phase.iloc[[1, 3]].eq(0).all()
+    assert result.cds_first_phase.iloc[[0, 2, 4]].isna().all()
+    assert result.utr_status.eq('available').all()
+    pandas.testing.assert_frame_equal(frame, original)
+    pandas.testing.assert_frame_equal(result[original.columns], original)
+
+
+def test_native_structure_keeps_first_gene_error_before_later_model_error():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({
+        'gene_id': ['first', 'later', 'later'], 'selected_transcript': ['t1', 't2', 't3'],
+        'sequence': ['chr1'] * 3, 'strand': ['+'] * 3,
+        'start': [1, 101, 201], 'end': [9, 109, 209],
+        'feature': ['CDS'] * 3, 'phase': ['invalid-phase', '0', '0'],
+        'attributes': ['Parent=t1', 'Parent=t2', 'Parent=t3'],
+    })
+    with pytest.raises(ValueError, match='Invalid CDS phase for first: invalid-phase'):
+        attach_transcript_structure(frame, frame)
+
+
 @pytest.mark.parametrize('phase', ['1', 'invalid'])
 def test_duplicate_cds_coordinates_retain_every_phase_record(phase):
     from workflow.support.gff2genestat import attach_transcript_structure
