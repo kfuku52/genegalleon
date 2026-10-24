@@ -61,6 +61,15 @@ native_ou_estimate_measurement_error="${native_ou_estimate_measurement_error:-ye
 native_ou_search_strategy="${native_ou_search_strategy:-auto}"
 native_ou_replicate_separator="${native_ou_replicate_separator-_}"
 treevis_query_marker="${treevis_query_marker:-1}"
+# Older project entrypoint blocks can predate the pairwise tree panels. Match
+# current entrypoint defaults without overriding explicit disabled/custom values.
+treevis_sequence_similarity="${treevis_sequence_similarity:-1}"
+treevis_sequence_similarity_width_mm="${treevis_sequence_similarity_width_mm:-15}"
+treevis_cis_similarity="${treevis_cis_similarity:-1}"
+treevis_cis_similarity_width_mm="${treevis_cis_similarity_width_mm:-15}"
+treevis_synteny_similarity="${treevis_synteny_similarity:-1}"
+treevis_synteny_similarity_width_mm="${treevis_synteny_similarity_width_mm:-15}"
+synteny_search_window="${synteny_search_window:-20}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
