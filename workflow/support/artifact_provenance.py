@@ -86,9 +86,9 @@ def runtime_support_root(path: Path):
     """Resolve container support paths against the active host runtime.
 
     Runtime provenance records intentionally retain the container path
-    ``/script/support``.  The read-only API runs beside the container, so it
-    needs an explicit, scoped mapping to the immutable runtime support tree
-    when auditing those records.
+    ``/script/support`` and ``/script/runtime_dependencies``. The read-only API
+    runs beside the container, so both source-owned trees need explicit mappings
+    to its own runtime. Declared content hashes still verify every mapped input.
     """
     root = Path(path).resolve(strict=True)
     token = _RUNTIME_SUPPORT_ROOT.set(root)
@@ -102,12 +102,18 @@ def _runtime_path(path: Path) -> Path:
     root = _RUNTIME_SUPPORT_ROOT.get()
     if root is None:
         return path
-    container_root = Path("/script/support")
-    try:
-        relative = path.absolute().relative_to(container_root)
-    except ValueError:
-        return path
-    return root.joinpath(*relative.parts)
+    for container_root, host_root in (
+        (Path("/script/support"), root),
+        (Path("/script/runtime_dependencies"), root.parent / "runtime_dependencies"),
+    ):
+        try:
+            relative = path.absolute().relative_to(container_root)
+        except ValueError:
+            continue
+        if container_root.name == "runtime_dependencies" and ".." in relative.parts:
+            return path
+        return host_root.joinpath(*relative.parts)
+    return path
 
 
 @contextlib.contextmanager
