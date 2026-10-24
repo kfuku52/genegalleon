@@ -287,13 +287,15 @@ def test_all_zero_deltas_keep_compact_ticks_and_separate_footer(tmp_path, monkey
     figure.plot_method_summary(fixture(2026), tmp_path)
 
 
-def test_measured_legend_space_preserves_bar_geometry_in_a_compact_layout(tmp_path, monkeypatch):
+@pytest.mark.parametrize('column_scale', [1.0, .8])
+def test_measured_legend_space_preserves_bar_geometry_in_a_compact_layout(tmp_path, monkeypatch, column_scale):
     from matplotlib.figure import Figure
 
     original = figure.layout
     def compact(rows):
         geometry = original(rows)
-        return {**geometry, 'bottom': geometry['bottom'] - 1.0, 'height': geometry['height'] - 1.0}
+        return {**geometry, 'bottom': geometry['bottom'] - 1.0, 'height': geometry['height'] - 1.0,
+                'positions': [(x, width * column_scale) for x, width in geometry['positions']]}
     monkeypatch.setattr(figure, 'layout', compact)
     inspected = []
     def inspect(fig, path, **kwargs):
@@ -304,6 +306,8 @@ def test_measured_legend_space_preserves_bar_geometry_in_a_compact_layout(tmp_pa
         assert fig.get_size_inches()[1] > compact(3)['height']
         assert footer.y0 == pytest.approx(.15 * fig.dpi)
         assert len(fig.legends) == 9 and len(fig.texts) == 2
+        titles = [''.join(legend.get_title().get_text().split()) for legend in fig.legends]
+        assert 'Swiss-ProtannotationoftheMiniprot/OrionGenounion' in titles
         assert all(not legend.get_window_extent(renderer).overlaps(footer) for legend in fig.legends)
         for ax in fig.axes:
             for bar in ax.patches:
@@ -340,7 +344,9 @@ def test_swissprot_union_baseline_slot_and_column_legends(tmp_path, monkeypatch)
         titles = [legend.get_title().get_text().replace("\n", " ") for legend in fig.legends]
         assert titles.count("BUSCO categories") == 1
         assert {"UTR ends", "UTR sources", "Model changes", "Nomination method", "Miniprot", "OrionGeno"} <= set(titles)
-        assert any("Miniprot/OrionGeno" in title and "union" in title for title in titles)
+        # Width-based wrapping may split a long word. Keep every character of
+        # the complete title while allowing only layout whitespace to vary.
+        assert 'Swiss-ProtannotationoftheMiniprot/OrionGenounion' in [''.join(title.split()) for title in titles]
         assert "Top: baseline" in " ".join(t.get_text() for t in fig.texts)
         for column, counts in enumerate((3, 2, 1, 1, 2)):
             start = sum((3, 2, 1, 1, 2)[:column])
