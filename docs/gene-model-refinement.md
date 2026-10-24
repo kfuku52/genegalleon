@@ -551,7 +551,7 @@ count. It requires `mode` (`proteins` or `transcriptome`), positive integer
 | --- | --- |
 | `species`, `analysed` | Species label and a Boolean model-analysis status. |
 | `busco` | `pre_rescue`, `before` (after rescue), and `after` (after refinement), each with integer `single`, `duplicated`, `fragmented`, `missing` summing to `groups`. An unanalysed species needs only `pre_rescue`. |
-| `rescue` | `method_counts` for `synteny_based`, `miniprot`, `oriongeno`; `exclusive_intersections` with `+`-joined route names; `unique_loci` and `loci_supported_by_multiple_methods`. Counts must reconcile to the same distinct adopted loci. |
+| `rescue` | `method_counts` for `synteny_based`, `miniprot`, `oriongeno`; `exclusive_intersections` with `+`-joined route names; `unique_loci` and `loci_supported_by_multiple_methods`. Optional `swissprot_support` partitions these same loci into `te_only`, `other_only`, `both`, `no_informative_hit`, `not_assessed`. All counts must reconcile to the same distinct adopted loci. |
 | `coding_paths` | `repairs`, `isoforms`, three `counts` in Miniprot-only / OrionGeno-only / both-methods order, and matching `colours`. |
 | `utr` | Positive `final_genes`; `sides` (`five_only`, `three_only`, `both`, `none`) and `origins` (`original_gff_only`, `oriongeno_only`, `both`, `none`), each summing to `final_genes`. These require independently audited source assignments. |
 
@@ -565,12 +565,31 @@ as predictor methods. This reporting snapshot is not a model-admission input.
 
 The 7.2-inch figure has five equal columns: missing-gene rescue, refined coding
 paths, BUSCO groups, change in complete groups (S+D), and UTRs in final gene models.
-The two Miniprot routes form one exclusive stack; OrionGeno and total adopted
-loci remain separate bars. Refinement and UTR upper bars use the warm palette;
+The two Miniprot routes form one exclusive blue stack, OrionGeno uses a separate
+green bar, and the lower warm/grey stack gives Swiss-Prot annotation of their
+non-redundant union. Historical inputs without Swiss-Prot counts show that union
+as not assessed, never as no informative hit. Refinement and UTR upper bars use the warm palette;
 their method/source lower bars use the blue palette. All bars have a common
-physical thickness and centred per-species positions. BUSCO axes show group
+physical thickness. A baseline-only BUSCO bar stays in the top slot. BUSCO axes show group
 counts above and percentages below; nonnegative changes start at exactly zero.
 Unanalysed model panels show grey placeholders without a crossing zero line.
+Each bar group has a titled legend within its column. BUSCO shares one category
+legend, with top/middle/bottom identified as baseline/post-rescue/post-refinement.
+Legend fitting accounts for both PDF core-font and PNG metrics, including the
+space between UTR ends and UTR sources.
+
+Optional top-level reporting metadata adds the dataset name and the thresholds
+below the plot. `busco_dataset` is the actual configured lineage name, for example
+`embryophyta_odb12`. Copy `rescue_parameters` from the frozen rescue plan's
+`request.parameters`; the displayed fields are `minimum_coverage`,
+`minimum_identity`, `minimum_broad_coverage`, `minimum_lower_coverage_identity`,
+`min_anchors`, `cscore`, and `max_interval`. `rescue_swissprot_evidence.parameters`
+records `evalue`, `minimum_alignment` (paired residues), `query_coverage`,
+`target_coverage`, and `score_fraction` from the matching audit. Missing threshold
+metadata is labelled as unrecorded rather than filled with current defaults.
+These are reporting inputs: plotting does not rerun searches or establish new
+annotation provenance. Swiss-Prot protein support remains separate from genomic
+repeat overlap and does not establish host function or absence of TE origin.
 The existing BUSCO comparison and Swiss-Prot diagnostic interfaces remain available.
 
 ## Outputs and downstream use

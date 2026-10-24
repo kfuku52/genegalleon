@@ -209,7 +209,7 @@ def test_figure_preserves_units_dual_axes_palettes_and_bar_geometry(tmp_path, mo
         fig.canvas.draw()
         assert fig.get_size_inches()[0] == pytest.approx(7.2)
         assert len(fig.axes) == 5 and len({round(a.get_position().width, 9) for a in fig.axes}) == 1
-        assert all(t.get_fontsize() == 8 for t in fig.findobj(match=Text))
+        assert {t.get_fontsize() for t in fig.findobj(match=Text)} <= {7.1, 7.7, 8}
         assert fig.axes[1].get_title(loc="left") == "Refined coding\npaths"
         assert fig.axes[2].get_title(loc="left") == "BUSCO\ngroups"
         assert fig.axes[3].get_xlim()[0] == 0
@@ -235,8 +235,8 @@ def test_figure_preserves_units_dual_axes_palettes_and_bar_geometry(tmp_path, mo
         assert sum("Not analysed" == t.get_text() for ax in fig.axes for t in ax.texts) == 4
         assert fig.axes[4].texts[0].get_text() == "n=10"
         renderer = fig.canvas.get_renderer()
-        footer = fig.texts[0].get_window_extent(renderer)
-        assert footer.y0 == pytest.approx(0.08 * fig.dpi)
+        footer = next(t for t in fig.texts if t.get_text().startswith("Miniprot ")).get_window_extent(renderer)
+        assert footer.y0 == pytest.approx(0.15 * fig.dpi)
         assert all(not legend.get_window_extent(renderer).overlaps(footer) for legend in fig.legends)
         inspected.append(Path(path).suffix)
         return original(fig, path, **kwargs)
@@ -277,12 +277,92 @@ def test_all_zero_deltas_keep_compact_ticks_and_separate_footer(tmp_path, monkey
         assert [t.get_text() for t in visible] == ["0", "0.5", "1"]
         assert visible[-1].get_window_extent(renderer).x1 < utr.get_xticklabels()[0].get_window_extent(renderer).x0
         assert all(
-            not legend.get_window_extent(renderer).overlaps(fig.texts[0].get_window_extent(renderer))
+            not legend.get_window_extent(renderer).overlaps(
+                next(t for t in fig.texts if t.get_text().startswith("Miniprot ")).get_window_extent(renderer)
+            )
             for legend in fig.legends
         )
 
     monkeypatch.setattr(Figure, "savefig", inspect)
     figure.plot_method_summary(fixture(2026), tmp_path)
+
+
+def test_swissprot_union_baseline_slot_and_column_legends(tmp_path, monkeypatch):
+    from matplotlib.colors import to_hex
+    from matplotlib.figure import Figure
+
+    data = fixture(2026)
+    data["busco_dataset"] = "embryophyta_odb12"
+    data["species"][0]["rescue"]["swissprot_support"] = dict(zip(figure.SWISS_KEYS, (1, 2, 1, 1, 0), strict=True))
+
+    def inspect(fig, *args, **kwargs):
+        fig.canvas.draw()
+        assert "embryophyta_odb12" in fig.axes[2].get_title(loc="left")
+        bars = fig.axes[0].patches[:9]
+        assert [p.get_width() for p in bars[-5:]] == [1, 2, 1, 1, 0]
+        assert [to_hex(p.get_facecolor()) for p in bars] == [
+            *figure.MINIPROT_STACK_COLOURS, figure.METHOD_COLOURS[2], *figure.SWISS_COLOURS,
+        ]
+        # Historical inputs lacking support counts must not become no-hit calls.
+        assert [p.get_width() for p in fig.axes[0].patches[13:18]] == [0, 0, 0, 0, 5]
+        baseline = fig.axes[2].patches[-4:]
+        assert all(p.get_y() + p.get_height() / 2 == pytest.approx(2 + figure.bar_offsets(3)[0]) for p in baseline)
+        titles = [legend.get_title().get_text().replace("\n", " ") for legend in fig.legends]
+        assert titles.count("BUSCO categories") == 1
+        assert {"UTR ends", "UTR sources", "Model changes", "Nomination method", "Miniprot", "OrionGeno"} <= set(titles)
+        assert any("Miniprot/OrionGeno" in title and "union" in title for title in titles)
+        assert "Top: baseline" in " ".join(t.get_text() for t in fig.texts)
+        for column, counts in enumerate((3, 2, 1, 1, 2)):
+            start = sum((3, 2, 1, 1, 2)[:column])
+            x, width = figure.layout(3)["positions"][column]
+            legends = fig.legends[start:start + counts]
+            for legend in legends:
+                bbox = legend.get_window_extent(fig.canvas.get_renderer())
+                assert bbox.x0 >= x * fig.dpi - .1 and bbox.x1 <= (x + width) * fig.dpi + .1
+            for upper, lower in zip(legends, legends[1:], strict=False):
+                assert upper.get_window_extent().y0 - lower.get_window_extent().y1 >= .09 * fig.dpi - .1
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    figure.plot_method_summary(data, tmp_path)
+
+
+def test_reported_thresholds_are_explicit_and_never_invented():
+    data = fixture()
+    assert "not recorded" in " ".join(figure.method_notes(data))
+    data["rescue_parameters"] = dict(minimum_coverage=.7, minimum_identity=.5, minimum_broad_coverage=.9,
+                                     minimum_lower_coverage_identity=.7, min_anchors=4, cscore=.7, max_interval=200000)
+    data["rescue_swissprot_evidence"] = dict(parameters=dict(evalue=1e-5, minimum_alignment=50,
+                                                           query_coverage=.5, target_coverage=.6, score_fraction=.9))
+    text = " ".join(figure.method_notes(data))
+    for expected in ("coverage >= 70%", "identity >= 70% at 70-<90%", ">= 50% at >= 90%",
+                     "blocks >= 4", "C-score >= 0.7", "200 kb", "E <= 1e-05", "50%/60%", "90% of best"):
+        assert expected in text
+    for key, value in (("minimum_coverage", float("nan")), ("min_anchors", True), ("cscore", 2)):
+        changed = copy.deepcopy(data)
+        changed["rescue_parameters"][key] = value
+        with pytest.raises(ValueError):
+            figure.validate(changed)
+
+
+@pytest.mark.parametrize("fault", ["total", "negative", "missing", "bool", "dataset", "swiss_threshold"])
+def test_swissprot_reporting_rejects_invalid_counts_or_metadata(fault):
+    data = fixture()
+    support = dict(zip(figure.SWISS_KEYS, (1, 2, 1, 1, 0), strict=True))
+    data["species"][0]["rescue"]["swissprot_support"] = support
+    if fault == "total":
+        support["both"] += 1
+    if fault == "negative":
+        support["not_assessed"] = -1
+    if fault == "missing":
+        del support["both"]
+    if fault == "bool":
+        support["te_only"] = True
+    if fault == "dataset":
+        data["busco_dataset"] = "embryophyta\nodb12"
+    if fault == "swiss_threshold":
+        data["rescue_swissprot_evidence"] = dict(parameters=dict(evalue=0))
+    with pytest.raises(ValueError):
+        figure.validate(data)
 
 
 @pytest.mark.parametrize("fault", ["busco", "origins", "paths", "loci", "intersection", "unanalysed", "donor_groups"])
