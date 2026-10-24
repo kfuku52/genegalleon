@@ -222,7 +222,7 @@ def method_notes(data):
     return notes
 
 
-def _place_legends(fig, geometry, data):
+def _place_legends(fig, geometry, data, *, _expanded=False):
     """Fit each bar-group legend using both PNG and PDF font metrics."""
     import io
 
@@ -232,6 +232,7 @@ def _place_legends(fig, geometry, data):
 
     font = FontProperties(family="sans-serif", size=7.7)
     bold = FontProperties(family="sans-serif", size=7.7, weight="bold")
+    legend_start, text_start = len(fig.legends), len(fig.texts)
     # At 72 dpi, the figure transforms and PDF renderer both use points. Agg
     # alone underestimates long legend stacks when the PDF uses core fonts.
     pdf = PdfFile(io.BytesIO())
@@ -298,15 +299,31 @@ def _place_legends(fig, geometry, data):
                 bottom = min(bottom, *(b.y0 for b in bounds))
                 top = min(b.y0 for b in bounds) - .09
             if column == 2:
-                fig.text(x / geometry["width"], top / geometry["height"],
-                         wrap("Top: baseline\nMiddle: post-rescue\nBottom: post-refinement", size * 72 - 1.5, font),
-                         va="top", fontproperties=font, linespacing=1.35)
+                caption = fig.text(x / geometry["width"], top / geometry["height"],
+                                   wrap("Top: baseline\nMiddle: post-rescue\nBottom: post-refinement", size * 72 - 1.5, font),
+                                   va="top", fontproperties=font, linespacing=1.35)
+                bottom = min(bottom, *(caption.get_window_extent(r).y0 / 72 for r in renderers))
         notes_font = FontProperties(family="sans-serif", size=7.1)
         notes = "\n".join(wrap(line, (geometry["width"] - .3) * 72, notes_font) for line in method_notes(data))
         footer = fig.text(.15 / geometry["width"], .15 / geometry["height"], notes,
                           va="bottom", fontproperties=notes_font, linespacing=1.35)
-        if any(footer.get_window_extent(r).y1 / 72 >= bottom - .07 for r in renderers):
-            raise ValueError("Figure legends overlap the recorded-threshold footer")
+        footer_top = max(footer.get_window_extent(r).y1 / 72 for r in renderers)
+        if footer_top >= bottom - .07:
+            extra = footer_top + .09 - bottom
+            if _expanded or not math.isfinite(extra):
+                raise ValueError("Figure legends overlap the recorded-threshold footer")
+            # Text metrics vary across font installations and renderers. Grow
+            # only the legend reserve; keep panel widths, row pitch and bars in
+            # physical units, then verify the complete layout again.
+            for artist in [*fig.legends[legend_start:], *fig.texts[text_start:]]:
+                artist.remove()
+            geometry = {**geometry, "height": geometry["height"] + extra,
+                        "bottom": geometry["bottom"] + extra}
+            fig.set_size_inches(geometry["width"], geometry["height"])
+            for ax, (x, width) in zip(fig.axes, geometry["positions"], strict=True):
+                ax.set_position([x / geometry["width"], geometry["bottom"] / geometry["height"],
+                                 width / geometry["width"], geometry["plot_height"] / geometry["height"]])
+            return _place_legends(fig, geometry, data, _expanded=True)
     finally:
         pdf.close()
 

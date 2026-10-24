@@ -287,6 +287,36 @@ def test_all_zero_deltas_keep_compact_ticks_and_separate_footer(tmp_path, monkey
     figure.plot_method_summary(fixture(2026), tmp_path)
 
 
+def test_measured_legend_space_preserves_bar_geometry_in_a_compact_layout(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+
+    original = figure.layout
+    def compact(rows):
+        geometry = original(rows)
+        return {**geometry, 'bottom': geometry['bottom'] - 1.0, 'height': geometry['height'] - 1.0}
+    monkeypatch.setattr(figure, 'layout', compact)
+    inspected = []
+    def inspect(fig, path, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        footer = next(t for t in fig.texts if t.get_text().startswith('Miniprot ')).get_window_extent(renderer)
+        assert fig.get_size_inches()[0] == pytest.approx(7.2)
+        assert fig.get_size_inches()[1] > compact(3)['height']
+        assert footer.y0 == pytest.approx(.15 * fig.dpi)
+        assert len(fig.legends) == 9 and len(fig.texts) == 2
+        assert all(not legend.get_window_extent(renderer).overlaps(footer) for legend in fig.legends)
+        for ax in fig.axes:
+            for bar in ax.patches:
+                if bar.get_height() < .5:
+                    y0 = ax.transData.transform((0, bar.get_y()))[1]
+                    y1 = ax.transData.transform((0, bar.get_y() + bar.get_height()))[1]
+                    assert abs(y1 - y0) * 72 / fig.dpi == pytest.approx(4.4)
+        inspected.append(Path(path).suffix)
+    monkeypatch.setattr(Figure, 'savefig', inspect)
+    figure.plot_method_summary(fixture(2026), tmp_path)
+    assert inspected == ['.pdf', '.png', '.svg']
+
+
 def test_swissprot_union_baseline_slot_and_column_legends(tmp_path, monkeypatch):
     from matplotlib.colors import to_hex
     from matplotlib.figure import Figure

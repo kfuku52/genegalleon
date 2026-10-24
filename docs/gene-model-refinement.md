@@ -576,7 +576,9 @@ Unanalysed model panels show grey placeholders without a crossing zero line.
 Each bar group has a titled legend within its column. BUSCO shares one category
 legend, with top/middle/bottom identified as baseline/post-rescue/post-refinement.
 Legend fitting accounts for both PDF core-font and PNG metrics, including the
-space between UTR ends and UTR sources.
+space between UTR ends and UTR sources. If the legends and threshold notes need
+more room, the figure grows vertically while retaining its width, panel widths,
+row pitch and physical bar thickness; the resulting layout is checked again.
 
 Optional top-level reporting metadata adds the dataset name and the thresholds
 below the plot. `busco_dataset` is the actual configured lineage name, for example
