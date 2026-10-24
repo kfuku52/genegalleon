@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from gene_model_improvement_summary import plot_method_summary
 from matplotlib.text import Text
 
 STATUS_COLOURS = ("#000000", "#B22222", "#666666", "#CCCCCC")
@@ -229,3 +230,54 @@ def plot_staged_comparison(rows, output, changes):
         for suffix in ("png", "svg", "pdf"):
             fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
         plt.close(fig)
+
+
+def main():
+    """Redraw the five-column method/UTR view without running scientific stages."""
+    import argparse
+    import hashlib
+    import json
+
+    from input_generation_array_state import FreshDigestBatch, atomic_json
+
+    parser = argparse.ArgumentParser(description="Draw a compact gene-model method and UTR summary")
+    parser.add_argument("--figure-data", required=True, type=Path,
+                        help="Explicit rescue/path/BUSCO/UTR reporting counts, not a model-admission input")
+    parser.add_argument("--output", required=True, type=Path, help="Separate figure output directory")
+    parser.add_argument("--refinement-output", type=Path,
+                        help="Reclassify path methods from receipt-bound refinement predictions")
+    args = parser.parse_args()
+    output = args.output.resolve()
+    if args.refinement_output is not None:
+        root = args.refinement_output.resolve()
+        if root == output or root in output.parents or output in root.parents:
+            parser.error("Figure output must be separate from the immutable refinement tree")
+    source = args.figure_data.resolve()
+    targets = ("improvement_figure_data.json", "improvement_method_provenance.json",
+               "busco_comparison.pdf", "busco_comparison.png", "busco_comparison.svg")
+    if source in {output / name for name in targets}:
+        parser.error("Figure output must not overwrite its reporting input")
+    raw = source.read_bytes()
+    source_sha = hashlib.sha256(raw).hexdigest()
+    data = json.loads(raw)
+    verification = FreshDigestBatch()
+    verification.read([source], expected={str(source): source_sha})
+    implementations = [Path(__file__), Path(__file__).with_name("gene_model_improvement_summary.py")]
+    if args.refinement_output is not None:
+        implementations.append(Path(__file__).with_name("refinement_path_methods.py"))
+    source_hashes = verification.read(implementations)
+    provenance = dict(figure_data_sha256=source_sha, predictors_executed=False, busco_executed=False,
+                      renderer_sha256={Path(p).name: sha for p, sha in source_hashes.items()},
+                      matplotlib_version=matplotlib.__version__)
+    if args.refinement_output is not None:
+        from refinement_path_methods import collect_path_methods
+        data, methods = collect_path_methods(data, args.refinement_output, verification=verification)
+        provenance["path_methods"] = methods
+    plot_method_summary(data, output)
+    verification.check()
+    atomic_json(output / "improvement_figure_data.json", data)
+    atomic_json(output / "improvement_method_provenance.json", provenance)
+
+
+if __name__ == "__main__":
+    main()
