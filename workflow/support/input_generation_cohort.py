@@ -162,7 +162,8 @@ def links_for(task):
     return links
 
 
-def verify_view(workspace, plan, *, indices=None):
+def verify_view(workspace, plan, *, indices=None, batch=None):
+    batch = batch or FreshDigestBatch()
     doc = load_cohort(plan)
     chosen = doc['tasks'] if indices is None else [doc['tasks'][i - 1] for i in indices]
     proof = workspace / 'cohort_view.json'
@@ -179,17 +180,21 @@ def verify_view(workspace, plan, *, indices=None):
             if directory.exists():
                 require(not directory.is_symlink() and {str(p.relative_to(workspace)) for p in directory.iterdir()} ==
                         {k for k in expected_links if Path(k).parent == Path(base + role)}, 'Unexpected cohort species files')
+    view_hashes = {}
     for task in chosen:
         require(saved['summaries'][task['species']] == task['summary'], 'Cohort source summary changed')
         for relative, source in links_for(task).items():
             target = workspace / relative
-            require(target.is_file() and not target.is_symlink() and digest(target) == task['files'][source],
-                    'Cohort view file changed: ' + str(target))
+            require(target.is_file() and not target.is_symlink(), 'Cohort view file changed: ' + str(target))
+            view_hashes[str(target)] = task['files'][source]
         audit = task['summary'].get('cloned_model_audit_path')
         if audit:
             snapshot = workspace / 'output/input_generation/cloned_model_history' / (task['species'] + '.json')
-            require(digest(snapshot) == task['files'][audit], 'Cohort clone history changed')
-    verify_tasks(chosen)
+            require(snapshot.is_file() and not snapshot.is_symlink(), 'Cohort clone history changed')
+            view_hashes[str(snapshot)] = task['files'][audit]
+    verify_tasks(chosen, batch=batch)
+    batch.read(view_hashes, expected=view_hashes)
+    batch.check()
     return doc
 
 
@@ -266,7 +271,8 @@ def qc_one(workspace, plan, index):
     with namespace_lock(workspace / '.cohort.lock', exclusive=False, timeout=30) as reader, \
             namespace_lock(lock, exclusive=True, nonblocking=True) as acquired:
         require(reader and acquired, 'Cohort QC has an active owner')
-        verify_view(workspace, plan, indices=[index])
+        batch = FreshDigestBatch()
+        verify_view(workspace, plan, indices=[index], batch=batch)
         row, sp = task['source_summary'], task['species']
         if any(value.startswith('/workspace/') for value in row.values()):
             require(Path('/workspace').is_dir() and Path('/workspace').samefile(task['source_workspace']),
@@ -296,7 +302,9 @@ def qc_one(workspace, plan, index):
             statuses = {k: ('?' if v[0] == 'Complete' and len(v) != 1 else labels[v[0]]) for k, v in groups.items()}
         record = dict(kind=KIND, plan_sha256=digest(plan), index=index, species=sp, ownership=result, mapping=mapping_result,
                       busco=quality, marker_statuses=statuses, passed=result.get('ok') is True and (mapping_result is None or mapping_result.get('ok') is True))
-        verify_tasks([task])
+        # Native QC only reads input files. Keep this one fresh content
+        # boundary fenced until publication instead of hashing it a second time.
+        batch.check()
         atomic_json(workspace / 'qc' / (str(index) + '.json'), record)
         require(record['passed'], 'Native cohort QC failed: ' + sp)
         return record

@@ -48,3 +48,26 @@ and a BUSCO `marker_occupancy.tsv` (S/D/F/M, `?` for ambiguous Complete rows,
 `.` for absent marker evidence). Marker inventories/lineages must agree; taxa
 with no single-copy markers are reported without automatic exclusion. Scheduler
 acceptance and a prepared view do not certify final QC completion.
+
+## Verification cost
+
+Fresh input and view verification share one invocation-local `FreshDigestBatch`.
+Each physical file is hashed once even when several view paths hardlink to it.
+The stat/target fences remain live through read-only native QC and are rechecked
+before publication; another invocation always hashes the content again. Native
+source changes during QC prevent a success receipt.
+
+The bounded verification benchmark uses two 64 MiB FASTA payloads, three
+hardlinked names per payload, one warmup and three repetitions. Docker
+Linux/arm64 (`0e46be37b7dd`), comparing the initial cohort implementation with
+this change, produced identical returned documents. Median verification time
+was 0.176 s → 0.076 s; hashed bytes were 384 MiB → 128 MiB. Peak Python
+allocations stayed about 2.03 MiB. This measures content verification only,
+not biological QC or total workflow speed.
+
+To reproduce with a saved baseline module visible inside the container:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_input_cohort_verification.py \
+  --baseline /data/benchmark/baseline_input_generation_cohort.py
+```

@@ -140,7 +140,7 @@ def test_cloned_snapshot_tampering_is_detected(tmp_path):
     plan, workspace, _ = fixture(tmp_path, clones=True)
     cohort.prepare(workspace, plan)
     (workspace / 'output/input_generation/cloned_model_history/Plant_one.json').write_text('{}')
-    with pytest.raises(ValueError, match='history changed'):
+    with pytest.raises(ValueError, match='hash mismatch'):
         cohort.verify_view(workspace, plan)
 
 
@@ -149,4 +149,37 @@ def test_unselected_species_file_is_not_silently_adopted(tmp_path):
     cohort.prepare(workspace, plan)
     (workspace / 'input/species_cds/Foreign_species.fa').write_text('>Foreign_species_g1\nATG\n')
     with pytest.raises(ValueError, match='Unexpected cohort species'):
+        cohort.verify_view(workspace, plan)
+
+
+def test_qc_cannot_publish_after_a_native_source_changes_during_validation(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path)
+    cohort.prepare(workspace, plan)
+    validator = import_module('validate_longest_cds_selection')
+    original = validator.validate_single_species
+    def change_input(task, limit):
+        result = original(task, limit)
+        raw = Path(task['summary_row']['cds_input_path'])
+        raw.write_text(raw.read_text() + '>new\nATGTAA\n')
+        return result
+    monkeypatch.setattr(validator, 'validate_single_species', change_input)
+    with pytest.raises(OSError, match='changed'):
+        cohort.qc_one(workspace, plan, 1)
+    assert not (workspace / 'qc/1.json').exists()
+
+
+def test_verification_hashes_hardlinked_views_once_per_fresh_boundary(tmp_path, monkeypatch):
+    plan, workspace, _ = fixture(tmp_path)
+    cohort.prepare(workspace, plan)
+    calls = []
+    original = state.digest
+    def counted(path):
+        calls.append(Path(path).stat().st_ino)
+        return original(path)
+    monkeypatch.setattr(state, 'digest', counted)
+    cohort.verify_view(workspace, plan)
+    output = Path(cohort.load_cohort(plan)['tasks'][0]['summary']['cds_output_path'])
+    assert calls.count(output.stat().st_ino) == 1
+    output.write_bytes(b'changed')
+    with pytest.raises(ValueError, match='hash mismatch'):
         cohort.verify_view(workspace, plan)
