@@ -208,7 +208,7 @@ def method_notes(data):
     if all(key in rescue for key in ("min_anchors", "cscore", "max_interval")):
         notes.append(f'Synteny guidance: blocks >= {rescue["min_anchors"]} anchors; C-score >= {rescue["cscore"]:g}; '
                      f'candidate interval <= {rescue["max_interval"] / 1000:g} kb.')
-    notes.append('Miniprot "only" excludes the other Miniprot route; OrionGeno support can overlap either route.')
+    notes.append('Miniprot "only" excludes the other Miniprot route.')
     if all(key in swiss for key in ("evalue", "minimum_alignment", "query_coverage", "target_coverage", "score_fraction")):
         notes.append(f'Swiss-Prot: E <= {swiss["evalue"]:g}; paired residues >= {swiss["minimum_alignment"]:g}; '
                      f'query/target coverage >= {100 * swiss["query_coverage"]:g}%/{100 * swiss["target_coverage"]:g}%; '
