@@ -28,6 +28,7 @@
     "test_pairwise_synteny.py",
     "test_pairwise_synteny_runtime.py",
     "test_species_taxonomy_runtime.py",
+    "test_species_tree_constraint.py",
     "test_scaffold_taxonomy.py",
     "test_alignment_stats_runtime.py",
     "test_cafe_branch_flags_runtime.py",

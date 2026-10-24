@@ -113,6 +113,13 @@ verified; acceptance and genome validation are rerun. See
 [additional rescue candidates](rescue-additional-candidates.md) for the explicit
 limits, independent donor support and distinction from orthology/copy recovery.
 
+## Species-tree topology constraints
+
+Use `species_tree_topology_constraint` for an optional reviewed Newick passed to
+concatenated IQ-TREE with `-g`. Complete and explicitly partial constraints,
+optional selection of alignment rows, provenance, rooting, and ASTRAL restrictions
+are described in [topology constraints](species-tree-topology-constraints.md).
+
 ## BUSCO duplicate representatives for species trees
 
 `species_tree_busco_duplicate_policy=exclude` preserves the existing species-tree
