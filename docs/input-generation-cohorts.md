@@ -42,6 +42,22 @@ workspace at `/workspace` inside the same qualified container. Other project
 paths must remain visible at their original absolute locations. An absent or
 wrong donor mount is an error; ORF audits are never rewritten to waive checks.
 
+For a relocated raw source, `plan --source-aliases aliases.json` accepts an
+explicit JSON map from original absolute input paths to physical replacements.
+Only receipt-bound raw CDS/GFF/genome inputs qualify, and their SHA-256 must
+match the original receipt. Original summaries and receipt identities remain
+in the plan alongside the relocation history; QC uses the recorded current
+paths. Missing outputs, evidence, changed bytes and unused aliases are errors.
+
+Cohort QC independently rederives historical transcript ORFs while retaining
+their original audit bytes and IDs. Source/output hashes, CDSKIT implementation,
+genetic code and selection policy must agree. The original header grouping is
+reproduced for audits predating declared Trinity gene grouping. Every rederived
+ID and sequence must match; the result records both implementation identities
+and the grouping policy, without certifying biological gene uniqueness.
+Ordinary formatter reuse and validation remain strict against the current
+contract; this historical path only establishes independent rederivation.
+
 Run `finalize --plan ... --workspace ...` only after every QC worker succeeds.
 It verifies the exact cohort/view and each species result, writes `cohort_qc.json`
 and a BUSCO `marker_occupancy.tsv` (S/D/F/M, `?` for ambiguous Complete rows,

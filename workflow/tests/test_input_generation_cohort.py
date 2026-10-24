@@ -15,7 +15,7 @@ state = import_module('input_generation_array_state')
 atomic_json, digest, verify_receipt = state.atomic_json, state.digest, state.verify_receipt
 
 
-def fixture(tmp_path, *, clones=False):
+def fixture(tmp_path, *, clones=False, transcriptome=False):
     selection = []
     for number, species in enumerate(['Plant_one', 'Plant_two'], 1):
         workspace = tmp_path / ('donor' + str(number))
@@ -27,12 +27,22 @@ def fixture(tmp_path, *, clones=False):
         task = dict(provider='local', species_key=species, species_prefix=species, cds_path=raw,
                     gff_path=None, genome_path=None, gbff_path=None, genetic_code=1,
                     gene_grouping_mode='strict', gff_repair_mode='safe')
+        if transcriptome:
+            task['cds_input_type'] = 'transcriptome'
         formatted = formatter.format_cds(task, directory, False, False)
         output = str(formatted['output_path'])
         row = dict(provider='local', species_key=species, species_prefix=species,
                    gene_grouping_mode='strict', gff_repair_mode='safe', cds_input_path=str(raw),
                    cds_output_path=output, gff_output_path='', genome_output_path='')
         files = [raw, Path(output)]
+        if transcriptome:
+            row['cds_input_type'] = 'transcriptome'
+            audit = Path(output + '.orf-extraction.json')
+            value = json.loads(audit.read_text())
+            value['contract']['implementation'] = 'a' * 64
+            value['contract'].pop('gene_grouping')
+            audit.write_text(json.dumps(value))
+            files.append(audit)
         if clones and number == 1:
             audit = workspace / 'cloned_models/audit.json'
             audit.parent.mkdir()
@@ -183,3 +193,55 @@ def test_verification_hashes_hardlinked_views_once_per_fresh_boundary(tmp_path, 
     output.write_bytes(b'changed')
     with pytest.raises(ValueError, match='hash mismatch'):
         cohort.verify_view(workspace, plan)
+
+
+def test_raw_source_relocation_preserves_original_receipt_and_rejects_different_bytes(tmp_path):
+    plan, workspace, selection = fixture(tmp_path)
+    original = cohort.load_cohort(plan)['tasks'][0]
+    raw = Path(original['summary']['cds_input_path'])
+    replacement = tmp_path / 'recovered.fa'
+    replacement.write_bytes(raw.read_bytes())
+    raw.unlink()
+    aliases = {str(raw): str(replacement)}
+    doc = cohort.freeze(selection, 2, source_aliases=aliases)
+    relocated = doc['tasks'][0]
+    assert relocated['receipt_sha256'] == original['receipt_sha256']
+    assert relocated['source_summary'] == original['source_summary']
+    assert relocated['qc_summary']['cds_input_path'] == str(replacement)
+    assert str(raw) not in relocated['files']
+    relocated_plan = tmp_path / 'relocated_plan.json'
+    atomic_json(relocated_plan, doc)
+    cohort.prepare(workspace, relocated_plan)
+    assert cohort.qc_one(workspace, relocated_plan, 1)['passed']
+    replacement.write_text('>different\nATGTAA\n')
+    with pytest.raises(ValueError, match='content differs'):
+        cohort.freeze(selection, 2, source_aliases=aliases)
+    with pytest.raises(ValueError, match='hash mismatch'):
+        cohort.verify_view(workspace, relocated_plan)
+
+
+def test_relocation_cannot_replace_unverified_evidence_or_symlinks(tmp_path):
+    plan, _, selection = fixture(tmp_path)
+    task = cohort.load_cohort(plan)['tasks'][0]
+    raw = task['summary']['cds_input_path']
+    with pytest.raises(ValueError, match='Unused/unverified'):
+        cohort.freeze(selection, 2, source_aliases={task['receipt_path']: raw})
+    link = tmp_path / 'link.fa'
+    link.symlink_to(raw)
+    with pytest.raises(ValueError, match='Invalid raw source relocation'):
+        cohort.freeze(selection, 2, source_aliases={raw: str(link)})
+
+
+def test_cohort_rederives_historical_orfs_and_preserves_the_original_audit(tmp_path):
+    plan, workspace, _ = fixture(tmp_path, transcriptome=True)
+    task = cohort.load_cohort(plan)['tasks'][0]
+    audit = Path(task['summary']['cds_output_path'] + '.orf-extraction.json')
+    before = audit.read_bytes()
+    cohort.prepare(workspace, plan)
+    result = cohort.qc_one(workspace, plan, 1)
+    proof = result['ownership']['stats']['transcript_orf_revalidation']
+    assert result['passed'] and proof['exact_sequences_rederived']
+    assert proof['original_implementation'] == 'a' * 64
+    assert proof['gene_grouping'] == 'historical-header-groups-v1'
+    assert not proof['audit_rewritten'] and not proof['biological_gene_uniqueness_established']
+    assert audit.read_bytes() == before

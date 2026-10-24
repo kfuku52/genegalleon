@@ -53,11 +53,15 @@ def write_table(path, rows):
     os.replace(temporary, path)
 
 
-def freeze(selection, expected_species):
+def freeze(selection, expected_species, *, source_aliases=None):
     """Seal native donor metadata; large-file verification belongs to prepare/QC."""
     rows = read_table(selection)
     require(len(rows) == expected_species, 'Selected species count differs')
     species, tasks, documents = set(), [], {}
+    source_aliases, used_aliases = dict(source_aliases or {}), set()
+    for old, new in source_aliases.items():
+        require(all(isinstance(p, str) and Path(p).is_absolute() and '..' not in Path(p).parts for p in (old, new))
+                and old != new and Path(new).is_file() and not Path(new).is_symlink(), 'Invalid raw source relocation')
     def document(path):
         path = Path(path)
         if str(path) not in documents:
@@ -109,9 +113,25 @@ def freeze(selection, expected_species):
         expected.update({str(plan_path): plan_sha, str(receipt): receipt_sha})
         require(all(isinstance(sha, str) and len(sha) == 64 and all(c in '0123456789abcdef' for c in sha)
                     for sha in expected.values()), 'Invalid native content hash')
-        tasks.append(dict(species=sp, source_summary=summaries[0], source_workspace=str(workspace), plan_path=str(plan_path),
+        task = dict(species=sp, source_summary=summaries[0], source_workspace=str(workspace), plan_path=str(plan_path),
                           plan_sha256=plan_sha, task_index=index, receipt_path=str(receipt), receipt_sha256=receipt_sha,
-                          summary=summary, files=expected))
+                          summary=summary, files=expected)
+        relocated, qc_summary = {}, dict(summaries[0])
+        for field in ('cds_input_path', 'gff_input_path', 'genome_input_path'):
+            old = summary.get(field, '')
+            if old not in source_aliases:
+                continue
+            new = source_aliases[old]
+            require(old in expected and digest(new) == expected[old], 'Relocated raw source content differs')
+            require(new not in expected or expected[new] == expected[old], 'Conflicting relocated source hash')
+            relocated[old] = dict(path=new, sha256=expected[old])
+            expected[new] = expected.pop(old)
+            summary[field] = qc_summary[field] = new
+            used_aliases.add(old)
+        if relocated:
+            task.update(source_relocations=relocated, qc_summary=qc_summary)
+        tasks.append(task)
+    require(used_aliases == set(source_aliases), 'Unused/unverified raw source relocation')
     return dict(kind=KIND, schema_version=1, task_count=len(tasks), selection_sha256=digest(selection), tasks=tasks)
 
 
@@ -273,11 +293,12 @@ def qc_one(workspace, plan, index):
         require(reader and acquired, 'Cohort QC has an active owner')
         batch = FreshDigestBatch()
         verify_view(workspace, plan, indices=[index], batch=batch)
-        row, sp = task['source_summary'], task['species']
+        row, sp = task.get('qc_summary', task['source_summary']), task['species']
         if any(value.startswith('/workspace/') for value in row.values()):
             require(Path('/workspace').is_dir() and Path('/workspace').samefile(task['source_workspace']),
                     'Native donor /workspace namespace is required for QC')
-        shared = dict(index=index, species_prefix=sp, cds_file=Path(row['cds_output_path']), summary_row=row)
+        shared = dict(index=index, species_prefix=sp, cds_file=Path(row['cds_output_path']), summary_row=row,
+                      revalidate_historical_orfs=True)
         result = ownership(shared, 10)
         mapping_result = None
         if row.get('gff_output_path'):
@@ -343,12 +364,14 @@ def main():
     p.add_argument('phase', choices=['plan', 'prepare', 'verify', 'qc', 'finalize'])
     p.add_argument('--selection', type=Path)
     p.add_argument('--expected-species', type=int)
+    p.add_argument('--source-aliases', type=Path, help='JSON map of original raw paths to byte-identical physical replacements')
     p.add_argument('--plan', type=Path, required=True)
     p.add_argument('--workspace', type=Path)
     p.add_argument('--task-index', type=int)
     a = p.parse_args()
     if a.phase == 'plan':
-        atomic_json(a.plan, freeze(a.selection, a.expected_species), immutable=True)
+        aliases = json.loads(a.source_aliases.read_text()) if a.source_aliases else None
+        atomic_json(a.plan, freeze(a.selection, a.expected_species, source_aliases=aliases), immutable=True)
         result = dict(planned=True, species=load_cohort(a.plan)['task_count'], plan_sha256=digest(a.plan))
     elif a.phase == 'prepare':
         prepare(a.workspace, a.plan)

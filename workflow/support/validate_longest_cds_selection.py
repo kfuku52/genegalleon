@@ -267,7 +267,7 @@ def read_fasta_records(path):
     return records, sorted(set(duplicate_ids))
 
 
-def collect_expected_longest_records(task):
+def collect_expected_longest_records(task, *, historical_header_groups=False):
     if task.get("paired_curation"):
         from curate_paired_species_inputs import validated_formatted_pair
         proof = validated_formatted_pair(task)
@@ -291,7 +291,8 @@ def collect_expected_longest_records(task):
     for header, sequence, _decision in formatter.iter_normalised_cds_records(cds_identifier_task):
         transcript_total += 1
         transcript_id = formatter.build_formatted_cds_id(cds_identifier_task, header)
-        gene_id = formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id)
+        gene_id = (formatter.build_header_gene_aggregate_id(cds_identifier_task, header, transcript_id)
+                   if historical_header_groups else formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id))
         raw_seq = re.sub(r"\s+", "", sequence).upper()
         seq = formatter.pad_to_codon_length(raw_seq)
         transcripts_by_gene[gene_id] += 1
@@ -337,8 +338,14 @@ def validate_single_species(task, missing_limit):
     try:
         format_task = build_task_from_summary_row(row)
         validate_task_inputs_exist(format_task)
-        verify_existing(format_task, cds_file)
-        expected_records, expected_stats = collect_expected_longest_records(format_task)
+        historical = None
+        if task.get('revalidate_historical_orfs') and input_type(format_task) == 'transcriptome':
+            from transcriptome_orf_revalidation import historical_contract
+            historical = historical_contract(format_task, cds_file)
+        else:
+            verify_existing(format_task, cds_file)
+        expected_records, expected_stats = collect_expected_longest_records(
+            format_task, historical_header_groups=bool(historical and historical['gene_grouping'] == 'historical-header-groups-v1'))
         actual_records, duplicate_output_ids = read_fasta_records(cds_file)
 
         expected_id_set = set(expected_records.keys())
@@ -384,6 +391,10 @@ def validate_single_species(task, missing_limit):
             "output_records": len(actual_records),
             **{key: value for key, value in expected_stats.items() if key.startswith("source_gene_")},
         }
+        if historical:
+            stats['transcript_orf_revalidation'] = {**historical, 'exact_sequences_rederived': not (
+                duplicate_output_ids or missing_ids or extra_ids or sequence_mismatch_ids),
+                'biological_gene_uniqueness_established': False}
 
         failure_parts = []
         if len(duplicate_output_ids) > 0:
