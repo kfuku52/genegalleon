@@ -1131,3 +1131,62 @@ def test_ids_only_main_finishes_fasta_validation_before_gff_or_output(tmp_path, 
                 "data_before_header": "FASTA sequence data precedes the first header", "gzip_crc": "CRC check failed"}
     assert expected[damage] in result.stderr
     assert output.read_bytes() == b"previous complete table\n"
+
+
+@pytest.mark.parametrize('identifier', ['ENSDARG00000000001.6', 'ENSDART00000000001.3', 'ENSDARP00000000001.1'])
+def test_ensembl_separate_versions_preserve_unversioned_parent_chain(tmp_path, identifier):
+    gff = tmp_path / 'Danio_rerio.gff'
+    gff.write_text(
+        'chr1\ts\tgene\t1\t18\t.\t+\t.\tID=gene:ENSDARG00000000001;gene_id=ENSDARG00000000001;version=6\n'
+        'chr1\ts\tmRNA\t1\t18\t.\t+\t.\tID=transcript:ENSDART00000000001;Parent=gene:ENSDARG00000000001;version=3\n'
+        'chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=CDS:ENSDARP00000000001;Parent=transcript:ENSDART00000000001;protein_id=ENSDARP00000000001;version=1\n'
+        'chr1\ts\tCDS\t13\t18\t.\t+\t0\tID=CDS:ENSDARP00000000001;Parent=transcript:ENSDART00000000001;protein_id=ENSDARP00000000001;version=1\n')
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    rows = process_single_gff(gff.name, str(tmp_path), ['Danio_rerio_' + identifier],
+                              'CDS', 'longest', columns, OUT_COLS)
+    assert rows.gene_id.tolist() == ['Danio_rerio_' + identifier]
+    assert rows.feature_blocks.tolist() == ['1-9;13-18']
+
+
+@pytest.mark.parametrize('key,prefix', [('gene', 'G'), ('transcript', 'T'), ('protein', 'P')])
+def test_gtf_typed_versions_and_exact_version_mismatch(key, prefix):
+    from workflow.support.gff2genestat import build_search_term_lookup, parse_attribute_summary
+
+    base = 'ENSDAR' + prefix + '00000000001'
+    attribute = f'{key}_id "{base}"; {key}_version "6";'
+    _, parents, values = parse_attribute_fields(attribute)
+    assert parents == () and base + '.6' in values
+    lookup, low, high = build_search_term_lookup(['Danio_rerio_' + base + '.6'])
+    assert parse_attribute_summary(attribute, lookup, low, high, {})[2][0].endswith('.6')
+    lookup, low, high = build_search_term_lookup(['Danio_rerio_' + base + '.7'])
+    assert parse_attribute_summary(attribute, lookup, low, high, {})[2] is None
+
+
+@pytest.mark.parametrize('attribute', [
+    'ID=gene:ENSDARG00000000001;version=6;version=7',
+    'ID=gene:ENSDARG00000000001;version=0',
+    'ID=gene:ENSDARG00000000001.7;version=6',
+])
+def test_conflicting_ensembl_versions_fail(attribute):
+    with pytest.raises(ValueError, match='version'):
+        parse_attribute_fields(attribute)
+
+
+def test_feature_version_is_not_applied_to_parent_or_unrelated_id():
+    _, parents, values = parse_attribute_fields(
+        'ID=transcript:ENSDART00000000001;Parent=gene:ENSDARG00000000001;gene_id=ENSDARG00000000001;version=3')
+    assert parents == ('gene:ENSDARG00000000001',)
+    assert 'transcript:ENSDART00000000001.3' in values
+    assert not any('ENSDARG00000000001.3' in value for value in values)
+    assert parse_attribute_fields('ID=ordinary;version=not-a-version')[2] == ('ordinary',)
+
+
+def test_explicit_version_wins_over_unversioned_fasta_gene(tmp_path):
+    gff = pandas.DataFrame([
+        ['chr1', 'gene', 1, 9, '+', 'ID=gene:ENSDARG00000000001;version=6'],
+        ['chr1', 'mRNA', 1, 9, '+', 'ID=t;Parent=gene:ENSDARG00000000001'],
+        ['chr1', 'CDS', 1, 9, '+', 'Parent=t'],
+    ], columns=['sequence', 'feature', 'start', 'end', 'strand', 'attributes'])
+    identifiers = ['Danio_rerio_ENSDARG00000000001', 'Danio_rerio_ENSDARG00000000001.6']
+    rows = extract_by_ids(gff, pandas.Series(identifiers), 'CDS', 'longest')
+    assert rows.gene_id.tolist() == [identifiers[1]]

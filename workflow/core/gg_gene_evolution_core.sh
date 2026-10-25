@@ -6599,6 +6599,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
     --optional-output "synteny=${file_og_synteny}"
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
     --parameter "window=${synteny_search_window}"
+    --parameter "missing_annotation=skip"
     --parameter "query_blast_evalue=${query_blast_evalue}"
     --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
     --parameter "genetic_code=${genetic_code}"
@@ -6655,6 +6656,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
         --lock_dir "${synteny_lock_dir}" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
+        --missing-annotation skip \
         --window "${synteny_search_window}" \
         --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \

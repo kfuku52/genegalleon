@@ -60,6 +60,8 @@ def build_arg_parser():
     parser.add_argument("--gff2genestat_script", required=True, type=str)
     parser.add_argument("--representative-map", default="", type=str)
     parser.add_argument("--input_sequence_mode", default="cds", choices=["cds", "protein"], type=str)
+    parser.add_argument("--missing-annotation", default="error", choices=["error", "skip"],
+                        help="Explicitly allow species without GFF annotations; malformed/ambiguous annotations still fail.")
     parser.add_argument("--window", default=5, type=int)
     parser.add_argument("--evalue", default=0.01, type=float)
     parser.add_argument("--genetic_code", default=1, type=int)
@@ -108,9 +110,9 @@ def guess_species_name(gene_id):
     return extract_species_label(gene_id)
 
 
-def find_species_file(directory, species_name, extensions):
+def species_file_candidates(directory, species_name, extensions):
     if not os.path.isdir(directory):
-        return ""
+        return []
     candidates = []
     for name in os.listdir(directory):
         lower_name = name.lower()
@@ -118,6 +120,11 @@ def find_species_file(directory, species_name, extensions):
             name, species_name, strip_extension=True
         ):
             candidates.append(name)
+    return candidates
+
+
+def find_species_file(directory, species_name, extensions):
+    candidates = species_file_candidates(directory, species_name, extensions)
     if not candidates:
         return ""
     candidates.sort()
@@ -264,6 +271,7 @@ def ensure_species_gene_cache(
     with open(lock_path, "a") as lock_handle:
         if HAS_FCNTL:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        tmp_path = None
         try:
             contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
                                                    gff2genestat_script)
@@ -302,12 +310,16 @@ def ensure_species_gene_cache(
             run_cmd(cmd)
             if (not os.path.exists(tmp_path)) or os.path.getsize(tmp_path) == 0:
                 raise RuntimeError("gff2genestat did not produce an output: {}".format(tmp_path))
+            if load_gene_info(tmp_path).empty:
+                raise ValueError("No FASTA identifiers mapped to usable GFF coordinates for {}".format(species_name))
             os.replace(tmp_path, out_path)
             recorded = dict(contract)
             recorded["output_sha256"] = sha256_file(out_path)
             write_species_gene_cache_manifest(manifest_path, recorded)
             return out_path
         finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
             if HAS_FCNTL:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
@@ -547,6 +559,10 @@ def main():
         sp_cds = find_species_file(args.dir_sp_cds, species_name, FASTA_EXTENSIONS)
         if not sp_cds:
             raise FileNotFoundError("species CDS file not found: {}".format(species_name))
+        if args.missing_annotation == "skip" and not species_file_candidates(
+                args.dir_sp_gff, species_name, GFF_EXTENSIONS):
+            print("No GFF annotation; synteny is unavailable for {}".format(species_name), file=sys.stderr)
+            continue
         species_cds_paths[species_name] = sp_cds
         try:
             cache_path = ensure_species_gene_cache(

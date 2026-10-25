@@ -75,6 +75,37 @@ NAMESPACE_SUFFIX_DELIMITERS = {
     "|",
 }
 
+VERSION_ATTRIBUTE_KEYS = frozenset(("version", "gene_version", "transcript_version", "protein_version"))
+
+
+def versioned_ensembl_attributes(values, versions):
+    """Join an explicitly declared feature version without stripping FASTA versions."""
+    structural_id = next((value for key, value in values if key == "ID"), "")
+    structural_base = strip_gff_feature_prefix(structural_id).split(".")[0]
+    result = []
+    for key, value in values:
+        if key not in {"ID", "gene_id", "transcript_id", "protein_id"}:
+            continue
+        identifier = strip_gff_feature_prefix(value)
+        match = re.fullmatch(r"(ENS[A-Z]*[GTEP][0-9]{6,})(?:\.([0-9]+))?", identifier)
+        if match is None:
+            continue
+        version_key = "version" if key == "ID" else key.removesuffix("_id") + "_version"
+        declared = versions.get(version_key, ())
+        if not declared and match[1] == structural_base:
+            declared = versions.get("version", ())
+        if not declared:
+            continue
+        unique = set(declared)
+        if len(unique) != 1 or not re.fullmatch(r"[1-9][0-9]*", next(iter(unique))):
+            raise ValueError(f"Invalid or conflicting Ensembl feature version for {value}")
+        version = next(iter(unique))
+        if match[2] is not None and match[2] != version:
+            raise ValueError(f"Conflicting Ensembl identifier/version attributes for {value}")
+        if match[2] is None:
+            result.append((key, value + "." + version))
+    return result
+
 ATTRIBUTE_KEY_ALIASES = {
     "gene_name": "geneName",
 }
@@ -341,6 +372,7 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
     attr_id = ""
     parents = []
     values = []
+    versions = {}
     for raw_field in str(attr_text).split(";"):
         field = raw_field.strip()
         if field == "":
@@ -357,6 +389,9 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
         else:
             continue
         key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key in VERSION_ATTRIBUTE_KEYS:
+            versions.setdefault(key, []).append(normalize_attribute_value(raw_value, decode=is_gff3))
+            continue
         if key not in MATCH_ATTRIBUTE_KEYS:
             continue
         if key == "Parent":
@@ -373,6 +408,7 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
             attr_id = value
         values.append((key, value))
 
+    values.extend(versioned_ensembl_attributes(values, versions))
     best = None
     has_parents = len(parents) > 0
     for key, value in values:
@@ -397,6 +433,8 @@ def parse_attribute_fields(attr_text):
     attr_id = ""
     parents = []
     match_values = []
+    attributes = []
+    versions = {}
     for raw_field in str(attr_text).split(";"):
         field = raw_field.strip()
         if field == "":
@@ -413,6 +451,9 @@ def parse_attribute_fields(attr_text):
         else:
             continue
         key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key in VERSION_ATTRIBUTE_KEYS:
+            versions.setdefault(key, []).append(normalize_attribute_value(raw_value, decode=is_gff3))
+            continue
         if key not in MATCH_ATTRIBUTE_KEYS:
             continue
         if key == "Parent":
@@ -427,6 +468,8 @@ def parse_attribute_fields(attr_text):
         if key == "ID" and attr_id == "":
             attr_id = value
         match_values.append(value)
+        attributes.append((key, value))
+    match_values.extend(value for _key, value in versioned_ensembl_attributes(attributes, versions))
     return attr_id, unique_values(parents), unique_values(match_values)
 
 
@@ -550,7 +593,13 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
             if len(parents) == 0 and len(match_values) > 0:
                 # The structural ID establishes ancestry. A display Name may
                 # be an obsolete alias that is another FASTA gene's identifier.
-                match = exact_structural_feature_match(attr_id, lookup)
+                # An Ensembl ID's separate version belongs to this feature,
+                # not to its Parent. Prefer the explicit version over a
+                # simultaneously present unversioned FASTA alias.
+                structural_values = [value for value in match_values
+                                     if value == attr_id or re.fullmatch(re.escape(attr_id) + r"\.[0-9]+", value)]
+                for value in structural_values:
+                    match = choose_better_match(match, exact_structural_feature_match(value, lookup))
                 if match is None:
                     match = match_values_to_gene_id(
                         values=(attr_id,),

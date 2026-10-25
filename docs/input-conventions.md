@@ -307,12 +307,19 @@ could contain summed isoforms. Follow the existing artifact-staleness policy;
 an authorized `rebuild` regenerates stale outputs, while `stop` remains the
 default. Do not adopt an unversioned GFF cache as a verified schema-2 result.
 
-A synteny gene-position table can legitimately contain only its header when
-no annotation matches the species' sequences. It must reach the existing
-empty-gene-info warning and omit that species' neighborhood rows, not crash
-during interval normalization. This does not supply missing annotations or
-relax source/provenance checks; normal and reversed intervals retain both
-original coordinate bounds.
+Ensembl stable IDs with separate GFF `version` or GTF `gene_version`,
+`transcript_version`, and `protein_version` attributes match the corresponding
+versioned FASTA IDs exactly. Parent links retain their original structural IDs;
+a transcript version is never appended to its parent gene. Different versions
+do not match, and conflicting declarations fail.
+
+The gene-evolution synteny panel omits neighborhoods only for species with no
+GFF annotation, recording a warning while retaining their sequences and tree
+tips. The standalone helper defaults to requiring annotations; explicit
+`--missing-annotation skip` permits absence. Ambiguous annotations and provided
+GFFs with no usable FASTA matches still fail. An empty newly generated position
+table is never published as a validated cache or substituted for a prior valid
+cache; correct the mapping or source annotation before resuming.
 
 Local synteny caches use `gff2genestat.py --phase-policy report`: neighborhoods
 need genomic coordinates, while sequence similarity uses the supplied FASTA
