@@ -219,6 +219,43 @@ def test_load_fimo_hits_parses_modern_fimo_tsv(tmp_path):
     assert df.loc[1, "motif_alt_id"] == "M2"
 
 
+def test_fimo_annotations_preserve_interleaved_hit_order_and_literal_singletons(tmp_path):
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(NA:1,001:1,nan:1,NULL:1)root;\n")
+    fimo = tmp_path / "fimo.tsv"
+    fimo.write_text(
+        "motif_id\tmotif_alt_id\tsequence_name\tstart\tstop\tstrand\tq-value\n"
+        "M1\t.\tNA\t11\t16\t+\t0.01\n"
+        "M2\tALT2\t001\t21\t26\t-\t0.02\n"
+        "M3\t.\tNA\t31\t36\t-\t0.03\n"
+        "M4\tALT4\tnan\t41\t46\t+\t0.04\n"
+        "M5\t.\t001\t51\t56\t+\t0.05\n"
+        "M6\tALT6\tNULL\t61\t66\t-\t0.06\n"
+        "invalid\t.\tNA\tbad\t99\t.\t0.001\n"
+    )
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--fimo", str(fimo)],
+        cwd=tmp_path, capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(
+        tmp_path / "orthogroup.branch.tsv", sep="\t", dtype=str, keep_default_na=False,
+    ).set_index("node_name")
+    columns = ["fimo_id", "fimo_alt_id", "fimo_start", "fimo_end", "fimo_strand", "fimo_qvalue"]
+    expected = pandas.DataFrame.from_dict({
+        "NA": ["M1; M3", "M1; M3", "11; 31", "16; 36", "+; -", "0.01; 0.03"],
+        "001": ["M2; M5", "ALT2; M5", "21; 51", "26; 56", "-; +", "0.02; 0.05"],
+        "nan": ["M4", "ALT4", "41", "46", "+", "0.04"],
+        "NULL": ["M6", "ALT6", "61", "66", "-", "0.06"],
+    }, orient="index", columns=columns)
+    expected.index.name = "node_name"
+    pandas.testing.assert_frame_equal(branches.loc[expected.index, columns], expected, check_exact=True)
+
+
 def test_orthogroup_statistics_preserves_qualified_species_prefixes():
     mod = load_module()
 
@@ -644,3 +681,31 @@ def test_promoter_coordinates_join_to_branch_annotations(tmp_path, compressed):
     expected = {"terminal": "3:6", "isolated": "1,3,5:6", "short": "1,1:6", "noNs": "3:6", "empty": "0:6"}
     assert branches.loc[list(expected), "promoter_N"].to_dict() == expected
     assert branches.loc[list(expected), "promoter_available"].tolist() == ["Y"] * len(expected)
+
+
+@pytest.mark.parametrize('internal', ['', 'spAB'])
+@pytest.mark.parametrize('root', ['', 'spRoot'])
+@pytest.mark.parametrize('dated', [False, True])
+def test_species_mapping_accepts_unnamed_internal_nodes_without_renaming_tree(tmp_path, internal, root, dated):
+    species = tmp_path / 'species.nwk'
+    original = f'((Species_a:1,Species_b:1){internal}:1,Species_c:2){root};\n'
+    species.write_text(original)
+    gene = tmp_path / 'gene.nwk'
+    gene.write_text('((Species_a_g1:1,Species_b_g1:1)geneAB:1,Species_c_g1:2)geneRoot;\n')
+    command = [sys.executable, str(SCRIPT_PATH), '--rooted_tree', str(gene), '--species_tree', str(species)]
+    if dated:
+        command += ['--dated_tree', str(gene)]
+    stub_root = tmp_path / 'stub_packages'
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, (str(stub_root), env.get('PYTHONPATH', ''))))
+    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    table = pandas.read_csv(tmp_path / 'orthogroup.branch.tsv', sep='\t', keep_default_na=False).set_index('node_name')
+    assert table.loc['geneAB', 'spnode_coverage'] == internal
+    assert table.loc['geneRoot', 'spnode_coverage'] == root
+    assert table.loc['Species_a_g1', 'spnode_coverage'] == 'Species_a'
+    if dated:
+        assert table.loc['geneAB', 'spnode_age'] == internal
+        assert table.loc['geneRoot', 'spnode_age'] == root
+    assert species.read_text() == original

@@ -20,6 +20,67 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+@pytest.mark.parametrize("annotation", ["rna_only", "overlapping_cds"])
+def test_physical_gene_coordinates_do_not_certify_coding_structure(tmp_path, annotation):
+    gff = tmp_path / "Species_a.gff"
+    gff.write_text(
+        "chr1\ts\tgene\t1\t30\t.\t+\t.\tID=gene:fgenesh1_pg.26__121\n"
+        "chr1\ts\tmRNA\t1\t30\t.\t+\t.\tID=t;Parent=gene:fgenesh1_pg.26__121\n"
+        "chr1\ts\texon\t1\t30\t.\t+\t.\tParent=t\n" +
+        ("chr1\ts\tCDS\t1\t15\t.\t+\t0\tID=c;Parent=t\n"
+         "chr1\ts\tCDS\t10\t30\t.\t+\t0\tID=c;Parent=t\n" if annotation == "overlapping_cds" else ""))
+    fasta = tmp_path / "Species_a.fa"
+    fasta.write_text(">Species_a_fgenesh1_pg.26_121\nMAAAAA\n")
+    output = tmp_path / "loci.tsv"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--mode", "gene_coordinates",
+                             "--dir_gff", str(tmp_path), "--seqfile", str(fasta),
+                             "--outfile", str(output), "--require-matches"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr + result.stdout
+    table = pandas.read_csv(output, sep="\t")
+    assert table.to_dict("records") == [dict(gene_id="Species_a_fgenesh1_pg.26_121", chromosome="chr1",
+                                             start=1, end=30, strand="+", coordinate_source="gene")]
+    assert "feature_blocks" not in table and "cds_first_phase" not in table
+
+
+@pytest.mark.parametrize("defect", ["contig", "strand", "bounds", "collision", "duplicate", "cycle"])
+def test_physical_gene_coordinates_reject_ambiguous_or_foreign_loci(tmp_path, defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = [["chr1", "s", "gene", 1, 30, ".", "+", ".", "ID=gene:g__1"],
+            ["chr1", "s", "mRNA", 1, 30, ".", "+", ".", "ID=t;Parent=gene:g__1"],
+            ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=t"]]
+    if defect == "contig":
+        rows[-1][0] = "other"
+    elif defect == "strand":
+        rows[-1][6] = "-"
+    elif defect == "bounds":
+        rows[-1][4] = 31
+    elif defect in {"collision", "duplicate"}:
+        rows.append(["chr1", "s", "gene", 15, 60, ".", "+", ".",
+                     "ID=gene:g_1" if defect == "collision" else "ID=gene:g__1"])
+    else:
+        rows[-1][-1] = "ID=c;Parent=cycle"
+        rows.append(["chr1", "s", "mRNA", 1, 9, ".", "+", ".", "ID=cycle;Parent=c"])
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g_1"], "longest")
+
+
+def test_physical_gene_coordinates_keep_cds_only_validation_strict():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = pandas.DataFrame([
+        ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=g1"],
+        ["chr1", "s", "CDS", 7, 15, ".", "+", "0", "ID=c;Parent=g1"],
+    ], columns=["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError, match="Overlapping GFF feature blocks"):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+    frame.loc[1, "start"] = 10
+    row = gene_locus_coordinates(frame, ["Species_a_g1"], "longest").iloc[0]
+    assert (row.start, row.end, row.coordinate_source) == (1, 15, "selected_CDS")
+
+
 def test_gff3_list_values_decode_once_and_gtf_percent_values_remain_literal():
     identifier, parents, _values = parse_attribute_fields('ID=c%253B1;Parent=t%2C1,t%252C1;')
     assert identifier == 'c%3B1'
@@ -275,6 +336,43 @@ def test_phase_validation_keeps_gene_local_error_order():
                              'sequence': ['chr1'] * 2, 'strand': ['+'] * 2, 'feature': ['CDS'] * 2,
                              'start': [1, 'invalid-coordinate'], 'end': [90, 290],
                              'phase': ['invalid-phase', '0'], 'attributes': ['Parent=t1', 'Parent=t2']})
+    with pytest.raises(ValueError, match='Invalid CDS phase for first: invalid-phase'):
+        attach_transcript_structure(frame, frame)
+
+
+def test_native_structure_groups_keep_positional_rows_and_every_phase():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({
+        'gene_id': ['second', 'first', 'second', 'first', 'second'],
+        'selected_transcript': ['t2', 't1', 't2', 't1', 't2'],
+        'sequence': ['chr1'] * 5, 'strand': ['-', '+', '-', '+', '-'],
+        'start': [201, 1, 301, 101, 201], 'end': [209, 9, 309, 109, 209],
+        'feature': ['CDS'] * 5, 'phase': ['0', '0', '0', '0', '1'],
+        'attributes': ['Parent=t2', 'Parent=t1', 'Parent=t2', 'Parent=t1', 'Parent=t2'],
+    }, index=[90, 3, 90, -7, 8])
+    original = frame.copy(deep=True)
+    with pytest.raises(ValueError, match='Conflicting CDS phases for second'):
+        attach_transcript_structure(frame, frame)
+    result = attach_transcript_structure(frame, frame, phase_policy='report')
+    assert result.phase_status.tolist() == ['conflicting', 'consistent', 'conflicting', 'consistent', 'conflicting']
+    assert result.cds_first_phase.iloc[[1, 3]].eq(0).all()
+    assert result.cds_first_phase.iloc[[0, 2, 4]].isna().all()
+    assert result.utr_status.eq('available').all()
+    pandas.testing.assert_frame_equal(frame, original)
+    pandas.testing.assert_frame_equal(result[original.columns], original)
+
+
+def test_native_structure_keeps_first_gene_error_before_later_model_error():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({
+        'gene_id': ['first', 'later', 'later'], 'selected_transcript': ['t1', 't2', 't3'],
+        'sequence': ['chr1'] * 3, 'strand': ['+'] * 3,
+        'start': [1, 101, 201], 'end': [9, 109, 209],
+        'feature': ['CDS'] * 3, 'phase': ['invalid-phase', '0', '0'],
+        'attributes': ['Parent=t1', 'Parent=t2', 'Parent=t3'],
+    })
     with pytest.raises(ValueError, match='Invalid CDS phase for first: invalid-phase'):
         attach_transcript_structure(frame, frame)
 
@@ -1094,3 +1192,113 @@ def test_ids_only_main_finishes_fasta_validation_before_gff_or_output(tmp_path, 
                 "data_before_header": "FASTA sequence data precedes the first header", "gzip_crc": "CRC check failed"}
     assert expected[damage] in result.stderr
     assert output.read_bytes() == b"previous complete table\n"
+
+
+@pytest.mark.parametrize('identifier', ['ENSDARG00000000001.6', 'ENSDART00000000001.3', 'ENSDARP00000000001.1'])
+def test_ensembl_separate_versions_preserve_unversioned_parent_chain(tmp_path, identifier):
+    gff = tmp_path / 'Danio_rerio.gff'
+    gff.write_text(
+        'chr1\ts\tgene\t1\t18\t.\t+\t.\tID=gene:ENSDARG00000000001;gene_id=ENSDARG00000000001;version=6\n'
+        'chr1\ts\tmRNA\t1\t18\t.\t+\t.\tID=transcript:ENSDART00000000001;Parent=gene:ENSDARG00000000001;version=3\n'
+        'chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=CDS:ENSDARP00000000001;Parent=transcript:ENSDART00000000001;protein_id=ENSDARP00000000001;version=1\n'
+        'chr1\ts\tCDS\t13\t18\t.\t+\t0\tID=CDS:ENSDARP00000000001;Parent=transcript:ENSDART00000000001;protein_id=ENSDARP00000000001;version=1\n')
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    rows = process_single_gff(gff.name, str(tmp_path), ['Danio_rerio_' + identifier],
+                              'CDS', 'longest', columns, OUT_COLS)
+    assert rows.gene_id.tolist() == ['Danio_rerio_' + identifier]
+    assert rows.feature_blocks.tolist() == ['1-9;13-18']
+
+
+@pytest.mark.parametrize('key,prefix', [('gene', 'G'), ('transcript', 'T'), ('protein', 'P')])
+def test_gtf_typed_versions_and_exact_version_mismatch(key, prefix):
+    from workflow.support.gff2genestat import build_search_term_lookup, parse_attribute_summary
+
+    base = 'ENSDAR' + prefix + '00000000001'
+    attribute = f'{key}_id "{base}"; {key}_version "6";'
+    _, parents, values = parse_attribute_fields(attribute)
+    assert parents == () and base + '.6' in values
+    lookup, low, high = build_search_term_lookup(['Danio_rerio_' + base + '.6'])
+    assert parse_attribute_summary(attribute, lookup, low, high, {})[2][0].endswith('.6')
+    lookup, low, high = build_search_term_lookup(['Danio_rerio_' + base + '.7'])
+    assert parse_attribute_summary(attribute, lookup, low, high, {})[2] is None
+
+
+@pytest.mark.parametrize('attribute', [
+    'ID=gene:ENSDARG00000000001;version=6;version=7',
+    'ID=gene:ENSDARG00000000001;version=0',
+    'ID=gene:ENSDARG00000000001.7;version=6',
+])
+def test_conflicting_ensembl_versions_fail(attribute):
+    with pytest.raises(ValueError, match='version'):
+        parse_attribute_fields(attribute)
+
+
+def test_feature_version_is_not_applied_to_parent_or_unrelated_id():
+    _, parents, values = parse_attribute_fields(
+        'ID=transcript:ENSDART00000000001;Parent=gene:ENSDARG00000000001;gene_id=ENSDARG00000000001;version=3')
+    assert parents == ('gene:ENSDARG00000000001',)
+    assert 'transcript:ENSDART00000000001.3' in values
+    assert not any('ENSDARG00000000001.3' in value for value in values)
+    assert parse_attribute_fields('ID=ordinary;version=not-a-version')[2] == ('ordinary',)
+
+
+def test_explicit_version_wins_over_unversioned_fasta_gene(tmp_path):
+    gff = pandas.DataFrame([
+        ['chr1', 'gene', 1, 9, '+', 'ID=gene:ENSDARG00000000001;version=6'],
+        ['chr1', 'mRNA', 1, 9, '+', 'ID=t;Parent=gene:ENSDARG00000000001'],
+        ['chr1', 'CDS', 1, 9, '+', 'Parent=t'],
+    ], columns=['sequence', 'feature', 'start', 'end', 'strand', 'attributes'])
+    identifiers = ['Danio_rerio_ENSDARG00000000001', 'Danio_rerio_ENSDARG00000000001.6']
+    rows = extract_by_ids(gff, pandas.Series(identifiers), 'CDS', 'longest')
+    assert rows.gene_id.tolist() == [identifiers[1]]
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("metadata", ["", "is_ordered", "part"])
+def test_physical_gene_coordinates_support_discontinuous_gff3_gene(strand, metadata):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = []
+    for index, (start, end) in enumerate([(1090, 1098), (100, 159), (1, 60)], 1):
+        suffix = ";is_ordered=true" if metadata == "is_ordered" else (
+            f";part={index}/3" if metadata == "part" else "")
+        rows.append(["chr1", "s", "gene", start, end, ".", strand, ".", "ID=gene:g1;Name=g1" + suffix])
+        rows.append(["chr1", "s", "CDS", start, end, ".", strand, "0", "ID=c1;Parent=gene:g1"])
+    # A transcript can span the discontinuities; each individual exon/CDS stays in a part.
+    rows.append(["chr1", "s", "mRNA", 1, 1098, ".", strand, ".", "ID=t;Parent=gene:g1"])
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    table = gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+    assert table.to_dict("records") == [dict(gene_id="Species_a_g1", chromosome="chr1",
+                                              start=1, end=1098, strand=strand, coordinate_source="gene")]
+
+
+@pytest.mark.parametrize("defect", ["contig", "strand", "overlap", "identity", "part_missing",
+                                    "part_repeated", "part_total", "cds_in_gap", "exon_in_gap"])
+def test_multipart_gene_coordinates_keep_identity_and_segment_checks(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = [["chr1", "s", "gene", 1, 30, ".", "+", ".", "ID=gene:g1;Name=g1;part=1/2"],
+            ["chr1", "s", "gene", 41, 60, ".", "+", ".", "ID=gene:g1;Name=g1;part=2/2"],
+            ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=gene:g1"]]
+    if defect == "contig":
+        rows[1][0] = "other"
+    elif defect == "strand":
+        rows[1][6] = "-"
+    elif defect == "overlap":
+        rows[1][3] = 25
+    elif defect == "identity":
+        rows[1][-1] = rows[1][-1].replace("Name=g1", "Name=foreign")
+    elif defect == "part_missing":
+        rows[1][-1] = rows[1][-1].replace(";part=2/2", "")
+    elif defect == "part_repeated":
+        rows[1][-1] = rows[1][-1].replace("part=2/2", "part=1/2")
+    elif defect == "part_total":
+        rows[1][-1] = rows[1][-1].replace("part=2/2", "part=2/3")
+    else:
+        rows[-1][2] = "CDS" if defect == "cds_in_gap" else "exon"
+        rows[-1][3:5] = [31, 39]
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")

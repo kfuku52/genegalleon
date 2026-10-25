@@ -75,6 +75,37 @@ NAMESPACE_SUFFIX_DELIMITERS = {
     "|",
 }
 
+VERSION_ATTRIBUTE_KEYS = frozenset(("version", "gene_version", "transcript_version", "protein_version"))
+
+
+def versioned_ensembl_attributes(values, versions):
+    """Join an explicitly declared feature version without stripping FASTA versions."""
+    structural_id = next((value for key, value in values if key == "ID"), "")
+    structural_base = strip_gff_feature_prefix(structural_id).split(".")[0]
+    result = []
+    for key, value in values:
+        if key not in {"ID", "gene_id", "transcript_id", "protein_id"}:
+            continue
+        identifier = strip_gff_feature_prefix(value)
+        match = re.fullmatch(r"(ENS[A-Z]*[GTEP][0-9]{6,})(?:\.([0-9]+))?", identifier)
+        if match is None:
+            continue
+        version_key = "version" if key == "ID" else key.removesuffix("_id") + "_version"
+        declared = versions.get(version_key, ())
+        if not declared and match[1] == structural_base:
+            declared = versions.get("version", ())
+        if not declared:
+            continue
+        unique = set(declared)
+        if len(unique) != 1 or not re.fullmatch(r"[1-9][0-9]*", next(iter(unique))):
+            raise ValueError(f"Invalid or conflicting Ensembl feature version for {value}")
+        version = next(iter(unique))
+        if match[2] is not None and match[2] != version:
+            raise ValueError(f"Conflicting Ensembl identifier/version attributes for {value}")
+        if match[2] is None:
+            result.append((key, value + "." + version))
+    return result
+
 ATTRIBUTE_KEY_ALIASES = {
     "gene_name": "geneName",
 }
@@ -86,11 +117,11 @@ def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        metavar="intron_num|gene_delim",
+        metavar="intron_num|gene_delim|gene_coordinates",
         default="",
         type=str,
-        help="Accepted values for --mode: intron_num|gene_delim.",
-        choices=["intron_num", "gene_delim"],
+        help="Accepted values for --mode: intron_num|gene_delim|gene_coordinates.",
+        choices=["intron_num", "gene_delim", "gene_coordinates"],
     )
     parser.add_argument("--dir_gff", metavar="PATH", default="", type=str, help="Path used by --dir_gff.")
     parser.add_argument("--validate-cds-length", action="store_true",
@@ -341,6 +372,7 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
     attr_id = ""
     parents = []
     values = []
+    versions = {}
     for raw_field in str(attr_text).split(";"):
         field = raw_field.strip()
         if field == "":
@@ -357,6 +389,9 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
         else:
             continue
         key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key in VERSION_ATTRIBUTE_KEYS:
+            versions.setdefault(key, []).append(normalize_attribute_value(raw_value, decode=is_gff3))
+            continue
         if key not in MATCH_ATTRIBUTE_KEYS:
             continue
         if key == "Parent":
@@ -373,6 +408,7 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
             attr_id = value
         values.append((key, value))
 
+    values.extend(versioned_ensembl_attributes(values, versions))
     best = None
     has_parents = len(parents) > 0
     for key, value in values:
@@ -397,6 +433,8 @@ def parse_attribute_fields(attr_text):
     attr_id = ""
     parents = []
     match_values = []
+    attributes = []
+    versions = {}
     for raw_field in str(attr_text).split(";"):
         field = raw_field.strip()
         if field == "":
@@ -413,6 +451,9 @@ def parse_attribute_fields(attr_text):
         else:
             continue
         key = ATTRIBUTE_KEY_ALIASES.get(key, key)
+        if key in VERSION_ATTRIBUTE_KEYS:
+            versions.setdefault(key, []).append(normalize_attribute_value(raw_value, decode=is_gff3))
+            continue
         if key not in MATCH_ATTRIBUTE_KEYS:
             continue
         if key == "Parent":
@@ -427,6 +468,8 @@ def parse_attribute_fields(attr_text):
         if key == "ID" and attr_id == "":
             attr_id = value
         match_values.append(value)
+        attributes.append((key, value))
+    match_values.extend(value for _key, value in versioned_ensembl_attributes(attributes, versions))
     return attr_id, unique_values(parents), unique_values(match_values)
 
 
@@ -515,7 +558,7 @@ def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, loo
     return best
 
 
-def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=None, species=""):
+def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=None, species="", canonical_aliases=False):
     if multiple_hits != "longest":
         raise ValueError("Unsupported multiple_hits policy: {}".format(multiple_hits))
     representative_map = load_representative_map(representative_map)
@@ -526,6 +569,27 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
             representative_map.choice(str(identifier), species)
     print("Extracting gene IDs: {}".format(datetime.datetime.now()), flush=True)
     lookup, min_len, max_len = build_search_term_lookup(seq_names)
+    if canonical_aliases:
+        # The input formatter sanitizes source names (including repeated
+        # underscores). Resolve only complete, exact formatted identifiers;
+        # never strip accession versions or guess a suffix here.
+        from format_species_annotation.common import sanitize_identifier
+        owners = {}
+        for attrs in gff.loc[gff["feature"].str.lower().isin(["gene", "pseudogene"]), "attributes"]:
+            identifier = parse_attribute_fields(attrs)[0]
+            if identifier:
+                canonical = sanitize_identifier(strip_gff_feature_prefix(identifier))
+                owners.setdefault(canonical, set()).add(identifier)
+        for canonical, identifiers in owners.items():
+            if len(identifiers) > 1 and canonical in lookup:
+                raise ValueError("Ambiguous normalized GFF gene identity: " + canonical)
+        for attrs in gff["attributes"]:
+            identifier, parents, values = parse_attribute_fields(attrs)
+            for value in unique_values((identifier,) + parents + values):
+                canonical = sanitize_identifier(strip_gff_feature_prefix(value))
+                if value not in lookup and canonical in lookup:
+                    lookup[value] = lookup[canonical]
+                    max_len = max(max_len, len(value))
     # GWH exports use `Gene`; the formatter already accepts feature names
     # case-insensitively. Keep source spelling and case-sensitive IDs intact.
     feature_names = gff.loc[:, "feature"].str.lower()
@@ -550,7 +614,13 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
             if len(parents) == 0 and len(match_values) > 0:
                 # The structural ID establishes ancestry. A display Name may
                 # be an obsolete alias that is another FASTA gene's identifier.
-                match = exact_structural_feature_match(attr_id, lookup)
+                # An Ensembl ID's separate version belongs to this feature,
+                # not to its Parent. Prefer the explicit version over a
+                # simultaneously present unversioned FASTA alias.
+                structural_values = [value for value in match_values
+                                     if value == attr_id or re.fullmatch(re.escape(attr_id) + r"\.[0-9]+", value)]
+                for value in structural_values:
+                    match = choose_better_match(match, exact_structural_feature_match(value, lookup))
                 if match is None:
                     match = match_values_to_gene_id(
                         values=(attr_id,),
@@ -783,6 +853,22 @@ def _phase_column_values(column, dtype):
     return column.astype(dtype)
 
 
+def _structure_arrays(frame):
+    """Use native columns without constructing a DataFrame for every gene.
+
+    Unusual types keep the original gene-local conversions and error order.
+    """
+    names = ("sequence", "strand", "start", "end", "attributes", "phase", "selected_transcript")
+    if not frame.columns.is_unique or not all(name in frame for name in names):
+        return None
+    if any(frame[name].dtype != numpy.dtype(int) for name in ("start", "end")):
+        return None
+    if any(not all(type(value) is str for value in frame[name])
+           for name in ("sequence", "strand", "attributes", "selected_transcript")):
+        return None
+    return {name: frame[name].to_numpy(copy=False) for name in names}
+
+
 def attach_transcript_structure(selected_cds, gff, phase_policy="strict", structure_policy="strict"):
     """Attach only explicit UTRs from the exact transcript selected for CDS."""
     selected_cds = selected_cds.copy()
@@ -797,15 +883,26 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
     first_phase = {}
     phase_status = {}
     utr_status = {}
-    for gene_id, cds in selected_cds.groupby("gene_id", sort=False):
-        transcript = cds["selected_transcript"].unique()
+    arrays = _structure_arrays(selected_cds)
+    groups = selected_cds.groupby("gene_id", sort=False)
+    for gene_id, cds in (groups.indices.items() if arrays is not None else groups):
+        transcript = (pandas.unique(arrays["selected_transcript"][cds]) if arrays is not None
+                      else cds["selected_transcript"].unique())
         if len(transcript) != 1:
             raise ValueError(f"Multiple selected transcripts for {gene_id}")
-        cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
+        if arrays is not None:
+            attributes = arrays["attributes"][cds]
+            coordinates = [(arrays["sequence"][i], arrays["strand"][i], arrays["start"][i], arrays["end"][i])
+                           for i in cds]
+            cds_blocks, splice_mode = ordered_annotated_blocks(
+                ((*block, attr) for block, attr in zip(coordinates, attributes, strict=True)), gene_id)
+        else:
+            attributes = cds["attributes"]
+            cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
         utr_rows = utr_by_transcript.get(transcript[0], [])
         utr_status[gene_id] = "available"
         if transcript[0].startswith("protein_id:"):
-            parent_ids = {parent for attr in cds["attributes"]
+            parent_ids = {parent for attr in attributes
                           for parent in transcript_ids(attr, gene_id)}
             if any(utr_by_transcript.get(parent) for parent in parent_ids):
                 if structure_policy != "report":
@@ -841,10 +938,12 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         # Build the coordinate lookup once, retaining every duplicate phase row.
         # Recasting and scanning all CDS rows for each block is unnecessary.
         phases_by_block = {}
-        for sequence, strand, start, end, phase in zip(
+        phase_rows = (((*block, phase) for block, phase in zip(coordinates, arrays["phase"][cds], strict=True))
+                      if arrays is not None else zip(
                 _phase_column_values(cds["sequence"], str), _phase_column_values(cds["strand"], str),
                 _phase_column_values(cds["start"], int), _phase_column_values(cds["end"], int),
-                cds["phase"], strict=True):
+                cds["phase"], strict=True))
+        for sequence, strand, start, end, phase in phase_rows:
             phases_by_block.setdefault((sequence, strand, start, end), []).append(phase)
         for block in cds_blocks:
             for value in phases_by_block.get(block, []):
@@ -1074,9 +1173,13 @@ def read_gff_table(gff_path, *, coding_only=False):
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
     except (pandas.errors.ParserError, ValueError):
-        opener = gzip.open if gff_path.endswith(".gz") else open
+        opener = gzip.open if str(gff_path).endswith(".gz") else open
         rows = []
-        with opener(gff_path, "rt", encoding="utf-8") as handle:
+        if hasattr(gff_path, "read"):
+            gff_path.seek(0)
+        import contextlib
+        context = contextlib.nullcontext(gff_path) if hasattr(gff_path, "read") else opener(gff_path, "rt", encoding="utf-8")
+        with context as handle:
             for raw_line in handle:
                 if raw_line.startswith("#") or raw_line.strip() == "":
                     continue
@@ -1093,48 +1196,116 @@ def read_coding_gff_table(gff_path):
     GFF output itself stays intact. Explicit parent/Derives_from links, including
     links through alignment features, are resolved to closure before tabulation.
     """
-    import tempfile
-    alignment_types = {"match", "match_part", "protein_match", "nucleotide_match", "translated_nucleotide_match"}
-    opener = gzip.open if str(gff_path).endswith(".gz") else open
-    known, wanted = set(), set()
-    with tempfile.TemporaryDirectory(prefix="gg-coding-gff-") as directory:
-        filtered = os.path.join(directory, "coding.gff")
-        with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "w", encoding="utf-8") as target:
-            for line in source:
-                if line.startswith("##FASTA"):
-                    break
-                parts = line.rstrip("\r\n").split("\t")
-                if line.startswith("#") or len(parts) < 9:
-                    target.write(line)
-                    continue
-                if parts[2].lower() in alignment_types:
-                    continue
-                target.write(line)
-                attrs = _parse_gff_attributes(parts[8])
-                known.update(attrs.get("ID", ()))
-                for key in ("Parent", "Derives_from", "derives_from"):
-                    wanted.update(attrs.get(key, ()))
-        inspected = set()
-        while wanted - known - inspected:
-            pending = wanted - known - inspected
-            with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "a", encoding="utf-8") as target:
-                for line in source:
-                    if line.startswith("##FASTA"):
-                        break
-                    parts = line.rstrip("\r\n").split("\t")
-                    if line.startswith("#") or len(parts) < 9 or parts[2].lower() not in alignment_types:
-                        continue
-                    attrs = _parse_gff_attributes(parts[8])
-                    if not set(attrs.get("ID", ())) & pending:
-                        continue
-                    target.write(line)
-                    for key in ("Parent", "Derives_from", "derives_from"):
-                        wanted.update(attrs.get(key, ()))
-            inspected.update(pending)
-        return read_gff_table(filtered)
+    from coding_gff_stream import CodingGffStream
+    with CodingGffStream(gff_path, _parse_gff_attributes) as stream:
+        return read_gff_table(stream)
 
 
-def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None):
+def validate_locus_children(gff, loci, segments=None):
+    """A physical locus may contain overlapping exons, never foreign coordinates."""
+    parents_by_id = {}
+    records = []
+    for row in gff.itertuples(index=False):
+        identifier, parents, _values = parse_attribute_fields(row.attributes)
+        if identifier:
+            parents_by_id.setdefault(identifier, set()).update(parents)
+        records.append((row, parents))
+    resolved = {}
+
+    def owners(identifier, active):
+        if identifier in loci:
+            return {identifier}
+        if identifier in resolved:
+            return resolved[identifier]
+        if identifier in active:
+            raise ValueError("Cyclic GFF locus ancestry: " + identifier)
+        result = set()
+        for parent in parents_by_id.get(identifier, ()):
+            result.update(owners(parent, active | {identifier}))
+        resolved[identifier] = result
+        return result
+
+    for row, parents in records:
+        ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
+        for ancestor in ancestors:
+            chromosome, strand, start, end = loci[ancestor]
+            parts = (segments or {}).get(ancestor, [(start, end)])
+            feature_block = str(row.feature) in {"CDS", "exon", "five_prime_UTR", "three_prime_UTR"}
+            contained = any(int(row.start) >= left and int(row.end) <= right for left, right in parts)
+            if (feature_block and not contained) or (str(row.sequence) != chromosome or str(row.strand) != strand
+                    or int(row.start) < start or int(row.end) > end or int(row.end) < int(row.start)):
+                raise ValueError("GFF child coordinates disagree with gene locus: " + ancestor)
+
+
+def physical_gene_interval(group, gene_id):
+    """One GFF3 gene feature may have multiple disjoint rows with the same ID.
+
+    Report its genomic envelope for neighborhood ordering, while retaining
+    each declared segment for descendant feature containment checks.
+    """
+    identifiers = {parse_attribute_fields(value)[0] for value in group["attributes"]}
+    intervals = sorted({(str(row.sequence), str(row.strand), int(row.start), int(row.end))
+                        for row in group.itertuples(index=False)})
+    if len(identifiers) != 1 or "" in identifiers or len({row[:2] for row in intervals}) != 1:
+        raise ValueError("Ambiguous GFF gene interval for " + gene_id)
+    chromosome, strand = intervals[0][:2]
+    if (not chromosome or group["sequence"].isna().any() or strand not in {"+", "-"}
+            or any(start < 1 or end < start for _, _, start, end in intervals)):
+        raise ValueError("Invalid GFF gene coordinates for " + gene_id)
+    parts = [(start, end) for _, _, start, end in intervals]
+    if any(right[0] <= left[1] for left, right in zip(parts, parts[1:], strict=False)):
+        raise ValueError("Overlapping GFF gene parts for " + gene_id)
+    attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
+    for key in ["Name", "gene", "gene_id", "locus_tag", "Parent", "gbkey", "gene_biotype"]:
+        if len({tuple(row.get(key, ())) for row in attributes}) != 1:
+            raise ValueError("Conflicting GFF gene identity attributes for " + gene_id)
+    if any("part" in row for row in attributes):
+        orders = set()
+        for row in attributes:
+            values = row.get("part", [])
+            if len(values) != 1 or re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", values[0]) is None:
+                raise ValueError("Invalid GFF gene part order for " + gene_id)
+            orders.add(tuple(map(int, values[0].split("/"))))
+        if orders != {(index, len(parts)) for index in range(1, len(parts) + 1)}:
+            raise ValueError("Incomplete GFF gene part order for " + gene_id)
+    return next(iter(identifiers)), (chromosome, strand, parts[0][0], parts[-1][1]), parts
+
+
+def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representative_map=None):
+    """Physical gene intervals, without certifying a coding model.
+
+    An explicit gene remains usable when its protein's source annotation has
+    no CDS or overlapping CDS parts. CDS-only exports still pass the ordinary
+    strict transcript validator. Explicit representative choices retain their
+    existing selected-CDS coordinate contract.
+    """
+    columns = ["gene_id", "chromosome", "start", "end", "strand", "coordinate_source"]
+    genes = extract_by_ids(gff, seq_names, "gene", multiple_hits, canonical_aliases=True)
+    rows = []
+    loci = {}
+    segments = {}
+    if representative_map is None:
+        for gene_id, group in genes.groupby("gene_id", sort=False):
+            identifier, interval, parts = physical_gene_interval(group, gene_id)
+            chromosome, strand, start, end = interval
+            loci[identifier] = interval
+            segments[identifier] = parts
+            rows.append(dict(gene_id=gene_id, chromosome=chromosome, start=start, end=end,
+                             strand=strand, coordinate_source="gene"))
+        validate_locus_children(gff, loci, segments)
+    mapped = {row["gene_id"] for row in rows}
+    remaining = [identifier for identifier in seq_names if identifier not in mapped]
+    if remaining:
+        cds = extract_by_ids(gff, remaining, "CDS", multiple_hits, species=species,
+                             representative_map=representative_map, canonical_aliases=True)
+        if not cds.empty:
+            cds = attach_transcript_structure(cds, gff, phase_policy="report", structure_policy="report")
+            traits = summarize_gene_features(cds, columns[:-1])
+            rows.extend(dict(row, coordinate_source="selected_CDS") for row in traits.to_dict("records"))
+    return pandas.DataFrame(rows, columns=columns)
+
+
+def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None, coordinate_mode=False):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
     if os.stat(gff_path).st_size == 0:
@@ -1146,7 +1317,7 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         csv.field_size_limit(sys.maxsize)
     except OverflowError:
         csv.field_size_limit(2147483647)
-    gff = read_gff_table(gff_path, coding_only=feature == "CDS")
+    gff = read_gff_table(gff_path, coding_only=feature == "CDS" and not coordinate_mode)
     if gff.shape[1] < len(gff_cols):
         if representative_map:
             raise ValueError(f"Representative map supplied for malformed GFF: {gff_path}")
@@ -1160,6 +1331,8 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         gff = gff.loc[~gff["sequence"].astype(str).isin(organelle_seqids)].copy()
     seq_sp = pandas.Series(seq_sp_values)
     species = extract_species_label(gff_file, strip_extension=True)
+    if coordinate_mode:
+        return gene_locus_coordinates(gff, seq_sp, multiple_hits, species, representative_map)
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits,
                            representative_map=representative_map, species=species)
     if gff_id.shape[0] == 0:
@@ -1406,6 +1579,9 @@ def apply_cds_resolution(traits, records, directory, cache_dir=None):
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
+    coordinate_mode = args.mode == "gene_coordinates"
+    if coordinate_mode and (args.validate_cds_length or args.cds_resolution_dir):
+        parser.error("gene_coordinates reports physical loci, not CDS structure or length")
     if args.representative_map and args.cds_resolution_dir:
         parser.error("--representative-map cannot be combined with --cds-resolution-dir; "
                      "selected transcript coordinates must come from the selected GFF")
@@ -1416,6 +1592,8 @@ def main():
 
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
                 "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status", "cds_partial", "utr_status", "structure_status"]
+    if coordinate_mode:
+        out_cols = ["gene_id", "chromosome", "start", "end", "strand", "coordinate_source"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     if args.validate_cds_length or args.cds_resolution_dir or args.sequence_store:
         records = list(fasta_records(Path(args.seqfile)))
@@ -1429,7 +1607,10 @@ def main():
         )
     if seq_names.duplicated().any():
         raise ValueError("Duplicate FASTA identifier in GFF input")
-    seq_species_labels = seq_names.map(extract_species_label)
+    seq_names_by_species = {}
+    for identifier in seq_names:
+        species = extract_species_label(identifier)
+        seq_names_by_species.setdefault(species, []).append(identifier)
     gff_files = sorted(gff for gff in os.listdir(args.dir_gff) if not gff.startswith("."))
     gff_files = [gff for gff in gff_files if gff.endswith((".gff", ".gtf", ".gff3", ".gff.gz", ".gtf.gz", ".gff3.gz"))]
     tasks = []
@@ -1437,10 +1618,10 @@ def main():
         sp_ub = extract_species_label(gff_file, strip_extension=True)
         if sp_ub == "":
             sp_ub = filename2sciname(file_name=gff_file)
-        seq_sp = seq_names[seq_species_labels == sp_ub]
-        if seq_sp.shape[0] == 0:
+        seq_sp_values = seq_names_by_species.get(sp_ub, ())
+        if not seq_sp_values:
             continue
-        tasks.append((gff_file, seq_sp.tolist()))
+        tasks.append((gff_file, list(seq_sp_values)))
 
     if args.sequence_store:
         candidates = {}
@@ -1471,6 +1652,7 @@ def main():
                 phase_policy=args.phase_policy,
                 structure_policy=args.structure_policy,
                 representative_map=representative_map,
+                coordinate_mode=coordinate_mode,
             )
             if df_tmp.shape[0] > 0:
                 frames.append(df_tmp)
@@ -1490,6 +1672,7 @@ def main():
                     args.phase_policy,
                     args.structure_policy,
                     representative_map,
+                    coordinate_mode,
                 ): (idx, gff_file)
                 for idx, (gff_file, seq_sp_values) in enumerate(tasks)
             }

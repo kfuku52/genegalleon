@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from workflow.support.gff2genestat import attach_transcript_structure, extract_by_ids, summarize_gene_features
-from workflow.support.gff_feature_structure import ordered_annotated_blocks
+from workflow.support.gff_feature_structure import has_source_overlap_marker, ordered_annotated_blocks
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
@@ -57,6 +57,31 @@ def test_source_audited_marker_cannot_bypass_overlap_validation():
             ('s', '+', 1, 10, 'ID=a;Parent=g;gg_source_overlap=confirmed'),
             ('s', '+', 20, 30, 'ID=a;Parent=g;gg_source_overlap=confirmed'),
         ], 'g')
+
+
+@pytest.mark.parametrize('marker,confirmed', [
+    ('Note=ordinary', False),
+    ('Note=gg_source_overlap=confirmed', False),
+    ('other_gg_source_overlap=confirmed', False),
+    ('gg_source_overlap_extra=confirmed', False),
+    ('gg_source_overlap=confirmedness', False),
+    ('GG_SOURCE_OVERLAP=confirmed', False),
+    ('gg_source_overlap=%63onfirmed', False),
+    (' gg_source_overlap = CoNfIrMeD ', True),
+    ('\u2003gg_source_overlap\u2003=\u2003confirmed\u2003', True),
+    ('Note=gg_source_overlap;gg_source_overlap=confirmed', True),
+])
+def test_source_overlap_marker_requires_its_exact_attribute(marker, confirmed):
+    attrs = 'ID=c;Parent=t;' + marker
+    assert has_source_overlap_marker(attrs) is confirmed
+    rows = [('s', '+', 1, 10, attrs), ('s', '+', 10, 20, attrs)]
+    if confirmed:
+        blocks, mode = ordered_annotated_blocks(rows, 'g')
+        assert blocks == [row[:4] for row in rows]
+        assert mode == 'source-overlap'
+    else:
+        with pytest.raises(ValueError, match='Overlapping GFF feature blocks'):
+            ordered_annotated_blocks(rows, 'g')
 
 
 def test_repeated_free_text_gff_attributes_do_not_change_block_structure():

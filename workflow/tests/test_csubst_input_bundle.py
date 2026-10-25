@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 import os
@@ -5,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from Bio.SeqRecord import SeqRecord
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 import csubst_input_bundle as bundle
@@ -44,6 +46,117 @@ def test_full_alignment_rejects_invalid_axes(tmp_path, text):
     path.write_text(text)
     with pytest.raises(ValueError):
         bundle.read_alignment(path)
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_read_alignment_returns_full_seqrecords_in_input_order(tmp_path, compressed):
+    path = tmp_path / ("alignment.fa.gz" if compressed else "alignment.fa")
+    payload = b">b CDS description\nATGTTA---\n>a other description\nATG---NNN\n"
+    path.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+
+    records = bundle.read_alignment(path)
+
+    assert isinstance(records, list)
+    assert all(isinstance(record, SeqRecord) for record in records)
+    assert [(record.id, record.description, str(record.seq)) for record in records] == [
+        ("b", "b CDS description", "ATGTTA---"),
+        ("a", "a other description", "ATG---NNN"),
+    ]
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_structural_tip_export_preserves_cds_order_and_structural_descriptions(tmp_path, compressed):
+    directory = make_bundle(tmp_path / "bundle")
+    alignment = directory / "csubst.fasta"
+    alignment.write_text(">b CDS description\nATGTTA---\n>a other description\nATG---NNN\n")
+    # Non-tip states do not have to share the CDS-derived length, even when
+    # their record is empty. Only the selected tips participate in that check.
+    (directory / "inspect/csubst_alignment_3di.fa").write_text(
+        ">Node1\n\n>a retained A description\nA-X\n>Node2\nACDEFGHIKLMN\n"
+        ">b retained B description\nCD-\n")
+    bundle.finalize(directory.parent, 2)
+    if compressed:
+        compressed_path = directory / "csubst.fasta.gz"
+        compressed_path.write_bytes(gzip.compress(alignment.read_bytes(), mtime=0))
+        alignment = compressed_path
+    output = tmp_path / "states.fa"
+
+    assert bundle.write_structural_tip_alignment(alignment, output) == str(output)
+
+    assert output.read_text() == ">b retained B description\nCD-\n>a retained A description\nA-X\n"
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize(
+    ("tail", "message"),
+    [
+        (">a\nATG---NNN\n", "duplicate sequence IDs"),
+        (">late\nATG\n", "equal, nonzero lengths"),
+        # The full-alignment duplicate check precedes the length check.
+        (">a\nATG\n", "duplicate sequence IDs"),
+    ],
+    ids=["late-duplicate", "late-length", "duplicate-before-length"],
+)
+def test_structural_tip_export_validates_late_cds_records_before_writing(tmp_path, compressed, tail, message):
+    directory = make_bundle(tmp_path / "bundle")
+    alignment = directory / "csubst.fasta"
+    alignment.write_text(">a\nATG---NNN\n>b\nATGTTA---\n" + tail)
+    bundle.finalize(directory.parent, 2)
+    if compressed:
+        compressed_path = directory / "csubst.fasta.gz"
+        compressed_path.write_bytes(gzip.compress(alignment.read_bytes(), mtime=0))
+        alignment = compressed_path
+    output = tmp_path / "states.fa"
+    output.write_text("existing output\n")
+
+    with pytest.raises(ValueError, match=message):
+        bundle.write_structural_tip_alignment(alignment, output)
+
+    assert output.read_text() == "existing output\n"
+
+
+def test_structural_tip_export_reads_gzip_tail_before_reporting_cds_duplicate(tmp_path):
+    directory = make_bundle(tmp_path / "bundle")
+    alignment = directory / "csubst.fasta.gz"
+    # Canonical bundle members remain valid; the supplied compressed alignment
+    # is truncated after records which would otherwise trigger a duplicate.
+    payload = b">a\nATG---NNN\n>a\nATG---NNN\n>b\nATGTTA---\n"
+    alignment.write_bytes(gzip.compress(payload, mtime=0)[:-8])
+    output = tmp_path / "states.fa"
+    output.write_text("existing output\n")
+
+    with pytest.raises(EOFError, match="end-of-stream"):
+        bundle.write_structural_tip_alignment(alignment, output)
+
+    assert output.read_text() == "existing output\n"
+
+
+def test_structural_tip_export_rejects_non_tip_duplicate_before_tip_length_mismatch(tmp_path):
+    directory = make_bundle(tmp_path / "bundle")
+    (directory / "inspect/csubst_alignment_3di.fa").write_text(
+        ">a\nA-X\n>b\nC\n>Node1\nA\n>Node1\nACDE\n")
+    bundle.finalize(directory.parent, 2)
+    output = tmp_path / "states.fa"
+    output.write_text("existing output\n")
+
+    with pytest.raises(ValueError, match="Duplicate IDs in CSUBST 3Di alignment"):
+        bundle.write_structural_tip_alignment(directory / "csubst.fasta", output)
+
+    assert output.read_text() == "existing output\n"
+
+
+@pytest.mark.parametrize("tail", [">Node1\nACD\n", ">b\nCD--\n"], ids=["missing", "length"])
+def test_structural_tip_export_preserves_output_when_late_tip_is_missing_or_invalid(tmp_path, tail):
+    directory = make_bundle(tmp_path / "bundle")
+    (directory / "inspect/csubst_alignment_3di.fa").write_text(">a\nA-X\n" + tail)
+    bundle.finalize(directory.parent, 2)
+    output = tmp_path / "states.fa"
+    output.write_text("existing output\n")
+
+    with pytest.raises(ValueError, match="does not match full CDS: b"):
+        bundle.write_structural_tip_alignment(directory / "csubst.fasta", output)
+
+    assert output.read_text() == "existing output\n"
 
 
 def test_bundle_relocation_and_sites_use_full_fit_and_real_structural_states(tmp_path):

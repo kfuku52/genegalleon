@@ -8,6 +8,24 @@ CORE_PATH = WORKFLOW_DIR / "core" / "gg_gene_evolution_core.sh"
 EXECUTION_RUNTIME_PATH = WORKFLOW_DIR / "support" / "gg_util" / "07_execution_runtime.sh"
 
 
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 4])
+def test_iqtree_reports_insufficient_sequences_before_tool_dispatch(tmp_path, count):
+    text = CORE_PATH.read_text()
+    start = text.index('  num_seq=$(gg_count_fasta_records', text.index('task="IQ-TREE"'))
+    end = text.index('  if [[ ${num_seq} -ge 4 ]]', start)
+    alignment = tmp_path / 'alignment.fa'
+    alignment.write_text(''.join(f'>Species_a_g{i}\nMAAA\n' for i in range(count)))
+    script = ('set -e\nog_id=family1\nfile_og_trimmed_aln_analysis=$1\n'
+              'gg_count_fasta_records() { awk \'/^>/ {n++} END {print n+0}\' "$1"; }\n' +
+              text[start:end] + '\nprintf "tool-dispatch\\n"\n')
+    result = subprocess.run(['bash', '-c', script, 'preflight', str(alignment)], capture_output=True, text=True)
+    if count < 3:
+        assert result.returncode == 1 and 'tool-dispatch' not in result.stdout
+        assert f'family=family1, sequences={count}; at least 3 sequences' in result.stderr
+    else:
+        assert result.returncode == 0 and result.stdout == 'tool-dispatch\n'
+
+
 @pytest.mark.parametrize("rows,accepted", [
     ("HOG0000004\t1\nHOG0000005\t20\n", True),
     ("HOG0000004\t1\nHOG0000004\t20\n", False),

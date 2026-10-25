@@ -1100,7 +1100,7 @@ def main():
         if is_ultrametric:
             cn.append("spnode_age")
         species_nodes = list(species_tree.traverse(strategy="postorder"))
-        species_names = {sn: sn.name.replace("'", "") for sn in species_nodes}
+        species_names = {sn: (sn.name or "").replace("'", "") for sn in species_nodes}
         species_leaf_node = {leaf.name: leaf for leaf in iter_leaves(species_tree)}
         species_depth = {}
         for sn in species_tree.traverse(strategy="preorder"):
@@ -1280,31 +1280,63 @@ def main():
         return pandas.DataFrame(rows, columns=cn)
 
     def get_N_coordinate(file):
+        def records(handle):
+            # Preserve literal '>' splitting, including empty records and an
+            # optional non-FASTA prefix. Join partial pieces only once per
+            # record so one long unwrapped sequence does not cause rescans.
+            pending = []
+
+            def flush():
+                value = "".join(pending)
+                pending.clear()
+                return value
+
+            first = True
+            while block := handle.read(1024 * 1024):
+                pieces = block.split(">")
+                pending.append(pieces[0])
+                if len(pieces) == 1:
+                    continue
+                if not first or any(pending):
+                    # The suspended generator must not retain a second raw
+                    # record reference while its caller normalizes the DNA.
+                    yield flush()
+                else:
+                    pending.clear()
+                first = False
+                for record in pieces[1:-1]:
+                    yield record
+                pending.append(pieces[-1])
+            if not first or any(pending):
+                yield flush()
+
+        seqnames, lengths, out = [], [], []
+        has_nonblank_record = False
         with open_text(file) as fh:
-            seqs = fh.read().split(">")
-        if seqs[0] == "":
-            seqs = seqs[1::]  # The first item is almost always empty ('')
-        if len(seqs) == 0 or all((s.strip() == "") for s in seqs):
+            for record in records(fh):
+                if not has_nonblank_record and record.strip():
+                    has_nonblank_record = True
+                seqnames.append(re.sub("\n.*", "", record.replace(">", "")))
+                seq = re.sub("^[^\n]*\n", "", record)
+                del record
+                seq = seq.replace("\n", "")
+                lengths.append(len(seq))
+                N_slices = []
+                # Avoid the run regex scan when the promoter has no unknown bases.
+                if "N" in seq or "n" in seq:
+                    for match in re.finditer("[Nn]+", seq):
+                        start, end = match.span()
+                        N_slices.append(str(end) if end == start + 1 else f"{start + 1}:{end}")
+                    del match
+                out.append(re.sub("^,", "", ",".join(N_slices)))
+                del seq
+        if not has_nonblank_record:
             return pandas.DataFrame({"node_name": [], "promoter_N": [], "promoter_available": []})
-        seqnames = list()
-        for i in range(len(seqs)):
-            seqnames.append(re.sub("\n.*", "", seqs[i].replace(">", "")))
-            seqs[i] = re.sub("^[^\n]*\n", "", seqs[i])
-            seqs[i] = re.sub("\n", "", seqs[i])
-        max_seqlen = max([len(seq) for seq in seqs])
-        out = list()
-        for i in range(len(seqs)):
-            N_slices = []
-            # Avoid the run regex scan when the promoter has no unknown bases.
-            if "N" in seqs[i] or "n" in seqs[i]:
-                for match in re.finditer("[Nn]+", seqs[i]):
-                    start, end = match.span()
-                    N_slices.append(str(end) if end == start + 1 else f"{start + 1}:{end}")
-            if len(seqs[i]) < max_seqlen:
-                slice_outside_scaffold = str(len(seqs[i])) + ":" + str(max_seqlen)
-                N_slices.append(slice_outside_scaffold)
-            slice_str = re.sub("^,", "", ",".join(N_slices))
-            out.append(slice_str)
+        max_seqlen = max(lengths)
+        for i, length in enumerate(lengths):
+            if length < max_seqlen:
+                padding = str(length) + ":" + str(max_seqlen)
+                out[i] = out[i] + "," + padding if out[i] else padding
         df_out = pandas.DataFrame({"node_name": seqnames, "promoter_N": out})
         df_out.loc[:, "promoter_available"] = "Y"
         return df_out
@@ -1312,14 +1344,24 @@ def main():
     def get_ancestor_and_descendant(tree, df_in):
         df_out = df_in.copy()
         tree = ensure_branch_ids(tree)
+        nodes = list(tree.traverse())
+        labels = {node: get_node_label(node) for node in nodes}
+        label_text = {node: str(label) for node, label in labels.items()}
+        ancestors_by_node = {}
         ancestors_map = {}
         descendants_map = {}
-        for node in tree.traverse():
-            anocestor_nodes = [get_node_label(n) for n in iter_ancestors(node)]
-            descendant_nodes = [get_node_label(n) for n in iter_descendants(node)]
-            nlabel = get_node_label(node)
-            ancestors_map[nlabel] = ",".join([str(n) for n in anocestor_nodes])
-            descendants_map[nlabel] = ",".join([str(n) for n in descendant_nodes])
+        for node in nodes:
+            if node.up in ancestors_by_node:
+                parent_ancestors = ancestors_by_node[node.up]
+                ancestors = label_text[node.up]
+                if parent_ancestors:
+                    ancestors += "," + parent_ancestors
+            else:
+                ancestors = ",".join(str(get_node_label(n)) for n in iter_ancestors(node))
+            ancestors_by_node[node] = ancestors
+            nlabel = labels[node]
+            ancestors_map[nlabel] = ancestors
+            descendants_map[nlabel] = ",".join(label_text[n] for n in iter_descendants(node))
         df_out["ancestors"] = df_out["branch_id"].map(ancestors_map).fillna("")
         df_out["descendants"] = df_out["branch_id"].map(descendants_map).fillna("")
         return df_out
@@ -1723,9 +1765,16 @@ def main():
             join_cols = ["motif_id", "motif_alt_id", "start", "stop", "strand", "q-value"]
             df_tmp_join = df_tmp.loc[:, ["sequence_name"] + join_cols].copy()
             df_tmp_join = df_tmp_join.astype({col_name: str for col_name in join_cols})
+            # Group positions once, avoiding a Series construction for every
+            # sequence/annotation column. FIMO loading has already made names
+            # nonmissing strings; sort=False retains their first-seen order.
+            grouped = df_tmp_join.groupby("sequence_name", sort=False).indices
+            aggregated = {"sequence_name": list(grouped)}
+            for column in join_cols:
+                values = df_tmp_join[column].to_numpy(dtype=object)
+                aggregated[column] = ["; ".join(values.take(indices)) for indices in grouped.values()]
             df_tmp2 = (
-                df_tmp_join.groupby("sequence_name", as_index=False, sort=False)[join_cols]
-                .agg("; ".join)
+                pandas.DataFrame(aggregated)
                 .rename(
                     columns={
                         "motif_id": "fimo_id",

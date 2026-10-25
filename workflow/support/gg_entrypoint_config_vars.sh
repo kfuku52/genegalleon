@@ -562,6 +562,9 @@ species_tree_output_storage
 species_tree_zip_compression
 species_tree_zip_compression_level
 species_tree_rooting
+species_tree_topology_constraint
+species_tree_topology_constraint_scope
+species_tree_iqtree_taxa
 strictly_single_copy_only
 species_tree_busco_copy_policy
 target_branch_go
@@ -570,6 +573,8 @@ undated_species_tree
 orthogroup_catalog_name
 orthogroup_selection_prefix_name
 orthogroup_annotation_cache_name
+orthogroup_exclude_gene_ids
+orthogroup_selection_scope_name
 EOF
       ;;
     gg_input_generation_entrypoint.sh)

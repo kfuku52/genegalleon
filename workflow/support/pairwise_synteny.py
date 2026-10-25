@@ -719,11 +719,16 @@ def order_karyotype(selected, genomes, anchors, mode, simple=None, scale_mode="s
     metadata.update(fixed_side=("target", "query")[fixed], weight="unique_anchor_pairs")
     fixed_order = {seqid: index for index, seqid in enumerate(selected[fixed])}
     lookup = [{gene.gene_id: gene for gene in genome} for genome in genomes]
+    fixed_genes = {seqid: [] for seqid in selected[fixed]}
+    for gene in genomes[fixed]:
+        if gene.seqid in fixed_genes:
+            fixed_genes[gene.seqid].append(gene)
     fixed_ranks = {}
     for seqid in selected[fixed]:
-        genes = sorted((gene for gene in genomes[fixed] if gene.seqid == seqid),
+        genes = sorted(fixed_genes[seqid],
                        key=lambda gene: (gene.start, gene.end, natural_key(gene.gene_id)))
         fixed_ranks.update((gene.gene_id, rank) for rank, gene in enumerate(genes))
+    del fixed_genes
     counts = {seqid: Counter() for seqid in selected[moving]}
     rank_sums = {seqid: Counter() for seqid in selected[moving]}
     seen = set()

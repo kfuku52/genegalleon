@@ -38,7 +38,11 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     rows = verify_inputs(root / "effective" / "inputs.tsv")
     plan_hash = digest(root / "plan.json")
     changes = verified_json(root / "effective", "changes.json", plan_hash)
-    selections = {(r["species"], r["gene_id"]): r for r in changes}
+    selections, selected_by_species = {}, defaultdict(list)
+    for selected in changes:
+        key = selected["species"], selected["gene_id"]
+        selections[key] = selected
+        selected_by_species[key[0]].append(selected)
     stats, predictions = {}, {}
     detail_keys = set()
     phase_detail_keys = set()
@@ -47,7 +51,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         metadata = verified_json(root / "catalog" / name, "catalog_metadata.json", plan_hash)
         models = verified_json(root / "predictions" / name, "predictions.json", plan_hash)
         predictions[name] = models
-        selected = [r for r in changes if r["species"] == name]
+        selected = selected_by_species.get(name, [])
         accepted = [r for r in models if r["status"] == "accepted"]
         stats[name] = {
             "refinement_status": "analysed", "refinement_reason": "",

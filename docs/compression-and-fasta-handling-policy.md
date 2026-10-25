@@ -5,8 +5,9 @@ GeneGalleon is intentionally gzip-friendly. Current practice is:
 - inputs may be plain or gzipped,
 - retained pipeline outputs are standardized toward `.fa.gz`,
 - plain FASTA is generated only when an intermediate third-party step requires it,
-- query2family and orthogroup artifacts may be grouped into standard
-  ZIP shards to reduce filesystem inode usage.
+- query2family and orthogroup artifacts default to standard ZIP shards,
+- high-file-count species-tree, duplicate-aware BUSCO, OrthoFinder and HGT
+  result directories default to neighboring ZIP files to reduce inode usage.
 
 Gzip and ZIP serve different purposes here. Gzip remains the retained format
 for an individual FASTA. ZIP-backed gene-family storage groups many otherwise
@@ -19,6 +20,14 @@ Set `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE=files` (or its `raw` alias) in
 or leave the default `zip`. See
 [Gene-Family Outputs and Progress Monitoring](gene-family-outputs-and-progress-monitoring.md#zip-backed-storage)
 for archive scope and manual-management commands.
+
+Duplicate-aware BUSCO and HGT storage use
+`GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE=zip` and
+`GG_COMMON_HGT_OUTPUT_STORAGE=zip`. Their owning workflows restore native paths
+before use and repack after their producers finish. The workspace storage command
+also includes saved analysis packages by default. See
+[workspace storage management](workspace-storage-management.md) for the full
+catalog, migration, restoration and custom-output commands.
 
 ## Accepted input forms
 

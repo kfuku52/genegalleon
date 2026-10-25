@@ -12,6 +12,51 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_protein_synteny_cache_uses_loci_and_invalidates_old_coding_cache(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache, species_gene_cache_contract
+
+    protein, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    protein.write_text('>Species_a_g_1\nMAAAA\n')
+    gff.write_text('chr1\ts\tgene\t1\t30\t.\t+\t.\tID=g__1\n'
+                   'chr1\ts\tmRNA\t1\t30\t.\t+\t.\tID=t;Parent=g__1\n'
+                   'chr1\ts\texon\t1\t30\t.\t+\t.\tParent=t\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(protein), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1, sequence_mode='protein')
+    path = ensure_species_gene_cache(**kwargs)
+    assert pd.read_csv(path, sep='\t').to_dict('records') == [dict(
+        gene_id='Species_a_g_1', chromosome='chr1', start=1, end=30, strand='+', coordinate_source='gene')]
+    manifest = json.loads(Path(path + '.provenance.json').read_text())
+    assert manifest['parameters']['mode'] == 'gene_coordinates'
+    assert manifest['parameters'] != species_gene_cache_contract('Species_a', str(protein), str(gff))['parameters']
+    before = Path(path).read_bytes()
+    gff.write_text(gff.read_text().replace('exon\t1\t30', 'exon\t1\t31'))
+    with pytest.raises(RuntimeError, match='child coordinates disagree'):
+        ensure_species_gene_cache(**kwargs)
+    assert Path(path).read_bytes() == before
+
+
+def test_protein_locus_cache_cannot_be_overwritten_by_legacy_cds_producers(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache
+
+    source, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    source.write_text('>Species_a_g1\nATGAAATAA\n')
+    gff.write_text('chr1\ts\tgene\t1\t15\t.\t+\t.\tID=g1\n'
+                   'chr1\ts\tmRNA\t1\t15\t.\t+\t.\tID=t;Parent=g1\n'
+                   'chr1\ts\tCDS\t4\t12\t.\t+\t0\tID=c;Parent=t\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(source), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1)
+    legacy = Path(ensure_species_gene_cache(**kwargs))
+    protein = Path(ensure_species_gene_cache(**kwargs, sequence_mode='protein'))
+    assert legacy != protein and legacy.parent == tmp_path / 'cache'
+    assert 'protein_loci' in protein.parts
+    before = protein.read_bytes()
+    legacy.write_text('legacy concurrent rewrite\n')
+    assert Path(ensure_species_gene_cache(**kwargs, sequence_mode='protein')).read_bytes() == before
+    assert pd.read_csv(protein, sep='\t').iloc[0].coordinate_source == 'gene'
+
+
 def test_gene_info_normalizes_then_stably_orders_each_chromosome(tmp_path):
     from workflow.support.synteny_neighbors import load_gene_info
 
@@ -246,3 +291,56 @@ def test_checked_in_real_aha_neighborhoods_and_promoters(tmp_path):
             expected_seq = (sequence[max(0, start - 2001):start - 1] if row.strand == "+"
                             else str(Seq(sequence[end:end + 2000]).reverse_complement()))
             assert promoters[row.gene_id][1].upper() == expected_seq.upper()
+
+
+@pytest.mark.parametrize('prior_valid', [False, True])
+def test_empty_synteny_cache_is_not_published_and_temporary_output_is_removed(tmp_path, prior_valid):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache
+
+    cds, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    cds.write_text('>Species_a_g\nATGAAATAA\n')
+    gff.write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=g\n')
+    cache = tmp_path / 'cache'
+    kwargs = dict(species_name='Species_a', species_cds_path=str(cds), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(cache), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1)
+    output = cache / 'Species_a.gff_info.tsv'
+    manifest = Path(str(output) + '.provenance.json')
+    if prior_valid:
+        ensure_species_gene_cache(**kwargs)
+        before, proof = output.read_bytes(), manifest.read_bytes()
+    gff.write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=unmatched\n')
+    with pytest.raises(ValueError, match='No FASTA identifiers mapped'):
+        ensure_species_gene_cache(**kwargs)
+    if prior_valid:
+        assert output.read_bytes() == before and manifest.read_bytes() == proof
+    else:
+        assert not output.exists() and not manifest.exists()
+    assert sorted(p.name for p in cache.iterdir()) == ([output.name, manifest.name] if prior_valid else [])
+
+
+@pytest.mark.parametrize('policy,annotation', [('error', 'missing'), ('skip', 'missing'),
+                                             ('skip', 'unmatched'), ('skip', 'ambiguous')])
+def test_missing_annotation_policy_only_skips_absent_annotations(tmp_path, monkeypatch, policy, annotation, capsys):
+    from workflow.support import synteny_neighbors as mod
+
+    fasta = tmp_path / 'Species_a.fa'
+    fasta.write_text('>Species_a_g\nATGAAATAA\n')
+    if annotation != 'missing':
+        (tmp_path / 'Species_a.gff').write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=unmatched\n')
+    if annotation == 'ambiguous':
+        (tmp_path / 'Species_a.gtf').write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\tgene_id "g";\n')
+    output = tmp_path / 'out.tsv'
+    monkeypatch.setattr(sys, 'argv', ['synteny_neighbors', '--focal_cds_fasta', str(fasta),
+        '--dir_sp_cds', str(tmp_path), '--dir_sp_gff', str(tmp_path), '--cache_dir', str(tmp_path / 'cache'),
+        '--lock_dir', str(tmp_path / 'locks'), '--gff2genestat_script', str(SUPPORT / 'gff2genestat.py'),
+        '--missing-annotation', policy, '--outfile', str(output)])
+    if policy == 'skip' and annotation == 'missing':
+        mod.main()
+        assert pd.read_csv(output, sep='\t').empty
+        assert 'synteny is unavailable for Species_a' in capsys.readouterr().err
+        assert fasta.read_text().startswith('>Species_a_g')
+    else:
+        with pytest.raises(RuntimeError):
+            mod.main()
+        assert not output.exists()

@@ -68,6 +68,42 @@ def test_old_transcript_grouping_audit_is_not_reused(tmp_path):
         formatter.format_cds(value, tmp_path / "out", False, False)
 
 
+@pytest.mark.parametrize('problem', ['none', 'sequence', 'source', 'policy', 'tool', 'grouping'])
+def test_independent_historical_rederivation_keeps_ids_and_requires_exact_sources_tools_and_sequences(tmp_path, problem):
+    import validate_longest_cds_selection as validator
+    from transcriptome_orfs import contract
+
+    value = task(tmp_path, '>TRINITY_DN1_c0_g1_i1\nATGAAATAA\n>TRINITY_DN1_c0_g1_i2\nATGCCCTAA\n')
+    output = tmp_path / 'out/Test_species.fa.gz'
+    with gzip.open(output, 'wt') as stream:
+        stream.write('>Test_species_TRINITY_DN1_c0_g1_i1\nATGAAATAA\n>Test_species_TRINITY_DN1_c0_g1_i2\nATGCCCTAA\n')
+    original = contract(value)
+    original.pop('gene_grouping')
+    original['implementation'] = 'a' * 64
+    if problem == 'sequence':
+        with gzip.open(output, 'wt') as stream:
+            stream.write('>Test_species_TRINITY_DN1_c0_g1_i1\nATGTTTTAA\n>Test_species_TRINITY_DN1_c0_g1_i2\nATGCCCTAA\n')
+    if problem == 'source':
+        value['cds_path'].write_text('>TRINITY_DN1_c0_g1_i1\nATGTTTTAA\n')
+    if problem == 'policy':
+        original['selection'] = 'longest-any'
+    if problem == 'tool':
+        original['cdskit_version'] = 'different'
+    if problem == 'grouping':
+        original['gene_grouping'] = 'unknown'
+    audit = Path(str(output) + '.orf-extraction.json')
+    audit.write_text(json.dumps(dict(contract=original, output=signature(output))))
+    before = audit.read_bytes()
+    row = dict(provider='local', species_key='Test_species', species_prefix='Test_species',
+               cds_input_path=str(value['cds_path']), cds_input_type='transcriptome', cds_output_path=str(output),
+               cds_sequences_before='2', cds_sequences_after='2', aggregated_cds_removed='0')
+    args = dict(cds_file=output, summary_row=row, index=1)
+    assert not validator.validate_single_species(args, 10)['ok']
+    result = validator.validate_single_species({**args, 'revalidate_historical_orfs': True}, 10)
+    assert result['ok'] == (problem == 'none'), result
+    assert audit.read_bytes() == before
+
+
 def test_existing_ordinary_cds_cannot_be_reused_as_derived_orf(tmp_path):
     value = task(tmp_path)
     ordinary = {**value, "cds_input_type": "cds"}

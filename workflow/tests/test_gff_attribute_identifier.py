@@ -184,3 +184,78 @@ def test_identify_attribute_key_preserves_late_unicode_and_na_identifiers(
     args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
 
     assert mod.identify_attribute_key(args) == "Name"
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize(
+    ("match_position", "expected"),
+    [("first", "Name"), ("last", "ID"), ("missing", None)],
+)
+def test_identify_attribute_key_scans_multiple_chunks_in_input_order(
+    tmp_path, monkeypatch, compressed, match_position, expected,
+):
+    mod = load_module()
+    monkeypatch.setattr(mod, "GFF_CHUNK_SIZE", 8, raising=False)
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    lines = ["##gff-version 3\n"]
+    for index in range(24):
+        feature, attributes = "mRNA", f"ID=absent{index}"
+        if index == 7:
+            attributes = "NA"
+        elif index == 8:
+            attributes = ""
+        elif index == 9:
+            feature, attributes = "gene", "Decoy=gene1"
+        elif index == 15:
+            attributes = "Name=absent#;Decoy=gene1"
+        elif index == 23 and match_position != "missing":
+            attributes = "ID=gene1"
+        if index == 0 and match_position == "first":
+            attributes = "Name=gene1"
+        if index % 8 == 0:
+            lines.append("# Comment between data records\n\n")
+        lines.append(f"chr1\tsrc\t{feature}\t1\t3\t.\t+\t.\t{attributes}\n")
+    payload = "".join(lines).encode("utf-8")
+    gff = tmp_path / ("input.gff3.gz" if compressed else "input.gff3")
+    gff.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    assert mod.identify_attribute_key(args) == expected
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("malformed_row", [7, 8, 9], ids=["before-boundary", "at-boundary", "after-boundary"])
+def test_identify_attribute_key_rejects_malformed_row_after_first_match(
+    tmp_path, monkeypatch, compressed, malformed_row,
+):
+    mod = load_module()
+    monkeypatch.setattr(mod, "GFF_CHUNK_SIZE", 8, raising=False)
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    rows = []
+    for row in range(1, 25):
+        attributes = "Name=gene1" if row == 1 else f"ID=absent{row}"
+        fields = ["chr1", "src", "mRNA", "1", "3", ".", "+", ".", attributes]
+        if row == malformed_row:
+            fields.append("unexpected tenth field")
+        rows.append("\t".join(fields) + "\n")
+    payload = "".join(rows).encode("utf-8")
+    gff = tmp_path / ("input.gff3.gz" if compressed else "input.gff3")
+    gff.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    with pytest.raises(mod.pandas.errors.ParserError, match="Expected 9 fields.*saw 10"):
+        mod.identify_attribute_key(args)
+
+
+def test_identify_attribute_key_rejects_truncated_gff_gzip_after_first_match(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "GFF_CHUNK_SIZE", 8, raising=False)
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    payload = b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tName=gene1\n"
+    payload += b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tID=absent\n" * 24
+    gff = tmp_path / "input.gff3.gz"
+    gff.write_bytes(gzip.compress(payload, mtime=0)[:-5])
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+
+    with pytest.raises(EOFError, match="end-of-stream"):
+        mod.identify_attribute_key(args)

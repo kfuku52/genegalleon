@@ -688,6 +688,35 @@ def test_dominant_partner_tie_uses_explicit_fixed_order_not_natural_order(tmp_pa
     assert metadata["chromosomes"][1]["dominant_partner"] == "q2"
 
 
+@pytest.mark.parametrize("mode", ["target", "query"])
+def test_dominant_partner_ranks_use_end_then_natural_id_with_interleaved_chromosomes(tmp_path, mode):
+    moving = display_genes("m", (("m1", 1), ("m2", 1), ("m3", 1), ("m4", 1)))
+    fixed = [SimpleNamespace(seqid=seqid, gene_id=gene, start=start, end=end)
+             for seqid, gene, start, end in [
+                 ("q2", "q2_g0", 0, 50),
+                 ("q1", "q1_g10", 100, 150),
+                 ("hidden", "hidden_g0", 0, 50),
+                 ("q1", "q1_g2", 100, 150),
+                 ("q1", "q1_g0", 0, 50),
+                 ("q1", "q1_z", 100, 120),
+             ]]
+    pairs = [("mm1_0", "q1_g10"), ("mm2_0", "q1_g2"),
+             ("mm3_0", "q2_g0"), ("mm4_0", "hidden_g0")]
+    if mode == "target":
+        selected, genomes = (["m1", "m2", "m3", "m4"], ["q1", "q2"]), (moving, fixed)
+    else:
+        selected, genomes = (["q1", "q2"], ["m1", "m2", "m3", "m4"]), (fixed, moving)
+        pairs = [(right, left) for left, right in pairs]
+    anchors = tmp_path / "lifted.anchors"
+    anchors.write_text("".join(f"{left} {right} 100\n" for left, right in pairs))
+    ordered, metadata = synteny.order_karyotype(selected, genomes, anchors, mode)
+    moving_index = 0 if mode == "target" else 1
+    assert ordered[moving_index] == ["m2", "m1", "m3", "m4"]
+    assert ordered[1 - moving_index] == ["q1", "q2"]
+    ranks = {row["seqid"]: row["partner_gene_rank_mean"] for row in metadata["chromosomes"]}
+    assert ranks == {"m1": 3.0, "m2": 2.0, "m3": 0.0, "m4": None}
+
+
 def test_disabled_sort_preserves_supplied_order_without_reading_anchors(tmp_path):
     selected = (["chr10", "chr2"], ["scaffold2", "scaffold1"])
     ordered, metadata = synteny.order_karyotype(selected, ((), ()), tmp_path / "unused", "none")

@@ -1194,6 +1194,8 @@ def test_orthofinder_completion_removes_working_data_and_reuses_retained_results
     first = _run_core(tmp_path, env)
 
     assert first.returncode == 0, first.stdout + first.stderr
+    genome_fence = inspect_lock(workspace / "output/.gg_genome_evolution_directory_storage.lock")
+    assert not genome_fence["gate_exists"] and not genome_fence["shared"]
     public = workspace / "output/orthofinder"
     result_dirs = [public, public / "core"] if core_limit == 1 else [public]
     for directory in result_dirs:
@@ -1205,7 +1207,10 @@ def test_orthofinder_completion_removes_working_data_and_reuses_retained_results
             assert archive.read("Orthogroup_Sequences/OG0000001.fa") == b">gene1\nMPEP\n"
         with zipfile.ZipFile(directory / "MultipleSequenceAlignments.zip") as archive:
             assert archive.read("MultipleSequenceAlignments/OG0000001.fa") == b">gene1\nM-PEP\n"
-        assert (directory / "Resolved_Gene_Trees/OG0000001_tree.txt").read_bytes() == b"(gene1:1,gene2:1);\n"
+        from workflow.support.orthofinder_output_store import open_binary
+        relative = directory.relative_to(public) / "Resolved_Gene_Trees/OG0000001_tree.txt"
+        with open_binary(public, relative.as_posix()) as handle:
+            assert handle.read() == b"(gene1:1,gene2:1);\n"
         assert (directory / "Species_Tree/SpeciesTree_rooted.txt").read_bytes() == b"(species1:1,species2:1);\n"
     assert (public / "hog2og/README.txt").is_file()
     if core_limit == 1:
@@ -1225,6 +1230,8 @@ def test_orthofinder_completion_removes_working_data_and_reuses_retained_results
     assert sorted(workspace.rglob("WorkingDirectory")) == [foreign.parent]
     fence = inspect_lock(workspace / "output/.gg_orthofinder_storage.lock")
     assert not fence["gate_exists"] and not fence["shared"]
+    genome_fence = inspect_lock(workspace / "output/.gg_genome_evolution_directory_storage.lock")
+    assert not genome_fence["gate_exists"] and not genome_fence["shared"]
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")

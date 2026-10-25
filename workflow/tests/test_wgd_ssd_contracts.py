@@ -534,6 +534,105 @@ def positioned(name, chromosome="chr1", rank=1, species=None, locus=None):
             "rank": rank, "start": rank * 100, "end": rank * 100 + 80}
 
 
+def refresh_classification_evidence(args):
+    path = args.evidence / "summary.json"
+    summary = json.loads(path.read_text())
+    summary["output_hashes"] = {name: wgd_ssd.digest(args.evidence / name) for name in summary["output_hashes"]}
+    path.write_text(json.dumps(summary))
+
+
+def test_classification_ignores_unrelated_evidence_but_keeps_conflicting_anchor_duplicates(tmp_path):
+    outputs = []
+    for unrelated in (False, True):
+        root = tmp_path / str(unrelated)
+        root.mkdir()
+        positions = [positioned("A_a"), positioned("A_b", rank=2)]
+        # An invalid/unmatched anchor still conflicts with a terminal tandem.
+        anchor = {"species": "A", "block_id": "block", "gene_a": "A_a", "gene_b": "A_b",
+                  "ks": "NA", "ks_status": "cds_unavailable", "species_event_id": "other",
+                  "placement_status": "missing_ks"}
+        anchors = [anchor, dict(anchor)]
+        if unrelated:
+            positions += [positioned(f"B_other{i}", rank=i + 1) for i in range(100)]
+            anchors += [{**anchor, "gene_a": f"B_other{i}", "gene_b": f"B_other{i + 1}"}
+                        for i in range(99)]
+        args = classification_fixture(root, "(A_a:1,A_b:1);", positions, anchors)
+        wgd_ssd.classify(args)
+        rows = read_table(args.output / "duplication_origins.tsv")
+        assert rows[0]["reason"] == "tandem_and_collinearity_conflict"
+        assert rows[0]["num_anchor_rows"] == "2"
+        outputs.append({name: (args.output / name).read_bytes() for name in
+                        ("duplication_origins.tsv", "pair_evidence.tsv", "classified_gene_tree.nhx")})
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv"])
+def test_classification_rejects_malformed_evidence_outside_family_scope(tmp_path, table):
+    args = classification_fixture(tmp_path, "(A_a:1,A_b:1);",
+                                  [positioned("A_a"), positioned("A_b", rank=2)])
+    with (args.evidence / table).open("a") as handle:
+        handle.write("outside_family\n")
+    refresh_classification_evidence(args)
+    with pytest.raises(ValueError, match="Invalid TSV row width"):
+        wgd_ssd.classify(args)
+    assert not (args.output / "summary.json").exists()
+
+
+@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv"])
+def test_classification_rejects_duplicate_identifiers_outside_family_scope(tmp_path, table):
+    positions = [positioned("A_a"), positioned("A_b", rank=2)]
+    events = []
+    if table == "gene_positions.tsv":
+        positions += [positioned("B_other")] * 2
+    else:
+        events = [{"species_event_id": "outside_family", "event_support": "unresolved"}] * 2
+    args = classification_fixture(tmp_path, "(A_a:1,A_b:1);", positions, events=events)
+    with pytest.raises(ValueError, match="Duplicate gene or species event identifier"):
+        wgd_ssd.classify(args)
+    assert not (args.output / "summary.json").exists()
+
+
+def test_family_evidence_defers_missing_anchor_key_until_a_row_exists(tmp_path):
+    write_rows(tmp_path / "gene_positions.tsv", ["gene_id"], [{"gene_id": "keep"}])
+    write_rows(tmp_path / "wgd_events.tsv", ["species_event_id"], [])
+    anchor = tmp_path / "anchor_evidence.tsv"
+    anchor.write_text("gene_a\tother\n\n")
+    positions, events, anchors = wgd_ssd._load_family_evidence(tmp_path, {"keep"})
+    assert positions == {"keep": {"gene_id": "keep"}}
+    assert events == anchors == {}
+    with anchor.open("a") as handle:
+        handle.write("outside\tignored\n")
+    with pytest.raises(KeyError) as error:
+        wgd_ssd._load_family_evidence(tmp_path, {"keep"})
+    assert error.value.args == ("gene_b",)
+
+
+def test_family_evidence_checks_event_rows_before_duplicate_positions(tmp_path):
+    write_rows(tmp_path / "gene_positions.tsv", ["gene_id"],
+               [{"gene_id": "outside"}, {"gene_id": "outside"}])
+    write_rows(tmp_path / "wgd_events.tsv", ["species_event_id", "event_support"], [])
+    with (tmp_path / "wgd_events.tsv").open("a") as handle:
+        handle.write("broken_event\n")
+    with pytest.raises(ValueError, match="Invalid TSV row width: .*wgd_events.tsv"):
+        wgd_ssd._load_family_evidence(tmp_path, {"keep"})
+
+
+def test_family_evidence_preserves_quoted_empty_ids_and_anchor_order(tmp_path):
+    (tmp_path / "gene_positions.tsv").write_text('gene_id\tnote\n""\t"α\tβ\nγ"\nkeep\t\n')
+    write_rows(tmp_path / "wgd_events.tsv", ["species_event_id"], [])
+    (tmp_path / "anchor_evidence.tsv").write_text(
+        'gene_b\tnote\tgene_a\nkeep\tfirst\t""\n""\tsecond\tkeep\n')
+    positions, _events, anchors = wgd_ssd._load_family_evidence(tmp_path, {"", "keep"})
+    assert list(positions) == ["", "keep"]
+    assert positions[""] == {"gene_id": "", "note": "α\tβ\nγ"}
+    assert list(anchors) == [("", "keep")]
+    assert anchors[("", "keep")] == [
+        {"gene_b": "keep", "note": "first", "gene_a": ""},
+        {"gene_b": "", "note": "second", "gene_a": "keep"},
+    ]
+    assert list(anchors[("", "keep")][0]) == ["gene_b", "note", "gene_a"]
+
+
 UNROOTED_SPECIES_INPUTS = (
     "[&U]((A:1,B:1):1,C:2);",
     "((A:1,B:1):1,C:2)[&&NHX:nwkit_rooted=no];",

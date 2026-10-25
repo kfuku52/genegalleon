@@ -1,5 +1,17 @@
 # Input Conventions
 
+Explicit orthogroup gene curation is disabled by default. Set
+`orthogroup_exclude_gene_ids` to a file with one exact gene ID per line to remove
+only those members during native selection. Use a new `orthogroup_catalog_name`;
+the copied original tables and `Orthogroups.GeneExclusion.tsv` preserve the
+change. A verified annotation cache is reused only for unchanged families;
+changed families receive new representatives and annotations. Set
+`orthogroup_selection_scope_name` to the preserved catalog when selection must
+retain its family scope/order while reapplying all gene/species/annotation
+criteria. This scope cannot be combined with an unchanged selection prefix.
+Gene exclusions do not infer organelle identity or change inference, rooting,
+genetic codes, thresholds, or the original input catalog.
+
 For BUSCO species-tree markers, `species_tree_busco_copy_policy="single-copy"`
 preserves the default exclusion of duplicated species/marker cells. Opt-in
 `"best-score"` with `strictly_single_copy_only=0` retains one candidate per
@@ -20,6 +32,10 @@ For sequence-quality ranking and a candidate audit including selection reasons,
 use [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-parameters.md#busco-duplicate-representatives-for-species-trees)
 instead. The default still excludes duplicates; the two opt-in policies cannot
 be enabled together.
+
+Internal species-tree node names are optional. Statistics retain an empty
+mapping label for an unnamed node and preserve the original tree topology,
+branch lengths, and Newick file.
 
 ### Species naming
 
@@ -178,6 +194,25 @@ start/end bounds. Identical blocks are counted once. Conflicting equal-length
 transcripts, mixed coordinate systems, or duplicate gene summaries are errors;
 they must not multiply rows in the downstream branch table.
 
+Protein-mode synteny uses `gff2genestat.py --mode gene_coordinates` to read
+physical gene loci. An exact gene interval remains usable when the source
+provides RNA/exon annotations without CDS, or overlapping CDS parts. The table
+records `coordinate_source=gene` and does not report coding frames or introns.
+Discontinuous GFF3 gene rows sharing one exact feature ID on one chromosome
+and strand use their genomic envelope; declared nonoverlapping parts still bound
+CDS/exon/UTR children. Conflicting identities, overlapping gene parts, and
+incomplete explicit `part=X/Y` orders fail. This follows the
+[NCBI GFF3 feature ID contract](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/file-formats/annotation-files/about-ncbi-gff3/).
+Gene identity, chromosome, strand, bounds, ancestry and child containment remain
+strict; ambiguous normalized source identifiers fail. Identifier matching uses
+the formatter's complete canonical identifier and retains accession versions.
+CDS-only exports and explicit representative maps retain the validated selected
+CDS interval (`coordinate_source=selected_CDS`). CDS-mode synteny and ordinary
+CDS trait validation keep their existing strict coding-structure contracts.
+Content-bound synteny caches distinguish the two coordinate modes.
+Protein locus caches additionally use a content-addressed namespace, so a
+concurrent older CDS-mode producer cannot replace their coordinates.
+
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.
@@ -307,12 +342,19 @@ could contain summed isoforms. Follow the existing artifact-staleness policy;
 an authorized `rebuild` regenerates stale outputs, while `stop` remains the
 default. Do not adopt an unversioned GFF cache as a verified schema-2 result.
 
-A synteny gene-position table can legitimately contain only its header when
-no annotation matches the species' sequences. It must reach the existing
-empty-gene-info warning and omit that species' neighborhood rows, not crash
-during interval normalization. This does not supply missing annotations or
-relax source/provenance checks; normal and reversed intervals retain both
-original coordinate bounds.
+Ensembl stable IDs with separate GFF `version` or GTF `gene_version`,
+`transcript_version`, and `protein_version` attributes match the corresponding
+versioned FASTA IDs exactly. Parent links retain their original structural IDs;
+a transcript version is never appended to its parent gene. Different versions
+do not match, and conflicting declarations fail.
+
+The gene-evolution synteny panel omits neighborhoods only for species with no
+GFF annotation, recording a warning while retaining their sequences and tree
+tips. The standalone helper defaults to requiring annotations; explicit
+`--missing-annotation skip` permits absence. Ambiguous annotations and provided
+GFFs with no usable FASTA matches still fail. An empty newly generated position
+table is never published as a validated cache or substituted for a prior valid
+cache; correct the mapping or source annotation before resuming.
 
 Local synteny caches use `gff2genestat.py --phase-policy report`: neighborhoods
 need genomic coordinates, while sequence similarity uses the supplied FASTA

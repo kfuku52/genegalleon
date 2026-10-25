@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from array import array
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
@@ -92,6 +93,7 @@ pd.set_option("display.max_rows", 100)
 pd.set_option("display.max_columns", 1000)
 
 MAX_SQL_VARIABLES = 999
+AA_CHANGE_FDR_READ_CHUNK_SIZE = 65536
 AA_CHANGE_FDR_UPDATE_BATCH_SIZE = 16384
 AA_CHANGE_TABLE = "aa_change"
 AA_CHANGE_UNIT_TABLE = "aa_change_unit"
@@ -303,20 +305,40 @@ def add_analytical_aa_change_fdr(engine):
         column_names = {column["name"] for column in sqlalchemy.inspect(conn).get_columns(AA_CHANGE_TABLE)}
         shadowed = {name.casefold() for name in column_names}
         rowid_alias = next((name for name in ("rowid", "_rowid_", "oid") if name not in shadowed), None)
-        frame = pd.read_sql_query(
+        rowid_buffer = array("q")
+        probability_buffer = array("d")
+        chunks = pd.read_sql_query(
             sqlalchemy.text(f'SELECT {rowid_alias or "NULL"} AS _rowid, "{p_column}" FROM "{AA_CHANGE_TABLE}"'), conn,
+            chunksize=AA_CHANGE_FDR_READ_CHUNK_SIZE,
         )
-        if rowid_alias is None and len(frame):
-            raise ValueError(
-                "Cannot assign analytical BH-FDR values: aa_change columns shadow all SQLite rowid aliases "
-                "(rowid, _rowid_, oid). Rename an additional column before rebuilding the database."
-            )
-        qvalues = calculate_bh_fdr(frame[p_column])
+        try:
+            for frame in chunks:
+                if frame.empty:
+                    continue
+                if rowid_alias is None:
+                    raise ValueError(
+                        "Cannot assign analytical BH-FDR values: aa_change columns shadow all SQLite rowid aliases "
+                        "(rowid, _rowid_, oid). Rename an additional column before rebuilding the database."
+                    )
+                # Keep the columns separate: a mixed two-column NumPy array
+                # would round integer rowids above 2**53 through float64.
+                rowid_buffer.frombytes(frame["_rowid"].to_numpy(dtype=np.int64, copy=False).tobytes())
+                probability_buffer.frombytes(
+                    pd.to_numeric(frame[p_column], errors="raise").to_numpy(dtype=np.float64, na_value=np.nan).tobytes()
+                )
+                del frame
+        finally:
+            chunks.close()
+        # One SELECT preserves a common snapshot without a separate count or
+        # an all-rows Python object list. The buffers are complete before views
+        # are exported, so they never need to resize while NumPy references them.
+        rowids = np.frombuffer(rowid_buffer, dtype=np.int64)
+        qvalues = calculate_bh_fdr(np.frombuffer(probability_buffer, dtype=np.float64))
+        del probability_buffer
         if q_column not in column_names:
             conn.execute(sqlalchemy.text(f'ALTER TABLE "{AA_CHANGE_TABLE}" ADD COLUMN "{q_column}" REAL'))
-        if len(frame):
-            rowids = frame["_rowid"].to_numpy(copy=False)
-            for start in range(0, len(frame), AA_CHANGE_FDR_UPDATE_BATCH_SIZE):
+        if len(rowids):
+            for start in range(0, len(rowids), AA_CHANGE_FDR_UPDATE_BATCH_SIZE):
                 stop = start + AA_CHANGE_FDR_UPDATE_BATCH_SIZE
                 parameters = [(None if np.isnan(value) else float(value), int(rowid))
                               for value, rowid in zip(qvalues[start:stop], rowids[start:stop], strict=True)]
@@ -328,7 +350,7 @@ def add_analytical_aa_change_fdr(engine):
             "p_column": p_column,
             "q_column": q_column,
             "scope": "all_imported_candidate_rows_across_orthogroups_traits_matches",
-            "candidate_count": len(frame),
+            "candidate_count": len(rowids),
             "test_count": int(np.isfinite(qvalues).sum()),
             "undefined_count": int(np.isnan(qvalues).sum()),
             "interpretation": "nominal_FDR_depends_on_analytical_P_and_selection_validity",

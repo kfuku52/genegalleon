@@ -19,14 +19,17 @@ try:
     from . import gene_family_output_store as FAMILY
     from . import orthofinder_output_store as ORTHOFINDER
     from . import species_tree_output_store as SPECIES
+    from .directory_storage_policy import DIRECTORY_SCOPES
 except ImportError:
     import gene_family_output_store as FAMILY
     import orthofinder_output_store as ORTHOFINDER
     import species_tree_output_store as SPECIES
+    from directory_storage_policy import DIRECTORY_SCOPES
 
 
 REPORT_SCHEMA_VERSION = 1
-TARGET_NAMES = ("query2family", "orthogroup", "species_tree", "orthofinder")
+TARGET_NAMES = ("query2family", "orthogroup", "species_tree", "orthofinder",
+                "genome_evolution", "hgt", "query2family_hgt", "analyses")
 
 
 def _environment_int(name: str, default: int) -> int:
@@ -158,6 +161,15 @@ def _target_specs(output_root: Path, selected: set[str]) -> list[dict]:
         if name not in selected:
             continue
         root = output_root / name
+        scope = "hgt" if name == "query2family_hgt" else name
+        if scope in DIRECTORY_SCOPES:
+            roots = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink()) if name == "analyses" and root.is_dir() else [root]
+            for candidate in roots:
+                names = DIRECTORY_SCOPES[scope]
+                if candidate.is_dir() and any((candidate / item).exists() or (candidate / (item + ".zip")).exists() for item in names):
+                    specs.append(dict(name=(name + "/" + candidate.name) if name == "analyses" else name,
+                                      kind="directory", mode=None, root=candidate.absolute(), scope=scope, directories=names))
+            continue
         if name == "orthofinder" and not any(
             (root / item).exists() or (root / (item + ".zip")).exists()
             for item in ORTHOFINDER.MANAGED_DIRECTORIES
@@ -179,7 +191,8 @@ def _excluded_paths(output_root: Path) -> list[str]:
     paths = []
     genome_evolution = output_root / "genome_evolution"
     if genome_evolution.is_dir():
-        paths.extend(str(path.resolve()) for path in sorted(genome_evolution.glob("busco_*")))
+        paths.extend(str(path.resolve()) for path in sorted(genome_evolution.glob("busco_*"))
+                     if path.name.removesuffix(".zip") not in DIRECTORY_SCOPES["genome_evolution"])
     return paths
 
 
@@ -322,10 +335,10 @@ def _species_preflight(spec: dict, args: argparse.Namespace) -> dict:
 
 def _orthofinder_preflight(spec: dict, args: argparse.Namespace) -> dict:
     root = Path(spec["root"])
-    names = args.orthofinder_directory or ORTHOFINDER.MANAGED_DIRECTORIES
+    names = spec.get("directories") or args.orthofinder_directory or ORTHOFINDER.MANAGED_DIRECTORIES
     records = ORTHOFINDER.status(root, names)
     issues = []
-    if args.command == "convert" and args.to == "zip" and any(row["state"] in {"raw", "mixed"} for row in records):
+    if spec["kind"] == "orthofinder" and args.command == "convert" and args.to == "zip" and any(row["state"] in {"raw", "mixed"} for row in records):
         ORTHOFINDER.require_completed(root)
     for record in records:
         record.update(_available_space_fields(root, args.available_bytes))
@@ -366,14 +379,14 @@ def _workspace_quota_plan(
                     temporary_bytes - int(preflight["zip_bytes"]),
                 )
             operation_specs = [(str(target["name"]), temporary_bytes, maximum_net_growth)]
-        elif target["kind"] == "orthofinder":
+        elif target["kind"] in {"orthofinder", "directory"}:
             key = "estimated_peak_new_bytes" if args.to == "zip" else "raw_materialize_allocated_bytes"
             rows = preflight["directories"]
             # Independent directories run concurrently, unlike species-tree conversion.
             peak = sum(sorted((int(row[key]) for row in rows), reverse=True)[:args.workers])
             growth = sum(max(0, int(row[key]) - int(row["raw_bytes"] if args.to == "zip" else row["zip_bytes"]))
                          for row in rows)
-            operation_specs = [("orthofinder", peak + growth, growth)]
+            operation_specs = [(target["name"], peak + growth, growth)]
         else:
             operation_specs = []
             for record in preflight["directories"]:
@@ -534,8 +547,8 @@ def _convert_species(spec: dict, args: argparse.Namespace) -> dict:
     return {"directories": records}
 
 
-def _verify_orthofinder(root: Path, args: argparse.Namespace) -> dict:
-    names = args.orthofinder_directory or ORTHOFINDER.MANAGED_DIRECTORIES
+def _verify_orthofinder(root: Path, args: argparse.Namespace, names=None) -> dict:
+    names = names or args.orthofinder_directory or ORTHOFINDER.MANAGED_DIRECTORIES
     reporter = SPECIES.ProgressReporter(args.progress_interval)
     count = 0
     if args.verification != "none":
@@ -568,7 +581,7 @@ def _tsv_rows(report: dict) -> list[dict]:
     for target in report["targets"]:
         before = target.get("preflight", {})
         after = target.get("postflight", {})
-        if target["kind"] in {"species-tree", "orthofinder"}:
+        if target["kind"] in {"species-tree", "orthofinder", "directory"}:
             before_dirs = before.get("directories", [])
             after_dirs = after.get("directories", [])
             before_logical_files = sum(
@@ -721,7 +734,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         subparser.add_argument(
             "--orthofinder-directory", action="append", choices=ORTHOFINDER.MANAGED_DIRECTORIES,
-            help="Select an OrthoFinder sequence directory; repeat for staged migration (default: all four)",
+            help="Select an OrthoFinder result directory; repeat for staged migration (default: all managed)",
         )
         subparser.add_argument(
             "--genecount",
@@ -935,7 +948,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                 )
                 contexts[str(spec["name"])] = context
                 target["preflight"] = _gene_preflight(spec, args, context)
-            elif spec["kind"] == "orthofinder":
+            elif spec["kind"] in {"orthofinder", "directory"}:
                 target["preflight"] = _orthofinder_preflight(spec, args)
             else:
                 target["preflight"] = _species_preflight(spec, args)
@@ -990,9 +1003,10 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                         args,
                         contexts[str(spec["name"])],
                     )
-                elif spec["kind"] == "orthofinder":
+                elif spec["kind"] in {"orthofinder", "directory"}:
                     target["conversion"] = ORTHOFINDER.convert(
-                        Path(spec["root"]), to=args.to, directories=args.orthofinder_directory,
+                        Path(spec["root"]), to=args.to, directories=spec.get("directories") or args.orthofinder_directory,
+                        namespace=spec.get("scope", "orthofinder"),
                         workers=args.workers, compression=args.compression, compression_level=args.compression_level,
                         available_bytes=args.available_bytes, progress_callback=SPECIES.ProgressReporter(args.progress_interval).update,
                     )
@@ -1006,8 +1020,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                         args.progress_interval,
                     )
                     if spec["kind"] == "gene-family"
-                    else _verify_orthofinder(Path(spec["root"]), args)
-                    if spec["kind"] == "orthofinder"
+                    else _verify_orthofinder(Path(spec["root"]), args, spec.get("directories"))
+                    if spec["kind"] in {"orthofinder", "directory"}
                     else _verify_species(
                         Path(spec["root"]),
                         args.verification,
@@ -1020,7 +1034,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                         args,
                         contexts[str(spec["name"])],
                     )
-                elif spec["kind"] == "orthofinder":
+                elif spec["kind"] in {"orthofinder", "directory"}:
                     target["postflight"] = _orthofinder_preflight(spec, args)
                 else:
                     target["postflight"] = _species_preflight(spec, args)

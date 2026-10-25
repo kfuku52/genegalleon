@@ -49,8 +49,11 @@ from gene_family_output_store import (
     query_id_matchers,
     read_only_observation,
 )
+from orthofinder_output_store import logical_directory_exists as managed_directory_exists
 from orthofinder_output_store import logical_directory_records as orthofinder_directory_records
+from orthofinder_output_store import logical_file_location as managed_file_location
 from orthofinder_output_store import logical_records as orthofinder_logical_records
+from orthofinder_output_store import open_binary as open_managed_binary
 from safe_zip_extract import extract_expected_prefix, validated_members
 from workflow_observation import observe_path, observing_files, strict_json_loads
 
@@ -86,9 +89,9 @@ def runtime_support_root(path: Path):
     """Resolve container support paths against the active host runtime.
 
     Runtime provenance records intentionally retain the container path
-    ``/script/support``.  The read-only API runs beside the container, so it
-    needs an explicit, scoped mapping to the immutable runtime support tree
-    when auditing those records.
+    ``/script/support`` and ``/script/runtime_dependencies``. The read-only API
+    runs beside the container, so both source-owned trees need explicit mappings
+    to its own runtime. Declared content hashes still verify every mapped input.
     """
     root = Path(path).resolve(strict=True)
     token = _RUNTIME_SUPPORT_ROOT.set(root)
@@ -102,12 +105,18 @@ def _runtime_path(path: Path) -> Path:
     root = _RUNTIME_SUPPORT_ROOT.get()
     if root is None:
         return path
-    container_root = Path("/script/support")
-    try:
-        relative = path.absolute().relative_to(container_root)
-    except ValueError:
-        return path
-    return root.joinpath(*relative.parts)
+    for container_root, host_root in (
+        (Path("/script/support"), root),
+        (Path("/script/runtime_dependencies"), root.parent / "runtime_dependencies"),
+    ):
+        try:
+            relative = path.absolute().relative_to(container_root)
+        except ValueError:
+            continue
+        if container_root.name == "runtime_dependencies" and ".." in relative.parts:
+            return path
+        return host_root.joinpath(*relative.parts)
+    return path
 
 
 @contextlib.contextmanager
@@ -185,7 +194,10 @@ def observation_artifact(path):
 def declared_path_exists(path):
     path = _runtime_path(Path(path))
     observe_path(path)
-    return os.path.lexists(path) or observation_artifact(path) is not None
+    if os.path.lexists(path) or observation_artifact(path) is not None:
+        return True
+    return (managed_directory_exists(path, observe=observe_path)
+            or managed_file_location(path, observe=observe_path) is not None)
 
 
 @contextlib.contextmanager
@@ -201,9 +213,15 @@ def open_declared_binary(path):
             yield handle
         return
     artifact = observation_artifact(path)
-    if artifact is None:
+    if artifact is not None:
+        with _LOGICAL_OBSERVATION_STORE.get().open_binary(artifact.subdir, artifact.name) as handle:
+            yield handle
+        return
+    location = managed_file_location(path, observe=observe_path)
+    if location is None:
         raise FileNotFoundError(path)
-    with _LOGICAL_OBSERVATION_STORE.get().open_binary(artifact.subdir, artifact.name) as handle:
+    root, name, relative, namespace = location
+    with open_managed_binary(root, name + "/" + relative, namespace=namespace) as handle:
         yield handle
 
 
@@ -281,7 +299,23 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    if not path.exists() and managed_directory_exists(path, observe=observe_path):
+        digest, size, _count = raw_or_zip_directory_digest(path)
+        return digest, size, "directory"
     memo = _DIGEST_OBSERVATION.get()
+    if not path.exists() and observation_artifact(path) is None:
+        location = managed_file_location(path, observe=observe_path)
+        if location is not None:
+            root, name, relative, namespace = location
+            def compute_managed():
+                with open_managed_binary(root, name + "/" + relative, namespace=namespace) as handle:
+                    return sha256_stream(handle)
+            if memo is not None:
+                archive = root / (name + ".zip")
+                digest, size = memo.read(archive, compute_managed, member=Path(name).name + "/" + relative)
+            else:
+                digest, size = compute_managed()
+            return digest, size, "file"
     if memo is not None:
         compute = scoped_digest_reader(lambda: sha256_path(path)[:2])
         if path.is_file() or path.is_dir():
@@ -682,6 +716,7 @@ def describe_gene_family_artifacts(
 
 def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
     archive_path = path.with_name(f"{path.name}.zip")
+    observe_path(archive_path)
     raw_result: tuple[str, int, int] | None = None
     archive_result: tuple[str, int, int] | None = None
     if path.exists():
@@ -1404,9 +1439,9 @@ def open_reference(
         return
     path = resolve_reference({"scope": str(scope), "path": raw_path}, logical_root, workspace_root)
     observe_path(path)
-    if not path.is_file() or path.is_symlink():
+    if path.is_symlink() or (path.exists() and not path.is_file()):
         raise FileNotFoundError(path)
-    with path.open("rb") as handle:
+    with open_declared_binary(path) as handle:
         yield handle
 
 

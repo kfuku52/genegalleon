@@ -211,6 +211,73 @@ def test_verify_resolves_container_support_inputs_against_its_own_runtime(projec
     assert result["contracts"][0]["error_code"] == "changed_input"
 
 
+@pytest.mark.parametrize("mutation", ["current", "changed_executable", "changed_manifest",
+                                     "missing_executable", "missing_manifest",
+                                     "unmapped_prefix", "parent_traversal"])
+@pytest.mark.parametrize("operation", ["verify", "preflight"])
+def test_owned_runtime_dependencies_keep_verify_and_preflight_strict(project, tmp_path, mutation, operation):
+    workspace, root, _source, _output, manifest, argv, plan = project
+    runtime = tmp_path / "runtime"
+    shutil.copytree(SUPPORT, runtime / "support", ignore=shutil.ignore_patterns("__pycache__"))
+    dependency = runtime / "runtime_dependencies" / "clipkit"
+    dependency.mkdir(parents=True)
+    executable = dependency / "clipkit"
+    executable.write_text("#!/usr/bin/env python\nprint('native tool')\n")
+    executable.chmod(0o755)
+    source_manifest = dependency / "source-manifest.json"
+    source_manifest.write_text(json.dumps({"source": "complete-owning-source"}))
+    declared = {"clipkit_executable": executable, "clipkit_source_manifest": source_manifest}
+    inputs = [value for label, path in declared.items() for value in ("--input", f"{label}={path}")]
+    assert cli(PROVENANCE, "record", *argv, *inputs).returncode == 0
+    payload = json.loads(manifest.read_text())
+    for entry in payload["inputs"]:
+        if entry["label"] in declared:
+            entry.update(scope="absolute", path="/script/runtime_dependencies/clipkit/" + declared[entry["label"]].name)
+    if mutation == "unmapped_prefix":
+        entry = next(item for item in payload["inputs"] if item["label"] == "clipkit_executable")
+        entry["path"] = "/script/runtime_dependencies_untrusted/clipkit"
+    elif mutation == "parent_traversal":
+        outside = runtime / ("outside_" + tmp_path.name)
+        outside.write_bytes(executable.read_bytes())
+        entry = next(item for item in payload["inputs"] if item["label"] == "clipkit_executable")
+        entry["path"] = "/script/runtime_dependencies/clipkit/../../" + outside.name
+    manifest.write_text(json.dumps(payload))
+    if mutation.startswith("changed_"):
+        (executable if mutation.endswith("executable") else source_manifest).write_text("changed\n")
+    elif mutation.startswith("missing_"):
+        (executable if mutation.endswith("executable") else source_manifest).unlink()
+    if operation == "verify":
+        arguments = ["verify", "--root", root, "--workspace-root", workspace,
+                     "--family-id", "OG0001", "--require-step", "summary_statistics"]
+    else:
+        replacements = {f"{label}={path}": f"{label}=" + next(
+            entry["path"] for entry in payload["inputs"] if entry["label"] == label)
+            for label, path in declared.items()}
+        container_argv = [replacements.get(value, value) for value in [*argv, *inputs]]
+        plan.write_text(json.dumps({"schema": "genegalleon-preflight-plan-v1", "contracts": [container_argv]}))
+        arguments = ["preflight", "--plan", plan]
+    before = snapshot(workspace), snapshot(runtime)
+    response = cli(runtime / "support/workflow_api.py", *arguments,
+                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    assert response.returncode == 0, response.stdout + response.stderr
+    result = json.loads(response.stdout)
+    row = result["contracts"][0]
+    if mutation == "current":
+        assert row["state"] == "verified_current"
+        if operation == "verify":
+            assert result["completion_state"] == "verified_declared_steps"
+        else:
+            assert not result["blocked"]
+    else:
+        assert row["state"] != "verified_current"
+        if operation == "verify":
+            assert result["completion_state"] == "unverified"
+            assert row["error_code"] == ("changed_input" if mutation.startswith("changed_") else "missing_input")
+        else:
+            assert result["blocked"] and row["runtime_exit_code"] in {2, 3}
+    assert (snapshot(workspace), snapshot(runtime)) == before
+
+
 def test_capabilities_requires_no_project_or_controller():
     response = query("capabilities")
     assert response["schema"] == "genegalleon-api-v1"

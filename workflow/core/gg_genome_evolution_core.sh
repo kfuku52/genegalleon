@@ -112,6 +112,24 @@ case "${species_tree_busco_duplicate_policy}" in
     ;;
 esac
 species_tree_rooting="${species_tree_rooting:-taxonomy}"
+species_tree_topology_constraint="${species_tree_topology_constraint:-}"
+species_tree_topology_constraint_scope="${species_tree_topology_constraint_scope:-complete}"
+species_tree_iqtree_taxa="${species_tree_iqtree_taxa:-}"
+for species_tree_path_variable in species_tree_topology_constraint species_tree_iqtree_taxa; do
+  case "${!species_tree_path_variable}" in
+    ""|/*) ;;
+    *) printf -v "${species_tree_path_variable}" '%s' "${PWD}/${!species_tree_path_variable}" ;;
+  esac
+done
+case "${species_tree_topology_constraint_scope}" in
+  complete|partial) ;;
+  *) echo "species_tree_topology_constraint_scope must be complete or partial" >&2; exit 2 ;;
+esac
+for species_tree_path_variable in species_tree_topology_constraint species_tree_iqtree_taxa; do
+  if [[ -n "${!species_tree_path_variable}" && ! -s "${!species_tree_path_variable}" ]]; then
+    echo "${species_tree_path_variable} must name an existing nonempty file" >&2; exit 2
+  fi
+done
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
@@ -2979,18 +2997,75 @@ orthofinder_storage_lock_release() {
   fi
 }
 
+# Keep the native BUSCO consumers on their historical paths while this workflow owns them.
+genome_evolution_storage_lock_token=""
+genome_evolution_storage_mode="${GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE:-zip}"
+case "${genome_evolution_storage_mode}" in
+  zip|files|raw) ;;
+  *) echo "Invalid GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE=${genome_evolution_storage_mode}" >&2; exit 2 ;;
+esac
+
+genome_evolution_storage_require_native_paths() {
+  [[ "${genome_evolution_storage_materialized:-0}" == 0 ]] || return 0
+  python "${gg_support_dir}/directory_output_store.py" materialize --kind genome_evolution \
+    --root "${dir_genome_evolution}" --producer-lock-token "${genome_evolution_storage_lock_token}" || return $?
+  genome_evolution_storage_materialized=1
+}
+
+genome_evolution_storage_prepare() {
+  genome_evolution_storage_lock_file="${gg_workspace_output_dir}/.gg_genome_evolution_directory_storage.lock"
+  genome_evolution_storage_lock_token=$(python "${gg_support_dir}/shared_namespace_lock.py" acquire-exclusive \
+    "${genome_evolution_storage_lock_file}" --owner-pid "$$") || return $?
+  genome_evolution_storage_materialized=0
+  local stage=""
+  local needs_native_paths=0
+  if [[ "${genome_evolution_storage_mode}" != zip ]]; then
+    needs_native_paths=1
+  else
+    while IFS= read -r stage; do
+      if [[ "${!stage:-0}" == 1 ]]; then
+        needs_native_paths=1
+        break
+      fi
+    done < <(compgen -A variable run_busco_dupaware_)
+  fi
+  # Disabled BUSCO stages can audit their declared logical ZIP directories.
+  # Keep completed archives intact when no native consumer needs real paths.
+  if [[ ${needs_native_paths} -eq 1 ]]; then
+    genome_evolution_storage_require_native_paths
+  fi
+}
+
+genome_evolution_storage_finish() {
+  local archive_status=0
+  [[ -n "${genome_evolution_storage_lock_token:-}" ]] || return 0
+  if [[ "${genome_evolution_storage_mode}" == zip && -z "$(jobs -pr)" ]]; then
+    python "${gg_support_dir}/directory_output_store.py" pack --kind genome_evolution \
+      --root "${dir_genome_evolution}" --producer-lock-token "${genome_evolution_storage_lock_token}" || archive_status=$?
+  fi
+  python "${gg_support_dir}/shared_namespace_lock.py" release-exclusive \
+    "${genome_evolution_storage_lock_file}" --token "${genome_evolution_storage_lock_token}" || return $?
+  genome_evolution_storage_lock_token=""
+  return "${archive_status}"
+}
+
 cleanup_genome_evolution_on_exit() {
   local exit_status=$?
   local cleanup_status=0
   local archive_status=0
   local orthofinder_lock_status=0
+  local grampa_cleanup_status=0
   local active_background_jobs=""
   trap - EXIT
   set +e
+  if declare -F cleanup_orthogroup_grampa_tmp >/dev/null; then
+    cleanup_orthogroup_grampa_tmp
+    grampa_cleanup_status=$?
+  fi
   orthofinder_storage_lock_release
   orthofinder_lock_status=$?
   cleanup_species_protein_tmp
-  cleanup_status=$?
+  cleanup_status=$(($? + grampa_cleanup_status))
   active_background_jobs=$(jobs -pr)
   if [[ -n "${active_background_jobs}" ]]; then
     echo "Warning: Background jobs are still active; leaving managed species-tree directories raw to avoid archiving files that may still be changing." >&2
@@ -2998,6 +3073,8 @@ cleanup_genome_evolution_on_exit() {
     species_tree_archive_managed_directories
     archive_status=$?
   fi
+  genome_evolution_storage_finish
+  cleanup_status=$((cleanup_status + $?))
   if [[ ${exit_status} -eq 0 ]]; then
     if [[ ${cleanup_status} -ne 0 ]]; then
       exit_status=${cleanup_status}
@@ -3080,9 +3157,18 @@ else
   check_species_cds_dir "${dir_sp_cds}"
   check_if_species_files_unique "${dir_sp_cds}" fasta
 fi
+if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+  if [[ ${run_astral_pep} -eq 1 || ${run_astral_dna} -eq 1 || "${undated_species_tree}" == astral_* ]]; then
+    echo "Species-tree topology constraints/taxon selection apply to concatenated IQ-TREE only. Disable ASTRAL and select iqtree_pep or iqtree_dna." >&2
+    exit 2
+  fi
+fi
 # Imported analysis inputs in selection-only runs are validated and hashed by
 # the copy-number stages below; disabled sequence/tree producers do not own them.
 if [[ ${copy_number_selection_only} -ne 1 ]]; then
+if [[ "${genome_evolution_mode}" == all ]]; then
+  genome_evolution_storage_prepare || exit $?
+fi
 shared_protein_input_signature=$(compute_shared_protein_input_signature)
 species_tree_requested_for_orthofinder=0
 if species_tree_summary_generation_requested; then
@@ -3593,7 +3679,23 @@ concat_iqtree_pep_provenance_args+=(
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
-gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
+concat_iqtree_pep_constraint_args=()
+if [[ -n "${species_tree_topology_constraint}" ]]; then
+  concat_iqtree_pep_provenance_args+=(--input "topology_constraint=${species_tree_topology_constraint}"
+    --parameter "constraint_scope=${species_tree_topology_constraint_scope}" --parameter "constraint_contract=1")
+  concat_iqtree_pep_constraint_args=(-g "${species_tree_topology_constraint}")
+fi
+if [[ -n "${species_tree_iqtree_taxa}" ]]; then
+  concat_iqtree_pep_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
+fi
+concat_iqtree_pep_legacy_policy="${artifact_legacy_policy:-adopt}"
+if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+  concat_iqtree_pep_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_pep}/topology_constraint.result.json")
+  concat_iqtree_pep_constraint_args+=(-redo)
+  # A tree without provenance cannot establish a constrained/selected search.
+  if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep_legacy_policy=rebuild; fi
+fi
+artifact_legacy_policy="${concat_iqtree_pep_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_pep}"
@@ -3610,7 +3712,17 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
 
   cd "${dir_concat_iqtree_pep}" || exit 1
   concat_pep_local="tmp.concat.pep.input.fasta"
-  seqkit seq --threads 1 "${file_concat_pep}" --out-file "./${concat_pep_local}"
+  if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+    python "${gg_support_dir}/species_tree_constraint.py" \
+      --alignment "${file_concat_pep}" --taxa-list "${species_tree_iqtree_taxa}" \
+      --constraint "${species_tree_topology_constraint}" --scope "${species_tree_topology_constraint_scope}" \
+      --output "./${concat_pep_local}" > topology_constraint.json
+    ntaxa=$(gg_count_fasta_records "./${concat_pep_local}")
+    bootstrap_params=()
+    if [[ ${ntaxa} -ge 4 ]]; then bootstrap_params=(--ufboot 1000 --bnni); fi
+  else
+    seqkit seq --threads 1 "${file_concat_pep}" --out-file "./${concat_pep_local}"
+  fi
   if iqtree \
     -s "${concat_pep_local}" \
     -st AA \
@@ -3619,6 +3731,7 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    "${concat_iqtree_pep_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
   else
@@ -3627,12 +3740,19 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
 
   if [[ ${iqtree_exit_status} -ne 0 ]]; then
     echo "Error. IQ-TREE exited with non-zero status: ${iqtree_exit_status}"
+    exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
     if [[ ${ntaxa} -lt 4 ]]; then
       out_nwk="${concat_pep_local}.treefile"
     else
       out_nwk="${concat_pep_local}.contree"
+    fi
+    if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+      python "${gg_support_dir}/species_tree_constraint.py" \
+        --alignment "${file_concat_pep}" --taxa-list "${species_tree_iqtree_taxa}" \
+        --constraint "${species_tree_topology_constraint}" --scope "${species_tree_topology_constraint_scope}" \
+        --tree "${out_nwk}" > topology_constraint.result.json
     fi
     cp_out "${out_nwk}" "${file_concat_iqtree_pep}"
     rm -f -- "./${concat_pep_local}"
@@ -3686,7 +3806,23 @@ concat_iqtree_dna_provenance_args+=(
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
-gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
+concat_iqtree_dna_constraint_args=()
+if [[ -n "${species_tree_topology_constraint}" ]]; then
+  concat_iqtree_dna_provenance_args+=(--input "topology_constraint=${species_tree_topology_constraint}"
+    --parameter "constraint_scope=${species_tree_topology_constraint_scope}" --parameter "constraint_contract=1")
+  concat_iqtree_dna_constraint_args=(-g "${species_tree_topology_constraint}")
+fi
+if [[ -n "${species_tree_iqtree_taxa}" ]]; then
+  concat_iqtree_dna_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
+fi
+concat_iqtree_dna_legacy_policy="${artifact_legacy_policy:-adopt}"
+if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+  concat_iqtree_dna_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_dna}/topology_constraint.result.json")
+  concat_iqtree_dna_constraint_args+=(-redo)
+  # A tree without provenance cannot establish a constrained/selected search.
+  if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna_legacy_policy=rebuild; fi
+fi
+artifact_legacy_policy="${concat_iqtree_dna_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_dna}"
@@ -3703,7 +3839,17 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
 
   cd "${dir_concat_iqtree_dna}" || exit 1
   concat_cds_local="tmp.concat.cds.input.fasta"
-  seqkit seq --threads 1 "${file_concat_cds}" --out-file "./${concat_cds_local}"
+  if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+    python "${gg_support_dir}/species_tree_constraint.py" \
+      --alignment "${file_concat_cds}" --taxa-list "${species_tree_iqtree_taxa}" \
+      --constraint "${species_tree_topology_constraint}" --scope "${species_tree_topology_constraint_scope}" \
+      --output "./${concat_cds_local}" > topology_constraint.json
+    ntaxa=$(gg_count_fasta_records "./${concat_cds_local}")
+    bootstrap_params=()
+    if [[ ${ntaxa} -ge 4 ]]; then bootstrap_params=(--ufboot 1000 --bnni); fi
+  else
+    seqkit seq --threads 1 "${file_concat_cds}" --out-file "./${concat_cds_local}"
+  fi
   if iqtree \
     -s "${concat_cds_local}" \
     -st DNA \
@@ -3712,6 +3858,7 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    "${concat_iqtree_dna_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
   else
@@ -3720,12 +3867,19 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
 
   if [[ ${iqtree_exit_status} -ne 0 ]]; then
     echo "Error. IQ-TREE exited with non-zero status: ${iqtree_exit_status}"
+    exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
     if [[ ${ntaxa} -lt 4 ]]; then
       out_nwk="${concat_cds_local}.treefile"
     else
       out_nwk="${concat_cds_local}.contree"
+    fi
+    if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
+      python "${gg_support_dir}/species_tree_constraint.py" \
+        --alignment "${file_concat_cds}" --taxa-list "${species_tree_iqtree_taxa}" \
+        --constraint "${species_tree_topology_constraint}" --scope "${species_tree_topology_constraint_scope}" \
+        --tree "${out_nwk}" > topology_constraint.result.json
     fi
     cp_out "${out_nwk}" "${file_concat_iqtree_dna}"
     rm -f -- "./${concat_cds_local}"
@@ -3852,7 +4006,10 @@ astral_pep_provenance_args+=(
   --parameter "absence_when_no_eligible_gene_trees=valid"
 )
 gg_artifact_add_input_if_present astral_pep_provenance_args "concat_peptide" "${file_concat_pep}"
-gg_artifact_prepare_stage astral_pep_needs_update run_astral_pep "${astral_pep_provenance_args[@]}" || exit $?
+# Explicit IQ-TREE-only selection must also prevent stale-artifact auto-enabling.
+if [[ -z "${species_tree_topology_constraint}" && -z "${species_tree_iqtree_taxa}" ]]; then
+  gg_artifact_prepare_stage astral_pep_needs_update run_astral_pep "${astral_pep_provenance_args[@]}" || exit $?
+fi
 if [[ ${astral_pep_needs_update} -eq 1 && ${run_astral_pep} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_pep}"
   ensure_dir "${dir_single_copy_iqtree_pep}"
@@ -4001,7 +4158,10 @@ astral_dna_provenance_args+=(
   --parameter "absence_when_no_eligible_gene_trees=valid"
 )
 gg_artifact_add_input_if_present astral_dna_provenance_args "concat_cds" "${file_concat_cds}"
-gg_artifact_prepare_stage astral_dna_needs_update run_astral_dna "${astral_dna_provenance_args[@]}" || exit $?
+# Explicit IQ-TREE-only selection must also prevent stale-artifact auto-enabling.
+if [[ -z "${species_tree_topology_constraint}" && -z "${species_tree_iqtree_taxa}" ]]; then
+  gg_artifact_prepare_stage astral_dna_needs_update run_astral_dna "${astral_dna_provenance_args[@]}" || exit $?
+fi
 if [[ ${astral_dna_needs_update} -eq 1 && ${run_astral_dna} -eq 1 ]]; then
   species_tree_materialize_directory "${dir_single_copy_iqtree_dna}"
   ensure_dir "${dir_single_copy_iqtree_dna}"
@@ -5408,6 +5568,21 @@ if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   og_selection_prefix_args=(--selection_prefix "${selection_prefix}")
 fi
 og_annotation_cache_args=()
+og_exclusion_args=()
+orthogroup_exclude_gene_ids="${orthogroup_exclude_gene_ids:-}"
+orthogroup_selection_scope_name="${orthogroup_selection_scope_name:-}"
+if [[ -n "${orthogroup_exclude_gene_ids}" ]]; then
+  [[ "${orthogroup_exclude_gene_ids}" == /* ]] || orthogroup_exclude_gene_ids="${gg_workspace_dir}/${orthogroup_exclude_gene_ids}"
+  [[ -s "${orthogroup_exclude_gene_ids}" && ! -L "${orthogroup_exclude_gene_ids}" ]] || { echo "Missing regular gene exclusion file" >&2; exit 2; }
+  og_exclusion_args+=(--exclude_gene_ids "${orthogroup_exclude_gene_ids}")
+fi
+if [[ -n "${orthogroup_selection_scope_name}" ]]; then
+  selection_scope_dir=$(gg_orthogroup_catalog_path "${orthogroup_selection_scope_name}") || exit $?
+  [[ "${selection_scope_dir}" != "${dir_orthofinder_filtered}" ]] || { echo "Selection scope must belong to a preserved different catalog" >&2; exit 2; }
+  selection_scope="${selection_scope_dir}/Orthogroups.GeneCount.selected.tsv"
+  [[ -s "${selection_scope}" ]] || { echo "Missing selection scope catalog" >&2; exit 2; }
+  og_exclusion_args+=(--selection_scope "${selection_scope}")
+fi
 orthogroup_annotation_cache_name="${orthogroup_annotation_cache_name:-}"
 if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
   annotation_cache_dir=$(gg_orthogroup_catalog_path "${orthogroup_annotation_cache_name}") || exit $?
@@ -5457,6 +5632,12 @@ if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
 fi
 if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   og_selection_provenance_args+=(--input "selection_prefix=${selection_prefix}")
+fi
+if [[ -n "${orthogroup_exclude_gene_ids}" ]]; then
+  og_selection_provenance_args+=(--input "excluded_gene_ids=${orthogroup_exclude_gene_ids}")
+fi
+if [[ -n "${orthogroup_selection_scope_name}" ]]; then
+  og_selection_provenance_args+=(--input "selection_scope=${selection_scope}")
 fi
 if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
   og_selection_provenance_args+=(--input "uniprot_sprot=/usr/local/db/uniprot_sprot.pep")
@@ -5508,6 +5689,7 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
     --remove_unannotated "${remove_unannotated_orthogroups}" \
     "${og_selection_prefix_args[@]}" \
     "${og_annotation_cache_args[@]}" \
+    "${og_exclusion_args[@]}" \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \
@@ -5634,7 +5816,8 @@ fi
 
 cleanup_species_protein_tmp
 species_tree_archive_managed_directories
-trap - EXIT
+# Keep the workflow cleanup active through all genome-evolution consumers.
+# It also owns the retained-directory producer lock acquired during startup.
 
 # Genome evolution
 
@@ -5745,6 +5928,7 @@ busco_extract_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_extract_needs_update run_busco_dupaware_extract_fasta "${busco_extract_provenance_args[@]}" || exit $?
 if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   prepare_species_tree_input_dir
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_fasta}"
@@ -5804,6 +5988,7 @@ busco_mafft_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_mafft_needs_update run_busco_dupaware_mafft "${busco_mafft_provenance_args[@]}" || exit $?
 if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_mafft}"
   ensure_dir "${dir_busco_mafft}"
@@ -5904,6 +6089,7 @@ busco_trimal_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_trimal_needs_update run_busco_dupaware_trimal "${busco_trimal_provenance_args[@]}" || exit $?
 if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_trimal}"
   ensure_dir "${dir_busco_trimal}"
@@ -5963,6 +6149,7 @@ busco_iqtree_dna_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_iqtree_dna_needs_update run_busco_dupaware_iqtree_dna "${busco_iqtree_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_iqtree_dna}"
   ensure_dir "${dir_busco_iqtree_dna}"
@@ -6022,6 +6209,7 @@ busco_iqtree_pep_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_iqtree_pep_needs_update run_busco_dupaware_iqtree_pep "${busco_iqtree_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_iqtree_pep}"
   ensure_dir "${dir_busco_iqtree_pep}"
@@ -6093,6 +6281,7 @@ if [[ -n "${species_label_map_tsv}" ]]; then
 fi
 gg_artifact_prepare_stage busco_reconciliation_dna_needs_update run_busco_dupaware_reconciliation_root_dna "${busco_reconciliation_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_reconciliation_dna_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-dna.XXXXXX") || exit $?
 
@@ -6130,6 +6319,7 @@ if [[ -n "${species_label_map_tsv}" ]]; then
 fi
 gg_artifact_prepare_stage busco_reconciliation_pep_needs_update run_busco_dupaware_reconciliation_root_pep "${busco_reconciliation_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_reconciliation_pep_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-pep.XXXXXX") || exit $?
 
@@ -6165,6 +6355,7 @@ busco_root_dna_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_root_dna_needs_update run_busco_dupaware_root_dna "${busco_root_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-dna.XXXXXX")
   ensure_dir "${busco_root_stage_dir}/reports"
@@ -6204,6 +6395,7 @@ busco_root_pep_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_root_pep_needs_update run_busco_dupaware_root_pep "${busco_root_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-pep.XXXXXX")
   ensure_dir "${busco_root_stage_dir}/reports"
@@ -6258,6 +6450,7 @@ fi
 grampa_locus_provenance busco_grampa_dna_provenance_args "${file_busco_grampa_dna%/*}"
 gg_artifact_prepare_stage busco_grampa_dna_needs_update run_busco_dupaware_grampa_dna "${busco_grampa_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_dna_needs_update} -eq 1 && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}" || exit $?
   gg_artifact_record "${busco_grampa_dna_provenance_args[@]}"
@@ -6296,6 +6489,7 @@ fi
 grampa_locus_provenance busco_grampa_pep_provenance_args "${file_busco_grampa_pep%/*}"
 gg_artifact_prepare_stage busco_grampa_pep_needs_update run_busco_dupaware_grampa_pep "${busco_grampa_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_pep_needs_update} -eq 1 && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}" || exit $?
   gg_artifact_record "${busco_grampa_pep_provenance_args[@]}"
@@ -6364,7 +6558,6 @@ if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 
     esac
     orthogroup_grampa_work_dir=""
   }
-  trap cleanup_orthogroup_grampa_tmp EXIT
   if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_store" || -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
     printf "%s\n" "${og_ids[@]}" > "${orthogroup_grampa_family_ids}"
     python "${gg_support_dir}/gene_family_output_store.py" materialize-families \
@@ -6392,7 +6585,6 @@ if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 
   echo "Number of selected rooted trees: $(gg_find_file_basenames "${orthogroup_grampa_indir}" | wc -l)"
   busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}" || exit $?
   cleanup_orthogroup_grampa_tmp
-  trap - EXIT
   gg_artifact_record "${orthogroup_grampa_provenance_args[@]}"
 else
   gg_step_skip "${task}"

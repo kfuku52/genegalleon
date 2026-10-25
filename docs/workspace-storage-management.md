@@ -41,50 +41,88 @@ The command detects these workspace layouts:
 - a project directory containing `gfe_data/`;
 - `workspace/output` or `gfe_data` supplied directly as `--workspace`.
 
-Within the detected output root, it manages only `query2family/`,
-`orthogroup/`, the four OrthoFinder sequence directories listed below, and the five documented high-file-count directories below
-`species_tree/`: `single_copy_cds_fasta`, `single_copy_mafft`,
-`single_copy_trimal`, `single_copy_iqtree_pep`, and
-`single_copy_iqtree_dna`.
+The default target selection includes all of these retained result stores:
 
-Below `orthofinder/`, it manages only `Orthogroup_Sequences`,
-`MultipleSequenceAlignments`, `core/Orthogroup_Sequences`, and
-`core/MultipleSequenceAlignments`. Each directory becomes one ZIP64 file next
-to its original path. All OGs are retained, including those absent from the
-selected-family catalog. Tables, trees, logs and other OrthoFinder results stay
-raw. A native completed all-species `Log.txt` is required before packing.
+| Output root | Managed directories |
+| --- | --- |
+| `query2family/`, `orthogroup/` | Existing gene-family artifact catalogs and ZIP shards |
+| `species_tree/` | `single_copy_cds_fasta`, `single_copy_mafft`, `single_copy_trimal`, `single_copy_iqtree_pep`, `single_copy_iqtree_dna` |
+| `orthofinder/` and `orthofinder/core/` | `Orthogroup_Sequences`, `MultipleSequenceAlignments`, `Gene_Trees`, `Resolved_Gene_Trees`, `Single_Copy_Orthologue_Sequences`, `Orthologues`, `Putative_Xenologs`, `Gene_Duplication_Events` |
+| `genome_evolution/` | `busco_cds_fasta`, `busco_mafft`, `busco_trimal`, `busco_iqtree_dna`, `busco_iqtree_pep`, `busco_reconciliation_dna`, `busco_reconciliation_pep`, `busco_rooted_txt_dna`, `busco_rooted_txt_pep`, `busco_rooted_nwk_dna`, `busco_rooted_nwk_pep` |
+| `hgt/`, `query2family_hgt/` | `tree_plot`, `tree_plot_input`, `artifact_provenance`, `trait_focus` |
+| Each saved package under `analyses/` | `inputs/families`, `rendered_global/families`, `rendered_gall/families`, `package/provenance`, `preparation` |
 
-It never converts or edits other OrthoFinder paths, `genome_evolution/busco_*`,
-unrecognized files or subdirectories below a gene-family output root, or small
-shared species-tree summary directories outside the managed list. Excluded
-top-level paths and unmatched gene-family file counts are recorded in the
-report. At most 20 unmatched path examples are included so a report cannot
-itself become a high-file-count artifact.
+Each directory store becomes one neighboring ZIP64 file. Files retain their
+logical paths, contents, modes and modification times. Empty directories also
+survive restoration. Existing gene-family shard layouts remain unchanged.
 
-### OrthoFinder sequence storage
+Curated `workspace/input/`, downloaded BUSCO databases, virtual environments,
+unknown output directories and shared species-tree summaries stay outside these
+catalogs. Unmatched gene-family files are reported with at most 20 examples.
 
-Successful `gg_genome_evolution` inference archives these four directories after
-publication, completion recording and WorkingDirectory cleanup. Core results
-remain raw until the all-species `--assign` run has completed. Failed inference
-is never archived by exit cleanup. Reusing a completed result audits existing
-ZIP metadata without decompressing every payload again.
+### Default workflow storage and saved packages
 
-To migrate an idle legacy workspace in two steps:
+`gg_genome_evolution` defaults to ZIP storage for the eleven duplicate-aware
+BUSCO directories. It restores them when an enabled BUSCO stage needs native
+paths, including a stage enabled later by `artifact_stale_policy=rebuild`, and
+packs them on exit once producers are idle. With every BUSCO stage disabled,
+completed archives remain intact. Files mode always restores the ordinary layout.
+Archived outputs still participate in legacy and freshness checks.
+`gg_hgt_core.sh`, invoked by gene summary, likewise restores its managed results
+before reuse and packs them after all family workers finish. Failed runs retain
+their failure status; packing partial results never marks analysis complete.
+Both producers and the workspace converter share a project-local storage fence.
+
+Set `GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE=files` or
+`GG_COMMON_HGT_OUTPUT_STORAGE=files` in `workflow/gg_common_params.sh` to keep the
+respective workflow's ordinary-file layout; `raw` is an alias. Both default to
+`zip`. Existing species-tree and gene-family storage controls remain independent.
+
+Saved analysis packages are offline artifacts. They join the workspace command's
+default catalog, but a biological workflow does not scan or rewrite historical
+packages. Stop their writers before converting; restore a package with `--to raw`
+before running historical scripts that require physical paths. Existing data is
+migrated only by an explicit conversion or its owning workflow's next run.
+
+```bash
+# Preview all newly managed output groups in an idle workspace.
+bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
+  --to zip --dry-run --workers 2
+# Select just the saved analysis packages, or use --target genome_evolution / hgt.
+bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
+  --target analyses --to zip --workers 2
+```
+
+For a custom HGT output directory outside the standard workspace roots:
+
+```bash
+python3 workflow/support/directory_output_store.py materialize \
+  --kind hgt --root /path/to/hgt-results
+python3 workflow/support/directory_output_store.py pack \
+  --kind hgt --root /path/to/hgt-results
+```
+
+### OrthoFinder result storage
+
+Successful `gg_genome_evolution` inference archives all managed OrthoFinder
+directories after publication, completion recording and WorkingDirectory cleanup.
+All OGs are retained, including those absent from the selected-family catalog.
+Core results remain raw until the all-species `--assign` run has completed. A
+native completed all-species `Log.txt` is required before packing. Failed inference
+is never archived by exit cleanup. Shared tables and logs outside the catalog
+stay raw. Reusing a completed result audits ZIP metadata without decompressing
+every payload again.
 
 ```bash
 bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
   --target orthofinder --to zip --dry-run --workers 2
 bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
-  --target orthofinder --to zip --workers 2 \
-  --orthofinder-directory Orthogroup_Sequences \
-  --orthofinder-directory MultipleSequenceAlignments
-bash workflow/gg_workspace_storage.sh convert --workspace /path/to/workspace \
-  --target orthofinder --to zip --workers 2 \
-  --orthofinder-directory core/Orthogroup_Sequences \
-  --orthofinder-directory core/MultipleSequenceAlignments
+  --target orthofinder --to zip --workers 2
 bash workflow/gg_workspace_storage.sh audit --workspace /path/to/workspace \
   --target orthofinder --verification deep
 ```
+
+Use repeated `--orthofinder-directory NAME` options for a partial migration.
 
 New archives contain a versioned manifest of every file's relative path, size,
 SHA256, mode and modification time, plus empty-directory metadata. Conversion
@@ -104,11 +142,16 @@ conversion checks combined temporary headroom before starting any worker.
 
 GeneGalleon's directory provenance uses the original logical paths and actual
 member contents, preserving existing raw-tree digests and summary freshness.
+This also applies to managed ZIPs nested inside another archived directory.
+Nested readers spool at most 8 MiB in memory and spill larger ZIPs into the
+standard temporary directory (`TMPDIR`). Observations fence the physical ZIP
+identity as well as its logical directory path. File-level provenance and archived
+HGT manifests remain readable without restoring their containing directory.
 Use the updated GeneGalleon readers for subsequent runs; old readers hash the
 physical ZIP layout. No scientific provenance manifest is rewritten merely to
 hide a storage change. Incomplete mixed raw/ZIP trees fail the logical audit.
 
-`convert --target orthofinder --to raw` restores all four directories and checks
+`convert --target orthofinder --to raw` restores all managed directories and checks
 every restored file before removing each ZIP. Native tools need real paths;
 the Python `materialized_directory(root, name, scratch)` context restores one
 directory into caller-owned scratch and removes that temporary copy afterward.
@@ -117,6 +160,13 @@ creating expanded files. Existing WorkingDirectory deletion policy is unchanged:
 these archives preserve retained results and cannot recreate a previously
 deleted native restart checkpoint. Check the native restart's required files
 before using `--assign`, `-b`, `-fg`, or `-ft`.
+
+Restoration checks each extracted member's CRC/SHA256 while writing its temporary
+file, then publishes it with an exclusive hard link so a concurrently created
+file cannot be overwritten. Every restored file is independently reread before
+commit. This removes a separate full ZIP-payload pre-read while preserving the
+content and durability checks. A failure preserves the recovery ZIP and any
+pre-existing files; a rejected first payload leaves no empty result tree.
 
 Recovery ZIPs remain until every restored file and directory entry has passed a
 successful filesystem sync. Sync errors stop deletion. An interrupted restore

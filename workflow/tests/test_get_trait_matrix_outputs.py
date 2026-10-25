@@ -244,3 +244,76 @@ def test_index_binding_preserves_filename_based_compression_errors(tmp_path, com
         process_trait_file(alias, {'g'}, mapping)
     with pytest.raises(type(expected.value)):
         process_trait_file(alias, {'g'}, mapping, tmp_path / 'cache')
+
+
+@pytest.mark.parametrize('target', ['source', 'index'])
+@pytest.mark.parametrize('change', ['rewrite', 'replace'])
+def test_shared_index_rejects_mutation_while_decoding_cached_rows(tmp_path, monkeypatch, target, change):
+    import pandas as pd
+
+    from workflow.support import trait_table_index as indexer
+
+    source = tmp_path / 'traits.tsv'
+    source.write_text('gene_id\tvalue\ng0\t1\ng1\t2\ng0\t3\n')
+    cache = tmp_path / 'cache'
+
+    def loader(path):
+        return pd.read_csv(path, sep='\t')
+
+    indexer.read_subset(source, {'g0'}, loader, cache)
+    database = next(cache.glob('*.sqlite3'))
+    mutated = []
+    original_loads = indexer.json.loads
+
+    def loads_then_mutate(payload, *args, **kwargs):
+        value = original_loads(payload, *args, **kwargs)
+        if not mutated and isinstance(value, list) and value and value[0] == 'g0':
+            path = source if target == 'source' else database
+            if change == 'rewrite':
+                # Preserve valid bytes so the final proof, rather than a parser
+                # or SQLite error, is responsible for rejecting the mutation.
+                with path.open('r+b') as handle:
+                    first = handle.read(1)
+                    handle.seek(0)
+                    handle.write(first)
+            else:
+                replacement = path.with_name(path.name + '.replacement')
+                replacement.write_bytes(path.read_bytes())
+                replacement.replace(path)
+            mutated.append(path)
+        return value
+
+    monkeypatch.setattr(indexer.json, 'loads', loads_then_mutate)
+    with pytest.raises(OSError, match='changed'):
+        indexer.read_subset(source, {'g0'}, loader, cache, source_proof=indexer.FreshDigestBatch())
+    assert mutated == [source if target == 'source' else database]
+
+
+@pytest.mark.parametrize('index_kind', ['integer', 'string'])
+def test_shared_index_keeps_extension_types_with_nonunique_named_index(tmp_path, index_kind):
+    import pandas as pd
+
+    from workflow.support.trait_table_index import read_subset
+
+    source = tmp_path / 'traits.tsv'
+    source.write_text('gene_id\textension_float\tlabel\tmissing\n'
+                      '001\t1.25\tλ\t\nNA\t-2.5\tNULL\t3.5\n'
+                      '001\t0\t日本語\t\nother\t4\tkept\t5\n')
+
+    def loader(path):
+        frame = pd.read_csv(path, sep='\t', keep_default_na=False, dtype={'gene_id': str})
+        # These extension values are JSON-representable; missing traits use the
+        # existing ordinary float/NaN contract of the index format.
+        frame['extension_float'] = frame['extension_float'].astype('Float64')
+        frame['label'] = frame['label'].astype('string')
+        frame['missing'] = pd.to_numeric(frame['missing'], errors='coerce')
+        labels = [9, 2, 9, 4] if index_kind == 'integer' else ['row9', 'row2', 'row9', 'row4']
+        frame.index = pd.Index(labels, name='original_row')
+        return frame
+
+    cache = tmp_path / 'cache'
+    for identifiers in ({'001'}, {'NA'}, {'001', 'NA'}, {'absent'}, set()):
+        expected = read_subset(source, identifiers, loader)
+        for _ in range(2):
+            actual = read_subset(source, identifiers, loader, cache)
+            pd.testing.assert_frame_equal(actual, expected)

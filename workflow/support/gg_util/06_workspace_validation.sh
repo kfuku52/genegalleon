@@ -475,6 +475,16 @@ gg_artifact_prepare_stage() {
       value=${argument#*=}
       path=${value}
       [[ -e "${path}" ]] && relevant=1
+      if [[ ${relevant} -ne 1 && -e "${path}.zip" ]]; then
+        local policy_status=0 policy_script=""
+        policy_script=$(gg_artifact_provenance_script_path) || return $?
+        python "$(dirname "${policy_script}")/directory_storage_policy.py" "${path}" || policy_status=$?
+        if [[ ${policy_status} -eq 0 ]]; then
+          relevant=1
+        elif [[ ${policy_status} -ne 1 ]]; then
+          return "${policy_status}"
+        fi
+      fi
     elif [[ "${previous}" == "--output-logical-directory" ]]; then
       value=${argument#*=}
       path=${value}

@@ -83,6 +83,14 @@ This is the main results area. Major stage roots include:
 - `workspace/output/{query2family,orthogroup}/csubst_scan_plot`
 - `workspace/output/versions`
 
+High-file-count result directories may be represented by a neighboring `.zip`
+file instead of expanded files. This is the default for managed gene-family,
+species-tree, duplicate-aware BUSCO, OrthoFinder and HGT outputs. Their workflows
+restore the historical paths before native tools read them. Saved package
+subdirectories under `analyses/` are also included in the default workspace
+conversion catalog. See [storage management](workspace-storage-management.md)
+before manual edits or replaying scripts that expect physical directories.
+
 `workspace/output/input_generation/gg_input_generation_species.tsv` is the rolling species summary table
 from `gg_input_generation_entrypoint.sh`. When taxonomy metadata is available, it includes per-species
 `taxid` plus nuclear, mitochondrial, and plastid genetic-code columns. It also records the GFF repair

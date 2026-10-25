@@ -92,6 +92,28 @@ def test_orthogroup_map_preserves_literal_member_and_group_ids(tmp_path, identif
     assert result.tolist() == identifiers
 
 
+@pytest.mark.parametrize('rows,identifiers,groups', [
+    ('\t , 001, NA, , 001\nOG2\tNA, beta\nOG3\t beta, ,gamma\nempty\t , , \n',
+     ['001', 'NA', 'beta', 'gamma'], [float('nan'), float('nan'), 'OG2', 'OG3']),
+    ('OG1\t , , \nOG2\t\u2003, \n', [], []),
+])
+def test_orthogroup_map_keeps_first_missing_group_and_empty_mapping_schema(tmp_path, rows, identifiers, groups):
+    mod = load_module()
+    path = tmp_path / 'orthogroups.tsv'
+    path.write_text('Orthogroup\tSpecies\n' + rows)
+    # The parser's group dtype remains part of the Series schema, including
+    # when every nonempty source cell contains only blank member tokens.
+    parsed = pandas.read_csv(path, sep='\t', converters={
+        'Orthogroup': mod.identifier_text, 'Species': mod.identifier_text,
+    })
+    expected = pandas.Series(groups, dtype=parsed['Orthogroup'].dtype, name='Orthogroup',
+                             index=pandas.Index(identifiers, dtype=str, name='gene_id'))
+
+    result = mod.load_orthogroup_map(str(path), 'Species')
+
+    pandas.testing.assert_series_equal(result, expected, check_exact=True)
+
+
 def test_load_expression_sets_gene_id_index(tmp_path):
     mod = load_module()
     infile = tmp_path / "expression.tsv"

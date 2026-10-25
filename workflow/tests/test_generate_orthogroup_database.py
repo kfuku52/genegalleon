@@ -945,6 +945,77 @@ def test_analytical_bh_rejects_invalid_input(values):
         load_module().calculate_bh_fdr(values)
 
 
+def legacy_analytical_bh_reference(np, pvalues):
+    """Freeze the original arithmetic order to detect float-bit changes."""
+    values = pandas.to_numeric(pandas.Series(pvalues), errors="raise").to_numpy(dtype=float, na_value=np.nan)
+    qvalues = np.full(values.shape, np.nan)
+    positions = np.flatnonzero(np.isfinite(values))
+    if positions.size:
+        order = np.argsort(values[positions], kind="stable")
+        ranked_positions = positions[order]
+        adjusted = values[ranked_positions] * positions.size / np.arange(1, positions.size + 1)
+        qvalues[ranked_positions] = np.minimum(1.0, np.minimum.accumulate(adjusted[::-1])[::-1])
+    return qvalues
+
+
+@pytest.mark.parametrize("input_kind", ["readonly", "noncontiguous", "nullable"])
+@pytest.mark.parametrize("profile", ["edge_values", "ties"])
+def test_analytical_bh_preserves_float_bits_and_input_storage(input_kind, profile):
+    mod = load_module()
+    np = mod.np
+    if profile == "edge_values":
+        data = np.array([
+            -0.0, 0.0, np.nextafter(0.0, 1.0), 1e-300, np.nan,
+            0.04, 0.01, 0.01, np.nextafter(1.0, 0.0), 1.0, -0.0,
+        ])
+    else:
+        data = np.resize(np.array([0.04, np.nan, 0.01, -0.0, 0.01, 0.0, 1.0]), 4099)
+    if input_kind == "nullable":
+        supplied = pandas.Series(data, dtype="Float64", name="analytical_p", index=np.arange(len(data)) * 3)
+        original = supplied.copy(deep=True)
+    else:
+        storage = np.full(len(data) * 2, 0.123)
+        storage[::2] = data
+        supplied = storage[::2] if input_kind == "noncontiguous" else data
+        original = storage.copy() if input_kind == "noncontiguous" else data.copy()
+        if input_kind == "readonly":
+            supplied.setflags(write=False)
+    expected = legacy_analytical_bh_reference(np, supplied)
+
+    observed = mod.calculate_bh_fdr(supplied)
+
+    assert observed.dtype == np.dtype("float64")
+    np.testing.assert_array_equal(observed.view(np.uint64), expected.view(np.uint64))
+    if input_kind == "nullable":
+        pandas.testing.assert_series_equal(supplied, original)
+    else:
+        retained = storage if input_kind == "noncontiguous" else supplied
+        np.testing.assert_array_equal(retained.view(np.uint64), original.view(np.uint64))
+        assert not np.shares_memory(observed, supplied)
+
+
+@pytest.mark.parametrize("invalid", [float("-inf"), -5e-324, 1.0000000000000002])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_analytical_bh_rejection_preserves_input_at_probability_boundaries(invalid, nullable):
+    mod = load_module()
+    np = mod.np
+    supplied = np.array([0.01, invalid, 0.2, np.nan])
+    if nullable:
+        supplied = pandas.Series(supplied, dtype="Float64")
+        original = supplied.copy(deep=True)
+    else:
+        original = supplied.copy()
+        supplied.setflags(write=False)
+
+    with pytest.raises(ValueError, match="finite probabilities"):
+        mod.calculate_bh_fdr(supplied)
+
+    if nullable:
+        pandas.testing.assert_series_equal(supplied, original)
+    else:
+        np.testing.assert_array_equal(supplied.view(np.uint64), original.view(np.uint64))
+
+
 def test_analytical_bh_pools_orthogroups_traits_and_matches(tmp_path):
     mod = load_module()
     engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
@@ -1344,3 +1415,89 @@ def test_schema_specific_indexes_accept_empty_association_table(tmp_path, caplog
             assert connection.execute(mod.sqlalchemy.text(f"PRAGMA index_info(idx_{column}_{table})")).fetchone()[2] == column
     assert "Failed to create index" not in caplog.text
     engine.dispose()
+
+
+@pytest.mark.parametrize("initial_probability", [0.01, None])
+def test_analytical_bh_sql_chunk_boundary_preserves_large_identity_and_mixed_values(tmp_path, initial_probability):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr-chunks.sqlite3'}")
+    count = 65541
+    rowids = [-23, *range(2 ** 53 + 1, 2 ** 53 + count - 1), 2 ** 63 - 2]
+    probabilities = [initial_probability] * 65536 + ["0.04", None, 1.0, "0", 0.5]
+    with engine.begin() as connection:
+        # No affinity on P: the numeric strings must remain SQL TEXT values.
+        connection.exec_driver_sql(
+            'CREATE TABLE aa_change (fixture_id INTEGER PRIMARY KEY, '
+            'p_rate_enrichment_asymptotic, "rowid" TEXT, "oid" TEXT)'
+        )
+        connection.exec_driver_sql(
+            'INSERT INTO aa_change VALUES (?, ?, ?, ?)',
+            [(rowid, probability, "same-rowid-label", "same-oid-label")
+             for rowid, probability in zip(rowids, probabilities, strict=True)],
+        )
+    probability_queries = []
+
+    def record_query(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT ") and 'FROM "aa_change"' in statement:
+            probability_queries.append(statement)
+
+    mod.sqlalchemy.event.listen(engine, "before_cursor_execute", record_query)
+    mod.add_analytical_aa_change_fdr(engine)
+    mod.sqlalchemy.event.remove(engine, "before_cursor_execute", record_query)
+    # One cursor supplies identities and probabilities from the same snapshot.
+    assert len(probability_queries) == 1
+    with engine.connect() as connection:
+        observed = connection.exec_driver_sql(
+            'SELECT fixture_id, p_rate_enrichment_asymptotic, q_rate_enrichment_asymptotic_global, '
+            '"rowid", "oid" FROM aa_change ORDER BY fixture_id'
+        ).fetchall()
+        assert [record[0] for record in observed] == rowids
+        assert [record[1] for record in observed] == probabilities
+        assert all(record[3:] == ("same-rowid-label", "same-oid-label") for record in observed)
+        expected = mod.calculate_bh_fdr(probabilities)
+        mod.np.testing.assert_array_equal(
+            mod.np.asarray([record[2] for record in observed], dtype=float), expected,
+        )
+        finite_count = int(mod.np.isfinite(expected).sum())
+        assert connection.exec_driver_sql(
+            'SELECT candidate_count, test_count, undefined_count FROM aa_change_fdr_metadata'
+        ).one() == (count, finite_count, count - finite_count)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("invalid_probability", ["invalid", float("inf"), -0.01, 1.01])
+def test_analytical_bh_late_sql_chunk_invalid_probability_preserves_database(tmp_path, invalid_probability):
+    mod = load_module()
+    path = tmp_path / "fdr-invalid-tail.sqlite3"
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{path}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            'CREATE TABLE aa_change (p_rate_enrichment_asymptotic, '
+            'q_rate_enrichment_asymptotic_global REAL)'
+        )
+        connection.exec_driver_sql('INSERT INTO aa_change VALUES (?, ?)', [(0.01, 0.75)] * 65536)
+        connection.exec_driver_sql('INSERT INTO aa_change VALUES (?, ?)', (invalid_probability, 0.75))
+        connection.exec_driver_sql('CREATE TABLE aa_change_fdr_metadata (proof TEXT)')
+        connection.exec_driver_sql("INSERT INTO aa_change_fdr_metadata VALUES ('previous verified metadata')")
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        mod.add_analytical_aa_change_fdr(engine)
+    engine.dispose()
+    assert path.read_bytes() == before
+
+
+def test_analytical_bh_shadowed_identity_precedes_invalid_probability_validation(tmp_path):
+    mod = load_module()
+    path = tmp_path / "fdr-shadow-invalid.sqlite3"
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{path}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            'CREATE TABLE aa_change (p_rate_enrichment_asymptotic TEXT, '
+            '"rowid" TEXT, "_rowid_" TEXT, "oid" TEXT)'
+        )
+        connection.exec_driver_sql("INSERT INTO aa_change VALUES ('invalid', 'same', 'same', 'same')")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="shadow all SQLite rowid aliases"):
+        mod.add_analytical_aa_change_fdr(engine)
+    engine.dispose()
+    assert path.read_bytes() == before

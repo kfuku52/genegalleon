@@ -61,6 +61,15 @@ native_ou_estimate_measurement_error="${native_ou_estimate_measurement_error:-ye
 native_ou_search_strategy="${native_ou_search_strategy:-auto}"
 native_ou_replicate_separator="${native_ou_replicate_separator-_}"
 treevis_query_marker="${treevis_query_marker:-1}"
+# Older project entrypoint blocks can predate the pairwise tree panels. Match
+# current entrypoint defaults without overriding explicit disabled/custom values.
+treevis_sequence_similarity="${treevis_sequence_similarity:-1}"
+treevis_sequence_similarity_width_mm="${treevis_sequence_similarity_width_mm:-15}"
+treevis_cis_similarity="${treevis_cis_similarity:-1}"
+treevis_cis_similarity_width_mm="${treevis_cis_similarity_width_mm:-15}"
+treevis_synteny_similarity="${treevis_synteny_similarity:-1}"
+treevis_synteny_similarity_width_mm="${treevis_synteny_similarity_width_mm:-15}"
+synteny_search_window="${synteny_search_window:-20}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
@@ -3500,6 +3509,10 @@ gg_artifact_prepare_stage iqtree_needs_update run_iqtree "${iqtree_provenance_ar
 if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
   gg_step_start "${task}"
   num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
+  if [[ ${num_seq} -lt 3 ]]; then
+    echo "Insufficient data for IQ-TREE: family=${og_id}, sequences=${num_seq}; at least 3 sequences are required. Preserve the alignment and review the query/search evidence." >&2
+    exit 1
+  fi
   if [[ ${num_seq} -ge 4 ]]; then
     if [[ ${run_generax} -eq 1 ]]; then
       other_iqtree_params=()
@@ -6573,6 +6586,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
   elif [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     synteny_source_dir="${dir_sp_protein_input}"
     synteny_sequence_mode="protein"
+    synteny_lock_dir="${dir_synteny_gene_cache}/.locks"
   fi
   run_synteny_generation=1
   synteny_needs_update=0
@@ -6590,6 +6604,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
     --optional-output "synteny=${file_og_synteny}"
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
     --parameter "window=${synteny_search_window}"
+    --parameter "missing_annotation=skip"
     --parameter "query_blast_evalue=${query_blast_evalue}"
     --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
     --parameter "genetic_code=${genetic_code}"
@@ -6646,6 +6661,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
         --lock_dir "${synteny_lock_dir}" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
+        --missing-annotation skip \
         --window "${synteny_search_window}" \
         --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \
