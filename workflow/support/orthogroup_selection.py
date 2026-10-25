@@ -121,6 +121,8 @@ def build_arg_parser():
     parser.add_argument("--annotation_cache_logical_root", default="", help="Original native logical root for cache verification.")
     parser.add_argument("--annotation_cache", default="", help="Full representative-annotation table from an unchanged native family catalog.")
     parser.add_argument("--selection_prefix", default="", help="Previous selected count table whose identical families retain their order.")
+    parser.add_argument("--exclude_gene_ids", default="", help="Optional file containing one exact excluded gene ID per line; original copied tables are preserved.")
+    parser.add_argument("--selection_scope", default="", help="Optional prior count table restricting selection to its family IDs and order; current biological criteria still apply.")
     parser.add_argument("--ncpu", metavar="INT", default=4, type=int, help="Number of CPU threads.")
     return parser
 
@@ -590,6 +592,13 @@ def reuse_annotation_cache(args, cache):
 
 
 def prepare_annotation(args):
+    if getattr(args, "exclude_gene_ids", ""):
+        import orthogroup_member_exclusion
+
+        return orthogroup_member_exclusion.prepare_annotation(
+            args, load_table=_load_orthogroup_table, reuse_cache=reuse_annotation_cache,
+            protein_lengths=get_concatenated_fx2tab, choose_representatives=get_df_gc_original,
+            annotate=annotate_representative_genes)
     cache = getattr(args, "annotation_cache", "")
     if cache:
         return reuse_annotation_cache(args, cache)
@@ -676,6 +685,17 @@ def select_orthogroups(args, file_genecount_in):
     df_og = df_og.reset_index(drop=True)
     print("Number of orthogroups in Orthogroups.selected.tsv: {:,}".format(df_og.shape[0]))
     prefix_path = getattr(args, "selection_prefix", "")
+    scope_path = getattr(args, "selection_scope", "")
+    if scope_path:
+        if prefix_path:
+            raise ValueError("Selection scope and an unchanged selection prefix cannot be combined")
+        ids = _load_orthogroup_table(scope_path)["Orthogroup"].tolist()
+        if len(ids) != len(set(ids)) or not set(ids).issubset(set(df_gc_original["Orthogroup"])):
+            raise ValueError("Selection scope must name unique existing native families")
+        selected = df_gc.set_index("Orthogroup", drop=False)
+        order = [family for family in ids if family in selected.index]
+        df_gc = selected.loc[order].reset_index(drop=True)
+        df_og = df_og.set_index("Orthogroup", drop=False).loc[order].reset_index(drop=True)
     if prefix_path:
         prefix = _load_orthogroup_table(prefix_path)
         ids = prefix["Orthogroup"].tolist()

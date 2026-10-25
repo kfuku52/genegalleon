@@ -5506,6 +5506,21 @@ if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   og_selection_prefix_args=(--selection_prefix "${selection_prefix}")
 fi
 og_annotation_cache_args=()
+og_exclusion_args=()
+orthogroup_exclude_gene_ids="${orthogroup_exclude_gene_ids:-}"
+orthogroup_selection_scope_name="${orthogroup_selection_scope_name:-}"
+if [[ -n "${orthogroup_exclude_gene_ids}" ]]; then
+  [[ "${orthogroup_exclude_gene_ids}" == /* ]] || orthogroup_exclude_gene_ids="${gg_workspace_dir}/${orthogroup_exclude_gene_ids}"
+  [[ -s "${orthogroup_exclude_gene_ids}" && ! -L "${orthogroup_exclude_gene_ids}" ]] || { echo "Missing regular gene exclusion file" >&2; exit 2; }
+  og_exclusion_args+=(--exclude_gene_ids "${orthogroup_exclude_gene_ids}")
+fi
+if [[ -n "${orthogroup_selection_scope_name}" ]]; then
+  selection_scope_dir=$(gg_orthogroup_catalog_path "${orthogroup_selection_scope_name}") || exit $?
+  [[ "${selection_scope_dir}" != "${dir_orthofinder_filtered}" ]] || { echo "Selection scope must belong to a preserved different catalog" >&2; exit 2; }
+  selection_scope="${selection_scope_dir}/Orthogroups.GeneCount.selected.tsv"
+  [[ -s "${selection_scope}" ]] || { echo "Missing selection scope catalog" >&2; exit 2; }
+  og_exclusion_args+=(--selection_scope "${selection_scope}")
+fi
 orthogroup_annotation_cache_name="${orthogroup_annotation_cache_name:-}"
 if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
   annotation_cache_dir=$(gg_orthogroup_catalog_path "${orthogroup_annotation_cache_name}") || exit $?
@@ -5555,6 +5570,12 @@ if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
 fi
 if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   og_selection_provenance_args+=(--input "selection_prefix=${selection_prefix}")
+fi
+if [[ -n "${orthogroup_exclude_gene_ids}" ]]; then
+  og_selection_provenance_args+=(--input "excluded_gene_ids=${orthogroup_exclude_gene_ids}")
+fi
+if [[ -n "${orthogroup_selection_scope_name}" ]]; then
+  og_selection_provenance_args+=(--input "selection_scope=${selection_scope}")
 fi
 if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
   og_selection_provenance_args+=(--input "uniprot_sprot=/usr/local/db/uniprot_sprot.pep")
@@ -5606,6 +5627,7 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
     --remove_unannotated "${remove_unannotated_orthogroups}" \
     "${og_selection_prefix_args[@]}" \
     "${og_annotation_cache_args[@]}" \
+    "${og_exclusion_args[@]}" \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \

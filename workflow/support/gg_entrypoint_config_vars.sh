@@ -573,6 +573,8 @@ undated_species_tree
 orthogroup_catalog_name
 orthogroup_selection_prefix_name
 orthogroup_annotation_cache_name
+orthogroup_exclude_gene_ids
+orthogroup_selection_scope_name
 EOF
       ;;
     gg_input_generation_entrypoint.sh)

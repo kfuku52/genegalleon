@@ -1,5 +1,17 @@
 # Input Conventions
 
+Explicit orthogroup gene curation is disabled by default. Set
+`orthogroup_exclude_gene_ids` to a file with one exact gene ID per line to remove
+only those members during native selection. Use a new `orthogroup_catalog_name`;
+the copied original tables and `Orthogroups.GeneExclusion.tsv` preserve the
+change. A verified annotation cache is reused only for unchanged families;
+changed families receive new representatives and annotations. Set
+`orthogroup_selection_scope_name` to the preserved catalog when selection must
+retain its family scope/order while reapplying all gene/species/annotation
+criteria. This scope cannot be combined with an unchanged selection prefix.
+Gene exclusions do not infer organelle identity or change inference, rooting,
+genetic codes, thresholds, or the original input catalog.
+
 For BUSCO species-tree markers, `species_tree_busco_copy_policy="single-copy"`
 preserves the default exclusion of duplicated species/marker cells. Opt-in
 `"best-score"` with `strictly_single_copy_only=0` retains one candidate per

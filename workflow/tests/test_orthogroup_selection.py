@@ -48,6 +48,104 @@ def test_get_df_gc_original_preserves_species_and_gene_order_for_ties():
     assert out.loc[out["Orthogroup"] == "OG2", "geneid_0.5"].iloc[0] == "g4"
 
 
+@pytest.mark.parametrize("text", ["", "g1\ng1\n", "g1,g2\n", "g1\tg2\n", "g1 g2\n"])
+def test_gene_exclusion_rejects_ambiguous_id_lists(tmp_path, monkeypatch, text):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    import orthogroup_member_exclusion as exclusion
+    path = tmp_path / "excluded.txt"
+    path.write_text(text)
+    with pytest.raises(ValueError):
+        exclusion.read_excluded_genes(path)
+
+
+@pytest.mark.parametrize("fault", ["", "counts", "duplicate_gene", "unknown_id"])
+def test_exact_member_exclusion_preserves_identifiers_and_recounts(tmp_path, monkeypatch, fault):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    import orthogroup_member_exclusion as exclusion
+    members = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": ["NA, 001", "only"], "B": ["nan", ""]})
+    counts = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": [2, 1], "B": [1, 0], "Total": [3, 1]})
+    original = members.copy(deep=True)
+    excluded = {"001", "only"}
+    if fault == "counts":
+        counts.loc[0, "A"] = 3
+    elif fault == "duplicate_gene":
+        members.loc[0, "A"] = "NA, NA"
+    elif fault == "unknown_id":
+        excluded.add("missing")
+    if fault:
+        with pytest.raises(ValueError):
+            exclusion.filter_members(members, counts, excluded)
+        return
+    filtered, updated, changed, report = exclusion.filter_members(members, counts, excluded)
+    pandas.testing.assert_frame_equal(members, original)
+    assert filtered["A"].tolist() == ["NA", ""]
+    assert filtered["B"].tolist() == ["nan", ""]
+    assert updated["Total"].tolist() == [2, 0]
+    assert updated["A"].tolist() == [1, 0]
+    assert changed == {"OG1", "OG2"}
+    assert report["GeneID"].tolist() == ["001", "only"]
+
+
+def test_gene_exclusion_reannotates_only_changed_families_with_verified_cache(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    mod = load_module()
+    root = tmp_path / "copied"
+    root.mkdir()
+    members = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": ["a1, organelle", "a3, a4"],
+                               "B": ["b1, b2", "b3, b4"]})
+    counts = pandas.DataFrame({"Orthogroup": ["OG1", "OG2"], "A": [2, 2], "B": [2, 2], "Total": [4, 4]})
+    members.to_csv(root / "Orthogroups.tsv", sep="\t", index=False)
+    counts.to_csv(root / "Orthogroups.GeneCount.tsv", sep="\t", index=False)
+    originals = {p.name: p.read_bytes() for p in root.iterdir()}
+    cache = tmp_path / "preserved_annotations.tsv"
+    counts.assign(**{"geneid_0.5": ["organelle", "a3"], "besthit_0.5": ["obsolete", "unchanged"]}).to_csv(cache, sep="\t", index=False)
+    excluded = tmp_path / "excluded.txt"
+    excluded.write_text("organelle\n")
+    args = SimpleNamespace(dir_orthofinder_og=str(root), annotation_cache=str(cache), gene_size_quantiles="0.5",
+                           exclude_gene_ids=str(excluded), selection_scope="")
+    _annotation_cache_proof(args, cache, tmp_path)
+    cache_before = cache.read_bytes()
+    monkeypatch.setattr(mod, "get_concatenated_fx2tab", lambda args: pandas.DataFrame(
+        {"#id": ["a1", "b1", "b2"], "length": [10, 20, 30]}))
+    calls = []
+    def annotate(frame, args):
+        calls.extend(frame["Orthogroup"])
+        assert frame["geneid_0.5"].tolist() == ["b1"]
+        return frame.assign(**{"besthit_0.5": "new-hit"})
+    monkeypatch.setattr(mod, "annotate_representative_genes", annotate)
+    output = mod.prepare_annotation(args)
+    assert calls == ["OG1"]
+    result = mod._load_orthogroup_table(output)
+    assert result["Total"].tolist() == [3, 4]
+    assert result["geneid_0.5"].tolist() == ["b1", "a3"]
+    assert result["besthit_0.5"].tolist() == ["new-hit", "unchanged"]
+    assert cache.read_bytes() == cache_before
+    assert (root / "Orthogroups.before_gene_exclusion.tsv").read_bytes() == originals["Orthogroups.tsv"]
+    assert (root / "Orthogroups.GeneCount.before_gene_exclusion.tsv").read_bytes() == originals["Orthogroups.GeneCount.tsv"]
+    assert "organelle" not in (root / "Orthogroups.tsv").read_text()
+    with pytest.raises(ValueError, match="fresh copied catalog"):
+        mod.prepare_annotation(args)
+
+
+def test_selection_scope_keeps_order_without_waiving_species_minimum(tmp_path):
+    mod = load_module()
+    members = pandas.DataFrame({"Orthogroup": ["OG1", "OG2", "OG3"], "A": ["a1, a2, a3, a4", "a5, a6", "a7, a8"],
+                               "B": ["", "b5, b6", "b7, b8"]})
+    counts = pandas.DataFrame({"Orthogroup": ["OG1", "OG2", "OG3"], "A": [4, 2, 2], "B": [0, 2, 2], "Total": [4, 4, 4],
+                              "besthit_0.5": ["hit", "hit", "hit"]})
+    members.to_csv(tmp_path / "Orthogroups.tsv", sep="\t", index=False)
+    annotated = tmp_path / "annotated.tsv"
+    counts.to_csv(annotated, sep="\t", index=False)
+    scope = tmp_path / "scope.tsv"
+    pandas.DataFrame({"Orthogroup": ["OG2", "OG1"]}).to_csv(scope, sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(tmp_path), min_gene_num=4, max_gene_num=1000, min_species_num=2,
+                           min_percent_species_coverage=0, remove_unannotated=True, annotation_search_method="mmseqs2",
+                           selection_scope=str(scope), selection_prefix="")
+    _, selected, _ = mod.select_orthogroups(args, annotated)
+    assert selected["Orthogroup"].tolist() == ["OG2"]
+    assert mod._load_orthogroup_table(tmp_path / "Orthogroups.selected.tsv")["Orthogroup"].tolist() == ["OG2"]
+
+
 def test_get_df_gc_original_assigns_multiple_quantiles():
     mod = load_module()
     args = SimpleNamespace(gene_size_quantiles="0.25,0.75")
