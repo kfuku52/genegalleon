@@ -658,3 +658,35 @@ def test_annotation_exceptions_are_explicit_protected_quality_flags(exception, f
     quality = MODULE.validate_candidate(candidate)
     assert quality[flag]
     assert not quality["usable"]
+
+
+@pytest.mark.parametrize("without_pysam", [False, True])
+@pytest.mark.parametrize("subclass_id", [False, True])
+def test_reconstruct_sequence_retains_other_genome_reference_protocol(monkeypatch, without_pysam, subclass_id):
+    __import__("pysam")  # Exercise both a loaded dependency and its absence.
+
+    class StringName(str):
+        pass
+
+    class Genome:
+        references = ("chr1",)
+
+        def __contains__(self, _seqid):
+            raise AssertionError("Other genome implementations use the references protocol")
+
+        def get_reference_length(self, _seqid):
+            return 3
+
+        def fetch(self, _seqid, start, end):
+            return "ATG"[start:end]
+
+    if without_pysam:
+        monkeypatch.delitem(sys.modules, "pysam")
+    identifier = StringName("chr1") if subclass_id else "chr1"
+    genome = Genome()
+    assert MODULE.reconstruct_sequence([[0, 3, 0]], identifier, "+", genome) == "ATG"
+    assert MODULE.reconstruct_sequence([[0, 3, 0]], identifier, "-", genome) == "CAT"
+    with pytest.raises(ValueError, match="^Unknown CDS contig or strand: absent$"):
+        MODULE.reconstruct_sequence([[0, 3, 0]], "absent", "+", genome)
+    if without_pysam:
+        assert "pysam" not in sys.modules

@@ -1344,14 +1344,24 @@ def main():
     def get_ancestor_and_descendant(tree, df_in):
         df_out = df_in.copy()
         tree = ensure_branch_ids(tree)
+        nodes = list(tree.traverse())
+        labels = {node: get_node_label(node) for node in nodes}
+        label_text = {node: str(label) for node, label in labels.items()}
+        ancestors_by_node = {}
         ancestors_map = {}
         descendants_map = {}
-        for node in tree.traverse():
-            anocestor_nodes = [get_node_label(n) for n in iter_ancestors(node)]
-            descendant_nodes = [get_node_label(n) for n in iter_descendants(node)]
-            nlabel = get_node_label(node)
-            ancestors_map[nlabel] = ",".join([str(n) for n in anocestor_nodes])
-            descendants_map[nlabel] = ",".join([str(n) for n in descendant_nodes])
+        for node in nodes:
+            if node.up in ancestors_by_node:
+                parent_ancestors = ancestors_by_node[node.up]
+                ancestors = label_text[node.up]
+                if parent_ancestors:
+                    ancestors += "," + parent_ancestors
+            else:
+                ancestors = ",".join(str(get_node_label(n)) for n in iter_ancestors(node))
+            ancestors_by_node[node] = ancestors
+            nlabel = labels[node]
+            ancestors_map[nlabel] = ancestors
+            descendants_map[nlabel] = ",".join(label_text[n] for n in iter_descendants(node))
         df_out["ancestors"] = df_out["branch_id"].map(ancestors_map).fillna("")
         df_out["descendants"] = df_out["branch_id"].map(descendants_map).fillna("")
         return df_out

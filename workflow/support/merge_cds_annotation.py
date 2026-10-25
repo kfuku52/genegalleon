@@ -121,11 +121,22 @@ def load_busco(path):
     repeated = tmp_agg["gene_id"].duplicated(keep=False)
     if not repeated.any():
         return dedupe_gene_id_index(tmp_agg)
+    # Reuse row positions for every annotation column instead of allocating a
+    # Series and invoking an aggregation callback for every gene and column.
+    duplicate_rows = tmp_agg if repeated.all() else tmp_agg.loc[repeated]
+    grouped = duplicate_rows.groupby("gene_id", sort=False).indices
+    duplicates = pandas.DataFrame({
+        "gene_id": pandas.Series(list(grouped), dtype=tmp_agg["gene_id"].dtype),
+    })
+    for column in agg_cols:
+        values = duplicate_rows[column].to_numpy(dtype=object)
+        duplicates[column] = pandas.Series(
+            ["; ".join(values.take(indices)) for indices in grouped.values()],
+            dtype=tmp_agg[column].dtype,
+        )
     if repeated.all():
-        tmp_agg = tmp_agg.groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
-        return dedupe_gene_id_index(tmp_agg)
+        return dedupe_gene_id_index(duplicates)
     gene_order = tmp_agg["gene_id"].drop_duplicates()
-    duplicates = tmp_agg.loc[repeated].groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
     tmp_agg = pandas.concat([tmp_agg.loc[~repeated], duplicates], ignore_index=True)
     return dedupe_gene_id_index(tmp_agg).reindex(gene_order)
 

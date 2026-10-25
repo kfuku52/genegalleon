@@ -23,7 +23,10 @@ def has_source_overlap_marker(text):
     It deliberately has its own mode instead of being treated as a biological
     exception such as ribosomal slippage.
     """
-    for field in str(text).split(';'):
+    text = str(text)
+    if 'gg_source_overlap' not in text:
+        return False
+    for field in text.split(';'):
         key, separator, value = field.partition('=')
         if separator and key.strip() == 'gg_source_overlap' and value.strip().lower() == 'confirmed':
             return True
@@ -53,13 +56,11 @@ def ordered_annotated_blocks(rows, gene_id):
                     raise ValueError(f'Conflicting GFF attribute {key} for {gene_id}')
                 fields[key] = value
         attributes.append(fields)
-    declared = []
+    declared, slippage = [], []
     for attr in attributes:
-        decoded_exception = unquote(attr.get('exception', ''))
-        declared.append(any(x.strip() == 'trans-splicing' for x in decoded_exception.split(',')))
-    slippage = [any(x.strip() == 'ribosomal slippage'
-                    for x in unquote(attr.get('exception', '')).split(','))
-                for attr in attributes]
+        exceptions = [value.strip() for value in unquote(attr.get('exception', '')).split(',')]
+        declared.append('trans-splicing' in exceptions)
+        slippage.append('ribosomal slippage' in exceptions)
     source_overlap = [has_source_overlap_marker(text) for *_coords, text in rows]
     pseudogene = [attr.get('pseudo', '').lower() == 'true' for attr in attributes]
     if any(pseudogene):

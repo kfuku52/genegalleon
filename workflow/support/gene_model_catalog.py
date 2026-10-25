@@ -123,7 +123,14 @@ def create_index(path, staged):
 
 def reconstruct_sequence(blocks, seqid, strand, genome):
     """Fetch biological CDS without per-exon phase trimming."""
-    if strand not in {"+", "-"} or seqid not in genome.references:
+    if strand not in {"+", "-"}:
+        raise ValueError("Unknown CDS contig or strand: " + seqid)
+    # FastaFile already maintains a reference-name hash index. Preserve the
+    # original reference-sequence protocol without importing a new dependency
+    # for callers supplying a different genome implementation.
+    native_fasta = getattr(sys.modules.get("pysam"), "FastaFile", None)
+    references = genome if type(genome) is native_fasta and type(seqid) is str else genome.references
+    if seqid not in references:
         raise ValueError("Unknown CDS contig or strand: " + seqid)
     pieces = []
     for start, end, _phase in blocks:

@@ -531,6 +531,10 @@ The [twelve-candidate speed review](performance-review-2026-10-25.md) records
 accepted workflow-helper changes, rejected proposals, complete-output comparisons
 and reproducible measurements across annotation, summaries and indexed FASTA I/O.
 
+The [second twelve-candidate review](performance-review-round2-2026-10-25.md)
+covers BUSCO aggregation, tree relations, GFF task planning, WGD evidence scans
+and indexed CDS reconstruction, with repeated timings and complete-output checks.
+
 For twelve RAM-reduction proposals, accepted FASTA/structural-tip/WGD changes,
 rejected chunk readers, and reproducible comparisons, see the
 [RAM requirements review](ram-requirements-review-2026-10-25.md).

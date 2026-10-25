@@ -1475,7 +1475,10 @@ def main():
         )
     if seq_names.duplicated().any():
         raise ValueError("Duplicate FASTA identifier in GFF input")
-    seq_species_labels = seq_names.map(extract_species_label)
+    seq_names_by_species = {}
+    for identifier in seq_names:
+        species = extract_species_label(identifier)
+        seq_names_by_species.setdefault(species, []).append(identifier)
     gff_files = sorted(gff for gff in os.listdir(args.dir_gff) if not gff.startswith("."))
     gff_files = [gff for gff in gff_files if gff.endswith((".gff", ".gtf", ".gff3", ".gff.gz", ".gtf.gz", ".gff3.gz"))]
     tasks = []
@@ -1483,10 +1486,10 @@ def main():
         sp_ub = extract_species_label(gff_file, strip_extension=True)
         if sp_ub == "":
             sp_ub = filename2sciname(file_name=gff_file)
-        seq_sp = seq_names[seq_species_labels == sp_ub]
-        if seq_sp.shape[0] == 0:
+        seq_sp_values = seq_names_by_species.get(sp_ub, ())
+        if not seq_sp_values:
             continue
-        tasks.append((gff_file, seq_sp.tolist()))
+        tasks.append((gff_file, list(seq_sp_values)))
 
     if args.sequence_store:
         candidates = {}

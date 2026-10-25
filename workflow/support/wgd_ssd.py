@@ -550,36 +550,48 @@ def same_species_cross_child_pairs(node, positions):
 
 def _load_family_evidence(evidence, gene_ids):
     """Validate complete tables while retaining only this family's evidence."""
-    def rows(path):
+    def rows(path, keys):
         with Path(path).open(encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter="\t", strict=True)
-            fields = reader.fieldnames or []
+            reader = csv.reader(handle, delimiter="\t", strict=True)
+            fields = next(reader, [])
             if not fields or len(set(fields)) != len(fields) or any(not field for field in fields):
                 raise ValueError(f"Invalid TSV header: {path}")
+            indices = None
             for row in reader:
-                if None in row or any(value is None for value in row.values()):
+                # DictReader skips physically empty rows, but a quoted empty
+                # field remains a real row and must still pass the width check.
+                if not row:
+                    continue
+                if len(row) != len(fields):
                     raise ValueError(f"Invalid TSV row width: {path}")
-                yield row
+                if indices is None:
+                    # Match DictReader's key errors only once a row is present,
+                    # after its width has been validated.
+                    for key in keys:
+                        if key not in fields:
+                            raise KeyError(key)
+                    indices = tuple(fields.index(key) for key in keys)
+                yield fields, row, indices
 
     positions, seen = {}, set()
     duplicate_gene = False
-    for row in rows(evidence / "gene_positions.tsv"):
-        gene = row["gene_id"]
+    for fields, values, indices in rows(evidence / "gene_positions.tsv", ("gene_id",)):
+        gene = values[indices[0]]
         duplicate_gene |= gene in seen
         seen.add(gene)
         if gene in gene_ids:
-            positions[gene] = row
+            positions[gene] = dict(zip(fields, values, strict=True))
     event_rows = read_table(evidence / "wgd_events.tsv")
     events = {row["species_event_id"]: row for row in event_rows}
     if duplicate_gene or len(events) != len(event_rows):
         raise ValueError("Duplicate gene or species event identifier in WGD evidence")
     del seen
     anchors = defaultdict(list)
-    for row in rows(evidence / "anchor_evidence.tsv"):
-        left, right = row["gene_a"], row["gene_b"]
+    for fields, values, indices in rows(evidence / "anchor_evidence.tsv", ("gene_a", "gene_b")):
+        left, right = values[indices[0]], values[indices[1]]
         # Invalid or unmatched anchors also participate in conflict detection.
         if left in gene_ids and right in gene_ids:
-            anchors[tuple(sorted((left, right)))].append(row)
+            anchors[tuple(sorted((left, right)))].append(dict(zip(fields, values, strict=True)))
     return positions, events, anchors
 
 
