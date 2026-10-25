@@ -51,12 +51,20 @@ def load_orthogroup_map(path, species_col):
     if tmp.empty:
         return None
 
-    tmp["gene_id"] = tmp[species_col].astype(str).str.split(",")
-    tmp = tmp.explode("gene_id")
-    tmp["gene_id"] = tmp["gene_id"].str.strip()
-    tmp = tmp.loc[tmp["gene_id"] != "", ["gene_id", "Orthogroup"]]
-    tmp = tmp.drop_duplicates(subset=["gene_id"], keep="first")
-    return tmp.set_index("gene_id")["Orthogroup"]
+    # Preserve the first orthogroup for each member in source order without
+    # materializing exploded copies of the input columns.
+    member_groups = {}
+    for group, members in zip(tmp["Orthogroup"].to_numpy(), tmp[species_col].to_numpy(), strict=True):
+        for member in str(members).split(","):
+            member = member.strip()
+            if member:
+                member_groups.setdefault(member, group)
+    return pandas.Series(
+        list(member_groups.values()),
+        index=pandas.Index(list(member_groups), name="gene_id", dtype=tmp[species_col].astype(str).dtype),
+        name="Orthogroup",
+        dtype=tmp["Orthogroup"].dtype,
+    )
 
 
 def load_uniprot(path):

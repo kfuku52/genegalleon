@@ -6011,6 +6011,36 @@ def test_attribute_syntax_preserves_gtf_quotes_and_ignores_embedded_fasta(tmp_pa
     validate_gff(gff)
 
 
+@pytest.mark.parametrize("source,feature,text", [
+    ("fixture", "gene", "ID=g1;Name=001;gene_id=NA;"),
+    ("maker", "mRNA", "ID=t1;Parent=g1;transcript_id=t1;Name=α β%3Bvalue"),
+    ("AUGUSTUS", "gene", "ID=g1;Name=a=b;Parent=g1,g2"),
+    ("funannotate", "gene", "ID=;Name=nan;Name=NULL;Parent="),
+    ("fixture", "CDS", "ID=c1;;Parent=t1;;"),
+    ("fixture", "CDS", " ID=c1; Parent=t1 "),
+])
+def test_attribute_syntax_keeps_structural_values_and_clean_row_audit(source, feature, text):
+    load_module()
+    from gff_attribute_syntax import normalise_attributes, normalise_line
+
+    assert normalise_attributes(text, source, feature) == text
+    line = f"chr1\t{source}\t{feature}\t1\t9\t.\t+\t0\t{text}\r\n"
+    changes = []
+    assert normalise_line(line, "input.gff3", 1, changes) == line
+    assert changes == []
+
+
+@pytest.mark.parametrize("source,feature", [(None, "gene"), (42, "gene"), ("maker", None), ("AUGUSTUS", None)])
+def test_attribute_syntax_keeps_invalid_source_or_feature_errors(source, feature):
+    load_module()
+    from gff_attribute_syntax import normalise_attributes
+
+    with pytest.raises(AttributeError, match="has no attribute 'lower'"):
+        normalise_attributes("ID=g1;Parent=t1", source, feature)
+    # The feature is only consulted by the existing source-specific rules.
+    assert normalise_attributes("ID=g1;Parent=t1", "fixture", None) == "ID=g1;Parent=t1"
+
+
 @pytest.mark.parametrize("reuse", [False, True])
 def test_invalid_legacy_gff_cache_is_never_silently_reused(tmp_path, reuse):
     module = load_module()

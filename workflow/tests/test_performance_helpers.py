@@ -361,6 +361,72 @@ def test_fasta_sequence_store_reuses_index_and_extracts_query_variants(tmp_path:
     assert rebuilt_digests["Species_b"] == first_digests["Species_b"]
 
 
+@pytest.mark.parametrize("patterns,flags,expected,code", [
+    ("Species_b_gene1\nSpecies_a_gene1\nSpecies_a_Gene2\nSpecies_a_gene1\n", ["--require-all"],
+     ">Species_a_Gene2 second header\nCCCC\n>Species_a_gene1 first header\nAAAA\n>Species_b_gene1\nTATA\n", 0),
+    ("GENE1\ngene3\nGENE1\n", ["--ignore-case", "--query-variants", "--prefix-species"],
+     ">Species_a_gene1\nAAAA\n>Species_b_Gene3\nACAC\n>Species_b_gene1\nTATA\n", 0),
+    ("SPECIES_A_CASE\n", ["--ignore-case"],
+     ">Species_a_case lower\nGGGG\n>Species_a_CASE upper\nTTTT\n", 0),
+    ("absent\nSpecies_b_gene1\nSpecies_a_Gene2\n", ["--require-all"],
+     ">Species_a_Gene2 second header\nCCCC\n>Species_b_gene1\nTATA\n", 3),
+    ("Species_a_NA\nSpecies_a_001\n", ["--require-all"],
+     ">Species_a_001 numeric\nCACA\n>Species_a_NA literal\nGAGA\n", 0),
+])
+def test_sequence_store_sparse_requests_preserve_source_order_and_identifier_semantics(
+        tmp_path, patterns, flags, expected, code):
+    module = sequence_store_module()
+    source_a, source_b = tmp_path / "a.fa", tmp_path / "b.fa"
+    source_a.write_text(
+        ">Species_a_Gene2 second header\nCCCC\n>Species_a_gene1 first header\nAAAA\n"
+        ">Species_a_case lower\nGGGG\n>Species_a_CASE upper\nTTTT\n"
+        ">Species_a_001 numeric\nCACA\n>Species_a_NA literal\nGAGA\n")
+    source_b.write_text(">Gene3 third header\nACAC\n>Species_b_gene1\nTATA\n")
+    database, manifest = tmp_path / "sequences.sqlite3", tmp_path / "manifest.json"
+    module.build_store(database, manifest, [(source_a, "Species_a"), (source_b, "Species_b")], 0, 0)
+    inputs = [database, manifest, source_a, source_b]
+    before = {path: path.read_bytes() for path in inputs}
+    pattern_file, output = tmp_path / "patterns.txt", tmp_path / "query.fa"
+    pattern_file.write_text(patterns)
+    result = run_helper("fasta_sequence_store.py", "extract", "--database", database,
+                        "--pattern-file", pattern_file, "--output", output, *flags)
+    assert result.returncode == code, result.stderr
+    assert output.read_text() == expected
+    if code:
+        assert result.stdout == ""
+        assert result.stderr == "Expected 3 indexed FASTA records but extracted 2; missing: absent\n"
+    else:
+        count = expected.count(">")
+        assert result.stdout == f"Extracted {count} indexed FASTA record(s) to {output}\n"
+        assert result.stderr == ""
+    assert {path: path.read_bytes() for path in inputs} == before
+
+
+@pytest.mark.parametrize("requested_count,case_pairs", [(1024, False), (1025, False), (1024, True)])
+def test_sequence_store_large_requests_keep_source_order_and_case_count_contract(tmp_path, requested_count, case_pairs):
+    module = sequence_store_module()
+    source = tmp_path / "source.fa"
+    source_order = [*range(0, 1026, 2), *range(1, 1026, 2)]
+
+    def record(index):
+        return f">Species_a_gene{index:04d} original {index}\nACGT\n"
+
+    source.write_text("".join(record(index) for index in source_order))
+    database, manifest = tmp_path / "sequences.sqlite3", tmp_path / "manifest.json"
+    module.build_store(database, manifest, [(source, "Species_a")], 0, 0)
+    identifiers = [f"Species_a_gene{index:04d}" for index in reversed(range(requested_count))]
+    patterns, output = tmp_path / "patterns.txt", tmp_path / "query.fa"
+    patterns.write_text("".join(identifier + "\n" + (identifier.upper() + "\n" if case_pairs else "")
+                                for identifier in identifiers))
+    flags = ["--ignore-case"] if case_pairs else []
+    result = run_helper("fasta_sequence_store.py", "extract", "--database", database,
+                        "--pattern-file", patterns, "--output", output, "--require-all", *flags)
+    # Case-folded requests produce each record once. require-all retains its
+    # existing comparison against the distinct original pattern count.
+    assert result.returncode == (3 if case_pairs else 0), result.stderr
+    assert output.read_text() == "".join(record(index) for index in source_order if index < requested_count)
+
+
 @pytest.mark.parametrize('kind,change', [('cds', 'bundle'), ('protein', 'bundle'), ('cds', 'view')])
 def test_selected_sequence_stores_survive_interleaved_ensure_and_extract(tmp_path: Path, kind, change):
     """Replay A.ensure -> B.ensure -> A.extract with overlapping gene IDs."""

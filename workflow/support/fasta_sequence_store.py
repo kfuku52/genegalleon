@@ -592,11 +592,16 @@ def extract(args: argparse.Namespace) -> int:
             ((normalize(pattern),) for pattern in requested),
         )
         identifier_column = "identifier_lower" if args.ignore_case else "identifier"
+        requested_count = connection.execute("SELECT COUNT(*) FROM requested").fetchone()[0]
+        # This cutoff chooses a query plan only. Larger requests retain the
+        # original join-order choice; matching and output ordering are unchanged.
+        from_clause = ("requested AS r CROSS JOIN sequences AS s" if requested_count <= 1024
+                       else "sequences AS s JOIN requested AS r")
         rows = list(
             connection.execute(
                 f"""
                 SELECT s.identifier, s.header, s.sequence, s.species
-                FROM sequences AS s JOIN requested AS r ON s.{identifier_column}=r.pattern
+                FROM {from_clause} ON s.{identifier_column}=r.pattern
                 ORDER BY s.source_order, s.record_order
                 """
             )

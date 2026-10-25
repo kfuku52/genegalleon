@@ -1723,9 +1723,16 @@ def main():
             join_cols = ["motif_id", "motif_alt_id", "start", "stop", "strand", "q-value"]
             df_tmp_join = df_tmp.loc[:, ["sequence_name"] + join_cols].copy()
             df_tmp_join = df_tmp_join.astype({col_name: str for col_name in join_cols})
+            # Group positions once, avoiding a Series construction for every
+            # sequence/annotation column. FIMO loading has already made names
+            # nonmissing strings; sort=False retains their first-seen order.
+            grouped = df_tmp_join.groupby("sequence_name", sort=False).indices
+            aggregated = {"sequence_name": list(grouped)}
+            for column in join_cols:
+                values = df_tmp_join[column].to_numpy(dtype=object)
+                aggregated[column] = ["; ".join(values.take(indices)) for indices in grouped.values()]
             df_tmp2 = (
-                df_tmp_join.groupby("sequence_name", as_index=False, sort=False)[join_cols]
-                .agg("; ".join)
+                pandas.DataFrame(aggregated)
                 .rename(
                     columns={
                         "motif_id": "fimo_id",

@@ -12,6 +12,12 @@ from pathlib import Path
 
 GFF_ATTRIBUTE_SYNTAX_VERSION = 8
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
+# These canonical structural fields never participate in metadata repair.
+# Match the complete text; every other form retains the detailed parser.
+CANONICAL_STRUCTURAL_ATTRIBUTES = re.compile(
+    r"(?:ID|Parent|Name|gene_id|transcript_id)=[^;]*"
+    r"(?:;(?:ID|Parent|Name|gene_id|transcript_id)=[^;]*)*;?"
+)
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
 # Chemical linkage lists in publisher descriptions, e.g. endo-1,3;1,4-beta.
@@ -114,6 +120,9 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
         return text  # Existing GFACS bare-ID adapter runs before output validation.
     if not KEY_VALUE.match(text.strip()):
         validate_attributes(text)
+        return text
+    if (type(source) is str and type(feature) is str
+            and CANONICAL_STRUCTURAL_ATTRIBUTES.fullmatch(text)):
         return text
     text = _escape_maker_note_delimiters(text, source, feature)
     repaired = []

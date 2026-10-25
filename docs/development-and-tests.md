@@ -527,6 +527,10 @@ shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 
 ## Database memory and timing comparisons
 
+The [twelve-candidate speed review](performance-review-2026-10-25.md) records
+accepted workflow-helper changes, rejected proposals, complete-output comparisons
+and reproducible measurements across annotation, summaries and indexed FASTA I/O.
+
 For twelve RAM-reduction proposals, accepted FASTA/structural-tip/WGD changes,
 rejected chunk readers, and reproducible comparisons, see the
 [RAM requirements review](ram-requirements-review-2026-10-25.md).
