@@ -534,6 +534,9 @@ and reproducible measurements across annotation, summaries and indexed FASTA I/O
 For twelve RAM-reduction proposals, accepted FASTA/structural-tip/WGD changes,
 rejected chunk readers, and reproducible comparisons, see the
 [RAM requirements review](ram-requirements-review-2026-10-25.md).
+The [second RAM review](ram-requirements-round2-2026-10-25.md) covers twelve more
+proposals and measured BH-FDR, SQL-buffer, trait-index, constraint and promoter
+memory reductions, with complete output comparisons and reproduction commands.
 
 The [2026-10-23 workflow helper review](performance-review-2026-10-23.md)
 records ten candidate optimizations, accepted and rejected measurements, exact
