@@ -3054,13 +3054,18 @@ cleanup_genome_evolution_on_exit() {
   local cleanup_status=0
   local archive_status=0
   local orthofinder_lock_status=0
+  local grampa_cleanup_status=0
   local active_background_jobs=""
   trap - EXIT
   set +e
+  if declare -F cleanup_orthogroup_grampa_tmp >/dev/null; then
+    cleanup_orthogroup_grampa_tmp
+    grampa_cleanup_status=$?
+  fi
   orthofinder_storage_lock_release
   orthofinder_lock_status=$?
   cleanup_species_protein_tmp
-  cleanup_status=$?
+  cleanup_status=$(($? + grampa_cleanup_status))
   active_background_jobs=$(jobs -pr)
   if [[ -n "${active_background_jobs}" ]]; then
     echo "Warning: Background jobs are still active; leaving managed species-tree directories raw to avoid archiving files that may still be changing." >&2
@@ -5811,7 +5816,8 @@ fi
 
 cleanup_species_protein_tmp
 species_tree_archive_managed_directories
-trap - EXIT
+# Keep the workflow cleanup active through all genome-evolution consumers.
+# It also owns the retained-directory producer lock acquired during startup.
 
 # Genome evolution
 
@@ -6552,7 +6558,6 @@ if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 
     esac
     orthogroup_grampa_work_dir=""
   }
-  trap cleanup_orthogroup_grampa_tmp EXIT
   if [[ -d "${gg_workspace_output_dir}/orthogroup/.gg_store" || -d "${gg_workspace_output_dir}/orthogroup/.gg_archives" ]]; then
     printf "%s\n" "${og_ids[@]}" > "${orthogroup_grampa_family_ids}"
     python "${gg_support_dir}/gene_family_output_store.py" materialize-families \
@@ -6580,7 +6585,6 @@ if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 
   echo "Number of selected rooted trees: $(gg_find_file_basenames "${orthogroup_grampa_indir}" | wc -l)"
   busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}" || exit $?
   cleanup_orthogroup_grampa_tmp
-  trap - EXIT
   gg_artifact_record "${orthogroup_grampa_provenance_args[@]}"
 else
   gg_step_skip "${task}"

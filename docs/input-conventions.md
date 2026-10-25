@@ -205,6 +205,8 @@ CDS-only exports and explicit representative maps retain the validated selected
 CDS interval (`coordinate_source=selected_CDS`). CDS-mode synteny and ordinary
 CDS trait validation keep their existing strict coding-structure contracts.
 Content-bound synteny caches distinguish the two coordinate modes.
+Protein locus caches additionally use a content-addressed namespace, so a
+concurrent older CDS-mode producer cannot replace their coordinates.
 
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric

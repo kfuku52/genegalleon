@@ -265,9 +265,18 @@ def ensure_species_gene_cache(
         raise FileNotFoundError("No unique GFF file matched species: {}".format(species_name))
     contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
                                            gff2genestat_script, sequence_mode)
+    if sequence_mode == "protein":
+        # Old CDS-mode producers can still be running in the same workspace.
+        # A physical-locus cache must never overwrite, or be overwritten by,
+        # their different coordinate model or another representative choice.
+        key = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        out_path = os.path.join(cache_dir, "protein_loci", key, species_name + ".gff_info.tsv")
+        manifest_path = out_path + ".provenance.json"
+        ensure_parent_dir(out_path)
     if species_gene_cache_is_current(out_path, manifest_path, contract):
         return out_path
-    lock_key = "{}|{}".format(os.path.abspath(cache_dir), species_name)
+    lock_key = (os.path.abspath(out_path) if sequence_mode == "protein" else
+                "{}|{}".format(os.path.abspath(cache_dir), species_name))
     lock_name = hashlib.sha1(lock_key.encode("utf-8")).hexdigest() + ".lock"
     lock_path = os.path.join(lock_dir, lock_name)
     ensure_parent_dir(lock_path)

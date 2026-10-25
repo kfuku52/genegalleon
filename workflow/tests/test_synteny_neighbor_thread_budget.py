@@ -1,7 +1,27 @@
 """Every neighborhood subprocess must honor the requested CPU budget."""
+import subprocess
 from pathlib import Path
 
 import pytest
+
+
+@pytest.mark.parametrize("mode,representative", [("protein", ""), ("cds", "/representatives"), ("cds", "")])
+def test_native_protein_families_share_annotation_cache_lock_namespace(mode, representative):
+    core = (Path(__file__).resolve().parents[1] / "core/gg_gene_evolution_core.sh").read_text()
+    start = core.index('  synteny_source_dir="${dir_sp_cds}"')
+    setup = core[start:core.index('  run_synteny_generation=1', start)]
+    script = ('set -eu\ndir_sp_cds=/cds\ndir_sp_protein_input=/proteins\n'
+              'dir_synteny_gene_cache=/shared/cache\n'
+              'species_protein_input_has_files() { return 0; }\n'
+              'input_sequence_mode=$1\nrepresentative_inputs=$2\n'
+              'for family in family_a family_b; do\n'
+              ' file_og_parameters_dir=/parameters/$family\n' + setup +
+              ' printf "%s\\n" "$synteny_lock_dir"\ndone\n')
+    result = subprocess.run(["bash", "-c", script, "cache-lock", mode, representative],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == (["/shared/cache/.locks"] * 2 if mode == "protein" or representative else
+                                         ["/parameters/family_a/synteny_locks", "/parameters/family_b/synteny_locks"])
 
 
 @pytest.mark.parametrize("threads", [-2, 0, 1, 4])

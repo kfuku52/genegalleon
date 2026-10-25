@@ -29,7 +29,11 @@ ALL_DIRECTORIES = tuple(dict.fromkeys(ORTHOFINDER_DIRECTORIES + tuple(
 if __name__ == "__main__":
     # Exit 0 only for a potential managed directory. The owning provenance
     # command still verifies the marker and every declared content hash.
+    import argparse
     import sys
     from pathlib import PurePath
 
-    sys.exit(0 if PurePath(sys.argv[1]).name in {PurePath(name).name for name in ALL_DIRECTORIES} else 1)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("path", help="Potential managed output directory (exit 0 when recognized, otherwise 1).")
+    args = parser.parse_args()
+    sys.exit(0 if PurePath(args.path).name in {PurePath(name).name for name in ALL_DIRECTORIES} else 1)

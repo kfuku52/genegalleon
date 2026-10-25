@@ -36,6 +36,27 @@ def test_protein_synteny_cache_uses_loci_and_invalidates_old_coding_cache(tmp_pa
     assert Path(path).read_bytes() == before
 
 
+def test_protein_locus_cache_cannot_be_overwritten_by_legacy_cds_producers(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache
+
+    source, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    source.write_text('>Species_a_g1\nATGAAATAA\n')
+    gff.write_text('chr1\ts\tgene\t1\t15\t.\t+\t.\tID=g1\n'
+                   'chr1\ts\tmRNA\t1\t15\t.\t+\t.\tID=t;Parent=g1\n'
+                   'chr1\ts\tCDS\t4\t12\t.\t+\t0\tID=c;Parent=t\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(source), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1)
+    legacy = Path(ensure_species_gene_cache(**kwargs))
+    protein = Path(ensure_species_gene_cache(**kwargs, sequence_mode='protein'))
+    assert legacy != protein and legacy.parent == tmp_path / 'cache'
+    assert 'protein_loci' in protein.parts
+    before = protein.read_bytes()
+    legacy.write_text('legacy concurrent rewrite\n')
+    assert Path(ensure_species_gene_cache(**kwargs, sequence_mode='protein')).read_bytes() == before
+    assert pd.read_csv(protein, sep='\t').iloc[0].coordinate_source == 'gene'
+
+
 def test_gene_info_normalizes_then_stably_orders_each_chromosome(tmp_path):
     from workflow.support.synteny_neighbors import load_gene_info
 

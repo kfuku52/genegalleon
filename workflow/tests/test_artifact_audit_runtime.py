@@ -3,6 +3,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import importlib
+import io
 import json
 import os
 import subprocess
@@ -227,9 +228,16 @@ def test_verify_common_input_is_read_once_then_fenced_and_attempt_bound(tmp_path
         'finished_at_ns': time.time_ns(), 'execution_state': 'exited', 'execution_accepted': True,
         'exit_code': 0, 'accepted_exit_codes': [0]}))
     original = provenance.sha256_stream
+    source_stat = source.stat()
     reads = []
     def read(handle):
-        if getattr(handle, 'name', None) == str(source):
+        # The secure O_NOFOLLOW reader exposes a file descriptor as .name.
+        # Count the actual source inode, retaining both initial and final reads.
+        try:
+            info = os.fstat(handle.fileno())
+        except (AttributeError, io.UnsupportedOperation):
+            info = None
+        if info is not None and (info.st_dev, info.st_ino) == (source_stat.st_dev, source_stat.st_ino):
             reads.append(1)
         return original(handle)
     monkeypatch.setattr(provenance, 'sha256_stream', read)

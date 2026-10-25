@@ -6586,6 +6586,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
   elif [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     synteny_source_dir="${dir_sp_protein_input}"
     synteny_sequence_mode="protein"
+    synteny_lock_dir="${dir_synteny_gene_cache}/.locks"
   fi
   run_synteny_generation=1
   synteny_needs_update=0
