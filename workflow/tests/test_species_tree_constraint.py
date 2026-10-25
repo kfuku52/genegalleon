@@ -1,10 +1,14 @@
+import gzip
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from Bio.SeqRecord import SeqRecord
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / 'workflow/support/species_tree_constraint.py'
@@ -22,6 +26,133 @@ def fixture(tmp_path):
 def run(alignment, constraint, *args):
     return subprocess.run([sys.executable, str(HELPER), '--alignment', str(alignment),
                            '--constraint', str(constraint), *map(str, args)], capture_output=True, text=True)
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location('constraint_contract', HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def arguments(alignment, *, constraint='', taxa_list='', output=None):
+    return SimpleNamespace(alignment=str(alignment), constraint=str(constraint), taxa_list=str(taxa_list),
+                           scope='complete', tree='', output=str(output) if output is not None else None)
+
+
+@pytest.mark.parametrize('compressed', [False, True], ids=['plain', 'gzip'])
+def test_public_alignment_and_selection_apis_preserve_records_and_sets(tmp_path, compressed):
+    module = load_module()
+    path = tmp_path / ('alignment.fa.gz' if compressed else 'alignment.fa')
+    payload = b''.join(b'>' + name + b' original description\nACD--X\n' for name in (b'D', b'C', b'B', b'A', b'E'))
+    path.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+
+    records = module.alignment(path)
+
+    assert isinstance(records, list)
+    assert all(isinstance(record, SeqRecord) for record in records)
+    assert [record.id for record in records] == list('DCBAE')
+    assert [record.description for record in records] == [name + ' original description' for name in 'DCBAE']
+    assert [str(record.seq) for record in records] == ['ACD--X'] * 5
+    assert module.selected_labels(records, '') == set('ABCDE')
+    selection = tmp_path / 'taxa.txt'
+    selection.write_text('A\nB\nC\nD\n')
+    selected = module.selected_labels(records, selection)
+    assert isinstance(selected, set) and selected == set('ABCD')
+
+
+def test_alignment_preserves_existing_unique_empty_header_id_behavior(tmp_path, capsys):
+    module = load_module()
+    path = tmp_path / 'alignment.fa'
+    path.write_text('>\nACD\n>A\nACD\n')
+
+    # The existing error text says nonempty IDs, but only an empty alignment
+    # and duplicate IDs are checked. RAM optimization must not tighten that API.
+    records = module.alignment(path)
+
+    assert [record.id for record in records] == ['', 'A']
+    assert module.selected_labels(records, '') == {'', 'A'}
+    module.run(arguments(path))
+    assert json.loads(capsys.readouterr().out)['alignment_taxa'] == 2
+
+
+@pytest.mark.parametrize('compressed', [False, True], ids=['plain', 'gzip'])
+@pytest.mark.parametrize('with_output', [False, True], ids=['report-only', 'output'])
+@pytest.mark.parametrize(
+    ('payload', 'message'),
+    [
+        (b'', 'unique, nonempty sequence IDs'),
+        (b'>A\nACD\n>B\nACD\n>A\nACD\n', 'unique, nonempty sequence IDs'),
+        (b'>A\nACD\n>B\nACDE\n', 'same positive length'),
+        (b'>A\n\n>B\n\n', 'same positive length'),
+        (b'>A\nACD\n>B\nACD\n>A\nACDE\n', 'unique, nonempty sequence IDs'),
+        (b'>\nACD\n>A\nACD\n>\nACD\n', 'unique, nonempty sequence IDs'),
+    ],
+    ids=['empty-alignment', 'late-duplicate', 'late-length', 'empty-sequences',
+         'duplicate-before-length', 'duplicate-empty-id'],
+)
+def test_alignment_errors_precede_later_inputs_and_preserve_output(tmp_path, compressed, with_output, payload, message):
+    module = load_module()
+    path = tmp_path / ('alignment.fa.gz' if compressed else 'alignment.fa')
+    path.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    output = tmp_path / 'previous.fa'
+    output.write_text('previous output\n')
+    args = arguments(path, constraint=tmp_path / 'missing.nwk', taxa_list=tmp_path / 'missing.txt',
+                     output=output if with_output else None)
+
+    with pytest.raises(ValueError, match=message):
+        module.run(args)
+
+    assert output.read_text() == 'previous output\n'
+
+
+@pytest.mark.parametrize('with_output', [False, True], ids=['report-only', 'output'])
+def test_truncated_gzip_tail_takes_priority_over_duplicate_and_length_errors(tmp_path, with_output):
+    module = load_module()
+    path = tmp_path / 'alignment.fa.gz'
+    # More than one decoded read buffer puts the duplicate before the broken
+    # trailer, so an implementation which stops scanning on a duplicate fails.
+    payload = b'>A\nACD\n>B\nACD\n>A\nACD\n>late\n' + b'ACD' * 4000 + b'\n'
+    path.write_bytes(gzip.compress(payload, mtime=0)[:-8])
+    output = tmp_path / 'previous.fa'
+    output.write_text('previous output\n')
+    args = arguments(path, constraint=tmp_path / 'missing.nwk', taxa_list=tmp_path / 'missing.txt',
+                     output=output if with_output else None)
+
+    with pytest.raises(EOFError, match='end-of-stream'):
+        module.run(args)
+
+    assert output.read_text() == 'previous output\n'
+
+
+@pytest.mark.parametrize('compressed', [False, True], ids=['plain', 'gzip'])
+@pytest.mark.parametrize('subset', [False, True], ids=['all', 'subset'])
+def test_report_only_and_output_modes_have_identical_reports(tmp_path, compressed, subset, capsys):
+    module = load_module()
+    alignment, constraint = fixture(tmp_path)
+    payload = ''.join(f'>{name} retained description\nACD--X\n' for name in 'FEDCBA').encode()
+    if compressed:
+        alignment = tmp_path / 'input.fa.gz'
+        alignment.write_bytes(gzip.compress(payload, mtime=0))
+    else:
+        alignment.write_bytes(payload)
+    selection = ''
+    if subset:
+        selection = tmp_path / 'taxa.txt'
+        selection.write_text('A\nB\nC\nD\n')
+        constraint.write_text('((A,B),C,D);\n')
+    output = tmp_path / 'output.fa'
+
+    module.run(arguments(alignment, constraint=constraint, taxa_list=selection))
+    report_only = json.loads(capsys.readouterr().out)
+    module.run(arguments(alignment, constraint=constraint, taxa_list=selection, output=output))
+    output_report = json.loads(capsys.readouterr().out)
+
+    assert report_only == output_report
+    assert report_only['alignment_taxa'] == 6
+    assert report_only['alignment_columns'] == 6
+    names = 'DCBA' if subset else 'FEDCBA'
+    assert output.read_text() == ''.join(f'>{name} retained description\nACD--X\n' for name in names)
 
 
 @pytest.mark.parametrize('constraint,message', [

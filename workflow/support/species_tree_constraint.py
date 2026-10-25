@@ -48,8 +48,35 @@ def alignment(path):
     return records
 
 
+def _alignment_axes(path):
+    """Validate every FASTA row without retaining its sequence for report-only runs."""
+    opener = gzip.open if path.suffix == '.gz' else open
+    labels, count = set(), 0
+    length, unequal_lengths = None, False
+    with opener(path, 'rt') as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            labels.add(record.id)
+            count += 1
+            row_length = len(record.seq)
+            if length is None:
+                length = row_length
+            elif row_length != length:
+                unequal_lengths = True
+            del record
+    # Complete parsing precedes duplicate/length validation, including gzip EOF
+    # errors. Keep the same error priority and accepted IDs as alignment().
+    if not count or count != len(labels):
+        raise ValueError('Alignment must have unique, nonempty sequence IDs')
+    if unequal_lengths or not length:
+        raise ValueError('Alignment rows must have the same positive length')
+    return labels, count, length
+
+
 def selected_labels(records, taxa_list):
-    available = {record.id for record in records}
+    return _selected_labels({record.id for record in records}, taxa_list)
+
+
+def _selected_labels(available, taxa_list):
     if not taxa_list:
         return available
     labels = Path(taxa_list).read_text().splitlines()
@@ -76,13 +103,19 @@ def constraint_info(path, taxa, scope):
 
 
 def run(args):
-    records = alignment(Path(args.alignment))
-    taxa = selected_labels(records, args.taxa_list)
+    if args.output:
+        # Retain the validated sequence snapshot when a selected FASTA is needed.
+        records = alignment(Path(args.alignment))
+        alignment_taxa, alignment_columns = len(records), len(records[0].seq)
+        taxa = selected_labels(records, args.taxa_list)
+    else:
+        available, alignment_taxa, alignment_columns = _alignment_axes(Path(args.alignment))
+        taxa = _selected_labels(available, args.taxa_list)
     labels, splits = (set(), set())
     if args.constraint:
         labels, splits = constraint_info(args.constraint, taxa, args.scope)
-    report = {'schema_version': 1, 'alignment_taxa': len(records), 'selected_taxa': len(taxa),
-              'alignment_columns': len(records[0].seq), 'constraint_scope': args.scope,
+    report = {'schema_version': 1, 'alignment_taxa': alignment_taxa, 'selected_taxa': len(taxa),
+              'alignment_columns': alignment_columns, 'constraint_scope': args.scope,
               'constraint_taxa': sorted(labels),
               'assumed_unrooted_splits': sorted([sorted(s) for s in splits]),
               'root_inferred_from_constraint': False,

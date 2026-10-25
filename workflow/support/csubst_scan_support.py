@@ -19,13 +19,25 @@ def calculate_bh_fdr(pvalues):
     invalid = np.isinf(values) | (np.isfinite(values) & ((values < 0) | (values > 1)))
     if invalid.any():
         raise ValueError("Analytical P values must be finite probabilities in [0, 1] or missing.")
-    qvalues = np.full(values.shape, np.nan)
+    del invalid
     positions = np.flatnonzero(np.isfinite(values))
-    if positions.size:
-        order = np.argsort(values[positions], kind="stable")
-        ranked_positions = positions[order]
-        adjusted = values[ranked_positions] * positions.size / np.arange(1, positions.size + 1)
-        qvalues[ranked_positions] = np.minimum(1.0, np.minimum.accumulate(adjusted[::-1])[::-1])
+    if not positions.size:
+        return np.full(values.shape, np.nan)
+    count = positions.size
+    order = np.argsort(values[positions], kind="stable")
+    ranked_positions = positions[order]
+    del positions, order
+    # Advanced indexing owns this copy; never modify values, which may share
+    # the caller's storage. Keep the original multiply-then-divide order.
+    adjusted = values[ranked_positions]
+    adjusted *= count
+    adjusted /= np.arange(1, count + 1)
+    reverse = adjusted[::-1]
+    np.minimum.accumulate(reverse, out=reverse)
+    np.minimum(1.0, adjusted, out=adjusted)
+    # Allocate the full output after the sort and arithmetic temporaries die.
+    qvalues = np.full(values.shape, np.nan)
+    qvalues[ranked_positions] = adjusted
     return qvalues
 
 

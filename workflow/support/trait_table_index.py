@@ -100,9 +100,19 @@ def read_subset(path, identifiers, loader, cache_dir=None, *, source_proof=None)
             connection.executemany('INSERT OR IGNORE INTO wanted VALUES (?)', ((str(g),) for g in identifiers))
             # Drive the join from requested IDs. Ordering by ordinal must not
             # persuade SQLite to scan every payload in the species table.
-            rows = connection.execute('SELECT rows.index_value, rows.payload FROM wanted CROSS JOIN rows INDEXED BY gene_ids ON rows.gene_id = wanted.gene_id ORDER BY rows.ordinal').fetchall()
-        frame = pd.DataFrame([json.loads(zlib.decompress(row[1]) if isinstance(row[1], bytes) else row[1]) for row in rows], columns=metadata['columns'],
-                             index=pd.Index([json.loads(row[0]) for row in rows], dtype=metadata['index_dtype'], name=metadata['index_name']))
+            rows = connection.execute('SELECT rows.index_value, rows.payload FROM wanted CROSS JOIN rows INDEXED BY gene_ids ON rows.gene_id = wanted.gene_id ORDER BY rows.ordinal')
+            index_values = []
+
+            def decoded_rows():
+                for index_value, payload in rows:
+                    index_values.append(index_value)
+                    yield json.loads(zlib.decompress(payload) if isinstance(payload, bytes) else payload)
+
+            # Consume the cursor while its connection is open, without retaining
+            # all encoded payloads alongside the decoded rows and DataFrame.
+            frame = pd.DataFrame(decoded_rows(), columns=metadata['columns'])
+            frame.index = pd.Index([json.loads(value) for value in index_values],
+                                   dtype=metadata['index_dtype'], name=metadata['index_name'])
         for column, dtype in zip(frame.columns, metadata['dtypes'], strict=True):
             frame[column] = frame[column].astype(dtype)
         frame = frame.loc[frame.iloc[:, 0].astype(str).isin(identifiers)].copy()
