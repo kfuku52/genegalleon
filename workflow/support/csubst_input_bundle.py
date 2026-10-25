@@ -27,6 +27,32 @@ def read_alignment(path):
     return records
 
 
+def _read_alignment_axes(path):
+    """Validate the full CDS stream while retaining only its ordered IDs/length."""
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    identifiers, seen = [], set()
+    alignment_length, unequal_lengths = None, False
+    with opener(path, "rt") as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            identifiers.append(record.id)
+            seen.add(record.id)
+            length = len(record.seq)
+            if alignment_length is None:
+                alignment_length = length
+            elif length != alignment_length:
+                unequal_lengths = True
+            # Do not retain the last CDS sequence during structural parsing.
+            del record
+    # Parse the complete stream before reporting axis errors, as read_alignment
+    # does: a malformed tail takes priority over duplicate or invalid axes.
+    if not identifiers or len(identifiers) != len(seen):
+        raise ValueError(f"Empty alignment or duplicate sequence IDs: {path}")
+    if unequal_lengths or not alignment_length or alignment_length % 3:
+        raise ValueError(f"Full CDS alignment must have equal, nonzero lengths in codon frame: {path}")
+    return identifiers, alignment_length
+
+
 def prepare_full_alignment(source, tree, destination):
     records = read_alignment(source)
     tips = [tip.name for tip in Phylo.read(tree, "newick").get_terminals()]
@@ -81,19 +107,25 @@ def finalize(bundle, genetic_code):
 def write_structural_tip_alignment(codon_alignment, output):
     directory = Path(codon_alignment).parent
     structural_directory(directory.parent)
-    records = read_alignment(codon_alignment)
+    identifiers, alignment_length = _read_alignment_axes(codon_alignment)
+    wanted, seen, by_id = set(identifiers), set(), {}
+    record_count = 0
     with open(directory / "inspect/csubst_alignment_3di.fa") as handle:
-        structural = list(SeqIO.parse(handle, "fasta"))
-    by_id = {record.id: record for record in structural}
-    if len(by_id) != len(structural):
+        for record in SeqIO.parse(handle, "fasta"):
+            record_count += 1
+            seen.add(record.id)
+            if record.id in wanted:
+                by_id[record.id] = record
+            # Unselected ancestral states must not remain live after this scan.
+            del record
+    if len(seen) != record_count:
         raise ValueError("Duplicate IDs in CSUBST 3Di alignment")
-    selected = []
-    for record in records:
-        state = by_id.get(record.id)
-        if state is None or len(state.seq) * 3 != len(record.seq):
-            raise ValueError(f"CSUBST 3Di alignment does not match full CDS: {record.id}")
-        selected.append(state)
-    SeqIO.write(selected, output, "fasta")
+    del wanted, seen
+    for identifier in identifiers:
+        state = by_id.get(identifier)
+        if state is None or len(state.seq) * 3 != alignment_length:
+            raise ValueError(f"CSUBST 3Di alignment does not match full CDS: {identifier}")
+    SeqIO.write((by_id[identifier] for identifier in identifiers), output, "fasta")
     return str(output)
 
 

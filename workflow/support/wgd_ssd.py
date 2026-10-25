@@ -548,6 +548,41 @@ def same_species_cross_child_pairs(node, positions):
     return pairs
 
 
+def _load_family_evidence(evidence, gene_ids):
+    """Validate complete tables while retaining only this family's evidence."""
+    def rows(path):
+        with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t", strict=True)
+            fields = reader.fieldnames or []
+            if not fields or len(set(fields)) != len(fields) or any(not field for field in fields):
+                raise ValueError(f"Invalid TSV header: {path}")
+            for row in reader:
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(f"Invalid TSV row width: {path}")
+                yield row
+
+    positions, seen = {}, set()
+    duplicate_gene = False
+    for row in rows(evidence / "gene_positions.tsv"):
+        gene = row["gene_id"]
+        duplicate_gene |= gene in seen
+        seen.add(gene)
+        if gene in gene_ids:
+            positions[gene] = row
+    event_rows = read_table(evidence / "wgd_events.tsv")
+    events = {row["species_event_id"]: row for row in event_rows}
+    if duplicate_gene or len(events) != len(event_rows):
+        raise ValueError("Duplicate gene or species event identifier in WGD evidence")
+    del seen
+    anchors = defaultdict(list)
+    for row in rows(evidence / "anchor_evidence.tsv"):
+        left, right = row["gene_a"], row["gene_b"]
+        # Invalid or unmatched anchors also participate in conflict detection.
+        if left in gene_ids and right in gene_ids:
+            anchors[tuple(sorted((left, right)))].append(row)
+    return positions, events, anchors
+
+
 def classify(args):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
@@ -611,15 +646,7 @@ def classify(args):
         run_tool(native_command, args.output, "wgd-tree")
         native = {(row["species_event_id"], row["gene_clade_id"]): row
                   for row in read_table(args.output / "native_tree_origins.tsv")}
-    position_rows = read_table(evidence / "gene_positions.tsv")
-    event_rows = read_table(evidence / "wgd_events.tsv")
-    positions = {row["gene_id"]: row for row in position_rows}
-    events = {row["species_event_id"]: row for row in event_rows}
-    if len(positions) != len(position_rows) or len(events) != len(event_rows):
-        raise ValueError("Duplicate gene or species event identifier in WGD evidence")
-    anchors = defaultdict(list)
-    for row in read_table(evidence / "anchor_evidence.tsv"):
-        anchors[tuple(sorted((row["gene_a"], row["gene_b"])))].append(row)
+    positions, events, anchors = _load_family_evidence(evidence, {leaf.name for leaf in tree.leaves()})
     clades, branches = CladeIndex(tree), assign_branch_ids(tree)
     nodes = {clades.clade_id_for_node(node): node for node in tree.traverse()}
     result, pair_rows = [], []

@@ -216,3 +216,119 @@ def test_sp2og_preserves_formatted_genes_and_integer_counts(tmp_path):
     assert (out / "Orthogroups.GeneCount.tsv").read_text() == (
         "Orthogroup\tspA\tspB\tTotal\nSP0000001\t2\t0\t2\nSP0000012\t1\t1\t2\n"
     )
+
+
+@pytest.mark.parametrize("existing_output", [False, True])
+@pytest.mark.parametrize("failure", ["late_empty", "late_duplicates", "late_parser_error"])
+def test_late_input_failures_preserve_publication(tmp_path, monkeypatch, existing_output, failure):
+    mod = load_module()
+    monkeypatch.setattr(mod, "FORMAT_CHUNK_SIZE", 2, raising=False)
+    source = tmp_path / "N0.tsv"
+    if failure == "late_empty":
+        # An empty identity takes precedence over an earlier duplicate.
+        identities = ["N0.HOG0", "N0.HOG1", "HOG0", "N0.HOG2", ""]
+        error_type = ValueError
+        expected_error = "Orthogroup table contains an empty family identity"
+    elif failure == "late_duplicates":
+        # Report distinct duplicate identities in second-appearance order,
+        # including collisions created by stripping the leading node prefix.
+        identities = [f"N0.HOG{i}" for i in range(8)]
+        identities += [f"HOG{i}" for i in [4, 1, 4, 7, 2, 6, 0]]
+        error_type = ValueError
+        expected_error = "Orthogroup table contains duplicate family identities: HOG4, HOG1, HOG7, HOG2, HOG6"
+    else:
+        identities = [f"N0.HOG{i}" for i in range(6)]
+        error_type = pandas.errors.ParserError
+        expected_error = None
+    content = "HOG\tOG\tGene Tree Parent Clade\tspA\n"
+    content += "".join(f"{identity}\tOG{i}\tn1\tgene{i}\n" for i, identity in enumerate(identities))
+    if failure == "late_parser_error":
+        content += "N0.HOG6\tOG6\tn1\tgene6\textra_field\n"
+    source.write_text(content, encoding="utf-8")
+    original = source.read_bytes()
+    out = tmp_path / "published"
+    previous = {}
+    if existing_output:
+        out.mkdir()
+        previous = {
+            name: f"previous verified {name}\n".encode()
+            for name in ["Orthogroups.tsv", "Orthogroups.GeneCount.tsv", "README.txt"]
+        }
+        for name, data in previous.items():
+            (out / name).write_bytes(data)
+
+    with pytest.raises(error_type) as caught:
+        mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode="hog2og", dir_out=str(out)))
+
+    if expected_error is not None:
+        assert str(caught.value) == expected_error
+    assert source.read_bytes() == original
+    if existing_output:
+        assert {name: (out / name).read_bytes() for name in previous} == previous
+        assert sorted(path.name for path in out.iterdir()) == sorted(previous)
+    else:
+        assert not out.exists()
+
+
+@pytest.mark.parametrize("mode", ["hog2og", "sp2og"])
+def test_multichunk_cli_preserves_quoted_cells_order_and_global_statistics(tmp_path, monkeypatch, capsys, mode):
+    mod = load_module()
+    monkeypatch.setattr(mod, "FORMAT_CHUNK_SIZE", 2, raising=False)
+    source = tmp_path / "N0.tsv"
+    cells_a = ["007", "a*\nb", "g1\tg2", "", "g1,g2,g3,g4"]
+    cells_b = ["NA", "x,y", "", "", "008"]
+    if mode == "hog2og":
+        input_table = pandas.DataFrame({
+            "spB": cells_b,
+            "HOG": ["N0.HOG1", "HOG2", "N0.HOG3", "N0.HOG4", "N0.HOG5"],
+            "OG": [f"OG{i}" for i in range(5)],
+            "spA": cells_a,
+            "Gene Tree Parent Clade": "N0",
+        })
+        families = [f"HOG{i}" for i in range(1, 6)]
+    else:
+        input_table = pandas.DataFrame({"spB.faa": cells_b, "group_id": ["1", "2", "003", "4", "5"], "spA.fa": cells_a})
+        families = [f"SP{i:07d}" for i in range(1, 6)]
+        cells_a = [value.replace("*", "").replace(",", ", ") for value in cells_a]
+        cells_b = [value.replace(",", ", ") for value in cells_b]
+    input_table.to_csv(source, sep="\t", index=False)
+    original = source.read_bytes()
+    out = tmp_path / "output"
+
+    mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode=mode, dir_out=str(out)))
+
+    expected_orthogroups = pandas.DataFrame({"spB": cells_b, "Orthogroup": families, "spA": cells_a})
+    expected_counts = pandas.DataFrame({
+        "Orthogroup": families,
+        "spB": [1, 2, 0, 0, 1],
+        "spA": [1, 1, 1, 0, 4],
+        "Total": [2, 3, 1, 0, 5],
+    })
+    assert (out / "Orthogroups.tsv").read_text() == expected_orthogroups.to_csv(sep="\t", index=False)
+    assert (out / "Orthogroups.GeneCount.tsv").read_text() == expected_counts.to_csv(sep="\t", index=False)
+    assert source.read_bytes() == original
+    assert (out / "README.txt").is_file()
+    stdout = capsys.readouterr().out
+    assert "Number of Orthogroups: 5\n" in stdout
+    assert "Largest Orthogroup size: 5\n" in stdout
+    assert "Smallest Orthogroup size: 0\n" in stdout
+
+
+@pytest.mark.parametrize("mode", ["hog2og", "sp2og"])
+def test_header_only_cli_preserves_headers_and_empty_statistics(tmp_path, monkeypatch, capsys, mode):
+    mod = load_module()
+    monkeypatch.setattr(mod, "FORMAT_CHUNK_SIZE", 2, raising=False)
+    source = tmp_path / "N0.tsv"
+    header = "HOG\tOG\tGene Tree Parent Clade\tspA\n" if mode == "hog2og" else "group_id\tspA.fa\n"
+    source.write_text(header, encoding="utf-8")
+    out = tmp_path / "output"
+
+    mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode=mode, dir_out=str(out)))
+
+    assert (out / "Orthogroups.tsv").read_text() == "Orthogroup\tspA\n"
+    assert (out / "Orthogroups.GeneCount.tsv").read_text() == "Orthogroup\tspA\tTotal\n"
+    assert (out / "README.txt").is_file()
+    stdout = capsys.readouterr().out
+    assert "Number of Orthogroups: 0\n" in stdout
+    assert "Largest Orthogroup size: nan\n" in stdout
+    assert "Smallest Orthogroup size: nan\n" in stdout
