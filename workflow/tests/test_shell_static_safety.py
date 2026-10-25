@@ -880,7 +880,10 @@ def test_hgt_zip_materialization_uses_locked_run_directory_and_stale_recovery():
     assert "flock -x 197" in core
     assert "if flock -n -x 196; then" in core
     assert 'dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"' in core
-    assert "trap hgt_cleanup_materialization_run EXIT" in core
+    assert "trap hgt_cleanup_on_exit EXIT" in core
+    cleanup = core.split("hgt_cleanup_on_exit() {", 1)[1].split("\n}\n", 1)[0]
+    assert "hgt_cleanup_materialization_run" in cleanup
+    assert cleanup.index('wait "${worker_pid}"') < cleanup.index('directory_output_store.py')
 
 
 def test_common_params_define_reference_species_auto_only_once():

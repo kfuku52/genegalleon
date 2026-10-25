@@ -1,4 +1,5 @@
 import gzip
+import io
 import json
 import os
 import re
@@ -12,6 +13,38 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"
+
+
+def _hgt_read(root, relative):
+    from workflow.support.directory_output_store import open_binary
+    with open_binary(root, str(relative), kind="hgt") as handle:
+        return handle.read()
+
+
+def _hgt_table(root, relative):
+    return pandas.read_csv(io.BytesIO(_hgt_read(root, relative)), sep="\t")
+
+
+def _hgt_members(root, directory):
+    from workflow.support.orthofinder_output_store import archive_records
+    raw = root / directory
+    if raw.is_dir():
+        return {path.relative_to(raw).as_posix() for path in raw.rglob("*") if path.is_file()}
+    if (root / (directory + ".zip")).is_file():
+        return {row["path"] for row in archive_records(root, directory)["files"]}
+    return set()
+
+
+def _hgt_snapshot(root, paths):
+    from workflow.support.orthofinder_output_store import archive_records
+    result = {}
+    for path in paths:
+        relative = path.relative_to(root)
+        directory = relative.parts[0]
+        member = relative.relative_to(directory).as_posix()
+        metadata = next(row for row in archive_records(root, directory)["files"] if row["path"] == member)
+        result[str(path)] = (metadata["mtime_ns"], _hgt_read(root, relative))
+    return result
 
 
 def _has_r_package(package: str) -> bool:
@@ -470,11 +503,13 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
         taxonomy_flow_pdf,
         transfer_tree_pdf,
         transfer_edges_tsv,
-        tree_plot_pdf,
     ]:
         assert path.exists(), f"Expected output not found: {path}"
         assert path.stat().st_size > 0, f"Output was empty: {path}"
 
+    assert (hgt_root / "tree_plot.zip").is_file()
+    assert not tree_plot_pdf.exists()
+    assert _hgt_read(hgt_root, tree_plot_pdf.relative_to(hgt_root)).startswith(b"%PDF")
     readme_text = readme_md.read_text(encoding="utf-8")
     assert "`hgt_branch_candidates.tsv`" in readme_text
     assert "`contamination_is_compatible_lineage`" in readme_text
@@ -498,19 +533,21 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert pandas.read_csv(event_gene_tsv, sep="\t").empty
     # Focus is enabled by default but unresolved reconciliation is not certified.
     focus_root = hgt_root / "trait_focus"
-    focus_index = pandas.read_csv(focus_root / "index.tsv", sep="\t")
+    focus_index = _hgt_table(hgt_root, "trait_focus/index.tsv")
     assert set(focus_index["target"]) == {"ALL_CATEGORY1", "Arabidopsis_thaliana"}
     assert focus_index["event_count"].sum() == 0
-    assert json.loads((focus_root / "manifest.json").read_text())["source_event_count"] == 1
+    assert json.loads(_hgt_read(hgt_root, "trait_focus/manifest.json"))["source_event_count"] == 1
     focused = focus_root / 'traits/test_trait/all_category1'
-    assert not (focused / 'transfer_tree.pdf').exists()
+    members = _hgt_members(hgt_root, "trait_focus")
+    assert 'traits/test_trait/all_category1/transfer_tree.pdf' not in members
     for name in ['filtering_flow','orthogroup_species_distribution','donor_recipient_counts']:
-        assert (focused / 'plots' / (name+'.pdf')).is_file()
-    assert not list((focused / 'tree_plot').glob('*.pdf'))  # Unresolved event cannot become a supported tree.
+        assert _hgt_read(hgt_root, (focused / 'plots' / (name+'.pdf')).relative_to(hgt_root)).startswith(b'%PDF')
+    assert not any(path.startswith('traits/test_trait/all_category1/tree_plot/') and path.endswith('.pdf')
+                   for path in members)  # Unresolved event cannot become a supported tree.
     recipient_result = focus_root / "traits/test_trait/tips/Arabidopsis_thaliana"
-    assert not (recipient_result / "transfer_tree.pdf").exists()
-    assert (recipient_result / "transfer_edges.tsv").is_file()
-    assert (recipient_result / "events.tsv").is_file()
+    assert "traits/test_trait/tips/Arabidopsis_thaliana/transfer_tree.pdf" not in members
+    assert _hgt_read(hgt_root, (recipient_result / "transfer_edges.tsv").relative_to(hgt_root))
+    assert _hgt_read(hgt_root, (recipient_result / "events.tsv").relative_to(hgt_root))
 
     assert branch_df.shape[0] == 1
     assert branch_df.loc[0, "orthogroup"] == "OG0001"
@@ -595,16 +632,16 @@ def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tm
     root = workspace / 'output/hgt'
     paths = [root / 'tree_plot' / f'{family}_hgt_tree_plot.pdf' for family in ['OG0001', 'OG0002']]
     paths += [root / 'tree_plot_input' / f'{family}_hgt_stat.branch.tsv' for family in ['OG0001', 'OG0002']]
-    before = {str(path): (path.stat().st_mtime_ns, path.read_bytes()) for path in paths}
+    before = _hgt_snapshot(root, paths)
     for family in ['OG0001', 'OG0002']:
-        frame = pandas.read_csv(root / 'tree_plot_input' / f'{family}_hgt_stat.branch.tsv', sep='\t')
+        frame = _hgt_table(root, f'tree_plot_input/{family}_hgt_stat.branch.tsv')
         assert set(frame['orthogroup']) == {family}
-        manifest = json.loads((root / 'artifact_provenance' / f'{family}.hgt_tree_plot.json').read_text())
+        manifest = json.loads(_hgt_read(root, f'artifact_provenance/{family}.hgt_tree_plot.json'))
         assert manifest['family_id'] == family
     second = run()
     assert second.returncode == 0, second.stderr
     assert 'Artifact provenance is current:' in second.stderr
-    assert {str(path): (path.stat().st_mtime_ns, path.read_bytes()) for path in paths} == before
+    assert _hgt_snapshot(root, paths) == before
     assert not (root / 'tmp/materialized').exists()
     # A fresh serial export must be identical to the parallel export, apart
     # from the PDF producer's wall-clock metadata.
@@ -614,11 +651,11 @@ def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tm
     assert serial.returncode == 0, serial.stderr
     for family in ['OG0001', 'OG0002']:
         name = f'{family}_hgt_stat.branch.tsv'
-        assert (serial_root / 'tree_plot_input' / name).read_bytes() == (root / 'tree_plot_input' / name).read_bytes()
+        assert _hgt_read(serial_root, 'tree_plot_input/' + name) == _hgt_read(root, 'tree_plot_input/' + name)
         name = f'{family}_hgt_tree_plot.pdf'
-        def canonical_pdf(path):
-            return re.sub(rb'/(CreationDate|ModDate)\s*\(D:[^)]*\)', rb'/\1(D:TIME)', path.read_bytes())
-        assert canonical_pdf(serial_root / 'tree_plot' / name) == canonical_pdf(root / 'tree_plot' / name)
+        def canonical_pdf(payload):
+            return re.sub(rb'/(CreationDate|ModDate)\s*\(D:[^)]*\)', rb'/\1(D:TIME)', payload)
+        assert canonical_pdf(_hgt_read(serial_root, 'tree_plot/' + name)) == canonical_pdf(_hgt_read(root, 'tree_plot/' + name))
 
 
 @pytest.mark.skipif(any(shutil.which(t) is None for t in ('seqkit', 'Rscript')), reason='native HGT runtime required')
@@ -636,14 +673,14 @@ def test_custom_direction_focused_scope_preserves_tables_and_skips_all_candidate
     assert result.returncode == 0, result.stderr
     output = workspace/'output/hgt'
     assert (output/'hgt_branch_candidates.tsv').is_file()
-    assert (output/'trait_focus/direction_event_audit.tsv').is_file()
+    assert _hgt_read(output, 'trait_focus/direction_event_audit.tsv')
     # Missing XML is retained as unresolved; it cannot become a passing transfer.
-    selected = pandas.read_csv(output/'trait_focus/direction_events.tsv', sep='\t')
+    selected = _hgt_table(output, 'trait_focus/direction_events.tsv')
     assert selected.empty
-    assert (output/'trait_focus/traits/test_trait/all_category1/plots/filtering_flow.pdf').is_file()
+    assert _hgt_read(output, 'trait_focus/traits/test_trait/all_category1/plots/filtering_flow.pdf').startswith(b'%PDF')
     assert not (output/'plots/hgt_branch_overview.pdf').exists()
     assert not (output/'tmp/candidate-inputs.sqlite3').exists()
-    assert not list((output/'tree_plot').glob('*.pdf'))
+    assert not any(path.endswith('.pdf') for path in _hgt_members(output, 'tree_plot'))
 
 
 @pytest.mark.skipif(any(shutil.which(t) is None for t in ('seqkit', 'Rscript')), reason='native HGT runtime required')

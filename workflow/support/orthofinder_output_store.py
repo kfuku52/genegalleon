@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Lossless ZIP64 storage for completed OrthoFinder sequence directories.
+"""Lossless ZIP64 storage for completed OrthoFinder result directories.
 
-Tables stay raw. Every OG (including unselected OGs) belongs to this store.
+Shared summary tables stay raw. Every OG (including unselected OGs) belongs to this store.
 No WorkingDirectory or native restart checkpoint is inferred or manufactured.
 """
 
@@ -24,20 +24,29 @@ from pathlib import Path, PurePosixPath
 
 try:
     from . import species_tree_output_store as DIRECTORY
+    from .directory_storage_policy import ALL_DIRECTORIES, DIRECTORY_SCOPES, ORTHOFINDER_DIRECTORIES
     from .shared_namespace_lock import inspect_lock, namespace_lock
 except ImportError:
     import species_tree_output_store as DIRECTORY
+    from directory_storage_policy import ALL_DIRECTORIES, DIRECTORY_SCOPES, ORTHOFINDER_DIRECTORIES
     from shared_namespace_lock import inspect_lock, namespace_lock
 
-MANAGED_DIRECTORIES = (
-    "Orthogroup_Sequences",
-    "MultipleSequenceAlignments",
-    "core/Orthogroup_Sequences",
-    "core/MultipleSequenceAlignments",
-)
+MANAGED_DIRECTORIES = ORTHOFINDER_DIRECTORIES
 MANIFEST = "__gg_orthofinder_manifest__.json"
 MARKER = b"GeneGalleon orthofinder directory archive v1\n"
+DIRECTORY_MARKER = b"GeneGalleon retained directory archive v1\n"
+DIRECTORY_MANIFEST = "__gg_directory_manifest__.json"
+ARCHIVE_BASENAMES = {Path(name).name + ".zip" for name in ALL_DIRECTORIES}
 CHUNK = 1024 * 1024
+
+
+def _format(name):
+    return (MARKER, MANIFEST) if name in MANAGED_DIRECTORIES else (DIRECTORY_MARKER, DIRECTORY_MANIFEST)
+
+
+def _namespace_directories(namespace):
+    _require(namespace == "orthofinder" or namespace in DIRECTORY_SCOPES, "Invalid storage namespace")
+    return MANAGED_DIRECTORIES if namespace == "orthofinder" else DIRECTORY_SCOPES[namespace]
 
 
 class OrthoFinderStorageError(RuntimeError):
@@ -54,17 +63,20 @@ def _physical(path):
     _require(not path.is_symlink(), f"Symlinked storage path: {path}")
 
 
-def lock_path(root):
-    return root.parent / ".gg_orthofinder_storage.lock"
+def lock_path(root, namespace="orthofinder"):
+    if namespace == "orthofinder":
+        return root.parent / ".gg_orthofinder_storage.lock"
+    _require(namespace in DIRECTORY_SCOPES, "Invalid storage namespace")
+    return root.parent / (".gg_" + root.name + "_directory_storage.lock")
 
 
 @contextlib.contextmanager
-def storage_lock(root, *, exclusive=True, producer_lock_token=None):
+def storage_lock(root, *, exclusive=True, producer_lock_token=None, namespace="orthofinder"):
     _physical(root)
     if producer_lock_token is not None:
         # A native producer holds the fence through its child converter. The
         # child may use, but must never release, its live parent's exact lock.
-        owner = inspect_lock(lock_path(root))["exclusive"]
+        owner = inspect_lock(lock_path(root, namespace))["exclusive"]
         _require(
             exclusive and owner is not None and owner.get("token") == producer_lock_token
             and owner.get("pid") == os.getppid() and owner.get("host") == socket.gethostname(),
@@ -72,7 +84,7 @@ def storage_lock(root, *, exclusive=True, producer_lock_token=None):
         )
         yield
         return
-    with namespace_lock(lock_path(root), exclusive=exclusive, timeout=300):
+    with namespace_lock(lock_path(root, namespace), exclusive=exclusive, timeout=300):
         yield
 
 
@@ -99,7 +111,7 @@ class _StreamingWriter:
 
 
 def _paths(root, name):
-    _require(name in MANAGED_DIRECTORIES, f"Unmanaged OrthoFinder directory: {name}")
+    _require(name in ALL_DIRECTORIES, f"Unmanaged output directory: {name}")
     raw = root / name
     archive = raw.with_name(raw.name + ".zip")
     _physical(raw)
@@ -165,10 +177,11 @@ def require_completed(root):
 
 
 def _manifest(archive, path, name):
-    _require(archive.comment == MARKER + name.encode(), f"Unmarked OrthoFinder archive: {path}")
+    marker, manifest_name = _format(name)
+    _require(archive.comment == marker + name.encode(), f"Unmarked directory archive: {path}")
     infos = archive.infolist()
     _require(len({info.filename for info in infos}) == len(infos), f"Duplicate ZIP members: {path}")
-    member = archive.getinfo(MANIFEST)
+    member = archive.getinfo(manifest_name)
     _require(member.file_size <= 256 * 1024 * 1024, f"Oversized manifest: {path}")
     data = json.loads(archive.read(member))
     _require(
@@ -184,7 +197,7 @@ def _manifest(archive, path, name):
             type(row.get("mode")) is int and 0 <= row["mode"] <= 0o7777 and type(row.get("mtime_ns")) is int,
             "Invalid member metadata",
         )
-    expected = {MANIFEST}
+    expected = {manifest_name}
     prefix = Path(name).name
     for record in records:
         relative = PurePosixPath(record["path"])
@@ -334,8 +347,9 @@ def _pack(
                     progress_callback(
                         phase="packing", directory=name, files_completed=index + 1, files_total=len(files)
                     )
-            archive.writestr(MANIFEST, json.dumps(data, sort_keys=True).encode(), compress_type=zipfile.ZIP_DEFLATED)
-            archive.comment = MARKER + name.encode()
+            marker, manifest_name = _format(name)
+            archive.writestr(manifest_name, json.dumps(data, sort_keys=True).encode(), compress_type=zipfile.ZIP_DEFLATED)
+            archive.comment = marker + name.encode()
         # Reuse the exact public verifier before publication, without changing its scope.
         with zipfile.ZipFile(partial) as archive:
             _manifest(archive, partial, name)
@@ -368,12 +382,28 @@ def _space(root, required, available):
     _require(required <= free, f"Insufficient temporary space: required={required}, available={free}")
 
 
+@contextlib.contextmanager
+def _restore_failure_cleanup(raw, data, *, was_raw):
+    try:
+        yield
+    except BaseException:
+        if not was_raw:
+            # A rejected first payload must not leave a newly visible empty
+            # result tree. rmdir never removes an existing or concurrent file.
+            for row in sorted(data["directories"], key=lambda row: len(PurePosixPath(row["path"]).parts), reverse=True):
+                try:
+                    (raw / row["path"]).rmdir()
+                except OSError:
+                    pass
+        raise
+
+
 def _materialize(root, name, *, available_bytes=None, progress_callback=None, **_unused):
     raw, path = _paths(root, name)
     if not path.exists():
         return dict(directory=name, state="raw" if raw.exists() else "absent")
     archive_signature = _signature(path.stat())
-    data = archive_records(root, name, deep=True, progress_callback=progress_callback)
+    data = archive_records(root, name, progress_callback=progress_callback)
     _require(_signature(path.stat()) == archive_signature, "Archive changed during restoration validation")
     _space(
         root,
@@ -381,7 +411,8 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
         + len(data["directories"]) * 4096,
         available_bytes,
     )
-    if raw.exists():
+    was_raw = raw.exists()
+    if was_raw:
         # An interrupted pack may leave an equal subset; reject changed or extra files.
         existing_directories, existing = _inventory(raw)
         known_directories = {row["path"] for row in data["directories"]}
@@ -400,72 +431,88 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
             with _source(p, value) as handle:
                 _require(_hash(handle) == (record["sha256"], record["size"]), f"Raw/ZIP conflict: {p}")
     else:
-        raw.mkdir()
-    with zipfile.ZipFile(path) as archive:
-        for record in data["directories"]:
-            (raw / record["path"]).mkdir(parents=True, exist_ok=True)
-        for record in data["files"]:
-            target = raw / record["path"]
-            if target.exists():
-                continue
-            partial = raw.parent / ("." + raw.name + ".restore." + uuid.uuid4().hex)
-            try:
-                with archive.open(raw.name + "/" + record["path"]) as source, partial.open("xb") as destination:
-                    shutil.copyfileobj(source, destination, CHUNK)
-                    destination.flush()
-                    os.fchmod(destination.fileno(), record["mode"])
-                    os.utime(destination.fileno(), ns=(record["mtime_ns"], record["mtime_ns"]))
-                os.replace(partial, target)
-            finally:
-                partial.unlink(missing_ok=True)
-        for record in reversed(data["directories"]):
-            target = raw / record["path"]
-            os.chmod(target, record["mode"])
-            os.utime(target, ns=(record["mtime_ns"], record["mtime_ns"]))
-    # Read every restored byte before removing its recovery ZIP.
-    restored_directories, files = _inventory(raw)
-    _require(
-        {p.relative_to(raw).as_posix() for p, _ in restored_directories}
-        == {row["path"] for row in data["directories"]},
-        "Restored directory membership differs",
-    )
-    expected = {row["path"]: row for row in data["files"]}
-    _require(len(files) == len(expected), "Restored membership differs")
-    for p, value in files:
-        record = expected[p.relative_to(raw).as_posix()]
+        raw.mkdir(parents=True)
+    with _restore_failure_cleanup(raw, data, was_raw=was_raw):
+        with zipfile.ZipFile(path) as archive:
+            for record in data["directories"]:
+                (raw / record["path"]).mkdir(parents=True, exist_ok=True)
+            for record in data["files"]:
+                target = raw / record["path"]
+                if target.exists():
+                    continue
+                partial = raw.parent / ("." + raw.name + ".restore." + uuid.uuid4().hex)
+                try:
+                    with archive.open(raw.name + "/" + record["path"]) as source, partial.open("xb") as destination:
+                        digest = hashlib.sha256()
+                        copied = 0
+                        while chunk := source.read(CHUNK):
+                            destination.write(chunk)
+                            digest.update(chunk)
+                            copied += len(chunk)
+                        _require((digest.hexdigest(), copied) == (record["sha256"], record["size"]),
+                                 f"ZIP payload mismatch during restoration: {target}")
+                        destination.flush()
+                        os.fchmod(destination.fileno(), record["mode"])
+                        os.utime(destination.fileno(), ns=(record["mtime_ns"], record["mtime_ns"]))
+                    # Unlike replace(), linking a verified temporary file cannot
+                    # overwrite a file another producer created after our inventory.
+                    try:
+                        os.link(partial, target)
+                    except FileExistsError as exc:
+                        raise OrthoFinderStorageError(f"Raw/ZIP publication conflict; target appeared: {target}") from exc
+                except zipfile.BadZipFile as exc:
+                    raise OrthoFinderStorageError(f"Invalid ZIP payload during restoration: {path}: {exc}") from exc
+                finally:
+                    partial.unlink(missing_ok=True)
+            for record in reversed(data["directories"]):
+                target = raw / record["path"]
+                os.chmod(target, record["mode"])
+                os.utime(target, ns=(record["mtime_ns"], record["mtime_ns"]))
+        # Read every restored byte before removing its recovery ZIP.
+        restored_directories, files = _inventory(raw)
         _require(
-            stat.S_IMODE(value.st_mode) == record["mode"] and value.st_mtime_ns == record["mtime_ns"],
-            f"Restored metadata differs: {p}",
+            {p.relative_to(raw).as_posix() for p, _ in restored_directories}
+            == {row["path"] for row in data["directories"]},
+            "Restored directory membership differs",
         )
-        with _source(p, value) as handle:
-            _require(_hash(handle) == (record["sha256"], record["size"]), f"Restored content differs: {p}")
-            # Also sync equal pre-existing files from an interrupted conversion.
-            os.fsync(handle.fileno())
-    for directory, _ in sorted(restored_directories, key=lambda row: len(row[0].parts), reverse=True):
-        _sync_directory(directory)
-    _sync_directory(raw.parent)
-    final_directories, final_files = _inventory(raw)
-    _require(
-        [(p, _signature(s)) for p, s in final_directories + final_files]
-        == [(p, _signature(s)) for p, s in restored_directories + files],
-        "Restored inventory changed before commit",
-    )
-    _require(_signature(path.stat()) == archive_signature, "Archive changed before restoration commit")
+        expected = {row["path"]: row for row in data["files"]}
+        _require(len(files) == len(expected), "Restored membership differs")
+        for p, value in files:
+            record = expected[p.relative_to(raw).as_posix()]
+            _require(
+                stat.S_IMODE(value.st_mode) == record["mode"] and value.st_mtime_ns == record["mtime_ns"],
+                f"Restored metadata differs: {p}",
+            )
+            with _source(p, value) as handle:
+                _require(_hash(handle) == (record["sha256"], record["size"]), f"Restored content differs: {p}")
+                # Also sync equal pre-existing files from an interrupted conversion.
+                os.fsync(handle.fileno())
+        for directory, _ in sorted(restored_directories, key=lambda row: len(row[0].parts), reverse=True):
+            _sync_directory(directory)
+        _sync_directory(raw.parent)
+        final_directories, final_files = _inventory(raw)
+        _require(
+            [(p, _signature(s)) for p, s in final_directories + final_files]
+            == [(p, _signature(s)) for p, s in restored_directories + files],
+            "Restored inventory changed before commit",
+        )
+        _require(_signature(path.stat()) == archive_signature, "Archive changed before restoration commit")
     path.unlink()
     _sync_directory(path.parent)
     return dict(directory=name, state="raw", files=len(files))
 
 
-def convert(root, *, to="zip", directories=None, workers=1, producer_lock_token=None, **options):
+def convert(root, *, to="zip", directories=None, workers=1, producer_lock_token=None, namespace="orthofinder", **options):
     root = Path(root).absolute()
-    names = tuple(directories or MANAGED_DIRECTORIES)
+    allowed = _namespace_directories(namespace)
+    names = tuple(directories or allowed)
     _require(
-        all(name in MANAGED_DIRECTORIES for name in names) and len(names) == len(set(names)),
+        all(name in allowed for name in names) and len(names) == len(set(names)),
         "Invalid directory selection",
     )
     _require(1 <= workers <= 4 and to in ("zip", "raw"), "Invalid conversion settings")
-    with storage_lock(root, producer_lock_token=producer_lock_token):
-        if to == "zip" and any((root / name).exists() for name in names):
+    with storage_lock(root, producer_lock_token=producer_lock_token, namespace=namespace):
+        if namespace == "orthofinder" and to == "zip" and any((root / name).exists() for name in names):
             require_completed(root)
         if workers > 1:
             # The standalone backend needs the same aggregate quota guard as
@@ -515,34 +562,125 @@ def status(root, directories=None):
     return records
 
 
+def logical_directory_exists(raw, *, observe=lambda _path: None):
+    raw = Path(raw)
+    return _archive_location(raw.with_name(raw.name + ".zip"), observe=observe) is not None
+
+
+def logical_file_location(path, *, observe=lambda _path: None):
+    """Resolve a missing physical file inside a recognized directory archive."""
+    path = Path(path).absolute()
+    for parent in path.parents:
+        if parent.name + ".zip" not in ARCHIVE_BASENAMES:
+            continue
+        location = _archive_location(parent.with_name(parent.name + ".zip"), observe=observe)
+        if location is None:
+            continue
+        _require(not parent.exists(), f"Incomplete conversion; raw and ZIP both exist: {parent}")
+        root, name = location
+        relative = path.relative_to(parent).as_posix()
+        records = archive_records(root, name)["files"]
+        if not any(row["path"] == relative for row in records):
+            return None
+        namespace = "orthofinder" if name in MANAGED_DIRECTORIES else next(
+            scope for scope, names in DIRECTORY_SCOPES.items() if name in names)
+        return root, name, relative, namespace
+    return None
+
+
 def logical_directory_records(raw):
-    """Recognize the versioned archive for a declared raw-or-ZIP directory."""
+    """Read logical files, including managed ZIPs nested inside an archived directory."""
     raw = Path(raw)
     path = raw.with_name(raw.name + ".zip")
     location = _archive_location(path)
     if location is None:
         return None
     _require(not raw.exists(), f"Incomplete conversion; raw and ZIP both exist: {raw}")
-    root, name = location
-    return archive_records(root, name, deep=True)["files"]
+    return _logical_archive_records(*location)
 
 
-def _archive_location(path):
-    if path.name not in {"Orthogroup_Sequences.zip", "MultipleSequenceAlignments.zip"}:
+def _logical_members(archive, path, name):
+    data = _manifest(archive, path, name)
+    rows = []
+    directories = {record["path"] for record in data["directories"]}
+    for record in data["files"]:
+        relative = PurePosixPath(record["path"])
+        member = Path(name).name + "/" + record["path"]
+        if relative.name not in ARCHIVE_BASENAMES:
+            with archive.open(member) as handle:
+                actual = _hash(handle)
+            _require(actual == (record["sha256"], record["size"]), f"SHA256 mismatch in {path}: {relative}")
+            rows.append(record)
+            continue
+        # Nested ZIPs need seeking. Spool only these members, with a bounded
+        # in-memory buffer; large nested archives spill into caller-local scratch.
+        with tempfile.SpooledTemporaryFile(max_size=8 * CHUNK) as spool:
+            digest = hashlib.sha256()
+            size = 0
+            with archive.open(member) as source:
+                while chunk := source.read(CHUNK):
+                    spool.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+            _require((digest.hexdigest(), size) == (record["sha256"], record["size"]),
+                     f"SHA256 mismatch in {path}: {relative}")
+            spool.seek(0)
+            try:
+                child = zipfile.ZipFile(spool)
+            except zipfile.BadZipFile:
+                rows.append(record)  # An ordinary, unmarked .zip is a physical file.
+                continue
+            with child:
+                child_name = _marked_name(child)
+                if child_name is None:
+                    rows.append(record)
+                    continue
+                suffix = PurePosixPath(child_name + ".zip").parts
+                _require(relative.parts[-len(suffix):] == suffix, f"Misplaced nested archive: {path}:{relative}")
+                prefix = relative.with_suffix("").as_posix()
+                _require(prefix not in directories, f"Incomplete conversion; nested raw and ZIP both exist: {prefix}")
+                rows.extend(dict(row, path=prefix + "/" + row["path"])
+                            for row in _logical_members(child, f"{path}:{relative}", child_name))
+    return rows
+
+
+def _logical_archive_records(root, name):
+    _, path = _paths(root, name)
+    before = _signature(path.stat())
+    try:
+        with zipfile.ZipFile(path) as archive:
+            rows = _logical_members(archive, path, name)
+    except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as exc:
+        raise OrthoFinderStorageError(f"Invalid logical directory archive {path}: {exc}") from exc
+    _require(_signature(path.stat()) == before, f"Archive changed during read: {path}")
+    return rows
+
+
+def _marked_name(archive):
+    marker = next((prefix for prefix in (MARKER, DIRECTORY_MARKER) if archive.comment.startswith(prefix)), None)
+    if marker is None:
         return None
+    name = archive.comment[len(marker):].decode()
+    _require(name in ALL_DIRECTORIES and _format(name)[0] == marker, "Invalid archive directory marker")
+    return name
+
+
+def _archive_location(path, *, observe=lambda _path: None):
+    if path.name not in ARCHIVE_BASENAMES:
+        return None
+    observe(path)
     _physical(path)
     if not path.is_file():
         return None
     try:
         with zipfile.ZipFile(path) as archive:
-            if not archive.comment.startswith(MARKER):
+            name = _marked_name(archive)
+            if name is None:
                 return None
-            name = archive.comment[len(MARKER):].decode()
     except UnicodeDecodeError as exc:
         raise OrthoFinderStorageError(f"Invalid archive directory marker: {path}") from exc
     except zipfile.BadZipFile:
         return None  # An unmarked physical ZIP is ordinary provenance input.
-    _require(name in MANAGED_DIRECTORIES, f"Invalid archive directory: {path}")
     base = path.parents[len(PurePosixPath(name).parts) - 1]
     _, expected = _paths(base, name)
     _require(path == expected, f"Misplaced OrthoFinder archive: {path}")
@@ -559,7 +697,7 @@ def logical_records(root, *, observe=lambda _path: None, children=None):
     inventory = children if children is not None else sorted(root.rglob("*"))
     archives = {}
     for path in inventory:
-        if path.name not in {"Orthogroup_Sequences.zip", "MultipleSequenceAlignments.zip"}:
+        if path.name not in ARCHIVE_BASENAMES:
             continue
         observe(path)
         location = _archive_location(path)
@@ -577,8 +715,8 @@ def logical_records(root, *, observe=lambda _path: None, children=None):
         _require(not path.is_symlink(), f"Symlinked provenance member: {path}")
         if path in archives:
             base, name, prefix = archives[path]
-            data = archive_records(base, name, deep=True)
-            rows.extend((prefix + "/" + row["path"], row["sha256"], row["size"]) for row in data["files"])
+            records = _logical_archive_records(base, name)
+            rows.extend((prefix + "/" + row["path"], row["sha256"], row["size"]) for row in records)
         elif path.is_file():
             before = path.stat()
             with _source(path, before) as handle:
@@ -589,10 +727,12 @@ def logical_records(root, *, observe=lambda _path: None, children=None):
 
 
 @contextlib.contextmanager
-def materialized_directory(root, name, scratch):
+def materialized_directory(root, name, scratch, *, namespace="orthofinder"):
     """Give native tools a raw directory, expanding only into caller-owned scratch."""
     root = Path(root).absolute()
-    with storage_lock(root, exclusive=False):
+    allowed = _namespace_directories(namespace)
+    _require(name in allowed, "Directory is outside the selected storage namespace")
+    with storage_lock(root, exclusive=False, namespace=namespace):
         raw, path = _paths(root, name)
         if raw.exists() and not path.exists():
             yield raw
@@ -609,14 +749,15 @@ def materialized_directory(root, name, scratch):
 
 
 @contextlib.contextmanager
-def open_binary(root, relative):
+def open_binary(root, relative, *, namespace="orthofinder"):
     """Read a result member without expanding its directory onto NFS."""
     root, relative = Path(root).absolute(), PurePosixPath(relative)
     _require(not relative.is_absolute() and ".." not in relative.parts, "Unsafe logical path")
-    with storage_lock(root, exclusive=False):
+    allowed = _namespace_directories(namespace)
+    with storage_lock(root, exclusive=False, namespace=namespace):
         path = root / relative
         _physical(path)
-        for name in MANAGED_DIRECTORIES:
+        for name in allowed:
             if PurePosixPath(name) in relative.parents:
                 raw, archive_path = _paths(root, name)
                 _require(not (raw.exists() and archive_path.exists()), f"Incomplete conversion: {raw}")
@@ -624,7 +765,7 @@ def open_binary(root, relative):
             with _source(path, path.stat()) as handle:
                 yield handle
             return
-        for name in MANAGED_DIRECTORIES:
+        for name in allowed:
             prefix = PurePosixPath(name)
             if prefix in relative.parents:
                 _, archive_path = _paths(root, name)

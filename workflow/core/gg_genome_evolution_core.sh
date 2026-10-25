@@ -2997,6 +2997,58 @@ orthofinder_storage_lock_release() {
   fi
 }
 
+# Keep the native BUSCO consumers on their historical paths while this workflow owns them.
+genome_evolution_storage_lock_token=""
+genome_evolution_storage_mode="${GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE:-zip}"
+case "${genome_evolution_storage_mode}" in
+  zip|files|raw) ;;
+  *) echo "Invalid GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE=${genome_evolution_storage_mode}" >&2; exit 2 ;;
+esac
+
+genome_evolution_storage_require_native_paths() {
+  [[ "${genome_evolution_storage_materialized:-0}" == 0 ]] || return 0
+  python "${gg_support_dir}/directory_output_store.py" materialize --kind genome_evolution \
+    --root "${dir_genome_evolution}" --producer-lock-token "${genome_evolution_storage_lock_token}" || return $?
+  genome_evolution_storage_materialized=1
+}
+
+genome_evolution_storage_prepare() {
+  genome_evolution_storage_lock_file="${gg_workspace_output_dir}/.gg_genome_evolution_directory_storage.lock"
+  genome_evolution_storage_lock_token=$(python "${gg_support_dir}/shared_namespace_lock.py" acquire-exclusive \
+    "${genome_evolution_storage_lock_file}" --owner-pid "$$") || return $?
+  genome_evolution_storage_materialized=0
+  local stage=""
+  local needs_native_paths=0
+  if [[ "${genome_evolution_storage_mode}" != zip ]]; then
+    needs_native_paths=1
+  else
+    while IFS= read -r stage; do
+      if [[ "${!stage:-0}" == 1 ]]; then
+        needs_native_paths=1
+        break
+      fi
+    done < <(compgen -A variable run_busco_dupaware_)
+  fi
+  # Disabled BUSCO stages can audit their declared logical ZIP directories.
+  # Keep completed archives intact when no native consumer needs real paths.
+  if [[ ${needs_native_paths} -eq 1 ]]; then
+    genome_evolution_storage_require_native_paths
+  fi
+}
+
+genome_evolution_storage_finish() {
+  local archive_status=0
+  [[ -n "${genome_evolution_storage_lock_token:-}" ]] || return 0
+  if [[ "${genome_evolution_storage_mode}" == zip && -z "$(jobs -pr)" ]]; then
+    python "${gg_support_dir}/directory_output_store.py" pack --kind genome_evolution \
+      --root "${dir_genome_evolution}" --producer-lock-token "${genome_evolution_storage_lock_token}" || archive_status=$?
+  fi
+  python "${gg_support_dir}/shared_namespace_lock.py" release-exclusive \
+    "${genome_evolution_storage_lock_file}" --token "${genome_evolution_storage_lock_token}" || return $?
+  genome_evolution_storage_lock_token=""
+  return "${archive_status}"
+}
+
 cleanup_genome_evolution_on_exit() {
   local exit_status=$?
   local cleanup_status=0
@@ -3016,6 +3068,8 @@ cleanup_genome_evolution_on_exit() {
     species_tree_archive_managed_directories
     archive_status=$?
   fi
+  genome_evolution_storage_finish
+  cleanup_status=$((cleanup_status + $?))
   if [[ ${exit_status} -eq 0 ]]; then
     if [[ ${cleanup_status} -ne 0 ]]; then
       exit_status=${cleanup_status}
@@ -3107,6 +3161,9 @@ fi
 # Imported analysis inputs in selection-only runs are validated and hashed by
 # the copy-number stages below; disabled sequence/tree producers do not own them.
 if [[ ${copy_number_selection_only} -ne 1 ]]; then
+if [[ "${genome_evolution_mode}" == all ]]; then
+  genome_evolution_storage_prepare || exit $?
+fi
 shared_protein_input_signature=$(compute_shared_protein_input_signature)
 species_tree_requested_for_orthofinder=0
 if species_tree_summary_generation_requested; then
@@ -5865,6 +5922,7 @@ busco_extract_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_extract_needs_update run_busco_dupaware_extract_fasta "${busco_extract_provenance_args[@]}" || exit $?
 if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   prepare_species_tree_input_dir
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_fasta}"
@@ -5924,6 +5982,7 @@ busco_mafft_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_mafft_needs_update run_busco_dupaware_mafft "${busco_mafft_provenance_args[@]}" || exit $?
 if [[ ${busco_mafft_needs_update} -eq 1 && ${run_busco_dupaware_mafft} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_mafft}"
   ensure_dir "${dir_busco_mafft}"
@@ -6024,6 +6083,7 @@ busco_trimal_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_trimal_needs_update run_busco_dupaware_trimal "${busco_trimal_provenance_args[@]}" || exit $?
 if [[ ${busco_trimal_needs_update} -eq 1 && ${run_busco_dupaware_trimal} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_trimal}"
   ensure_dir "${dir_busco_trimal}"
@@ -6083,6 +6143,7 @@ busco_iqtree_dna_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_iqtree_dna_needs_update run_busco_dupaware_iqtree_dna "${busco_iqtree_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_iqtree_dna_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_iqtree_dna}"
   ensure_dir "${dir_busco_iqtree_dna}"
@@ -6142,6 +6203,7 @@ busco_iqtree_pep_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_iqtree_pep_needs_update run_busco_dupaware_iqtree_pep "${busco_iqtree_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_iqtree_pep_needs_update} -eq 1 && ${run_busco_dupaware_iqtree_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   rm -rf -- "${dir_busco_iqtree_pep}"
   ensure_dir "${dir_busco_iqtree_pep}"
@@ -6213,6 +6275,7 @@ if [[ -n "${species_label_map_tsv}" ]]; then
 fi
 gg_artifact_prepare_stage busco_reconciliation_dna_needs_update run_busco_dupaware_reconciliation_root_dna "${busco_reconciliation_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_reconciliation_dna_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-dna.XXXXXX") || exit $?
 
@@ -6250,6 +6313,7 @@ if [[ -n "${species_label_map_tsv}" ]]; then
 fi
 gg_artifact_prepare_stage busco_reconciliation_pep_needs_update run_busco_dupaware_reconciliation_root_pep "${busco_reconciliation_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_reconciliation_pep_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-pep.XXXXXX") || exit $?
 
@@ -6285,6 +6349,7 @@ busco_root_dna_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_root_dna_needs_update run_busco_dupaware_root_dna "${busco_root_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-dna.XXXXXX")
   ensure_dir "${busco_root_stage_dir}/reports"
@@ -6324,6 +6389,7 @@ busco_root_pep_provenance_args+=(
 )
 gg_artifact_prepare_stage busco_root_pep_needs_update run_busco_dupaware_root_pep "${busco_root_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_root_stage_dir=$(mktemp -d "./tmp.busco-root-pep.XXXXXX")
   ensure_dir "${busco_root_stage_dir}/reports"
@@ -6378,6 +6444,7 @@ fi
 grampa_locus_provenance busco_grampa_dna_provenance_args "${file_busco_grampa_dna%/*}"
 gg_artifact_prepare_stage busco_grampa_dna_needs_update run_busco_dupaware_grampa_dna "${busco_grampa_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_dna_needs_update} -eq 1 && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}" || exit $?
   gg_artifact_record "${busco_grampa_dna_provenance_args[@]}"
@@ -6416,6 +6483,7 @@ fi
 grampa_locus_provenance busco_grampa_pep_provenance_args "${file_busco_grampa_pep%/*}"
 gg_artifact_prepare_stage busco_grampa_pep_needs_update run_busco_dupaware_grampa_pep "${busco_grampa_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_pep_needs_update} -eq 1 && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
+  genome_evolution_storage_require_native_paths || exit $?
   gg_step_start "${task}"
   busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}" || exit $?
   gg_artifact_record "${busco_grampa_pep_provenance_args[@]}"

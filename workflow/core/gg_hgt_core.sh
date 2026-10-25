@@ -339,7 +339,44 @@ hgt_cleanup_family_materialization() {
   esac
 }
 
-trap hgt_cleanup_materialization_run EXIT
+hgt_storage_lock_token=""
+hgt_storage_mode="${GG_COMMON_HGT_OUTPUT_STORAGE:-zip}"
+case "${hgt_storage_mode}" in
+  zip|files|raw) ;;
+  *) echo "Invalid GG_COMMON_HGT_OUTPUT_STORAGE=${hgt_storage_mode}" >&2; exit 2 ;;
+esac
+
+hgt_cleanup_on_exit() {
+  local exit_status=$?
+  local cleanup_status=0
+  local worker_pid=""
+  trap - EXIT
+  set +e
+  # Every family producer must finish before its files can be verified and packed.
+  for worker_pid in "${hgt_plot_pids[@]}"; do
+    wait "${worker_pid}" || cleanup_status=1
+  done
+  hgt_cleanup_materialization_run || cleanup_status=1
+  if [[ -n "${hgt_storage_lock_token:-}" ]]; then
+    if [[ "${hgt_storage_mode}" == zip ]]; then
+      python "${gg_support_dir}/directory_output_store.py" pack --kind hgt --root "${dir_hgt}" \
+        --producer-lock-token "${hgt_storage_lock_token}" || cleanup_status=1
+    fi
+    python "${gg_support_dir}/shared_namespace_lock.py" release-exclusive \
+      "${hgt_storage_lock_file}" --token "${hgt_storage_lock_token}" || cleanup_status=1
+  fi
+  [[ ${exit_status} -ne 0 ]] || exit_status=${cleanup_status}
+  exit "${exit_status}"
+}
+
+hgt_plot_pids=()
+trap hgt_cleanup_on_exit EXIT
+hgt_storage_lock_file="$(dirname "${dir_hgt}")/.gg_$(basename "${dir_hgt}")_directory_storage.lock"
+hgt_storage_lock_token=$(python "${gg_support_dir}/shared_namespace_lock.py" acquire-exclusive \
+  "${hgt_storage_lock_file}" --owner-pid "$$") || exit $?
+python "${gg_support_dir}/directory_output_store.py" materialize --kind hgt --root "${dir_hgt}" \
+  --producer-lock-token "${hgt_storage_lock_token}" || exit $?
+
 
 contamination_arg=""
 if [[ -n "${hgt_contamination_dir}" ]]; then
@@ -1004,5 +1041,4 @@ if [[ "${hgt_plot_scope}" == "all" && -s "${file_hgt_branch}" && -s "${file_hgt_
 fi
 
 hgt_cleanup_materialization_run
-trap - EXIT
 echo "$(date): Exiting Singularity environment"
