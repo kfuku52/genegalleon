@@ -644,3 +644,27 @@ def test_promoter_coordinates_join_to_branch_annotations(tmp_path, compressed):
     expected = {"terminal": "3:6", "isolated": "1,3,5:6", "short": "1,1:6", "noNs": "3:6", "empty": "0:6"}
     assert branches.loc[list(expected), "promoter_N"].to_dict() == expected
     assert branches.loc[list(expected), "promoter_available"].tolist() == ["Y"] * len(expected)
+
+
+@pytest.mark.parametrize('internal', ['', 'spAB'])
+@pytest.mark.parametrize('root', ['', 'spRoot'])
+@pytest.mark.parametrize('dated', [False, True])
+def test_species_mapping_accepts_unnamed_internal_nodes_without_renaming_tree(tmp_path, internal, root, dated):
+    species = tmp_path / 'species.nwk'
+    original = f'((Species_a:1,Species_b:1){internal}:1,Species_c:2){root};\n'
+    species.write_text(original)
+    gene = tmp_path / 'gene.nwk'
+    gene.write_text('((Species_a_g1:1,Species_b_g1:1)geneAB:1,Species_c_g1:2)geneRoot;\n')
+    command = [sys.executable, str(SCRIPT_PATH), '--rooted_tree', str(gene), '--species_tree', str(species)]
+    if dated:
+        command += ['--dated_tree', str(gene)]
+    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    table = pandas.read_csv(tmp_path / 'orthogroup.branch.tsv', sep='\t', keep_default_na=False).set_index('node_name')
+    assert table.loc['geneAB', 'spnode_coverage'] == internal
+    assert table.loc['geneRoot', 'spnode_coverage'] == root
+    assert table.loc['Species_a_g1', 'spnode_coverage'] == 'Species_a'
+    if dated:
+        assert table.loc['geneAB', 'spnode_age'] == internal
+        assert table.loc['geneRoot', 'spnode_age'] == root
+    assert species.read_text() == original

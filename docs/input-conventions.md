@@ -21,6 +21,10 @@ use [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-
 instead. The default still excludes duplicates; the two opt-in policies cannot
 be enabled together.
 
+Internal species-tree node names are optional. Statistics retain an empty
+mapping label for an unnamed node and preserve the original tree topology,
+branch lengths, and Newick file.
+
 ### Species naming
 
 Species IDs are inferred from filename prefixes such as `GENUS_SPECIES`.

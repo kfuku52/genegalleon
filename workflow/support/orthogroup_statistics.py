@@ -1100,7 +1100,7 @@ def main():
         if is_ultrametric:
             cn.append("spnode_age")
         species_nodes = list(species_tree.traverse(strategy="postorder"))
-        species_names = {sn: sn.name.replace("'", "") for sn in species_nodes}
+        species_names = {sn: (sn.name or "").replace("'", "") for sn in species_nodes}
         species_leaf_node = {leaf.name: leaf for leaf in iter_leaves(species_tree)}
         species_depth = {}
         for sn in species_tree.traverse(strategy="preorder"):
