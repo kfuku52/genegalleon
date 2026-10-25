@@ -658,7 +658,11 @@ def test_species_mapping_accepts_unnamed_internal_nodes_without_renaming_tree(tm
     command = [sys.executable, str(SCRIPT_PATH), '--rooted_tree', str(gene), '--species_tree', str(species)]
     if dated:
         command += ['--dated_tree', str(gene)]
-    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    stub_root = tmp_path / 'stub_packages'
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, (str(stub_root), env.get('PYTHONPATH', ''))))
+    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr
     table = pandas.read_csv(tmp_path / 'orthogroup.branch.tsv', sep='\t', keep_default_na=False).set_index('node_name')
     assert table.loc['geneAB', 'spnode_coverage'] == internal
