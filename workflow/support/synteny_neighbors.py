@@ -212,7 +212,7 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
         contract["inputs"]["representative_map_sha256"] = sha256_file(representative_map)
         contract["parameters"]["multiple_hits"] = "representative_map"
     if sequence_mode == "protein":
-        contract["parameters"].update(mode="gene_coordinates", gff_annotation_schema=6)
+        contract["parameters"].update(mode="gene_coordinates", gff_annotation_schema=7)
     return contract
 
 

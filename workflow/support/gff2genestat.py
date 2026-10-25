@@ -1201,7 +1201,7 @@ def read_coding_gff_table(gff_path):
         return read_gff_table(stream)
 
 
-def validate_locus_children(gff, loci):
+def validate_locus_children(gff, loci, segments=None):
     """A physical locus may contain overlapping exons, never foreign coordinates."""
     parents_by_id = {}
     records = []
@@ -1229,9 +1229,46 @@ def validate_locus_children(gff, loci):
         ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
         for ancestor in ancestors:
             chromosome, strand, start, end = loci[ancestor]
-            if (str(row.sequence) != chromosome or str(row.strand) != strand
+            parts = (segments or {}).get(ancestor, [(start, end)])
+            feature_block = str(row.feature) in {"CDS", "exon", "five_prime_UTR", "three_prime_UTR"}
+            contained = any(int(row.start) >= left and int(row.end) <= right for left, right in parts)
+            if (feature_block and not contained) or (str(row.sequence) != chromosome or str(row.strand) != strand
                     or int(row.start) < start or int(row.end) > end or int(row.end) < int(row.start)):
                 raise ValueError("GFF child coordinates disagree with gene locus: " + ancestor)
+
+
+def physical_gene_interval(group, gene_id):
+    """One GFF3 gene feature may have multiple disjoint rows with the same ID.
+
+    Report its genomic envelope for neighborhood ordering, while retaining
+    each declared segment for descendant feature containment checks.
+    """
+    identifiers = {parse_attribute_fields(value)[0] for value in group["attributes"]}
+    intervals = sorted({(str(row.sequence), str(row.strand), int(row.start), int(row.end))
+                        for row in group.itertuples(index=False)})
+    if len(identifiers) != 1 or "" in identifiers or len({row[:2] for row in intervals}) != 1:
+        raise ValueError("Ambiguous GFF gene interval for " + gene_id)
+    chromosome, strand = intervals[0][:2]
+    if (not chromosome or group["sequence"].isna().any() or strand not in {"+", "-"}
+            or any(start < 1 or end < start for _, _, start, end in intervals)):
+        raise ValueError("Invalid GFF gene coordinates for " + gene_id)
+    parts = [(start, end) for _, _, start, end in intervals]
+    if any(right[0] <= left[1] for left, right in zip(parts, parts[1:], strict=False)):
+        raise ValueError("Overlapping GFF gene parts for " + gene_id)
+    attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
+    for key in ["Name", "gene", "gene_id", "locus_tag", "Parent", "gbkey", "gene_biotype"]:
+        if len({tuple(row.get(key, ())) for row in attributes}) != 1:
+            raise ValueError("Conflicting GFF gene identity attributes for " + gene_id)
+    if any("part" in row for row in attributes):
+        orders = set()
+        for row in attributes:
+            values = row.get("part", [])
+            if len(values) != 1 or re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", values[0]) is None:
+                raise ValueError("Invalid GFF gene part order for " + gene_id)
+            orders.add(tuple(map(int, values[0].split("/"))))
+        if orders != {(index, len(parts)) for index in range(1, len(parts) + 1)}:
+            raise ValueError("Incomplete GFF gene part order for " + gene_id)
+    return next(iter(identifiers)), (chromosome, strand, parts[0][0], parts[-1][1]), parts
 
 
 def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representative_map=None):
@@ -1246,20 +1283,16 @@ def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representa
     genes = extract_by_ids(gff, seq_names, "gene", multiple_hits, canonical_aliases=True)
     rows = []
     loci = {}
+    segments = {}
     if representative_map is None:
         for gene_id, group in genes.groupby("gene_id", sort=False):
-            identities = {parse_attribute_fields(value)[0] for value in group["attributes"]}
-            intervals = {(str(row.sequence), str(row.strand), int(row.start), int(row.end))
-                         for row in group.itertuples(index=False)}
-            if len(identities) != 1 or "" in identities or len(intervals) != 1:
-                raise ValueError("Ambiguous GFF gene interval for " + gene_id)
-            chromosome, strand, start, end = next(iter(intervals))
-            if not chromosome or pandas.isna(group.iloc[0].sequence) or strand not in {"+", "-"} or start < 1 or end < start:
-                raise ValueError("Invalid GFF gene coordinates for " + gene_id)
-            loci[next(iter(identities))] = (chromosome, strand, start, end)
+            identifier, interval, parts = physical_gene_interval(group, gene_id)
+            chromosome, strand, start, end = interval
+            loci[identifier] = interval
+            segments[identifier] = parts
             rows.append(dict(gene_id=gene_id, chromosome=chromosome, start=start, end=end,
                              strand=strand, coordinate_source="gene"))
-        validate_locus_children(gff, loci)
+        validate_locus_children(gff, loci, segments)
     mapped = {row["gene_id"] for row in rows}
     remaining = [identifier for identifier in seq_names if identifier not in mapped]
     if remaining:

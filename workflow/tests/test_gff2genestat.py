@@ -56,7 +56,7 @@ def test_physical_gene_coordinates_reject_ambiguous_or_foreign_loci(tmp_path, de
     elif defect == "bounds":
         rows[-1][4] = 31
     elif defect in {"collision", "duplicate"}:
-        rows.append(["chr1", "s", "gene", 40, 60, ".", "+", ".",
+        rows.append(["chr1", "s", "gene", 15, 60, ".", "+", ".",
                      "ID=gene:g_1" if defect == "collision" else "ID=gene:g__1"])
     else:
         rows[-1][-1] = "ID=c;Parent=cycle"
@@ -1251,3 +1251,54 @@ def test_explicit_version_wins_over_unversioned_fasta_gene(tmp_path):
     identifiers = ['Danio_rerio_ENSDARG00000000001', 'Danio_rerio_ENSDARG00000000001.6']
     rows = extract_by_ids(gff, pandas.Series(identifiers), 'CDS', 'longest')
     assert rows.gene_id.tolist() == [identifiers[1]]
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("metadata", ["", "is_ordered", "part"])
+def test_physical_gene_coordinates_support_discontinuous_gff3_gene(strand, metadata):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = []
+    for index, (start, end) in enumerate([(1090, 1098), (100, 159), (1, 60)], 1):
+        suffix = ";is_ordered=true" if metadata == "is_ordered" else (
+            f";part={index}/3" if metadata == "part" else "")
+        rows.append(["chr1", "s", "gene", start, end, ".", strand, ".", "ID=gene:g1;Name=g1" + suffix])
+        rows.append(["chr1", "s", "CDS", start, end, ".", strand, "0", "ID=c1;Parent=gene:g1"])
+    # A transcript can span the discontinuities; each individual exon/CDS stays in a part.
+    rows.append(["chr1", "s", "mRNA", 1, 1098, ".", strand, ".", "ID=t;Parent=gene:g1"])
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    table = gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+    assert table.to_dict("records") == [dict(gene_id="Species_a_g1", chromosome="chr1",
+                                              start=1, end=1098, strand=strand, coordinate_source="gene")]
+
+
+@pytest.mark.parametrize("defect", ["contig", "strand", "overlap", "identity", "part_missing",
+                                    "part_repeated", "part_total", "cds_in_gap", "exon_in_gap"])
+def test_multipart_gene_coordinates_keep_identity_and_segment_checks(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = [["chr1", "s", "gene", 1, 30, ".", "+", ".", "ID=gene:g1;Name=g1;part=1/2"],
+            ["chr1", "s", "gene", 41, 60, ".", "+", ".", "ID=gene:g1;Name=g1;part=2/2"],
+            ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=gene:g1"]]
+    if defect == "contig":
+        rows[1][0] = "other"
+    elif defect == "strand":
+        rows[1][6] = "-"
+    elif defect == "overlap":
+        rows[1][3] = 25
+    elif defect == "identity":
+        rows[1][-1] = rows[1][-1].replace("Name=g1", "Name=foreign")
+    elif defect == "part_missing":
+        rows[1][-1] = rows[1][-1].replace(";part=2/2", "")
+    elif defect == "part_repeated":
+        rows[1][-1] = rows[1][-1].replace("part=2/2", "part=1/2")
+    elif defect == "part_total":
+        rows[1][-1] = rows[1][-1].replace("part=2/2", "part=2/3")
+    else:
+        rows[-1][2] = "CDS" if defect == "cds_in_gap" else "exon"
+        rows[-1][3:5] = [31, 39]
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")

@@ -198,6 +198,11 @@ Protein-mode synteny uses `gff2genestat.py --mode gene_coordinates` to read
 physical gene loci. An exact gene interval remains usable when the source
 provides RNA/exon annotations without CDS, or overlapping CDS parts. The table
 records `coordinate_source=gene` and does not report coding frames or introns.
+Discontinuous GFF3 gene rows sharing one exact feature ID on one chromosome
+and strand use their genomic envelope; declared nonoverlapping parts still bound
+CDS/exon/UTR children. Conflicting identities, overlapping gene parts, and
+incomplete explicit `part=X/Y` orders fail. This follows the
+[NCBI GFF3 feature ID contract](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/file-formats/annotation-files/about-ncbi-gff3/).
 Gene identity, chromosome, strand, bounds, ancestry and child containment remain
 strict; ambiguous normalized source identifiers fail. Identifier matching uses
 the formatter's complete canonical identifier and retains accession versions.
