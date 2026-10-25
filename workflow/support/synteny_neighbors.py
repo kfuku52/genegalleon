@@ -190,7 +190,7 @@ def sha256_file(path):
 
 
 def species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map=None,
-                                gff2genestat_script=None):
+                                gff2genestat_script=None, sequence_mode="cds"):
     support = Path(__file__).resolve().parent
     contract = {
         "schema_version": 1,
@@ -211,6 +211,8 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
     if representative_map:
         contract["inputs"]["representative_map_sha256"] = sha256_file(representative_map)
         contract["parameters"]["multiple_hits"] = "representative_map"
+    if sequence_mode == "protein":
+        contract["parameters"].update(mode="gene_coordinates", gff_annotation_schema=6)
     return contract
 
 
@@ -253,6 +255,7 @@ def ensure_species_gene_cache(
     gff2genestat_script,
     threads,
     representative_map=None,
+    sequence_mode="cds",
 ):
     ensure_parent_dir(os.path.join(cache_dir, "dummy"))
     out_path = os.path.join(cache_dir, species_name + ".gff_info.tsv")
@@ -261,7 +264,7 @@ def ensure_species_gene_cache(
     if not species_gff_path:
         raise FileNotFoundError("No unique GFF file matched species: {}".format(species_name))
     contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
-                                           gff2genestat_script)
+                                           gff2genestat_script, sequence_mode)
     if species_gene_cache_is_current(out_path, manifest_path, contract):
         return out_path
     lock_key = "{}|{}".format(os.path.abspath(cache_dir), species_name)
@@ -274,7 +277,7 @@ def ensure_species_gene_cache(
         tmp_path = None
         try:
             contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
-                                                   gff2genestat_script)
+                                                   gff2genestat_script, sequence_mode)
             if species_gene_cache_is_current(out_path, manifest_path, contract):
                 return out_path
             tmp_path = out_path + ".tmp." + str(os.getpid())
@@ -282,7 +285,7 @@ def ensure_species_gene_cache(
                 sys.executable,
                 gff2genestat_script,
                 "--mode",
-                "gene_delim",
+                "gene_coordinates" if sequence_mode == "protein" else "gene_delim",
                 "--dir_gff",
                 dir_sp_gff,
                 "--seqfile",
@@ -574,6 +577,7 @@ def main():
                 gff2genestat_script=args.gff2genestat_script,
                 threads=args.threads,
                 representative_map=args.representative_map,
+                sequence_mode=args.input_sequence_mode,
             )
         except Exception as exc:
             raise RuntimeError("failed to prepare gene cache for {}: {}".format(species_name, exc)) from exc

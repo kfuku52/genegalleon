@@ -194,6 +194,18 @@ start/end bounds. Identical blocks are counted once. Conflicting equal-length
 transcripts, mixed coordinate systems, or duplicate gene summaries are errors;
 they must not multiply rows in the downstream branch table.
 
+Protein-mode synteny uses `gff2genestat.py --mode gene_coordinates` to read
+physical gene loci. An exact gene interval remains usable when the source
+provides RNA/exon annotations without CDS, or overlapping CDS parts. The table
+records `coordinate_source=gene` and does not report coding frames or introns.
+Gene identity, chromosome, strand, bounds, ancestry and child containment remain
+strict; ambiguous normalized source identifiers fail. Identifier matching uses
+the formatter's complete canonical identifier and retains accession versions.
+CDS-only exports and explicit representative maps retain the validated selected
+CDS interval (`coordinate_source=selected_CDS`). CDS-mode synteny and ordinary
+CDS trait validation keep their existing strict coding-structure contracts.
+Content-bound synteny caches distinguish the two coordinate modes.
+
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.

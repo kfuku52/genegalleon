@@ -3509,6 +3509,10 @@ gg_artifact_prepare_stage iqtree_needs_update run_iqtree "${iqtree_provenance_ar
 if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
   gg_step_start "${task}"
   num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
+  if [[ ${num_seq} -lt 3 ]]; then
+    echo "Insufficient data for IQ-TREE: family=${og_id}, sequences=${num_seq}; at least 3 sequences are required. Preserve the alignment and review the query/search evidence." >&2
+    exit 1
+  fi
   if [[ ${num_seq} -ge 4 ]]; then
     if [[ ${run_generax} -eq 1 ]]; then
       other_iqtree_params=()

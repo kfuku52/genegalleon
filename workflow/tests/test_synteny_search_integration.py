@@ -12,6 +12,30 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_protein_synteny_cache_uses_loci_and_invalidates_old_coding_cache(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache, species_gene_cache_contract
+
+    protein, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    protein.write_text('>Species_a_g_1\nMAAAA\n')
+    gff.write_text('chr1\ts\tgene\t1\t30\t.\t+\t.\tID=g__1\n'
+                   'chr1\ts\tmRNA\t1\t30\t.\t+\t.\tID=t;Parent=g__1\n'
+                   'chr1\ts\texon\t1\t30\t.\t+\t.\tParent=t\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(protein), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1, sequence_mode='protein')
+    path = ensure_species_gene_cache(**kwargs)
+    assert pd.read_csv(path, sep='\t').to_dict('records') == [dict(
+        gene_id='Species_a_g_1', chromosome='chr1', start=1, end=30, strand='+', coordinate_source='gene')]
+    manifest = json.loads(Path(path + '.provenance.json').read_text())
+    assert manifest['parameters']['mode'] == 'gene_coordinates'
+    assert manifest['parameters'] != species_gene_cache_contract('Species_a', str(protein), str(gff))['parameters']
+    before = Path(path).read_bytes()
+    gff.write_text(gff.read_text().replace('exon\t1\t30', 'exon\t1\t31'))
+    with pytest.raises(RuntimeError, match='child coordinates disagree'):
+        ensure_species_gene_cache(**kwargs)
+    assert Path(path).read_bytes() == before
+
+
 def test_gene_info_normalizes_then_stably_orders_each_chromosome(tmp_path):
     from workflow.support.synteny_neighbors import load_gene_info
 

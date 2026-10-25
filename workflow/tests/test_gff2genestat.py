@@ -20,6 +20,67 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+@pytest.mark.parametrize("annotation", ["rna_only", "overlapping_cds"])
+def test_physical_gene_coordinates_do_not_certify_coding_structure(tmp_path, annotation):
+    gff = tmp_path / "Species_a.gff"
+    gff.write_text(
+        "chr1\ts\tgene\t1\t30\t.\t+\t.\tID=gene:fgenesh1_pg.26__121\n"
+        "chr1\ts\tmRNA\t1\t30\t.\t+\t.\tID=t;Parent=gene:fgenesh1_pg.26__121\n"
+        "chr1\ts\texon\t1\t30\t.\t+\t.\tParent=t\n" +
+        ("chr1\ts\tCDS\t1\t15\t.\t+\t0\tID=c;Parent=t\n"
+         "chr1\ts\tCDS\t10\t30\t.\t+\t0\tID=c;Parent=t\n" if annotation == "overlapping_cds" else ""))
+    fasta = tmp_path / "Species_a.fa"
+    fasta.write_text(">Species_a_fgenesh1_pg.26_121\nMAAAAA\n")
+    output = tmp_path / "loci.tsv"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--mode", "gene_coordinates",
+                             "--dir_gff", str(tmp_path), "--seqfile", str(fasta),
+                             "--outfile", str(output), "--require-matches"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr + result.stdout
+    table = pandas.read_csv(output, sep="\t")
+    assert table.to_dict("records") == [dict(gene_id="Species_a_fgenesh1_pg.26_121", chromosome="chr1",
+                                             start=1, end=30, strand="+", coordinate_source="gene")]
+    assert "feature_blocks" not in table and "cds_first_phase" not in table
+
+
+@pytest.mark.parametrize("defect", ["contig", "strand", "bounds", "collision", "duplicate", "cycle"])
+def test_physical_gene_coordinates_reject_ambiguous_or_foreign_loci(tmp_path, defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = [["chr1", "s", "gene", 1, 30, ".", "+", ".", "ID=gene:g__1"],
+            ["chr1", "s", "mRNA", 1, 30, ".", "+", ".", "ID=t;Parent=gene:g__1"],
+            ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=t"]]
+    if defect == "contig":
+        rows[-1][0] = "other"
+    elif defect == "strand":
+        rows[-1][6] = "-"
+    elif defect == "bounds":
+        rows[-1][4] = 31
+    elif defect in {"collision", "duplicate"}:
+        rows.append(["chr1", "s", "gene", 40, 60, ".", "+", ".",
+                     "ID=gene:g_1" if defect == "collision" else "ID=gene:g__1"])
+    else:
+        rows[-1][-1] = "ID=c;Parent=cycle"
+        rows.append(["chr1", "s", "mRNA", 1, 9, ".", "+", ".", "ID=cycle;Parent=c"])
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g_1"], "longest")
+
+
+def test_physical_gene_coordinates_keep_cds_only_validation_strict():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = pandas.DataFrame([
+        ["chr1", "s", "CDS", 1, 9, ".", "+", "0", "ID=c;Parent=g1"],
+        ["chr1", "s", "CDS", 7, 15, ".", "+", "0", "ID=c;Parent=g1"],
+    ], columns=["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError, match="Overlapping GFF feature blocks"):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+    frame.loc[1, "start"] = 10
+    row = gene_locus_coordinates(frame, ["Species_a_g1"], "longest").iloc[0]
+    assert (row.start, row.end, row.coordinate_source) == (1, 15, "selected_CDS")
+
+
 def test_gff3_list_values_decode_once_and_gtf_percent_values_remain_literal():
     identifier, parents, _values = parse_attribute_fields('ID=c%253B1;Parent=t%2C1,t%252C1;')
     assert identifier == 'c%3B1'
