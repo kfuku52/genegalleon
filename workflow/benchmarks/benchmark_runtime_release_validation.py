@@ -12,6 +12,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -27,18 +28,25 @@ def canonical(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def worker(script, root, snapshot):
+def worker(script, root, snapshot, input_delay_ms):
     code = compile(body(script), str(script), "exec")
     counts = {"stat_calls": 0, "lstat_calls": 0, "hashed_bytes": 0}
+    counter_lock = threading.Lock()
     original_hash = hashlib.sha256
+
+    def delivered(data):
+        if data and input_delay_ms:
+            time.sleep(input_delay_ms / 1000)
+        with counter_lock:
+            counts["hashed_bytes"] += len(data)
 
     class Hasher:
         def __init__(self, data=b"", **kwargs):
-            counts["hashed_bytes"] += len(data)
+            delivered(data)
             self.wrapped = original_hash(data, **kwargs)
 
         def update(self, data):
-            counts["hashed_bytes"] += len(data)
+            delivered(data)
             self.wrapped.update(data)
 
         def hexdigest(self):
@@ -46,7 +54,8 @@ def worker(script, root, snapshot):
 
     def counted(function, key):
         def call(*args, **kwargs):
-            counts[key] += 1
+            with counter_lock:
+                counts[key] += 1
             return function(*args, **kwargs)
         return call
 
@@ -75,14 +84,16 @@ def main():
     parser.add_argument("--candidate", type=Path, default=BOOTSTRAP)
     parser.add_argument("--files", type=int, default=2000)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--input-delay-ms", type=float, default=0,
+                        help="Simulated latency at hash input delivery; not a filesystem measurement")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--root", type=Path)
     parser.add_argument("--snapshot")
     args = parser.parse_args()
     if args.worker:
-        worker(args.candidate, args.root, args.snapshot)
+        worker(args.candidate, args.root, args.snapshot, args.input_delay_ms)
         return
-    if args.files < 1 or args.repeats < 2:
+    if args.files < 1 or args.repeats < 2 or not 0 <= args.input_delay_ms <= 100:
         parser.error("positive file count and at least two repetitions required")
     fixture_path = REPO / "workflow/tests/test_gg_util_paths.py"
     spec = importlib.util.spec_from_file_location("release_fixture", fixture_path)
@@ -116,7 +127,8 @@ def main():
             for name in order:
                 path = args.baseline if name == "baseline" else args.candidate
                 command = [sys.executable, "-B", __file__, "--worker", "--baseline", str(args.baseline),
-                           "--candidate", str(path), "--root", str(root), "--snapshot", snapshot]
+                           "--candidate", str(path), "--root", str(root), "--snapshot", snapshot,
+                           "--input-delay-ms", str(args.input_delay_ms)]
                 result = subprocess.run(command, capture_output=True, text=True)
                 if result.returncode:
                     raise RuntimeError(result.stderr)
@@ -127,6 +139,7 @@ def main():
         if len(outputs) != 1 or len(hash_bytes) != 1:
             raise RuntimeError("verification output or fresh hashed bytes differ")
         report = {"files": len(manifest["installed_files"]), "repeats": args.repeats,
+                  "simulated_input_delay_ms": args.input_delay_ms,
                   "scope": "fresh runtime verification only; no scientific inputs or scheduler submission",
                   "equal_output_and_hashed_bytes": True, "results": results,
                   "median_seconds": {name: statistics.median(row["seconds"] for row in values)

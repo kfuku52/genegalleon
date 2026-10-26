@@ -1329,6 +1329,47 @@ def test_explicit_runtime_release_fences_changes_after_earlier_reads(tmp_path, m
             "manifest changed during verification") in result.stderr
 
 
+@pytest.mark.parametrize("cpus", [1, 2, 16])
+def test_explicit_runtime_release_overlaps_slow_reads_within_cpu_limit(tmp_path, cpus):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(
+        release, "gg_input_generation",
+        additional_files={f"workflow/support/slow/file{index:02d}.txt": b"fixture\n" for index in range(32)},
+    )
+    wrapper = tmp_path / "python-latency"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import hashlib,json,sys,threading,time\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;threads=set();deliveries=0\n"
+        "def delay(data):\n"
+        " global deliveries\n"
+        " if data:\n"
+        "  deliveries+=1\n"
+        "  if deliveries>16:time.sleep(.02)\n"
+        "  threads.add(threading.current_thread().name)\n"
+        "class Hasher:\n"
+        " def __init__(self,data=b''):delay(data);self.inner=original(data)\n"
+        " def update(self,data):delay(data);self.inner.update(data)\n"
+        " def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher\nexec(compile(code,'<slow-input-fixture>','exec'))\n"
+        "print('WORKERS='+json.dumps(sorted(threads-{'MainThread'})),file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               "unset SLURM_CPUS_PER_TASK NSLOTS PBS_NP; "
+               f"export GG_TASK_CPUS={cpus} GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = run_bash(command, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(release.resolve() / "workflow")
+    workers = json.loads(next(line[8:] for line in result.stderr.splitlines() if line.startswith("WORKERS=")))
+    assert len(workers) <= min(4, cpus)
+    assert bool(workers) is (cpus > 1)
+
+
 def test_explicit_runtime_release_ignores_spooled_bootstrap_hint(tmp_path):
     release_root = tmp_path / "release-a"
     snapshot = _write_runtime_release_contract(release_root, "gg_genome_evolution")
