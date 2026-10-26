@@ -1202,14 +1202,23 @@ def read_coding_gff_table(gff_path):
 
 
 def validate_locus_children(gff, loci, segments=None):
-    """A physical locus may contain overlapping exons, never foreign coordinates."""
+    """Validate physical containment, allowing coherent opposite-strand RNAs.
+
+    A declared gene can group bidirectional RNA precursors. Their children must
+    follow the explicit RNA's strand and parts; an unlinked strand conflict
+    remains invalid. The source gene interval and strand are never inferred
+    from its transcripts, and this does not certify any coding structure.
+    """
     parents_by_id = {}
+    rna_rows = {}
     records = []
     for row in gff.itertuples(index=False):
         identifier, parents, _values = parse_attribute_fields(row.attributes)
         if identifier:
             parents_by_id.setdefault(identifier, set()).update(parents)
-        records.append((row, parents))
+            if str(row.feature).lower().endswith(("rna", "transcript")):
+                rna_rows.setdefault(identifier, []).append(row)
+        records.append((row, parents, identifier))
     resolved = {}
 
     def owners(identifier, active):
@@ -1225,15 +1234,67 @@ def validate_locus_children(gff, loci, segments=None):
         resolved[identifier] = result
         return result
 
-    for row, parents in records:
+    opposite_rnas = {}
+    for row, parents, identifier in records:
+        if not str(row.feature).lower().endswith(("rna", "transcript")):
+            continue
+        ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
+        for ancestor in ancestors:
+            if str(row.strand) != loci[ancestor][1]:
+                opposite_rnas.setdefault(ancestor, set()).add(identifier)
+
+    resolved_rnas = {}
+
+    def rna_owners(identifier, active):
+        if identifier in rna_rows:
+            return {identifier}
+        if identifier in loci:
+            return set()
+        if identifier in resolved_rnas:
+            return resolved_rnas[identifier]
+        if identifier in active:
+            raise ValueError("Cyclic GFF RNA ancestry: " + identifier)
+        result = set()
+        for parent in parents_by_id.get(identifier, ()):
+            result.update(rna_owners(parent, active | {identifier}))
+        resolved_rnas[identifier] = result
+        return result
+
+    for row, parents, identifier in records:
         ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
         for ancestor in ancestors:
             chromosome, strand, start, end = loci[ancestor]
             parts = (segments or {}).get(ancestor, [(start, end)])
             feature_block = str(row.feature) in {"CDS", "exon", "five_prime_UTR", "three_prime_UTR"}
             contained = any(int(row.start) >= left and int(row.end) <= right for left, right in parts)
-            if (feature_block and not contained) or (str(row.sequence) != chromosome or str(row.strand) != strand
-                    or int(row.start) < start or int(row.end) > end or int(row.end) < int(row.start)):
+            invalid = ((feature_block and not contained) or str(row.sequence) != chromosome
+                       or int(row.start) < start or int(row.end) > end or int(row.end) < int(row.start))
+            if invalid:
+                raise ValueError("GFF child coordinates disagree with gene locus: " + ancestor)
+            strand_valid = str(row.strand) == strand
+            if ancestor in opposite_rnas:
+                transcripts = set().union(*(rna_owners(parent, set()) for parent in parents))
+                transcripts = {transcript for transcript in transcripts
+                               if ancestor in owners(transcript, set())}
+                is_rna = str(row.feature).lower().endswith(("rna", "transcript"))
+                if is_rna:
+                    transcripts.discard(identifier)
+                    if identifier in opposite_rnas[ancestor]:
+                        transcripts.add(identifier)
+                if transcripts & opposite_rnas[ancestor]:
+                    strand_valid = bool(transcripts) and str(row.strand) in {"+", "-"}
+                    for transcript in transcripts:
+                        declared = rna_rows.get(transcript, [])
+                        systems = {(str(part.sequence), str(part.strand)) for part in declared}
+                        rna_parts = [(int(part.start), int(part.end)) for part in declared]
+                        strand_valid = strand_valid and systems == {(str(row.sequence), str(row.strand))}
+                        if feature_block:
+                            strand_valid = strand_valid and any(
+                                int(row.start) >= left and int(row.end) <= right for left, right in rna_parts)
+                        elif rna_parts:
+                            strand_valid = strand_valid and (int(row.start) >= min(p[0] for p in rna_parts)
+                                                            and int(row.end) <= max(p[1] for p in rna_parts))
+            if not strand_valid:
                 raise ValueError("GFF child coordinates disagree with gene locus: " + ancestor)
 
 
