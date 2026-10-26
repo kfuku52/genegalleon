@@ -1302,3 +1302,48 @@ def test_multipart_gene_coordinates_keep_identity_and_segment_checks(defect):
                                            "score", "strand", "phase", "attributes"])
     with pytest.raises(ValueError):
         gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_gene_locus_keeps_source_anchor_for_coherent_bidirectional_rna(reverse):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    strand, opposite = ("+", "-") if reverse else ("-", "+")
+    rows = [["chr1", "s", "gene", 1, 100, ".", strand, ".", "ID=gene:g1"],
+            ["chr1", "s", "mRNA", 1, 100, ".", strand, ".", "ID=normal;Parent=gene:g1"],
+            ["chr1", "s", "CDS", 1, 9, ".", strand, "0", "ID=c0;Parent=normal"],
+            ["chr1", "s", "mRNA", 20, 40, ".", opposite, ".", "ID=precursor;Parent=gene:g1"],
+            ["chr1", "s", "exon", 20, 40, ".", opposite, ".", "Parent=precursor"],
+            ["chr1", "s", "CDS", 25, 39, ".", opposite, "0", "ID=c1;Parent=precursor"]]
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    assert gene_locus_coordinates(frame, ["Species_a_g1"], "longest").to_dict("records") == [
+        dict(gene_id="Species_a_g1", chromosome="chr1", start=1, end=100, strand=strand, coordinate_source="gene")]
+
+
+@pytest.mark.parametrize("defect", ["child_strand", "child_bounds", "foreign_contig", "unknown_strand",
+                                    "direct_gene_child", "missing_rna_id", "ambiguous_rna"])
+def test_bidirectional_gene_requires_explicit_coherent_rna(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    rows = [["chr1", "s", "gene", 1, 100, ".", "-", ".", "ID=gene:g1"],
+            ["chr1", "s", "mRNA", 20, 40, ".", "+", ".", "ID=t;Parent=gene:g1"],
+            ["chr1", "s", "CDS", 25, 39, ".", "+", "0", "ID=c;Parent=t"]]
+    if defect == "child_strand":
+        rows[-1][6] = "-"
+    elif defect == "child_bounds":
+        rows[-1][4] = 45
+    elif defect == "foreign_contig":
+        rows[1][0] = rows[-1][0] = "other"
+    elif defect == "unknown_strand":
+        rows[1][6] = rows[-1][6] = "."
+    elif defect == "direct_gene_child":
+        rows[-1][-1] = "ID=c;Parent=gene:g1"
+    elif defect == "missing_rna_id":
+        rows[1][-1] = "Parent=gene:g1"
+    else:
+        rows.append(["chr1", "s", "mRNA", 20, 40, ".", "-", ".", "ID=t;Parent=gene:g1"])
+    frame = pandas.DataFrame(rows, columns=["sequence", "source", "feature", "start", "end",
+                                           "score", "strand", "phase", "attributes"])
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")

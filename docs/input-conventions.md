@@ -200,7 +200,10 @@ provides RNA/exon annotations without CDS, or overlapping CDS parts. The table
 records `coordinate_source=gene` and does not report coding frames or introns.
 Discontinuous GFF3 gene rows sharing one exact feature ID on one chromosome
 and strand use their genomic envelope; declared nonoverlapping parts still bound
-CDS/exon/UTR children. Conflicting identities, overlapping gene parts, and
+CDS/exon/UTR children. A gene may contain explicitly linked RNA precursors on
+either strand; opposite-strand children must follow a coherent RNA parent and
+its coordinates. The declared gene anchor is retained. Unlinked strand conflicts,
+conflicting identities, overlapping gene parts, and
 incomplete explicit `part=X/Y` orders fail. This follows the
 [NCBI GFF3 feature ID contract](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/file-formats/annotation-files/about-ncbi-gff3/).
 Gene identity, chromosome, strand, bounds, ancestry and child containment remain

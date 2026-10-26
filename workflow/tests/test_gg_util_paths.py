@@ -276,6 +276,7 @@ def _write_runtime_release_contract(
     workflow: str,
     *,
     manifest_release_root: Optional[Path] = None,
+    additional_files: Optional[dict] = None,
 ) -> str:
     required_paths = {
         "VERSION",
@@ -289,13 +290,17 @@ def _write_runtime_release_contract(
         RUNTIME_SUPPORT_PATHS,
         {"workflow/support/format_species_constants.py"},
     )
+    runtime_paths.update(additional_files or {})
     installed_files = []
     for relative in sorted(runtime_paths):
         source = REPO_ROOT / relative
         target = release_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-        os.chmod(target, stat.S_IMODE(source.stat().st_mode))
+        if additional_files and relative in additional_files:
+            target.write_bytes(additional_files[relative])
+        else:
+            shutil.copyfile(source, target)
+            os.chmod(target, stat.S_IMODE(source.stat().st_mode))
         installed_files.append(
             {
                 "path": relative,
@@ -1254,6 +1259,115 @@ def test_explicit_runtime_release_rejects_tampered_nonclosure_inventory_file(tmp
 
     assert completed.returncode != 0
     assert f"Explicit runtime release file changed: {relative}" in completed.stderr
+
+
+@pytest.mark.parametrize("replacement", ["symlink_leaf", "symlink_parent", "fifo"])
+def test_explicit_runtime_release_rejects_redirected_or_nonregular_inventory(tmp_path, replacement):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation")
+    leaf = release / "workflow/support/format_species_constants.py"
+    if replacement == "symlink_parent":
+        parent = release / "workflow/support/gg_util"
+        outside = tmp_path / "retained_helpers"
+        parent.rename(outside)
+        parent.symlink_to(outside, target_is_directory=True)
+    else:
+        outside = tmp_path / "retained_file"
+        leaf.rename(outside)
+        if replacement == "fifo":
+            os.mkfifo(leaf)
+        else:
+            leaf.symlink_to(outside)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = subprocess.run(["bash", "-lc", command], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode != 0
+    assert "Explicit runtime release file" in result.stderr
+
+
+@pytest.mark.parametrize("mutation", ["file", "directory", "manifest"])
+def test_explicit_runtime_release_fences_changes_after_earlier_reads(tmp_path, mutation):
+    release = tmp_path / "release"
+    marker = b"late inventory read triggers a concurrent fixture mutation\n"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation",
+                                               additional_files={"zz-last-read.txt": marker})
+    # The mutation is triggered by a late content read, independent of whether
+    # the validator uses Path.read_bytes or a descriptor-backed stream.
+    wrapper = tmp_path / "python-proof"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import hashlib,os,shutil,sys\nfrom pathlib import Path\n"
+        "code=sys.stdin.read(); sys.argv=sys.argv[1:]; original=hashlib.sha256; fired=False\n"
+        f"root=Path({str(release)!r}); marker={marker!r}\n"
+        "def mutate(data):\n"
+        " global fired\n"
+        " if fired or data != marker:return\n"
+        " fired=True\n"
+        + (" (root/'VERSION').write_bytes(b'changed after verification\\n')\n" if mutation == "file" else
+           " parent=root/'workflow/support'; retained=root/'retained-support'; parent.rename(retained); shutil.copytree(retained,parent)\n" if mutation == "directory" else
+           " path=root/'.kfauto-release.json'; path.write_text(path.read_text()+'\\n')\n")
+        + "class Hasher:\n"
+        " def __init__(self,data=b''):mutate(data);self.inner=original(data)\n"
+        " def update(self,data):mutate(data);self.inner.update(data)\n"
+        " def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher\nexec(compile(code,'<native-bootstrap>','exec'))\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = run_bash(command, tmp_path)
+    assert result.returncode != 0, result.stdout
+    assert ("file changed: VERSION" if mutation == "file" else
+            "directory changed:" if mutation == "directory" else
+            "manifest changed during verification") in result.stderr
+
+
+@pytest.mark.parametrize("cpus", [1, 2, 16])
+def test_explicit_runtime_release_overlaps_slow_reads_within_cpu_limit(tmp_path, cpus):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(
+        release, "gg_input_generation",
+        additional_files={f"workflow/support/slow/file{index:02d}.txt": b"fixture\n" for index in range(32)},
+    )
+    wrapper = tmp_path / "python-latency"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import hashlib,json,sys,threading,time\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;threads=set();deliveries=0\n"
+        "def delay(data):\n"
+        " global deliveries\n"
+        " if data:\n"
+        "  deliveries+=1\n"
+        "  if deliveries>16:time.sleep(.02)\n"
+        "  threads.add(threading.current_thread().name)\n"
+        "class Hasher:\n"
+        " def __init__(self,data=b''):delay(data);self.inner=original(data)\n"
+        " def update(self,data):delay(data);self.inner.update(data)\n"
+        " def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher\nexec(compile(code,'<slow-input-fixture>','exec'))\n"
+        "print('WORKERS='+json.dumps(sorted(threads-{'MainThread'})),file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               "unset SLURM_CPUS_PER_TASK NSLOTS PBS_NP; "
+               f"export GG_TASK_CPUS={cpus} GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = run_bash(command, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(release.resolve() / "workflow")
+    workers = json.loads(next(line[8:] for line in result.stderr.splitlines() if line.startswith("WORKERS=")))
+    assert len(workers) <= min(4, cpus)
+    assert bool(workers) is (cpus > 1)
 
 
 def test_explicit_runtime_release_ignores_spooled_bootstrap_hint(tmp_path):
