@@ -1464,3 +1464,9 @@ disabled, and runs native assembly, longest CDS, statistics and
 `embryophyta_odb12` BUSCO. The native workflow retains its full cache validation
 and resume behavior. A changed transfer index or missing native result proof
 prevents an assembly completion receipt.
+
+In protein-mode synteny, a GTF gene feature uses its explicit gene_id as
+its structural identity when GFF3 ID is absent. Explicit transcript_id and
+gene_id links validate child contigs, strands and bounds, including GTF files
+without separate transcript rows. Conflicting identities still fail. The gene
+feature provides the physical anchor; transcript/CDS spans do not replace it.

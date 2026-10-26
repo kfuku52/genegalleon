@@ -1204,7 +1204,54 @@ def read_coding_gff_table(gff_path):
         return read_gff_table(stream)
 
 
-def validate_locus_children(gff, loci, segments=None, nonlocal_loci=None):
+def gtf_locus_attributes(text):
+    """Read GTF syntax only; an absent GFF3 ID is never inferred from a Name."""
+    if not re.match(r"^\s*[^\s=;]+\s+", str(text)):
+        return None
+    from format_species_annotation.common import parse_gff_attributes
+    return parse_gff_attributes(text)
+
+
+def gtf_locus_identifier(attrs, key, *, required=False):
+    values = set(attrs.get(key, ()))
+    if len(values) > 1 or (required and not values):
+        raise ValueError("Ambiguous or missing GTF " + key)
+    return next(iter(values), "")
+
+
+def gtf_locus_relationship(row, gtf_loci, transcripts):
+    """Resolve explicit GTF gene/transcript IDs for newly supported gene rows."""
+    attrs = gtf_locus_attributes(row.attributes)
+    legacy_id, legacy_parents, _values = parse_attribute_fields(row.attributes)
+    if attrs is None:
+        return legacy_id, legacy_parents
+    gene = gtf_locus_identifier(attrs, "gene_id")
+    if gene not in gtf_loci:
+        transcript = gtf_locus_identifier(attrs, "transcript_id")
+        if gene and transcript and transcripts.setdefault(transcript, gene) != gene:
+            raise ValueError("Conflicting GTF transcript ownership: " + transcript)
+        return legacy_id, legacy_parents
+    kind = str(row.feature).lower()
+    if kind in {"gene", "pseudogene"}:
+        identifier, parents = gene, ()
+    else:
+        transcript = gtf_locus_identifier(attrs, "transcript_id",
+                                          required=kind.endswith(("rna", "transcript")))
+        if transcript:
+            previous = transcripts.setdefault(transcript, gene)
+            if previous != gene or (transcript in gtf_loci and transcript != gene):
+                raise ValueError("Conflicting GTF transcript ownership: " + transcript)
+        if kind.endswith(("rna", "transcript")):
+            identifier, parents = transcript, (gene,)
+        else:
+            identifier, parents = legacy_id, (transcript or gene,)
+    if ((legacy_id and identifier != legacy_id)
+            or (legacy_parents and set(legacy_parents) != set(parents))):
+        raise ValueError("Conflicting GTF locus identity")
+    return identifier, parents
+
+
+def validate_locus_children(gff, loci, segments=None, nonlocal_loci=None, gtf_loci=None):
     """Validate physical containment, allowing coherent opposite-strand RNAs.
 
     A declared gene can group bidirectional RNA precursors. Their children must
@@ -1213,16 +1260,28 @@ def validate_locus_children(gff, loci, segments=None, nonlocal_loci=None):
     from its transcripts, and this does not certify any coding structure.
     """
     nonlocal_loci = nonlocal_loci or {}
+    gtf_loci = gtf_loci or set()
+    gtf_transcripts = {}
     parents_by_id = {}
     rna_rows = {}
     records = []
     for row in gff.itertuples(index=False):
-        identifier, parents, _values = parse_attribute_fields(row.attributes)
+        if gtf_loci:
+            identifier, parents = gtf_locus_relationship(row, gtf_loci, gtf_transcripts)
+        else:
+            identifier, parents, _values = parse_attribute_fields(row.attributes)
         if identifier:
             parents_by_id.setdefault(identifier, set()).update(parents)
             if str(row.feature).lower().endswith(("rna", "transcript")):
                 rna_rows.setdefault(identifier, []).append(row)
         records.append((row, parents, identifier))
+    for transcript, gene in gtf_transcripts.items():
+        if (transcript in loci or transcript in nonlocal_loci) and transcript != gene:
+            raise ValueError("Conflicting GTF transcript ownership: " + transcript)
+        declared = parents_by_id.setdefault(transcript, set())
+        if declared and declared != {gene}:
+            raise ValueError("Conflicting GTF transcript ownership: " + transcript)
+        declared.add(gene)
     resolved = {}
 
     def owners(identifier, active):
@@ -1269,6 +1328,14 @@ def validate_locus_children(gff, loci, segments=None, nonlocal_loci=None):
     for row, parents, identifier in records:
         ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
         for ancestor in ancestors:
+            if ancestor in gtf_loci and not str(row.feature).lower().endswith(("rna", "transcript")):
+                transcripts = set().union(*(rna_owners(parent, set()) for parent in parents))
+                for transcript in transcripts:
+                    if not any(str(rna.sequence) == str(row.sequence)
+                               and str(rna.strand) == str(row.strand)
+                               and int(rna.start) <= int(row.start) <= int(row.end) <= int(rna.end)
+                               for rna in rna_rows[transcript]):
+                        raise ValueError("GTF child coordinates disagree with transcript: " + transcript)
             if ancestor in nonlocal_loci:
                 parts = nonlocal_loci[ancestor]
                 valid = nonlocal_child_is_contained(row, parts)
@@ -1338,9 +1405,15 @@ def nonlocal_child_is_contained(row, parts):
 
 def physical_gene_identity(group, gene_id):
     identifiers = {parse_attribute_fields(value)[0] for value in group["attributes"]}
+    if identifiers == {""}:
+        attributes = [gtf_locus_attributes(value) for value in group["attributes"]]
+        if any(value is None for value in attributes):
+            raise ValueError("Ambiguous GFF gene interval for " + gene_id)
+        identifiers = {gtf_locus_identifier(value, "gene_id", required=True) for value in attributes}
+    else:
+        attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
     if len(identifiers) != 1 or "" in identifiers:
         raise ValueError("Ambiguous GFF gene interval for " + gene_id)
-    attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
     for key in ["Name", "gene", "gene_id", "locus_tag", "Parent", "gbkey", "gene_biotype"]:
         if len({tuple(row.get(key, ())) for row in attributes}) != 1:
             raise ValueError("Conflicting GFF gene identity attributes for " + gene_id)
@@ -1396,6 +1469,7 @@ def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representa
     loci = {}
     segments = {}
     nonlocal_loci = {}
+    gtf_loci = set()
     if representative_map is None:
         for gene_id, group in genes.groupby("gene_id", sort=False):
             if (nonlocal_gene_policy == "missing" and len(group) > 1
@@ -1414,10 +1488,12 @@ def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representa
             identifier, interval, parts = physical_gene_interval(group, gene_id)
             chromosome, strand, start, end = interval
             loci[identifier] = interval
+            if all(not parse_attribute_fields(value)[0] for value in group["attributes"]):
+                gtf_loci.add(identifier)
             segments[identifier] = parts
             rows.append(dict(gene_id=gene_id, chromosome=chromosome, start=start, end=end,
                              strand=strand, coordinate_source="gene"))
-        validate_locus_children(gff, loci, segments, nonlocal_loci)
+        validate_locus_children(gff, loci, segments, nonlocal_loci, gtf_loci)
     mapped = {row["gene_id"] for row in rows}
     remaining = [identifier for identifier in seq_names if identifier not in mapped]
     if remaining:

@@ -1430,3 +1430,78 @@ def test_bidirectional_gene_requires_explicit_coherent_rna(defect):
                                            "score", "strand", "phase", "attributes"])
     with pytest.raises(ValueError):
         gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+
+
+def gtf_gene_coordinate_frame(with_transcript=True):
+    rows = [["chr1", "gene", 100, 500, "-", 'gene_id "g1"; gene_biotype "protein_coding";'],
+            ["chr1", "transcript", 100, 500, "-", 'gene_id "g1"; transcript_id "t1";'],
+            ["chr1", "CDS", 100, 200, "-", 'gene_id "g1"; transcript_id "t1"; protein_id "p1";'],
+            ["chr1", "exon", 300, 400, "-", 'gene_id "g1"; transcript_id "t1";']]
+    if not with_transcript:
+        del rows[1]
+    return pandas.DataFrame(rows, columns=["sequence", "feature", "start", "end", "strand", "attributes"])
+
+
+@pytest.mark.parametrize("with_transcript", [True, False])
+@pytest.mark.parametrize("policy", ["error", "missing"])
+def test_gtf_gene_coordinates_keep_explicit_gene_id_and_physical_anchor(with_transcript, policy):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame(with_transcript)
+    table = gene_locus_coordinates(frame, ["Species_a_g1"], "longest", nonlocal_gene_policy=policy)
+    assert table.to_dict("records") == [dict(gene_id="Species_a_g1", chromosome="chr1",
+                                             start=100, end=500, strand="-", coordinate_source="gene")]
+
+
+@pytest.mark.parametrize("defect", ["child_contig", "child_strand", "child_bounds", "rna_bounds",
+                                    "rna_strand", "gene_identity", "transcript_ownership"])
+def test_gtf_gene_coordinates_validate_explicit_child_relationships(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame()
+    if defect == "child_contig":
+        frame.loc[2, "sequence"] = "other"
+    elif defect == "child_strand":
+        frame.loc[2, "strand"] = "+"
+    elif defect == "child_bounds":
+        frame.loc[2, "start"] = 90
+    elif defect == "rna_bounds":
+        frame.loc[1, "start"] = 150
+    elif defect == "rna_strand":
+        frame.loc[1, "strand"] = "+"
+    elif defect == "gene_identity":
+        frame.loc[0, "attributes"] += ' gene_id "foreign";'
+    else:
+        frame.loc[3, "attributes"] = 'gene_id "foreign"; transcript_id "t1";'
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest", nonlocal_gene_policy="missing")
+
+
+def test_idless_gff3_gene_still_cannot_use_a_display_alias_as_its_identity():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame().iloc[:1].copy()
+    frame.loc[0, "attributes"] = "Name=g1;gene_id=g1"
+    with pytest.raises(ValueError, match="Ambiguous GFF gene interval"):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+
+
+def test_gtf_gene_coordinates_cli_retains_gene_instead_of_cds_span(tmp_path):
+    directory = tmp_path / "gff"
+    directory.mkdir()
+    frame = gtf_gene_coordinate_frame()
+    annotation = directory / "Species_a.gff"
+    annotation.write_text("".join(
+        f"{row.sequence}\tsource\t{row.feature}\t{row.start}\t{row.end}\t.\t{row.strand}\t.\t{row.attributes}\n"
+        for row in frame.itertuples(index=False)))
+    fasta = tmp_path / "protein.fa"
+    fasta.write_text(">Species_a_g1\nMPEPTIDE\n")
+    output = tmp_path / "loci.tsv"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--mode", "gene_coordinates",
+                             "--dir_gff", str(directory), "--seqfile", str(fasta), "--outfile", str(output),
+                             "--require-matches", "--nonlocal-gene-policy", "missing"],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert pandas.read_csv(output, sep="\t").to_dict("records") == [
+        dict(gene_id="Species_a_g1", chromosome="chr1", start=100, end=500,
+             strand="-", coordinate_source="gene")]
