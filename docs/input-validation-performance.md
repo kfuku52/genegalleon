@@ -238,3 +238,49 @@ wall/CPU/RSS sample and canonical output hashes. Regression tests cover Unicode
 header and legacy case behavior, wrapped/gzip equivalence, invalid symbols
 across batch boundaries, complete gzip trailers and late input replacement or
 same-size edits with a restored mtime.
+
+
+## Source identity and organelle attribute scans
+
+These whole-file scans decode only their consumed attribute keys. The shared
+parser retains full decoding by default; selected decoding preserves duplicate
+values, order, GFF3 percent escapes, bare model IDs and GTF quoted scalars.
+GTF still lexes every field, so malformed unused attributes still fail.
+Source normalization, whole-file scanning and organelle content/stat fences are
+unchanged. No persistent metadata-only cache or early acceptance was added.
+
+On 2026-10-27, fixed Docker Linux/aarch64 / Python 3.12.15 measurements used one
+warmup and five alternating fresh-process pairs per input. Source baseline was
+`06d0204bf8ea61d0ac552b75cfab53ad04c87a05`. Timers include both native scans and
+I/O, excluding imports, fixture generation and output hashing. Complete source
+view bytes and organelle sets matched in every pair.
+
+| Generated input | Before median | After median |
+|---|---:|---:|
+| 100,000 ordinary NCBI-style rows, plain | 2.005 s | 0.925 s |
+| Same rows, gzip | 2.011 s | 0.950 s |
+| 32-row control, plain | 1.091 ms | 0.704 ms |
+| 5,000 quoted GTF rows, plain | 0.317 s | 0.320 s |
+
+The NCBI-style scans used about 53–54% less time. GTF lexing remains mandatory;
+its measured time is effectively unchanged. Whole-worker peak RSS includes
+imports and post-timing output hashing; no RAM improvement or whole-workflow
+speedup is claimed. The comparison used an explicitly selected existing image,
+not a claim that its moving dependencies were current.
+
+The [measurement record](benchmarks/annotation-scans-2026-10-27.json) retains
+runtime identity, module hashes, inputs, all pairs and cached-call controls.
+Use `workflow/benchmarks/benchmark_annotation_scans.py --help` for the portable
+fixture comparison. In a GeneGalleon container, pass a baseline support tree
+exported from the baseline commit:
+
+```bash
+python workflow/benchmarks/benchmark_annotation_scans.py \
+  --baseline-support /baseline/workflow/support --rows 100000 --repeats 5 \
+  --output /results/annotation-scans.json
+```
+
+`--existing-gff FILE --existing-only` compares an unchanged external annotation
+without generating fixtures. It reads that file, writes only its JSON report
+and temporary source-normalization views, and retains the same complete-output
+comparison. Keep private inputs and measurement logs outside the repository.

@@ -18,6 +18,9 @@ from gff_attribute_syntax import normalise_line
 from .common import first_token, parse_gff_attributes
 from .source_identity import source_annotation_path
 
+ORGANELLE_SCAN_KEYS = frozenset({"genome", "genome_type", "organelle",
+                                 "chromosome", "molecule", "mol_type"})
+
 ORGANELLE_GENOME_TERMS = frozenset(
     {
         "mitochondrion",
@@ -104,7 +107,7 @@ def _cached_organelle_seqids(path, device, inode, size, mtime, ctime, content_di
             seqid = str(parts[0] or "").strip()
             if seqid == "":
                 continue
-            attrs = parse_gff_attributes(parts[8])
+            attrs = parse_gff_attributes(parts[8], keys=ORGANELLE_SCAN_KEYS)
             if is_organelle_annotation(parts[2], attrs):
                 seqids.add(seqid)
     metadata = Path(path).stat()
