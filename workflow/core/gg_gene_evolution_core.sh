@@ -70,6 +70,11 @@ treevis_cis_similarity_width_mm="${treevis_cis_similarity_width_mm:-15}"
 treevis_synteny_similarity="${treevis_synteny_similarity:-1}"
 treevis_synteny_similarity_width_mm="${treevis_synteny_similarity_width_mm:-15}"
 synteny_search_window="${synteny_search_window:-20}"
+synteny_nonlocal_gene_policy="${synteny_nonlocal_gene_policy:-error}"
+case "${synteny_nonlocal_gene_policy}" in
+  error|missing) ;;
+  *) echo "synteny_nonlocal_gene_policy must be error or missing" >&2; exit 2 ;;
+esac
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
 
@@ -6605,6 +6610,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
     --parameter "window=${synteny_search_window}"
     --parameter "missing_annotation=skip"
+    --parameter "nonlocal_gene_policy=${synteny_nonlocal_gene_policy}"
     --parameter "query_blast_evalue=${query_blast_evalue}"
     --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
     --parameter "genetic_code=${genetic_code}"
@@ -6662,6 +6668,7 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
         --missing-annotation skip \
+        --nonlocal-gene-policy "${synteny_nonlocal_gene_policy}" \
         --window "${synteny_search_window}" \
         --evalue "${synteny_evalue}" \
         --genetic_code "${genetic_code}" \

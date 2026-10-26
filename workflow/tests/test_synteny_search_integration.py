@@ -12,6 +12,97 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_missing_nonlocal_genes_keep_windows_and_sequences(tmp_path):
+    from workflow.support.synteny_neighbors import (
+        ensure_species_gene_cache,
+        load_gene_info,
+        species_gene_cache_contract,
+    )
+
+    inputs = tmp_path / "input"
+    inputs.mkdir()
+    fasta = inputs / "Species_a.fa"
+    fasta.write_text(">Species_a_focal\nMAAAAAAAA\n>Species_a_split\nMCCCCCCCC\n>Species_a_neighbor\nMDDDDDDDD\n")
+    gff = inputs / "Species_a.gff"
+    gff.write_text(
+        "chr1\ts\tgene\t10\t18\t.\t+\t.\tID=focal\n"
+        "chr1\ts\tgene\t30\t38\t.\t+\t.\tID=neighbor\n"
+        "chr1\ts\tgene\t20\t28\t.\t+\t.\tID=split;exception=trans-splicing;part=1\n"
+        "chr1\ts\tgene\t100\t108\t.\t-\t.\tID=split;exception=trans-splicing;part=2\n"
+        "chr1\ts\tmRNA\t20\t108\t.\t?\t.\tID=t;Parent=split;exception=trans-splicing\n"
+        "chr1\ts\texon\t20\t28\t.\t+\t.\tParent=t\n"
+        "chr1\ts\texon\t100\t108\t.\t-\t.\tParent=t\n"
+    )
+    kwargs = dict(
+        species_name="Species_a",
+        species_cds_path=str(fasta),
+        dir_sp_gff=str(inputs),
+        cache_dir=str(tmp_path / "cache"),
+        lock_dir=str(tmp_path / "locks"),
+        gff2genestat_script=str(SUPPORT / "gff2genestat.py"),
+        threads=1,
+        sequence_mode="protein",
+    )
+    with pytest.raises(RuntimeError, match="Ambiguous GFF gene interval"):
+        ensure_species_gene_cache(**kwargs)
+    path = ensure_species_gene_cache(**kwargs, nonlocal_gene_policy="missing")
+    table = pd.read_csv(path, sep="\t")
+    assert set(table.gene_id) == {"Species_a_focal", "Species_a_split", "Species_a_neighbor"}
+    assert table.set_index("gene_id").loc["Species_a_split", ["chromosome", "start", "end", "strand"]].isna().all()
+    info = load_gene_info(path, "missing")
+    assert len(info.attrs["masked_loci"]) == 2
+    assert info.attrs["unavailable_genes"] == {"Species_a_split"}
+    with pytest.raises(ValueError, match="explicit missing policy"):
+        load_gene_info(path)
+    assert species_gene_cache_contract(
+        "Species_a", str(fasta), str(gff), sequence_mode="protein"
+    ) != species_gene_cache_contract(
+        "Species_a", str(fasta), str(gff), sequence_mode="protein", nonlocal_gene_policy="missing"
+    )
+    before = fasta.read_bytes()
+    for focal, window in [("focal", 1), ("focal", 2), ("split", 2)]:
+        query = tmp_path / "focal.fa"
+        query.write_text(">Species_a_" + focal + "\nMAAAAAAAA\n")
+        out = tmp_path / f"{focal}.{window}.tsv"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SUPPORT / "synteny_neighbors.py"),
+                "--focal_cds_fasta",
+                str(query),
+                "--dir_sp_cds",
+                str(inputs),
+                "--dir_sp_gff",
+                str(inputs),
+                "--cache_dir",
+                str(tmp_path / "cache"),
+                "--lock_dir",
+                str(tmp_path / "locks"),
+                "--gff2genestat_script",
+                str(SUPPORT / "gff2genestat.py"),
+                "--input_sequence_mode",
+                "protein",
+                "--nonlocal-gene-policy",
+                "missing",
+                "--window",
+                str(window),
+                "--outfile",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        links = pd.read_csv(out, sep="\t")
+        if focal == "focal" and window == 2:
+            assert links[["node_name", "neighbor_gene", "offset"]].values.tolist() == [
+                ["Species_a_focal", "Species_a_neighbor", 2]
+            ]
+        else:
+            assert links.empty
+    assert fasta.read_bytes() == before
+
+
 def test_protein_synteny_cache_uses_loci_and_invalidates_old_coding_cache(tmp_path):
     from workflow.support.synteny_neighbors import ensure_species_gene_cache, species_gene_cache_contract
 

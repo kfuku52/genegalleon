@@ -62,6 +62,9 @@ def build_arg_parser():
     parser.add_argument("--input_sequence_mode", default="cds", choices=["cds", "protein"], type=str)
     parser.add_argument("--missing-annotation", default="error", choices=["error", "skip"],
                         help="Explicitly allow species without GFF annotations; malformed/ambiguous annotations still fail.")
+    parser.add_argument("--nonlocal-gene-policy", default="error", choices=["error", "missing"],
+                        help="Protein mode only: retain explicitly ordered trans-spliced genes as missing focal "
+                             "coordinates, with masked physical parts preserving neighbor-window offsets.")
     parser.add_argument("--window", default=5, type=int)
     parser.add_argument("--evalue", default=0.01, type=float)
     parser.add_argument("--genetic_code", default=1, type=int)
@@ -149,13 +152,49 @@ def run_cmd(cmd):
     return proc
 
 
-def load_gene_info(path):
+def load_gene_info(path, nonlocal_gene_policy="error"):
     if (not os.path.exists(path)) or os.path.getsize(path) == 0:
         return pandas.DataFrame(columns=["gene_id", "chromosome", "start", "end", "strand"])
     df = pandas.read_csv(path, sep="\t", header=0)
     required_cols = {"gene_id", "chromosome", "start", "end"}
     if not required_cols.issubset(set(df.columns)):
         return pandas.DataFrame(columns=["gene_id", "chromosome", "start", "end", "strand"])
+    unavailable = df.loc[df["coordinate_source"].eq("unavailable_trans_splicing")] if "coordinate_source" in df else df.iloc[:0]
+    parts = []
+    masked_ids = set()
+    unavailable_ids = set()
+    if not unavailable.empty:
+        if nonlocal_gene_policy != "missing" or not {"locus_parts", "strand"}.issubset(df.columns):
+            raise ValueError("Nonlocal gene coordinates require the explicit missing policy and physical parts")
+        if df["gene_id"].duplicated().any():
+            raise ValueError("Duplicated gene identity in nonlocal coordinate table")
+        source_gene_ids = set(df["gene_id"].astype(str))
+        for row in unavailable.itertuples(index=False):
+            if pandas.isna(row.gene_id) or not str(row.gene_id).strip():
+                raise ValueError("Unavailable trans-spliced gene needs an identifier")
+            if not all(pandas.isna(getattr(row, key)) for key in ["chromosome", "start", "end", "strand"]):
+                raise ValueError("Unavailable trans-spliced gene must not have an inferred locus")
+            blocks = json.loads(row.locus_parts)
+            if not isinstance(blocks, list) or len(blocks) < 2:
+                raise ValueError("Nonlocal gene needs at least two physical parts")
+            observed = set()
+            for index, block in enumerate(blocks):
+                if (not isinstance(block, dict) or set(block) != {"chromosome", "start", "end", "strand"}
+                        or not isinstance(block["chromosome"], str) or not block["chromosome"]
+                        or not isinstance(block["strand"], str) or block["strand"] not in {"+", "-"}
+                        or type(block["start"]) is not int or type(block["end"]) is not int
+                        or not 1 <= block["start"] <= block["end"]):
+                    raise ValueError("Invalid nonlocal gene physical part")
+                key = tuple(block[name] for name in ["chromosome", "strand", "start", "end"])
+                if key in observed:
+                    raise ValueError("Repeated nonlocal gene physical part")
+                observed.add(key)
+                identifier = "__gg_masked_locus_{}:{}".format(hashlib.sha256(str(row.gene_id).encode()).hexdigest(), index)
+                if identifier in source_gene_ids:
+                    raise ValueError("Masked physical locus collides with a sequence identifier")
+                parts.append(dict(block, gene_id=identifier))
+                masked_ids.add(identifier)
+            unavailable_ids.add(str(row.gene_id))
     out = df.loc[:, [c for c in ["gene_id", "chromosome", "start", "end", "strand"] if c in df.columns]].copy()
     if "strand" not in out.columns:
         out["strand"] = "+"
@@ -168,6 +207,8 @@ def load_gene_info(path):
     out["start"] = pandas.to_numeric(out["start"], errors="coerce")
     out["end"] = pandas.to_numeric(out["end"], errors="coerce")
     out = out.dropna(subset=["start", "end"])
+    if parts:
+        out = pandas.concat([out, pandas.DataFrame(parts)], ignore_index=True)
     # Row-wise agg cannot concatenate results from a header-only annotation
     # table. Compute both bounds before assignment, including for zero rows,
     # so main() can handle empty gene information with its existing warning.
@@ -178,6 +219,8 @@ def load_gene_info(path):
     out = out.loc[out["chromosome"] != "", :]
     out = out.drop_duplicates(subset=["gene_id"], keep="first")
     out = out.sort_values(["chromosome", "start", "end", "gene_id"], kind="mergesort").reset_index(drop=True)
+    if unavailable_ids:
+        out.attrs.update(unavailable_genes=unavailable_ids, masked_loci=masked_ids)
     return out
 
 
@@ -190,7 +233,7 @@ def sha256_file(path):
 
 
 def species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map=None,
-                                gff2genestat_script=None, sequence_mode="cds"):
+                                gff2genestat_script=None, sequence_mode="cds", nonlocal_gene_policy="error"):
     support = Path(__file__).resolve().parent
     contract = {
         "schema_version": 1,
@@ -213,6 +256,10 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
         contract["parameters"]["multiple_hits"] = "representative_map"
     if sequence_mode == "protein":
         contract["parameters"].update(mode="gene_coordinates", gff_annotation_schema=7)
+    if nonlocal_gene_policy != "error":
+        if nonlocal_gene_policy != "missing" or sequence_mode != "protein" or representative_map:
+            raise ValueError("Nonlocal gene missingness requires protein mode without a representative map")
+        contract["parameters"].update(nonlocal_gene_policy=nonlocal_gene_policy, gff_annotation_schema=8)
     return contract
 
 
@@ -256,6 +303,7 @@ def ensure_species_gene_cache(
     threads,
     representative_map=None,
     sequence_mode="cds",
+    nonlocal_gene_policy="error",
 ):
     ensure_parent_dir(os.path.join(cache_dir, "dummy"))
     out_path = os.path.join(cache_dir, species_name + ".gff_info.tsv")
@@ -264,7 +312,7 @@ def ensure_species_gene_cache(
     if not species_gff_path:
         raise FileNotFoundError("No unique GFF file matched species: {}".format(species_name))
     contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
-                                           gff2genestat_script, sequence_mode)
+                                           gff2genestat_script, sequence_mode, nonlocal_gene_policy)
     if sequence_mode == "protein":
         # Old CDS-mode producers can still be running in the same workspace.
         # A physical-locus cache must never overwrite, or be overwritten by,
@@ -286,7 +334,7 @@ def ensure_species_gene_cache(
         tmp_path = None
         try:
             contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
-                                                   gff2genestat_script, sequence_mode)
+                                                   gff2genestat_script, sequence_mode, nonlocal_gene_policy)
             if species_gene_cache_is_current(out_path, manifest_path, contract):
                 return out_path
             tmp_path = out_path + ".tmp." + str(os.getpid())
@@ -319,10 +367,12 @@ def ensure_species_gene_cache(
             ]
             if representative_map:
                 cmd.extend(("--representative-map", str(representative_map)))
+            if nonlocal_gene_policy != "error":
+                cmd.extend(("--nonlocal-gene-policy", nonlocal_gene_policy))
             run_cmd(cmd)
             if (not os.path.exists(tmp_path)) or os.path.getsize(tmp_path) == 0:
                 raise RuntimeError("gff2genestat did not produce an output: {}".format(tmp_path))
-            if load_gene_info(tmp_path).empty:
+            if load_gene_info(tmp_path, nonlocal_gene_policy).empty:
                 raise ValueError("No FASTA identifiers mapped to usable GFF coordinates for {}".format(species_name))
             os.replace(tmp_path, out_path)
             recorded = dict(contract)
@@ -547,7 +597,10 @@ def write_empty_output(path):
 
 
 def main():
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if args.nonlocal_gene_policy == "missing" and (args.input_sequence_mode != "protein" or args.representative_map):
+        parser.error("--nonlocal-gene-policy missing requires protein mode without --representative-map")
     species_genetic_codes = load_species_genetic_codes(args.genetic_codes)
     args.window = max(1, int(args.window))
     args.threads = max(1, int(args.threads))
@@ -587,14 +640,21 @@ def main():
                 threads=args.threads,
                 representative_map=args.representative_map,
                 sequence_mode=args.input_sequence_mode,
+                nonlocal_gene_policy=args.nonlocal_gene_policy,
             )
         except Exception as exc:
             raise RuntimeError("failed to prepare gene cache for {}: {}".format(species_name, exc)) from exc
-        gene_info = load_gene_info(cache_path)
+        gene_info = load_gene_info(cache_path, args.nonlocal_gene_policy)
         if gene_info.shape[0] == 0:
             raise ValueError("gene info is empty for species: {}".format(species_name))
         chrom_genes = {}
         gene_locus = {}
+        unavailable_genes = gene_info.attrs.get("unavailable_genes", set())
+        masked_loci = gene_info.attrs.get("masked_loci", set())
+        unavailable_focals = sorted(focal_by_species[species_name] & unavailable_genes)
+        if unavailable_focals:
+            print("Synteny coordinates unavailable for explicit trans-spliced genes: "
+                  + ", ".join(unavailable_focals), file=sys.stderr)
         for chromosome, df_chr in gene_info.groupby("chromosome", sort=False):
             # load_gene_info already normalizes IDs and stably orders each
             # chromosome by start/end/gene_id; groupby retains that row order.
@@ -602,10 +662,12 @@ def main():
             strands = df_chr["strand"].fillna("+").astype(str).tolist()
             chrom_genes[chromosome] = {"genes": genes, "strands": strands}
             for i, gene_id in enumerate(genes):
-                if gene_id not in gene_locus:
+                if gene_id not in masked_loci and gene_id not in gene_locus:
                     gene_locus[gene_id] = (chromosome, i, strands[i])
         matched_focals = sorted(focal_by_species[species_name].intersection(gene_locus))
         if not matched_focals:
+            if focal_by_species[species_name] <= unavailable_genes:
+                continue
             raise ValueError("no focal genes matched GFF gene information for species: {}".format(species_name))
         for focal_gene in matched_focals:
             chromosome, focal_idx, strand = gene_locus[focal_gene]
@@ -618,7 +680,7 @@ def main():
                 downstream_sign = +1
             for step in range(1, args.window + 1):
                 up_idx = focal_idx + (upstream_sign * step)
-                if 0 <= up_idx < len(genes):
+                if 0 <= up_idx < len(genes) and genes[up_idx] not in masked_loci:
                     neighbor_gene = genes[up_idx]
                     neighbor_rows.append(
                         {
@@ -631,7 +693,7 @@ def main():
                     )
                     species_neighbor_ids[species_name].add(neighbor_gene)
                 down_idx = focal_idx + (downstream_sign * step)
-                if 0 <= down_idx < len(genes):
+                if 0 <= down_idx < len(genes) and genes[down_idx] not in masked_loci:
                     neighbor_gene = genes[down_idx]
                     neighbor_rows.append(
                         {

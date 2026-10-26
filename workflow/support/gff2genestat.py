@@ -22,7 +22,7 @@ try:
     from fasta_sequence_store import fasta_records
     from format_species_annotation.grouping_identity import strip_gff_feature_prefix
     from format_species_annotation.organelle import gff_organelle_seqids
-    from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
+    from gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
     from input_generation_array_state import FreshDigestBatch
     from representative_selection import load_representative_map, matching_identifier
@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - package import path used in tests
     from .fasta_sequence_store import fasta_records
     from .format_species_annotation.grouping_identity import strip_gff_feature_prefix
     from .format_species_annotation.organelle import gff_organelle_seqids
-    from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
+    from .gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
     from .input_generation_array_state import FreshDigestBatch
     from .representative_selection import load_representative_map, matching_identifier
@@ -133,6 +133,9 @@ def build_arg_parser():
                         help="Report conflicting UTRs and length-incompatible CDS structure as unavailable.")
     parser.add_argument("--require-matches", action="store_true",
                         help="Fail instead of publishing an empty table when no input IDs map.")
+    parser.add_argument("--nonlocal-gene-policy", choices=["error", "missing"], default="error",
+                        help="In gene_coordinates mode, missing retains explicitly ordered trans-spliced genes "
+                             "without a single locus as unavailable coordinates and records their physical parts.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
     parser.add_argument("--representative-map", default="", metavar="PATH",
                         help="Use the exact CDS transcript declared for each locus; missing choices fail.")
@@ -1201,7 +1204,7 @@ def read_coding_gff_table(gff_path):
         return read_gff_table(stream)
 
 
-def validate_locus_children(gff, loci, segments=None):
+def validate_locus_children(gff, loci, segments=None, nonlocal_loci=None):
     """Validate physical containment, allowing coherent opposite-strand RNAs.
 
     A declared gene can group bidirectional RNA precursors. Their children must
@@ -1209,6 +1212,7 @@ def validate_locus_children(gff, loci, segments=None):
     remains invalid. The source gene interval and strand are never inferred
     from its transcripts, and this does not certify any coding structure.
     """
+    nonlocal_loci = nonlocal_loci or {}
     parents_by_id = {}
     rna_rows = {}
     records = []
@@ -1222,7 +1226,7 @@ def validate_locus_children(gff, loci, segments=None):
     resolved = {}
 
     def owners(identifier, active):
-        if identifier in loci:
+        if identifier in loci or identifier in nonlocal_loci:
             return {identifier}
         if identifier in resolved:
             return resolved[identifier]
@@ -1240,6 +1244,8 @@ def validate_locus_children(gff, loci, segments=None):
             continue
         ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
         for ancestor in ancestors:
+            if ancestor in nonlocal_loci:
+                continue
             if str(row.strand) != loci[ancestor][1]:
                 opposite_rnas.setdefault(ancestor, set()).add(identifier)
 
@@ -1248,7 +1254,7 @@ def validate_locus_children(gff, loci, segments=None):
     def rna_owners(identifier, active):
         if identifier in rna_rows:
             return {identifier}
-        if identifier in loci:
+        if identifier in loci or identifier in nonlocal_loci:
             return set()
         if identifier in resolved_rnas:
             return resolved_rnas[identifier]
@@ -1263,6 +1269,24 @@ def validate_locus_children(gff, loci, segments=None):
     for row, parents, identifier in records:
         ancestors = set().union(*(owners(parent, set()) for parent in parents)) if parents else set()
         for ancestor in ancestors:
+            if ancestor in nonlocal_loci:
+                parts = nonlocal_loci[ancestor]
+                valid = nonlocal_child_is_contained(row, parts)
+                if str(row.feature) in {"CDS", "exon", "five_prime_UTR", "three_prime_UTR"}:
+                    transcripts = set().union(*(rna_owners(parent, set()) for parent in parents))
+                    for transcript in transcripts:
+                        if ancestor not in owners(transcript, set()):
+                            continue
+                        valid = valid and any(
+                            str(parent.sequence) == str(row.sequence)
+                            and int(parent.start) <= int(row.start) <= int(row.end) <= int(parent.end)
+                            and (str(parent.strand) == str(row.strand)
+                                 or (str(parent.strand) in {"?", "."}
+                                     and has_trans_splicing_exception(parent.attributes)))
+                            for parent in rna_rows[transcript])
+                if not valid:
+                    raise ValueError("GFF child coordinates disagree with nonlocal gene: " + ancestor)
+                continue
             chromosome, strand, start, end = loci[ancestor]
             parts = (segments or {}).get(ancestor, [(start, end)])
             feature_block = str(row.feature) in {"CDS", "exon", "five_prime_UTR", "three_prime_UTR"}
@@ -1298,16 +1322,41 @@ def validate_locus_children(gff, loci, segments=None):
                 raise ValueError("GFF child coordinates disagree with gene locus: " + ancestor)
 
 
+def nonlocal_child_is_contained(row, parts):
+    """Check physical parts, permitting an explicitly trans-spliced RNA envelope."""
+    if any(str(row.sequence) == chrom and str(row.strand) == strand
+           and start <= int(row.start) <= int(row.end) <= end for chrom, strand, start, end in parts):
+        return True
+    if (not str(row.feature).lower().endswith(("rna", "transcript"))
+            or not has_trans_splicing_exception(row.attributes)):
+        return False
+    local = [part for part in parts if part[0] == str(row.sequence)]
+    strands = {part[1] for part in local}
+    return (bool(local) and (str(row.strand) in strands or str(row.strand) in {"?", "."})
+            and min(part[2] for part in local) <= int(row.start) <= int(row.end) <= max(part[3] for part in local))
+
+
+def physical_gene_identity(group, gene_id):
+    identifiers = {parse_attribute_fields(value)[0] for value in group["attributes"]}
+    if len(identifiers) != 1 or "" in identifiers:
+        raise ValueError("Ambiguous GFF gene interval for " + gene_id)
+    attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
+    for key in ["Name", "gene", "gene_id", "locus_tag", "Parent", "gbkey", "gene_biotype"]:
+        if len({tuple(row.get(key, ())) for row in attributes}) != 1:
+            raise ValueError("Conflicting GFF gene identity attributes for " + gene_id)
+    return next(iter(identifiers)), attributes
+
+
 def physical_gene_interval(group, gene_id):
     """One GFF3 gene feature may have multiple disjoint rows with the same ID.
 
     Report its genomic envelope for neighborhood ordering, while retaining
     each declared segment for descendant feature containment checks.
     """
-    identifiers = {parse_attribute_fields(value)[0] for value in group["attributes"]}
+    identifier, attributes = physical_gene_identity(group, gene_id)
     intervals = sorted({(str(row.sequence), str(row.strand), int(row.start), int(row.end))
                         for row in group.itertuples(index=False)})
-    if len(identifiers) != 1 or "" in identifiers or len({row[:2] for row in intervals}) != 1:
+    if len({row[:2] for row in intervals}) != 1:
         raise ValueError("Ambiguous GFF gene interval for " + gene_id)
     chromosome, strand = intervals[0][:2]
     if (not chromosome or group["sequence"].isna().any() or strand not in {"+", "-"}
@@ -1316,10 +1365,6 @@ def physical_gene_interval(group, gene_id):
     parts = [(start, end) for _, _, start, end in intervals]
     if any(right[0] <= left[1] for left, right in zip(parts, parts[1:], strict=False)):
         raise ValueError("Overlapping GFF gene parts for " + gene_id)
-    attributes = [_parse_gff_attributes(value) for value in group["attributes"]]
-    for key in ["Name", "gene", "gene_id", "locus_tag", "Parent", "gbkey", "gene_biotype"]:
-        if len({tuple(row.get(key, ())) for row in attributes}) != 1:
-            raise ValueError("Conflicting GFF gene identity attributes for " + gene_id)
     if any("part" in row for row in attributes):
         orders = set()
         for row in attributes:
@@ -1329,10 +1374,11 @@ def physical_gene_interval(group, gene_id):
             orders.add(tuple(map(int, values[0].split("/"))))
         if orders != {(index, len(parts)) for index in range(1, len(parts) + 1)}:
             raise ValueError("Incomplete GFF gene part order for " + gene_id)
-    return next(iter(identifiers)), (chromosome, strand, parts[0][0], parts[-1][1]), parts
+    return identifier, (chromosome, strand, parts[0][0], parts[-1][1]), parts
 
 
-def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representative_map=None):
+def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representative_map=None,
+                          nonlocal_gene_policy="error"):
     """Physical gene intervals, without certifying a coding model.
 
     An explicit gene remains usable when its protein's source annotation has
@@ -1341,19 +1387,37 @@ def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representa
     existing selected-CDS coordinate contract.
     """
     columns = ["gene_id", "chromosome", "start", "end", "strand", "coordinate_source"]
+    if nonlocal_gene_policy not in {"error", "missing"}:
+        raise ValueError("Invalid nonlocal gene policy")
+    if nonlocal_gene_policy != "error" and representative_map is not None:
+        raise ValueError("Nonlocal gene missingness requires physical gene mode without a representative map")
     genes = extract_by_ids(gff, seq_names, "gene", multiple_hits, canonical_aliases=True)
     rows = []
     loci = {}
     segments = {}
+    nonlocal_loci = {}
     if representative_map is None:
         for gene_id, group in genes.groupby("gene_id", sort=False):
+            if (nonlocal_gene_policy == "missing" and len(group) > 1
+                    and any(has_trans_splicing_exception(value) for value in group["attributes"])):
+                identifier, _attributes = physical_gene_identity(group, gene_id)
+                parts, _mode = ordered_annotated_blocks(
+                    [(row.sequence, row.strand, row.start, row.end, row.attributes)
+                     for row in group.itertuples(index=False)], gene_id)
+                if len(parts) > 1:
+                    nonlocal_loci[identifier] = parts
+                    rows.append(dict(gene_id=gene_id, chromosome=None, start=None, end=None, strand=None,
+                                     coordinate_source="unavailable_trans_splicing",
+                                     locus_parts=json.dumps([dict(chromosome=chrom, strand=strand, start=start, end=end)
+                                                             for chrom, strand, start, end in parts], separators=(",", ":"))))
+                    continue
             identifier, interval, parts = physical_gene_interval(group, gene_id)
             chromosome, strand, start, end = interval
             loci[identifier] = interval
             segments[identifier] = parts
             rows.append(dict(gene_id=gene_id, chromosome=chromosome, start=start, end=end,
                              strand=strand, coordinate_source="gene"))
-        validate_locus_children(gff, loci, segments)
+        validate_locus_children(gff, loci, segments, nonlocal_loci)
     mapped = {row["gene_id"] for row in rows}
     remaining = [identifier for identifier in seq_names if identifier not in mapped]
     if remaining:
@@ -1361,12 +1425,30 @@ def gene_locus_coordinates(gff, seq_names, multiple_hits, species="", representa
                              representative_map=representative_map, canonical_aliases=True)
         if not cds.empty:
             cds = attach_transcript_structure(cds, gff, phase_policy="report", structure_policy="report")
-            traits = summarize_gene_features(cds, columns[:-1])
+            nonlocal_cds = set()
+            for gene_id, group in cds.groupby("gene_id", sort=False):
+                if not any(has_trans_splicing_exception(value) for value in group["attributes"]):
+                    continue
+                parts, _mode = ordered_annotated_blocks(
+                    [(row.sequence, row.strand, row.start, row.end, row.attributes)
+                     for row in group.itertuples(index=False)], gene_id)
+                if len(parts) < 2:
+                    continue
+                if nonlocal_gene_policy == "error":
+                    raise ValueError("Trans-spliced CDS has no single gene locus: " + gene_id)
+                nonlocal_cds.add(gene_id)
+                rows.append(dict(gene_id=gene_id, chromosome=None, start=None, end=None, strand=None,
+                                 coordinate_source="unavailable_trans_splicing",
+                                 locus_parts=json.dumps([dict(chromosome=chrom, strand=strand, start=start, end=end)
+                                                         for chrom, strand, start, end in parts], separators=(",", ":"))))
+            traits = summarize_gene_features(cds.loc[~cds["gene_id"].isin(nonlocal_cds)], columns[:-1])
             rows.extend(dict(row, coordinate_source="selected_CDS") for row in traits.to_dict("records"))
+    if any("locus_parts" in row for row in rows):
+        columns.append("locus_parts")
     return pandas.DataFrame(rows, columns=columns)
 
 
-def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None, coordinate_mode=False):
+def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None, coordinate_mode=False, nonlocal_gene_policy="error"):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
     if os.stat(gff_path).st_size == 0:
@@ -1393,7 +1475,7 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     seq_sp = pandas.Series(seq_sp_values)
     species = extract_species_label(gff_file, strip_extension=True)
     if coordinate_mode:
-        return gene_locus_coordinates(gff, seq_sp, multiple_hits, species, representative_map)
+        return gene_locus_coordinates(gff, seq_sp, multiple_hits, species, representative_map, nonlocal_gene_policy)
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits,
                            representative_map=representative_map, species=species)
     if gff_id.shape[0] == 0:
@@ -1641,6 +1723,8 @@ def main():
     parser = build_arg_parser()
     args = parser.parse_args()
     coordinate_mode = args.mode == "gene_coordinates"
+    if args.nonlocal_gene_policy != "error" and (not coordinate_mode or args.representative_map):
+        parser.error("--nonlocal-gene-policy missing requires gene_coordinates without --representative-map")
     if coordinate_mode and (args.validate_cds_length or args.cds_resolution_dir):
         parser.error("gene_coordinates reports physical loci, not CDS structure or length")
     if args.representative_map and args.cds_resolution_dir:
@@ -1714,6 +1798,7 @@ def main():
                 structure_policy=args.structure_policy,
                 representative_map=representative_map,
                 coordinate_mode=coordinate_mode,
+                nonlocal_gene_policy=args.nonlocal_gene_policy,
             )
             if df_tmp.shape[0] > 0:
                 frames.append(df_tmp)
@@ -1734,6 +1819,7 @@ def main():
                     args.structure_policy,
                     representative_map,
                     coordinate_mode,
+                    args.nonlocal_gene_policy,
                 ): (idx, gff_file)
                 for idx, (gff_file, seq_sp_values) in enumerate(tasks)
             }

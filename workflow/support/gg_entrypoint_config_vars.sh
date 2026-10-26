@@ -320,6 +320,7 @@ treevis_cis_similarity_width_mm
 treevis_synteny_similarity
 treevis_synteny_similarity_width_mm
 synteny_search_window
+synteny_nonlocal_gene_policy
 uniprot_annotation_method
 orthogroup_catalog_name
 EOF

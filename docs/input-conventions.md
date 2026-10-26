@@ -216,6 +216,19 @@ Content-bound synteny caches distinguish the two coordinate modes.
 Protein locus caches additionally use a content-addressed namespace, so a
 concurrent older CDS-mode producer cannot replace their coordinates.
 
+`synteny_nonlocal_gene_policy="missing"` explicitly permits protein-mode
+synteny to retain an ordered, annotated trans-spliced gene without inventing a
+single locus. The default is `error`; ordinary coordinate/identity conflicts
+still fail. Such a gene retains its identifier, sequences and phylogenetic tip,
+with `coordinate_source=unavailable_trans_splicing` and empty coordinate fields.
+The optional `locus_parts` JSON column records validated physical parts. These
+parts occupy masked positions in neighborhood windows, so missing genes do not
+compress offsets or become homology links. An unavailable focal gene has no
+synteny links, which the existing tree panel represents as missing data, not zero.
+The standalone helpers expose `--nonlocal-gene-policy missing`; it requires
+protein/gene-coordinate mode without an explicit representative map. CDS trait
+validation is unchanged. The policy is included in cache and stage provenance.
+
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.
