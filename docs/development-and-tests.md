@@ -527,6 +527,11 @@ shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 
 ## Database memory and timing comparisons
 
+The [2026-10-26 twelve-candidate review](performance-review-2026-10-26.md)
+covers RSC status aggregation, BUSCO marker selection, binary foregrounds,
+karyotype preparation, scaffold plots and FASTQ resource profiling, including
+rejected proposals, complete-output checks and repeated measurements.
+
 The [twelve-candidate speed review](performance-review-2026-10-25.md) records
 accepted workflow-helper changes, rejected proposals, complete-output comparisons
 and reproducible measurements across annotation, summaries and indexed FASTA I/O.

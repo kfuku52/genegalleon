@@ -36,13 +36,15 @@ def scan(path: Path, kind: str) -> dict:
                 header = handle.readline()
                 if not header:
                     break
-                seq, plus, quality = (handle.readline() for _ in range(3))
+                seq = handle.readline()
+                plus = handle.readline()
+                quality = handle.readline()
+                length = len(seq.rstrip(b"\r\n"))
                 if (not header.startswith(b"@") or not plus.startswith(b"+")
-                        or not seq.strip() or len(seq.rstrip(b"\r\n")) != len(quality.rstrip(b"\r\n"))):
+                        or not seq.strip() or length != len(quality.rstrip(b"\r\n"))):
                     raise ValueError(f"invalid four-line FASTQ: {path}")
                 for line in (header, seq, plus, quality):
                     checksum.update(line)
-                length = len(seq.rstrip(b"\r\n"))
                 sequences += 1
                 residues += length
                 longest = max(longest, length)

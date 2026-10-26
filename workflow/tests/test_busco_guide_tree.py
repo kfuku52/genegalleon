@@ -114,6 +114,35 @@ def test_only_sole_complete_rows_are_single_copy(tmp_path):
     assert rows == {"A": "id"} and universe == set("ABCDE")
 
 
+@pytest.mark.parametrize("suffix", ["", ".gz"])
+def test_single_copy_rows_preserve_order_and_ignore_repeated_incomplete_rows(tmp_path, suffix):
+    path = tmp_path / ("full.tsv" + suffix)
+    content = ("B\tComplete\t001\nA\tComplete\tNA\n"
+               "C\tComplete\nC\tComplete\tsecond\n"
+               "D\tMissing\nD\tComplete\tlate\nE\tFragmented\n")
+    if suffix:
+        with gzip.open(path, "wt") as handle:
+            handle.write(content)
+    else:
+        path.write_text(content)
+    rows, universe = guide.single_copy_rows(path)
+    assert list(rows.items()) == [("B", "001"), ("A", "NA")]
+    assert universe == set("ABCDE")
+
+
+@pytest.mark.parametrize("content,message", [
+    ("A\tComplete\nB\tinvalid\n", "Invalid BUSCO full-table row"),
+    ("bad/id\tMissing\nA\tComplete\n", "BUSCO marker"),
+    ("A\tComplete\tfirst\nA\tMissing\nA\tinvalid\n", "Invalid BUSCO full-table row"),
+    ("A\tComplete\n", "Single-copy BUSCO lacks sequence ID"),
+])
+def test_single_copy_rows_keep_global_validation_and_error_priority(tmp_path, content, message):
+    path = tmp_path / "full.tsv"
+    path.write_text(content)
+    with pytest.raises(ValueError, match=message):
+        guide.single_copy_rows(path)
+
+
 def test_preserve_exact_busco_protein_and_mapping_deterministically(tmp_path):
     args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK*", "BUSCO2": "MXXDEK"}, ["BUSCO3"])
     before = args.output.read_bytes()

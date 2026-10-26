@@ -7,6 +7,7 @@ import math
 import os
 import re
 import tempfile
+from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -196,7 +197,9 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("Karyotype BED gene IDs must be unique within each track.")
             entry.rev = set()
-            entry.sizes = {sid: len(list(entry.bed.sub_bed(sid))) for sid in entry.seqids}
+            selected_seqids = set(entry.seqids)
+            chromosome_counts = Counter(gene.seqid for gene in entry.bed if gene.seqid in selected_seqids)
+            entry.sizes = {sid: chromosome_counts[sid] for sid in entry.seqids}
             if not all(entry.sizes.values()):
                 raise ValueError("Every selected karyotype chromosome must have genes in its BED.")
         for first, second, blocks, _ in layout.edges:

@@ -1,0 +1,3468 @@
+{
+  "date": "2026-10-26",
+  "source_baseline": "c6164ebe8709e15f552ccee7dddababd3052d781",
+  "pre_push_main": "ed33c16c992b3fb6a3cfc801eee93ffab9013d82",
+  "version": "0.8.422",
+  "runtime_image": "sha256:875a6b5926b47eabed44cd8de5f6820b416a378da2945e26edaf379317be438a",
+  "runtime_input": "10c8654f12e6d5fc8024d78f621ba57764f0a3512f4986d4f170bad61ab0c62a",
+  "accepted_candidates": [
+    2,
+    5,
+    6,
+    7,
+    10,
+    11,
+    12
+  ],
+  "rejected_candidates": [
+    1,
+    3,
+    4,
+    8,
+    9
+  ],
+  "final_support_sha256": {
+    "busco_guide_tree.py": "048ca2e97a31f446deac2b530e3307bb746063ea50bcf96f11b323feb0e63849",
+    "resolve_binary_trait_foregrounds.py": "8d309d5454d3e6915cdee34777f85b3f917b25914725fde1a4fc9ee4665a22fa",
+    "reconciled_speciation_contrast.py": "50e99b1ea43dbbe6d051fc302a3da9b49731b7c1f297b2c1dd71b2f9ae053e8b",
+    "pairwise_synteny_karyotype.py": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150",
+    "resource_profile.py": "c3c8aa291072179512ecdc43ac3e67b90451d657ef8ed22377481c9125216171",
+    "scaffold_size_histogram.py": "d417b466c6565cddd919cc9ac651b7c236792b1b03f7596a56c0cde4aaec35bc"
+  },
+  "notes": [
+    "Reports include rejected and intermediate variants; their candidate hashes may differ from final_support_sha256.",
+    "count-bound-tradeoff compares the intermediate unbounded Counter against the final selected-only Counter.",
+    "status-finite-only uses the accepted mask-only source as its baseline; it is not an independent additive gain.",
+    "Initial baseline-only status memory samples had an inherited parent RSS floor and are omitted.",
+    "Resource and scaffold screening used worker ru_maxrss; final selected-count/render records used Linux VmHWM.",
+    "No whole-workflow, NAS, or SIF performance claim."
+  ],
+  "validation": {
+    "final_source_tests": {
+      "tree_busco": 58,
+      "summary": 31,
+      "synteny_resource_scaffold": 47
+    },
+    "skipped": 0,
+    "supplementary_tests": {
+      "count": 110,
+      "note": "Counter refinement landed during this run; final 47-test selection was run afterward."
+    },
+    "static": [
+      "dev lint with Docker Bash parser and host Ruff/config",
+      "git diff --check"
+    ]
+  },
+  "reports": {
+    "summary/omark-200-descending.json": {
+      "mode": "omark",
+      "rows": 500,
+      "clades": 200,
+      "clade_order": "descending",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.5662213340001472,
+            "cpu_s": 0.148657025,
+            "peak_rss_kib": 75776
+          },
+          {
+            "wall_s": 0.6083355419998497,
+            "cpu_s": 0.145187104,
+            "peak_rss_kib": 75796
+          },
+          {
+            "wall_s": 0.6074926670000877,
+            "cpu_s": 0.14953396199999996,
+            "peak_rss_kib": 75788
+          },
+          {
+            "wall_s": 0.7096132090000538,
+            "cpu_s": 0.16279955200000001,
+            "peak_rss_kib": 75800
+          },
+          {
+            "wall_s": 0.6207203339999978,
+            "cpu_s": 0.151969939,
+            "peak_rss_kib": 75792
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.5923496670000077,
+            "cpu_s": 0.13974246099999998,
+            "peak_rss_kib": 75736
+          },
+          {
+            "wall_s": 0.457848125000055,
+            "cpu_s": 0.16494500099999998,
+            "peak_rss_kib": 75724
+          },
+          {
+            "wall_s": 0.49237441700006457,
+            "cpu_s": 0.154268428,
+            "peak_rss_kib": 75724
+          },
+          {
+            "wall_s": 0.5357774999999947,
+            "cpu_s": 0.132729893,
+            "peak_rss_kib": 75724
+          },
+          {
+            "wall_s": 0.531424374999915,
+            "cpu_s": 0.128184935,
+            "peak_rss_kib": 75696
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/summarize_omark.py",
+          "sha256": "376268affbbb7e2be3bd101cfcafb6da7d7afc3ee9e919d5ffedfe4df9d08dd4"
+        },
+        "current": {
+          "path": "workflow/support/summarize_omark.py",
+          "sha256": "c0a132c6184be2d66a492a919fde376b3ebced9d9e32b853e82f7e606d271f4e"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.6083355419998497,
+          "cpu_s": 0.14953396199999996,
+          "peak_rss_kib": 75792
+        },
+        "current": {
+          "wall_s": 0.531424374999915,
+          "cpu_s": 0.13974246099999998,
+          "peak_rss_kib": 75724
+        }
+      }
+    },
+    "summary/omark-200.json": {
+      "mode": "omark",
+      "rows": 500,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.6127029169999787,
+            "cpu_s": 0.17826738000000003,
+            "peak_rss_kib": 75796
+          },
+          {
+            "wall_s": 0.5238914170001863,
+            "cpu_s": 0.19044195800000002,
+            "peak_rss_kib": 75792
+          },
+          {
+            "wall_s": 0.6183216669999183,
+            "cpu_s": 0.170838722,
+            "peak_rss_kib": 75788
+          },
+          {
+            "wall_s": 0.4900142500000584,
+            "cpu_s": 0.170544193,
+            "peak_rss_kib": 75804
+          },
+          {
+            "wall_s": 0.6335039580001194,
+            "cpu_s": 0.175094252,
+            "peak_rss_kib": 75772
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.4917147500000283,
+            "cpu_s": 0.150541219,
+            "peak_rss_kib": 75736
+          },
+          {
+            "wall_s": 0.6874192499999481,
+            "cpu_s": 0.16079407299999998,
+            "peak_rss_kib": 75728
+          },
+          {
+            "wall_s": 0.6363467090000086,
+            "cpu_s": 0.16688805499999998,
+            "peak_rss_kib": 75736
+          },
+          {
+            "wall_s": 0.5180822919999173,
+            "cpu_s": 0.152790769,
+            "peak_rss_kib": 75712
+          },
+          {
+            "wall_s": 0.6431377080000402,
+            "cpu_s": 0.150419664,
+            "peak_rss_kib": 75728
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/summarize_omark.py",
+          "sha256": "376268affbbb7e2be3bd101cfcafb6da7d7afc3ee9e919d5ffedfe4df9d08dd4"
+        },
+        "current": {
+          "path": "workflow/support/summarize_omark.py",
+          "sha256": "c0a132c6184be2d66a492a919fde376b3ebced9d9e32b853e82f7e606d271f4e"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.6127029169999787,
+          "cpu_s": 0.175094252,
+          "peak_rss_kib": 75792
+        },
+        "current": {
+          "wall_s": 0.6363467090000086,
+          "cpu_s": 0.152790769,
+          "peak_rss_kib": 75728
+        }
+      }
+    },
+    "summary/omark-8-descending.json": {
+      "mode": "omark",
+      "rows": 500,
+      "clades": 8,
+      "clade_order": "descending",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.43362212500005626,
+            "cpu_s": 0.05928570300000002,
+            "peak_rss_kib": 75696
+          },
+          {
+            "wall_s": 0.4317023749999862,
+            "cpu_s": 0.056654961999999975,
+            "peak_rss_kib": 75668
+          },
+          {
+            "wall_s": 0.5688602510001601,
+            "cpu_s": 0.05498061900000001,
+            "peak_rss_kib": 75676
+          },
+          {
+            "wall_s": 0.2877610419998291,
+            "cpu_s": 0.05362527799999997,
+            "peak_rss_kib": 75680
+          },
+          {
+            "wall_s": 0.2616728329999205,
+            "cpu_s": 0.05068483100000004,
+            "peak_rss_kib": 75676
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.5784871670000484,
+            "cpu_s": 0.064110465,
+            "peak_rss_kib": 75692
+          },
+          {
+            "wall_s": 0.6110807499999282,
+            "cpu_s": 0.06252144800000003,
+            "peak_rss_kib": 75680
+          },
+          {
+            "wall_s": 0.413065417000098,
+            "cpu_s": 0.05949768,
+            "peak_rss_kib": 75684
+          },
+          {
+            "wall_s": 0.3047543749999022,
+            "cpu_s": 0.06626532799999996,
+            "peak_rss_kib": 75688
+          },
+          {
+            "wall_s": 0.28823499999998603,
+            "cpu_s": 0.053583330999999956,
+            "peak_rss_kib": 75684
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/summarize_omark.py",
+          "sha256": "376268affbbb7e2be3bd101cfcafb6da7d7afc3ee9e919d5ffedfe4df9d08dd4"
+        },
+        "current": {
+          "path": "workflow/support/summarize_omark.py",
+          "sha256": "c0a132c6184be2d66a492a919fde376b3ebced9d9e32b853e82f7e606d271f4e"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.4317023749999862,
+          "cpu_s": 0.05498061900000001,
+          "peak_rss_kib": 75676
+        },
+        "current": {
+          "wall_s": 0.413065417000098,
+          "cpu_s": 0.06252144800000003,
+          "peak_rss_kib": 75684
+        }
+      }
+    },
+    "summary/omark-8.json": {
+      "mode": "omark",
+      "rows": 500,
+      "clades": 8,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.4748756669998784,
+            "cpu_s": 0.07560562799999998,
+            "peak_rss_kib": 75684
+          },
+          {
+            "wall_s": 0.5861325009998382,
+            "cpu_s": 0.062051725,
+            "peak_rss_kib": 75684
+          },
+          {
+            "wall_s": 0.4570270829999572,
+            "cpu_s": 0.05495061699999998,
+            "peak_rss_kib": 75692
+          },
+          {
+            "wall_s": 0.47819095900013053,
+            "cpu_s": 0.05471319499999999,
+            "peak_rss_kib": 75672
+          },
+          {
+            "wall_s": 0.47061829199992644,
+            "cpu_s": 0.054736560000000045,
+            "peak_rss_kib": 75668
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.41656575000001794,
+            "cpu_s": 0.05173257999999997,
+            "peak_rss_kib": 75692
+          },
+          {
+            "wall_s": 0.8347501260000172,
+            "cpu_s": 0.07012045899999997,
+            "peak_rss_kib": 75680
+          },
+          {
+            "wall_s": 0.4638257500000691,
+            "cpu_s": 0.05281100900000002,
+            "peak_rss_kib": 75688
+          },
+          {
+            "wall_s": 0.422909208999954,
+            "cpu_s": 0.058213042999999964,
+            "peak_rss_kib": 75684
+          },
+          {
+            "wall_s": 0.376532958000098,
+            "cpu_s": 0.06161028599999996,
+            "peak_rss_kib": 75696
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/summarize_omark.py",
+          "sha256": "376268affbbb7e2be3bd101cfcafb6da7d7afc3ee9e919d5ffedfe4df9d08dd4"
+        },
+        "current": {
+          "path": "workflow/support/summarize_omark.py",
+          "sha256": "c0a132c6184be2d66a492a919fde376b3ebced9d9e32b853e82f7e606d271f4e"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.4748756669998784,
+          "cpu_s": 0.05495061699999998,
+          "peak_rss_kib": 75684
+        },
+        "current": {
+          "wall_s": 0.422909208999954,
+          "cpu_s": 0.058213042999999964,
+          "peak_rss_kib": 75688
+        }
+      }
+    },
+    "summary/stat-tree-small.json": {
+      "mode": "stat-tree",
+      "rows": 8,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.00812495799982571,
+            "cpu_s": 0.0055412919999999755,
+            "peak_rss_kib": 80376
+          },
+          {
+            "wall_s": 0.010490625000102227,
+            "cpu_s": 0.007065166999999983,
+            "peak_rss_kib": 80372
+          },
+          {
+            "wall_s": 0.01574479199985035,
+            "cpu_s": 0.011096332000000042,
+            "peak_rss_kib": 80376
+          },
+          {
+            "wall_s": 0.01393679200009501,
+            "cpu_s": 0.011133791999999976,
+            "peak_rss_kib": 80372
+          },
+          {
+            "wall_s": 0.010306958000001032,
+            "cpu_s": 0.007789792000000018,
+            "peak_rss_kib": 80360
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.01060325000003104,
+            "cpu_s": 0.006403124999999982,
+            "peak_rss_kib": 80452
+          },
+          {
+            "wall_s": 0.011604708000049868,
+            "cpu_s": 0.009697667000000021,
+            "peak_rss_kib": 80456
+          },
+          {
+            "wall_s": 0.009912374999885287,
+            "cpu_s": 0.008430832,
+            "peak_rss_kib": 80468
+          },
+          {
+            "wall_s": 0.007497332999946593,
+            "cpu_s": 0.0062493750000000015,
+            "peak_rss_kib": 80460
+          },
+          {
+            "wall_s": 0.013992624999900727,
+            "cpu_s": 0.009964748999999995,
+            "peak_rss_kib": 80452
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "5d6a558b66d1d92cdb0eff1932d3df3e000cac5eea6b1f496487f175ae561b35"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "ac34caf0a4b7d5806de014b232cf1b47c655bf891d90d46df519856459f978c6"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.010490625000102227,
+          "cpu_s": 0.007789792000000018,
+          "peak_rss_kib": 80372
+        },
+        "current": {
+          "wall_s": 0.01060325000003104,
+          "cpu_s": 0.008430832,
+          "peak_rss_kib": 80456
+        }
+      }
+    },
+    "summary/stat-tree.json": {
+      "mode": "stat-tree",
+      "rows": 200000,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.45021154200003366,
+            "cpu_s": 0.43878379300000003,
+            "peak_rss_kib": 162152
+          },
+          {
+            "wall_s": 0.5819457499999316,
+            "cpu_s": 0.55170662,
+            "peak_rss_kib": 162644
+          },
+          {
+            "wall_s": 0.5265174169999227,
+            "cpu_s": 0.5054126619999999,
+            "peak_rss_kib": 159988
+          },
+          {
+            "wall_s": 0.5657744579998507,
+            "cpu_s": 0.5519702070000001,
+            "peak_rss_kib": 163240
+          },
+          {
+            "wall_s": 0.5613993329998266,
+            "cpu_s": 0.5232720790000001,
+            "peak_rss_kib": 162912
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.4456716670001697,
+            "cpu_s": 0.421887204,
+            "peak_rss_kib": 162724
+          },
+          {
+            "wall_s": 0.5857107080000787,
+            "cpu_s": 0.5428103790000001,
+            "peak_rss_kib": 163404
+          },
+          {
+            "wall_s": 0.7775937499998236,
+            "cpu_s": 0.7412712450000001,
+            "peak_rss_kib": 162452
+          },
+          {
+            "wall_s": 0.5190170420000868,
+            "cpu_s": 0.507918665,
+            "peak_rss_kib": 163448
+          },
+          {
+            "wall_s": 0.6779987499999152,
+            "cpu_s": 0.6467196669999999,
+            "peak_rss_kib": 162804
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "5d6a558b66d1d92cdb0eff1932d3df3e000cac5eea6b1f496487f175ae561b35"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "ac34caf0a4b7d5806de014b232cf1b47c655bf891d90d46df519856459f978c6"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.5613993329998266,
+          "cpu_s": 0.5232720790000001,
+          "peak_rss_kib": 162644
+        },
+        "current": {
+          "wall_s": 0.5857107080000787,
+          "cpu_s": 0.5428103790000001,
+          "peak_rss_kib": 162804
+        }
+      }
+    },
+    "summary/status-finite-only.json": {
+      "mode": "status",
+      "rows": 200000,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.3158867080001073,
+            "cpu_s": 0.31584320800000004,
+            "peak_rss_kib": 252084
+          },
+          {
+            "wall_s": 0.3185136249999232,
+            "cpu_s": 0.31848370800000003,
+            "peak_rss_kib": 252032
+          },
+          {
+            "wall_s": 0.31203837599991857,
+            "cpu_s": 0.31201862300000005,
+            "peak_rss_kib": 252076
+          },
+          {
+            "wall_s": 0.3543200000001434,
+            "cpu_s": 0.354394372,
+            "peak_rss_kib": 252084
+          },
+          {
+            "wall_s": 0.3224636669999654,
+            "cpu_s": 0.32247070699999997,
+            "peak_rss_kib": 252084
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.28086966699993354,
+            "cpu_s": 0.280847499,
+            "peak_rss_kib": 252368
+          },
+          {
+            "wall_s": 0.3351179589999447,
+            "cpu_s": 0.335101291,
+            "peak_rss_kib": 252220
+          },
+          {
+            "wall_s": 0.31907300100010616,
+            "cpu_s": 0.31907083199999997,
+            "peak_rss_kib": 252128
+          },
+          {
+            "wall_s": 0.3119737920001171,
+            "cpu_s": 0.31197003999999995,
+            "peak_rss_kib": 252196
+          },
+          {
+            "wall_s": 0.28097266700001455,
+            "cpu_s": 0.280959999,
+            "peak_rss_kib": 252180
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/summary/mask-only-source/reconciled_speciation_contrast.py",
+          "sha256": "50e99b1ea43dbbe6d051fc302a3da9b49731b7c1f297b2c1dd71b2f9ae053e8b"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "ac34caf0a4b7d5806de014b232cf1b47c655bf891d90d46df519856459f978c6"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.3185136249999232,
+          "cpu_s": 0.31848370800000003,
+          "peak_rss_kib": 252084
+        },
+        "current": {
+          "wall_s": 0.3119737920001171,
+          "cpu_s": 0.31197003999999995,
+          "peak_rss_kib": 252196
+        }
+      }
+    },
+    "summary/status-mask-only.json": {
+      "mode": "status",
+      "rows": 200000,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.7479600839999421,
+            "cpu_s": 0.747866498,
+            "peak_rss_kib": 275476
+          },
+          {
+            "wall_s": 0.8200486670000373,
+            "cpu_s": 0.819961622,
+            "peak_rss_kib": 275548
+          },
+          {
+            "wall_s": 0.6825540419999925,
+            "cpu_s": 0.6824725819999999,
+            "peak_rss_kib": 275524
+          },
+          {
+            "wall_s": 0.8039145420000295,
+            "cpu_s": 0.8037578289999999,
+            "peak_rss_kib": 275412
+          },
+          {
+            "wall_s": 0.7208291669999198,
+            "cpu_s": 0.720611914,
+            "peak_rss_kib": 275444
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.34916895800006387,
+            "cpu_s": 0.349163499,
+            "peak_rss_kib": 251464
+          },
+          {
+            "wall_s": 0.30454933400005757,
+            "cpu_s": 0.30426441200000004,
+            "peak_rss_kib": 251464
+          },
+          {
+            "wall_s": 0.3113010839999788,
+            "cpu_s": 0.311243664,
+            "peak_rss_kib": 251404
+          },
+          {
+            "wall_s": 0.525091792000012,
+            "cpu_s": 0.525055708,
+            "peak_rss_kib": 251388
+          },
+          {
+            "wall_s": 0.3497184999998808,
+            "cpu_s": 0.349712415,
+            "peak_rss_kib": 252276
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "5d6a558b66d1d92cdb0eff1932d3df3e000cac5eea6b1f496487f175ae561b35"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "50e99b1ea43dbbe6d051fc302a3da9b49731b7c1f297b2c1dd71b2f9ae053e8b"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.7479600839999421,
+          "cpu_s": 0.747866498,
+          "peak_rss_kib": 275476
+        },
+        "current": {
+          "wall_s": 0.34916895800006387,
+          "cpu_s": 0.349163499,
+          "peak_rss_kib": 251464
+        }
+      }
+    },
+    "summary/status-small-final.json": {
+      "mode": "status",
+      "rows": 8,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.007385958999975628,
+            "cpu_s": 0.00739012499999997,
+            "peak_rss_kib": 80300
+          },
+          {
+            "wall_s": 0.014329750000115382,
+            "cpu_s": 0.014335125000000004,
+            "peak_rss_kib": 80292
+          },
+          {
+            "wall_s": 0.01541399999996429,
+            "cpu_s": 0.015419083,
+            "peak_rss_kib": 80296
+          },
+          {
+            "wall_s": 0.006485792000148649,
+            "cpu_s": 0.006490041999999974,
+            "peak_rss_kib": 80300
+          },
+          {
+            "wall_s": 0.018440957999928287,
+            "cpu_s": 0.018449207999999995,
+            "peak_rss_kib": 80296
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.005354082999929233,
+            "cpu_s": 0.005350875999999949,
+            "peak_rss_kib": 80388
+          },
+          {
+            "wall_s": 0.006283040999960576,
+            "cpu_s": 0.0062887090000000034,
+            "peak_rss_kib": 80384
+          },
+          {
+            "wall_s": 0.00589241700004095,
+            "cpu_s": 0.005899916999999977,
+            "peak_rss_kib": 80384
+          },
+          {
+            "wall_s": 0.006577999999990425,
+            "cpu_s": 0.006595167000000013,
+            "peak_rss_kib": 80380
+          },
+          {
+            "wall_s": 0.010761875000071086,
+            "cpu_s": 0.010769083999999984,
+            "peak_rss_kib": 80376
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "5d6a558b66d1d92cdb0eff1932d3df3e000cac5eea6b1f496487f175ae561b35"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "50e99b1ea43dbbe6d051fc302a3da9b49731b7c1f297b2c1dd71b2f9ae053e8b"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.014329750000115382,
+          "cpu_s": 0.014335125000000004,
+          "peak_rss_kib": 80296
+        },
+        "current": {
+          "wall_s": 0.006283040999960576,
+          "cpu_s": 0.0062887090000000034,
+          "peak_rss_kib": 80384
+        }
+      }
+    },
+    "summary/status-small.json": {
+      "mode": "status",
+      "rows": 8,
+      "clades": 200,
+      "clade_order": "mixed",
+      "repeats": 5,
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "pandas": "3.0.6",
+      "numpy": "1.26.4",
+      "samples": {
+        "baseline": [
+          {
+            "wall_s": 0.007682624999915788,
+            "cpu_s": 0.0076879589999999665,
+            "peak_rss_kib": 80292
+          },
+          {
+            "wall_s": 0.006641292000040266,
+            "cpu_s": 0.00664625000000002,
+            "peak_rss_kib": 80292
+          },
+          {
+            "wall_s": 0.012670500000012908,
+            "cpu_s": 0.012676624999999997,
+            "peak_rss_kib": 80296
+          },
+          {
+            "wall_s": 0.007636000000047716,
+            "cpu_s": 0.0076443750000000366,
+            "peak_rss_kib": 80296
+          },
+          {
+            "wall_s": 0.02417841699980272,
+            "cpu_s": 0.024188623999999992,
+            "peak_rss_kib": 80296
+          }
+        ],
+        "current": [
+          {
+            "wall_s": 0.006027417000041169,
+            "cpu_s": 0.006036291000000027,
+            "peak_rss_kib": 80384
+          },
+          {
+            "wall_s": 0.007045791999871653,
+            "cpu_s": 0.007052166999999998,
+            "peak_rss_kib": 80384
+          },
+          {
+            "wall_s": 0.006998500000008789,
+            "cpu_s": 0.0070082919999999715,
+            "peak_rss_kib": 80372
+          },
+          {
+            "wall_s": 0.005255750000060289,
+            "cpu_s": 0.005261792000000043,
+            "peak_rss_kib": 80380
+          },
+          {
+            "wall_s": 0.005718166999940877,
+            "cpu_s": 0.005722624999999981,
+            "peak_rss_kib": 80392
+          }
+        ]
+      },
+      "equivalent": true,
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "5d6a558b66d1d92cdb0eff1932d3df3e000cac5eea6b1f496487f175ae561b35"
+        },
+        "current": {
+          "path": "workflow/support/reconciled_speciation_contrast.py",
+          "sha256": "ac34caf0a4b7d5806de014b232cf1b47c655bf891d90d46df519856459f978c6"
+        }
+      },
+      "medians": {
+        "baseline": {
+          "wall_s": 0.007682624999915788,
+          "cpu_s": 0.0076879589999999665,
+          "peak_rss_kib": 80296
+        },
+        "current": {
+          "wall_s": 0.006027417000041169,
+          "cpu_s": 0.006036291000000027,
+          "peak_rss_kib": 80384
+        }
+      }
+    },
+    "tree/busco-comparison.json": {
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/busco_guide_tree.py",
+          "sha256": "e2c9426fa25e13a9cf2b85532fd64fc2e49777e5445f8f5c6d605cb54cf36b4e"
+        },
+        "candidate": {
+          "path": "workflow/support/busco_guide_tree.py",
+          "sha256": "048ca2e97a31f446deac2b530e3307bb746063ea50bcf96f11b323feb0e63849"
+        }
+      },
+      "repeats": 3,
+      "profiles": {
+        "rows-small": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0016510829998424015,
+                "cpu_seconds": 0.000697625000000035,
+                "rss_kib": 52792
+              },
+              {
+                "wall_seconds": 0.0010802499998590065,
+                "cpu_seconds": 0.00033629099999998857,
+                "rss_kib": 52788
+              },
+              {
+                "wall_seconds": 0.00435212499996851,
+                "cpu_seconds": 0.0011129990000000034,
+                "rss_kib": 52788
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0027170000000751315,
+                "cpu_seconds": 0.000961166999999985,
+                "rss_kib": 52764
+              },
+              {
+                "wall_seconds": 0.0017992499999763822,
+                "cpu_seconds": 0.000976750999999998,
+                "rss_kib": 52764
+              },
+              {
+                "wall_seconds": 0.0017987920000450686,
+                "cpu_seconds": 0.000954290999999996,
+                "rss_kib": 52760
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0016510829998424015,
+              "cpu_seconds": 0.000697625000000035,
+              "rss_kib": 52788
+            },
+            "candidate": {
+              "wall_seconds": 0.0017992499999763822,
+              "cpu_seconds": 0.000961166999999985,
+              "rss_kib": 52764
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-singletons": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.03924462500003756,
+                "cpu_seconds": 0.03704412600000001,
+                "rss_kib": 56056
+              },
+              {
+                "wall_seconds": 0.02599904199996672,
+                "cpu_seconds": 0.025485707999999996,
+                "rss_kib": 56048
+              },
+              {
+                "wall_seconds": 0.011907500000006621,
+                "cpu_seconds": 0.011203164999999987,
+                "rss_kib": 56060
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.014494957999886537,
+                "cpu_seconds": 0.013334208000000014,
+                "rss_kib": 53152
+              },
+              {
+                "wall_seconds": 0.009536708000041472,
+                "cpu_seconds": 0.008962004000000023,
+                "rss_kib": 53152
+              },
+              {
+                "wall_seconds": 0.0077948750001723965,
+                "cpu_seconds": 0.006931039,
+                "rss_kib": 53156
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.02599904199996672,
+              "cpu_seconds": 0.025485707999999996,
+              "rss_kib": 56056
+            },
+            "candidate": {
+              "wall_seconds": 0.009536708000041472,
+              "cpu_seconds": 0.008962004000000023,
+              "rss_kib": 53152
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-duplicated": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0231349160001173,
+                "cpu_seconds": 0.021828083999999998,
+                "rss_kib": 63344
+              },
+              {
+                "wall_seconds": 0.02864854200015543,
+                "cpu_seconds": 0.025565751999999997,
+                "rss_kib": 63348
+              },
+              {
+                "wall_seconds": 0.03571350000015627,
+                "cpu_seconds": 0.034799044,
+                "rss_kib": 63348
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.015233458000011524,
+                "cpu_seconds": 0.014924832999999998,
+                "rss_kib": 53156
+              },
+              {
+                "wall_seconds": 0.017146874999980355,
+                "cpu_seconds": 0.014641291,
+                "rss_kib": 53148
+              },
+              {
+                "wall_seconds": 0.020261750000145184,
+                "cpu_seconds": 0.01962121,
+                "rss_kib": 53152
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.02864854200015543,
+              "cpu_seconds": 0.025565751999999997,
+              "rss_kib": 63348
+            },
+            "candidate": {
+              "wall_seconds": 0.017146874999980355,
+              "cpu_seconds": 0.014924832999999998,
+              "rss_kib": 53152
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-wide": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0762975009999991,
+                "cpu_seconds": 0.06623304400000002,
+                "rss_kib": 71372
+              },
+              {
+                "wall_seconds": 0.06514770900002986,
+                "cpu_seconds": 0.06002191899999998,
+                "rss_kib": 71304
+              },
+              {
+                "wall_seconds": 0.04203566699993644,
+                "cpu_seconds": 0.03572429599999999,
+                "rss_kib": 71372
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.03861158299991985,
+                "cpu_seconds": 0.03533866799999996,
+                "rss_kib": 53176
+              },
+              {
+                "wall_seconds": 0.03618070900006387,
+                "cpu_seconds": 0.030651295999999995,
+                "rss_kib": 53172
+              },
+              {
+                "wall_seconds": 0.05512791600017408,
+                "cpu_seconds": 0.045478041999999996,
+                "rss_kib": 53168
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.06514770900002986,
+              "cpu_seconds": 0.06002191899999998,
+              "rss_kib": 71372
+            },
+            "candidate": {
+              "wall_seconds": 0.03861158299991985,
+              "cpu_seconds": 0.03533866799999996,
+              "rss_kib": 53172
+            }
+          },
+          "complete_output_equal": true
+        },
+        "markers-small": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 7.625000080224709e-06,
+                "cpu_seconds": 9.499999999995623e-06,
+                "rss_kib": 23404
+              },
+              {
+                "wall_seconds": 8.83300003806653e-06,
+                "cpu_seconds": 1.1375000000000968e-05,
+                "rss_kib": 23340
+              },
+              {
+                "wall_seconds": 2.720799989219813e-05,
+                "cpu_seconds": 3.137500000000015e-05,
+                "rss_kib": 23396
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 8.333000096172327e-06,
+                "cpu_seconds": 1.1584000000001982e-05,
+                "rss_kib": 23392
+              },
+              {
+                "wall_seconds": 9.457999794904026e-06,
+                "cpu_seconds": 1.1958000000006352e-05,
+                "rss_kib": 23404
+              },
+              {
+                "wall_seconds": 8.083000011538388e-06,
+                "cpu_seconds": 1.0833000000001758e-05,
+                "rss_kib": 23340
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 8.83300003806653e-06,
+              "cpu_seconds": 1.1375000000000968e-05,
+              "rss_kib": 23396
+            },
+            "candidate": {
+              "wall_seconds": 8.333000096172327e-06,
+              "cpu_seconds": 1.1584000000001982e-05,
+              "rss_kib": 23392
+            }
+          },
+          "complete_output_equal": true
+        },
+        "markers-default": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.6460100419999435,
+                "cpu_seconds": 0.6459624960000001,
+                "rss_kib": 61644
+              },
+              {
+                "wall_seconds": 0.6008045000000948,
+                "cpu_seconds": 0.600649123,
+                "rss_kib": 61636
+              },
+              {
+                "wall_seconds": 0.6369754589998138,
+                "cpu_seconds": 0.636939581,
+                "rss_kib": 61644
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.012981667000076413,
+                "cpu_seconds": 0.012991584,
+                "rss_kib": 61648
+              },
+              {
+                "wall_seconds": 0.011085167000146612,
+                "cpu_seconds": 0.011106667000000015,
+                "rss_kib": 61576
+              },
+              {
+                "wall_seconds": 0.010668040999917139,
+                "cpu_seconds": 0.010676415999999994,
+                "rss_kib": 61628
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.6369754589998138,
+              "cpu_seconds": 0.636939581,
+              "rss_kib": 61644
+            },
+            "candidate": {
+              "wall_seconds": 0.011085167000146612,
+              "cpu_seconds": 0.011106667000000015,
+              "rss_kib": 61628
+            }
+          },
+          "complete_output_equal": true
+        },
+        "markers-large": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 8.142384795999988,
+                "cpu_seconds": 8.12084173,
+                "rss_kib": 186304
+              },
+              {
+                "wall_seconds": 8.276761336999925,
+                "cpu_seconds": 8.273968679,
+                "rss_kib": 186088
+              },
+              {
+                "wall_seconds": 8.927474130000064,
+                "cpu_seconds": 8.923699880000001,
+                "rss_kib": 186132
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.038851582999996026,
+                "cpu_seconds": 0.03885749999999999,
+                "rss_kib": 186312
+              },
+              {
+                "wall_seconds": 0.04408354199995301,
+                "cpu_seconds": 0.03721654299999999,
+                "rss_kib": 186112
+              },
+              {
+                "wall_seconds": 0.04843033299994204,
+                "cpu_seconds": 0.048436125,
+                "rss_kib": 186232
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 8.276761336999925,
+              "cpu_seconds": 8.273968679,
+              "rss_kib": 186132
+            },
+            "candidate": {
+              "wall_seconds": 0.04408354199995301,
+              "cpu_seconds": 0.03885749999999999,
+              "rss_kib": 186232
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-error-late": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0008353749999514548,
+                "cpu_seconds": 0.000217542000000015,
+                "rss_kib": 52760
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0011246669998854486,
+                "cpu_seconds": 0.0001661249999999892,
+                "rss_kib": 52744
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0008353749999514548,
+              "cpu_seconds": 0.000217542000000015,
+              "rss_kib": 52760
+            },
+            "candidate": {
+              "wall_seconds": 0.0011246669998854486,
+              "cpu_seconds": 0.0001661249999999892,
+              "rss_kib": 52744
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-error-id": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0006622079999942798,
+                "cpu_seconds": 0.00024054100000001077,
+                "rss_kib": 52764
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0018953339999825403,
+                "cpu_seconds": 0.00037187300000002255,
+                "rss_kib": 52736
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0006622079999942798,
+              "cpu_seconds": 0.00024054100000001077,
+              "rss_kib": 52764
+            },
+            "candidate": {
+              "wall_seconds": 0.0018953339999825403,
+              "cpu_seconds": 0.00037187300000002255,
+              "rss_kib": 52736
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-error-sole": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0013273749998461426,
+                "cpu_seconds": 0.00031199900000000724,
+                "rss_kib": 52768
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0006902079999235866,
+                "cpu_seconds": 0.00021337299999998893,
+                "rss_kib": 52748
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0013273749998461426,
+              "cpu_seconds": 0.00031199900000000724,
+              "rss_kib": 52768
+            },
+            "candidate": {
+              "wall_seconds": 0.0006902079999235866,
+              "cpu_seconds": 0.00021337299999998893,
+              "rss_kib": 52748
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-duplicate-invalid-sole": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0012515840001015022,
+                "cpu_seconds": 0.00050583500000001,
+                "rss_kib": 52712
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0008049580001170398,
+                "cpu_seconds": 0.00023454200000000425,
+                "rss_kib": 52776
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0012515840001015022,
+              "cpu_seconds": 0.00050583500000001,
+              "rss_kib": 52712
+            },
+            "candidate": {
+              "wall_seconds": 0.0008049580001170398,
+              "cpu_seconds": 0.00023454200000000425,
+              "rss_kib": 52776
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-empty": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0008632080000552378,
+                "cpu_seconds": 0.0002873340000000002,
+                "rss_kib": 52796
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0011544579999736015,
+                "cpu_seconds": 0.0002976249999999958,
+                "rss_kib": 52760
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0008632080000552378,
+              "cpu_seconds": 0.0002873340000000002,
+              "rss_kib": 52796
+            },
+            "candidate": {
+              "wall_seconds": 0.0011544579999736015,
+              "cpu_seconds": 0.0002976249999999958,
+              "rss_kib": 52760
+            }
+          },
+          "complete_output_equal": true
+        }
+      }
+    },
+    "tree/busco-confirmation.json": {
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/busco_guide_tree.py",
+          "sha256": "e2c9426fa25e13a9cf2b85532fd64fc2e49777e5445f8f5c6d605cb54cf36b4e"
+        },
+        "candidate": {
+          "path": "workflow/support/busco_guide_tree.py",
+          "sha256": "048ca2e97a31f446deac2b530e3307bb746063ea50bcf96f11b323feb0e63849"
+        }
+      },
+      "repeats": 5,
+      "profiles": {
+        "rows-singletons": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.010251165999989098,
+                "cpu_seconds": 0.010001166000000006,
+                "rss_kib": 56100
+              },
+              {
+                "wall_seconds": 0.012297916999841618,
+                "cpu_seconds": 0.011865666999999996,
+                "rss_kib": 56096
+              },
+              {
+                "wall_seconds": 0.013301667000177986,
+                "cpu_seconds": 0.012698165999999983,
+                "rss_kib": 56100
+              },
+              {
+                "wall_seconds": 0.020488167000166868,
+                "cpu_seconds": 0.02009704300000001,
+                "rss_kib": 56100
+              },
+              {
+                "wall_seconds": 0.011956708000070648,
+                "cpu_seconds": 0.011745958,
+                "rss_kib": 56104
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.008015625000098225,
+                "cpu_seconds": 0.007689790000000002,
+                "rss_kib": 53192
+              },
+              {
+                "wall_seconds": 0.00893787500012877,
+                "cpu_seconds": 0.008629333000000017,
+                "rss_kib": 53184
+              },
+              {
+                "wall_seconds": 0.008724750000055792,
+                "cpu_seconds": 0.008336710000000025,
+                "rss_kib": 53204
+              },
+              {
+                "wall_seconds": 0.010051707999991777,
+                "cpu_seconds": 0.009669459000000019,
+                "rss_kib": 53204
+              },
+              {
+                "wall_seconds": 0.007975499999929525,
+                "cpu_seconds": 0.007748459999999985,
+                "rss_kib": 53204
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.012297916999841618,
+              "cpu_seconds": 0.011865666999999996,
+              "rss_kib": 56100
+            },
+            "candidate": {
+              "wall_seconds": 0.008724750000055792,
+              "cpu_seconds": 0.008336710000000025,
+              "rss_kib": 53204
+            }
+          },
+          "complete_output_equal": true
+        },
+        "rows-wide": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.04335062499990272,
+                "cpu_seconds": 0.042018082999999984,
+                "rss_kib": 71492
+              },
+              {
+                "wall_seconds": 0.036577958999941984,
+                "cpu_seconds": 0.03616707899999999,
+                "rss_kib": 71500
+              },
+              {
+                "wall_seconds": 0.10352116600006411,
+                "cpu_seconds": 0.092741456,
+                "rss_kib": 71492
+              },
+              {
+                "wall_seconds": 0.03473491699992337,
+                "cpu_seconds": 0.034035207999999983,
+                "rss_kib": 71360
+              },
+              {
+                "wall_seconds": 0.04098408400000153,
+                "cpu_seconds": 0.039933671000000004,
+                "rss_kib": 71496
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.021277042000065194,
+                "cpu_seconds": 0.020918413999999996,
+                "rss_kib": 53160
+              },
+              {
+                "wall_seconds": 0.022425750000138578,
+                "cpu_seconds": 0.021694328999999984,
+                "rss_kib": 53160
+              },
+              {
+                "wall_seconds": 0.038396833999968294,
+                "cpu_seconds": 0.035198961,
+                "rss_kib": 53152
+              },
+              {
+                "wall_seconds": 0.021219125000015993,
+                "cpu_seconds": 0.020433842000000008,
+                "rss_kib": 53152
+              },
+              {
+                "wall_seconds": 0.020588124999903812,
+                "cpu_seconds": 0.020064956999999994,
+                "rss_kib": 53156
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.04098408400000153,
+              "cpu_seconds": 0.039933671000000004,
+              "rss_kib": 71492
+            },
+            "candidate": {
+              "wall_seconds": 0.021277042000065194,
+              "cpu_seconds": 0.020918413999999996,
+              "rss_kib": 53156
+            }
+          },
+          "complete_output_equal": true
+        },
+        "markers-default": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.36881366700004037,
+                "cpu_seconds": 0.368808749,
+                "rss_kib": 61728
+              },
+              {
+                "wall_seconds": 0.43143479200011825,
+                "cpu_seconds": 0.43141816499999996,
+                "rss_kib": 61648
+              },
+              {
+                "wall_seconds": 0.40788770800008933,
+                "cpu_seconds": 0.40786087299999996,
+                "rss_kib": 61544
+              },
+              {
+                "wall_seconds": 0.4244306659998074,
+                "cpu_seconds": 0.424408664,
+                "rss_kib": 61584
+              },
+              {
+                "wall_seconds": 0.4278366250000545,
+                "cpu_seconds": 0.42775441500000005,
+                "rss_kib": 61588
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.007567500000050131,
+                "cpu_seconds": 0.0075734159999999995,
+                "rss_kib": 61648
+              },
+              {
+                "wall_seconds": 0.011476291999997557,
+                "cpu_seconds": 0.011484584000000006,
+                "rss_kib": 61588
+              },
+              {
+                "wall_seconds": 0.008561332999988736,
+                "cpu_seconds": 0.008565040999999995,
+                "rss_kib": 61584
+              },
+              {
+                "wall_seconds": 0.013190541000085432,
+                "cpu_seconds": 0.013197165999999996,
+                "rss_kib": 61584
+              },
+              {
+                "wall_seconds": 0.009346457999981794,
+                "cpu_seconds": 0.009354792,
+                "rss_kib": 61636
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.4244306659998074,
+              "cpu_seconds": 0.424408664,
+              "rss_kib": 61588
+            },
+            "candidate": {
+              "wall_seconds": 0.009346457999981794,
+              "cpu_seconds": 0.009354792,
+              "rss_kib": 61588
+            }
+          },
+          "complete_output_equal": true
+        }
+      }
+    },
+    "tree/traits-comparison.json": {
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resolve_binary_trait_foregrounds.py",
+          "sha256": "84e9a6ad99c68d6b49e50460c4ea1c0055f1b31a418edd6f9a103f24101444ee"
+        },
+        "candidate": {
+          "path": "workflow/support/resolve_binary_trait_foregrounds.py",
+          "sha256": "8d309d5454d3e6915cdee34777f85b3f917b25914725fde1a4fc9ee4665a22fa"
+        }
+      },
+      "repeats": 3,
+      "profiles": {
+        "traits-small": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0004087909999270778,
+                "cpu_seconds": 0.00041433399999998843,
+                "rss_kib": 46588
+              },
+              {
+                "wall_seconds": 0.0005210829999668931,
+                "cpu_seconds": 0.0005282919999999858,
+                "rss_kib": 46580
+              },
+              {
+                "wall_seconds": 0.00017987500018534774,
+                "cpu_seconds": 0.00018250000000002986,
+                "rss_kib": 46588
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.00017566699989401968,
+                "cpu_seconds": 0.00017854100000000428,
+                "rss_kib": 46516
+              },
+              {
+                "wall_seconds": 0.00019129199995404633,
+                "cpu_seconds": 0.00019408300000001155,
+                "rss_kib": 46548
+              },
+              {
+                "wall_seconds": 0.0009577920000083395,
+                "cpu_seconds": 0.0009613750000000143,
+                "rss_kib": 46536
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.0004087909999270778,
+              "cpu_seconds": 0.00041433399999998843,
+              "rss_kib": 46588
+            },
+            "candidate": {
+              "wall_seconds": 0.00019129199995404633,
+              "cpu_seconds": 0.00019408300000001155,
+              "rss_kib": 46536
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-many": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.7712897510000403,
+                "cpu_seconds": 0.771219246,
+                "rss_kib": 48824
+              },
+              {
+                "wall_seconds": 0.7105477079999218,
+                "cpu_seconds": 0.710429332,
+                "rss_kib": 48824
+              },
+              {
+                "wall_seconds": 0.7831996259999414,
+                "cpu_seconds": 0.7831274140000001,
+                "rss_kib": 48816
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.12508299999990413,
+                "cpu_seconds": 0.12509112500000003,
+                "rss_kib": 48760
+              },
+              {
+                "wall_seconds": 0.17118883399984952,
+                "cpu_seconds": 0.171170749,
+                "rss_kib": 48768
+              },
+              {
+                "wall_seconds": 0.14118054200002916,
+                "cpu_seconds": 0.141186707,
+                "rss_kib": 48768
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.7712897510000403,
+              "cpu_seconds": 0.771219246,
+              "rss_kib": 48824
+            },
+            "candidate": {
+              "wall_seconds": 0.14118054200002916,
+              "cpu_seconds": 0.141186707,
+              "rss_kib": 48768
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-ladder": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.061712041999953726,
+                "cpu_seconds": 0.061723874999999984,
+                "rss_kib": 46828
+              },
+              {
+                "wall_seconds": 0.05716945900007886,
+                "cpu_seconds": 0.05717941599999998,
+                "rss_kib": 46832
+              },
+              {
+                "wall_seconds": 0.08077437499991902,
+                "cpu_seconds": 0.080764167,
+                "rss_kib": 46828
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.015309041999898909,
+                "cpu_seconds": 0.015321583,
+                "rss_kib": 46840
+              },
+              {
+                "wall_seconds": 0.019771832999822436,
+                "cpu_seconds": 0.01977899999999999,
+                "rss_kib": 46844
+              },
+              {
+                "wall_seconds": 0.0186138750000282,
+                "cpu_seconds": 0.01862087500000001,
+                "rss_kib": 46844
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.061712041999953726,
+              "cpu_seconds": 0.061723874999999984,
+              "rss_kib": 46828
+            },
+            "candidate": {
+              "wall_seconds": 0.0186138750000282,
+              "cpu_seconds": 0.01862087500000001,
+              "rss_kib": 46844
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-star": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.2012861260000136,
+                "cpu_seconds": 0.201283041,
+                "rss_kib": 47680
+              },
+              {
+                "wall_seconds": 0.1971911249997902,
+                "cpu_seconds": 0.197185582,
+                "rss_kib": 47680
+              },
+              {
+                "wall_seconds": 0.17127025000013418,
+                "cpu_seconds": 0.171226623,
+                "rss_kib": 47684
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.058820458000127473,
+                "cpu_seconds": 0.058830667,
+                "rss_kib": 47672
+              },
+              {
+                "wall_seconds": 0.06466083299983438,
+                "cpu_seconds": 0.06466745800000001,
+                "rss_kib": 47676
+              },
+              {
+                "wall_seconds": 0.06148445899998478,
+                "cpu_seconds": 0.06149054200000001,
+                "rss_kib": 47676
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.1971911249997902,
+              "cpu_seconds": 0.197185582,
+              "rss_kib": 47680
+            },
+            "candidate": {
+              "wall_seconds": 0.06148445899998478,
+              "cpu_seconds": 0.06149054200000001,
+              "rss_kib": 47676
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-single": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.02228654100008498,
+                "cpu_seconds": 0.022293707999999995,
+                "rss_kib": 47504
+              },
+              {
+                "wall_seconds": 0.012985541000034573,
+                "cpu_seconds": 0.012992499999999962,
+                "rss_kib": 47484
+              },
+              {
+                "wall_seconds": 0.032825416999912704,
+                "cpu_seconds": 0.032834584,
+                "rss_kib": 47500
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.010681208999812952,
+                "cpu_seconds": 0.010687957999999997,
+                "rss_kib": 47516
+              },
+              {
+                "wall_seconds": 0.014538459000050352,
+                "cpu_seconds": 0.01454850000000002,
+                "rss_kib": 47520
+              },
+              {
+                "wall_seconds": 0.017838375000110318,
+                "cpu_seconds": 0.01784616699999997,
+                "rss_kib": 47520
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.02228654100008498,
+              "cpu_seconds": 0.022293707999999995,
+              "rss_kib": 47500
+            },
+            "candidate": {
+              "wall_seconds": 0.014538459000050352,
+              "cpu_seconds": 0.01454850000000002,
+              "rss_kib": 47520
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-nonbinary": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.0024131669999860605,
+                "cpu_seconds": 0.002417040999999981,
+                "rss_kib": 46660
+              },
+              {
+                "wall_seconds": 0.001984917000072528,
+                "cpu_seconds": 0.001987916999999978,
+                "rss_kib": 46684
+              },
+              {
+                "wall_seconds": 0.001978000000008251,
+                "cpu_seconds": 0.0019810829999999946,
+                "rss_kib": 46680
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.0019770000001244625,
+                "cpu_seconds": 0.0019806250000000136,
+                "rss_kib": 46696
+              },
+              {
+                "wall_seconds": 0.0026178329999311245,
+                "cpu_seconds": 0.0026247920000000147,
+                "rss_kib": 46688
+              },
+              {
+                "wall_seconds": 0.0023564589998841257,
+                "cpu_seconds": 0.0023599160000000174,
+                "rss_kib": 46684
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.001984917000072528,
+              "cpu_seconds": 0.001987916999999978,
+              "rss_kib": 46680
+            },
+            "candidate": {
+              "wall_seconds": 0.0023564589998841257,
+              "cpu_seconds": 0.0023599160000000174,
+              "rss_kib": 46688
+            }
+          },
+          "complete_output_equal": true
+        }
+      }
+    },
+    "tree/traits-confirmation.json": {
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resolve_binary_trait_foregrounds.py",
+          "sha256": "84e9a6ad99c68d6b49e50460c4ea1c0055f1b31a418edd6f9a103f24101444ee"
+        },
+        "candidate": {
+          "path": "workflow/support/resolve_binary_trait_foregrounds.py",
+          "sha256": "8d309d5454d3e6915cdee34777f85b3f917b25914725fde1a4fc9ee4665a22fa"
+        }
+      },
+      "repeats": 5,
+      "profiles": {
+        "traits-many": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.8880334590000984,
+                "cpu_seconds": 0.8879991230000001,
+                "rss_kib": 48836
+              },
+              {
+                "wall_seconds": 1.1211406260001695,
+                "cpu_seconds": 1.1210348289999998,
+                "rss_kib": 48836
+              },
+              {
+                "wall_seconds": 1.0233740419998867,
+                "cpu_seconds": 1.023323162,
+                "rss_kib": 48832
+              },
+              {
+                "wall_seconds": 1.1512975420000657,
+                "cpu_seconds": 1.151217413,
+                "rss_kib": 48852
+              },
+              {
+                "wall_seconds": 0.9921915840000111,
+                "cpu_seconds": 0.992143456,
+                "rss_kib": 48836
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.23142862499980765,
+                "cpu_seconds": 0.23138975099999992,
+                "rss_kib": 48808
+              },
+              {
+                "wall_seconds": 0.2597800839998854,
+                "cpu_seconds": 0.25977333199999997,
+                "rss_kib": 48812
+              },
+              {
+                "wall_seconds": 0.2735490409997965,
+                "cpu_seconds": 0.27355733299999996,
+                "rss_kib": 48812
+              },
+              {
+                "wall_seconds": 0.19574404199988749,
+                "cpu_seconds": 0.19576987399999995,
+                "rss_kib": 48808
+              },
+              {
+                "wall_seconds": 0.11590066700000534,
+                "cpu_seconds": 0.11590966600000002,
+                "rss_kib": 48816
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 1.0233740419998867,
+              "cpu_seconds": 1.023323162,
+              "rss_kib": 48836
+            },
+            "candidate": {
+              "wall_seconds": 0.23142862499980765,
+              "cpu_seconds": 0.23138975099999992,
+              "rss_kib": 48812
+            }
+          },
+          "complete_output_equal": true
+        },
+        "traits-single": {
+          "runs": {
+            "baseline": [
+              {
+                "wall_seconds": 0.030706125000051543,
+                "cpu_seconds": 0.03071929200000001,
+                "rss_kib": 47496
+              },
+              {
+                "wall_seconds": 0.02092920899985984,
+                "cpu_seconds": 0.020936083999999994,
+                "rss_kib": 47484
+              },
+              {
+                "wall_seconds": 0.03017016700005115,
+                "cpu_seconds": 0.03016191600000001,
+                "rss_kib": 47496
+              },
+              {
+                "wall_seconds": 0.02581558299993958,
+                "cpu_seconds": 0.025824249999999993,
+                "rss_kib": 47496
+              },
+              {
+                "wall_seconds": 0.01720783299992945,
+                "cpu_seconds": 0.017215833999999985,
+                "rss_kib": 47500
+              }
+            ],
+            "candidate": [
+              {
+                "wall_seconds": 0.022646249999979773,
+                "cpu_seconds": 0.022657083000000022,
+                "rss_kib": 47512
+              },
+              {
+                "wall_seconds": 0.029449124999928245,
+                "cpu_seconds": 0.029460292,
+                "rss_kib": 47512
+              },
+              {
+                "wall_seconds": 0.0281204580001031,
+                "cpu_seconds": 0.028129458000000024,
+                "rss_kib": 47492
+              },
+              {
+                "wall_seconds": 0.02169929200022125,
+                "cpu_seconds": 0.021709541,
+                "rss_kib": 47500
+              },
+              {
+                "wall_seconds": 0.01941141600013907,
+                "cpu_seconds": 0.019419832999999997,
+                "rss_kib": 47508
+              }
+            ]
+          },
+          "median": {
+            "baseline": {
+              "wall_seconds": 0.02581558299993958,
+              "cpu_seconds": 0.025824249999999993,
+              "rss_kib": 47496
+            },
+            "candidate": {
+              "wall_seconds": 0.022646249999979773,
+              "cpu_seconds": 0.022657083000000022,
+              "rss_kib": 47508
+            }
+          },
+          "complete_output_equal": true
+        }
+      }
+    },
+    "synteny/count-bound-tradeoff.json": {
+      "case": "count-sparse",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/karyotype_unbounded.py",
+          "sha256": "51df91833045d07da1061b88fabd7630103804ea0963ad6ccc0d02e978c1c0e3"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/karyotype_selected_candidate.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.0052352500001688895,
+          "cpu": 0.005237000000000047,
+          "rss_kib": 196396,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.018917958000201907,
+          "cpu": 0.01891833300000001,
+          "rss_kib": 196376,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.017903708999710943,
+          "cpu": 0.017903500000000072,
+          "rss_kib": 196316,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.0065055840000241005,
+          "cpu": 0.006507916999999974,
+          "rss_kib": 196392,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.0050469160000830016,
+          "cpu": 0.0050480829999999255,
+          "rss_kib": 196420,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.018072374999974272,
+          "cpu": 0.01806437500000002,
+          "rss_kib": 196372,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 0.018072374999974272,
+          "cpu": 0.01806437500000002,
+          "rss_kib": 196372
+        },
+        "candidate": {
+          "wall": 0.0052352500001688895,
+          "cpu": 0.005237000000000047,
+          "rss_kib": 196396
+        }
+      }
+    },
+    "synteny/count-large.json": {
+      "case": "count-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "51df91833045d07da1061b88fabd7630103804ea0963ad6ccc0d02e978c1c0e3"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.06827737499997966,
+          "cpu": 0.06827995799999997,
+          "rss_kib": 189916,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.025286000000051,
+          "cpu": 1.025095413,
+          "rss_kib": 189900,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.8909919589998481,
+          "cpu": 0.89095908,
+          "rss_kib": 189896,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.06987587499997971,
+          "cpu": 0.06987891700000004,
+          "rss_kib": 189924,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.0492180419998931,
+          "cpu": 0.04921941699999999,
+          "rss_kib": 189840,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.693969541999877,
+          "cpu": 0.693889457,
+          "rss_kib": 189828,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.8620687919999455,
+          "cpu": 0.8620310389999999,
+          "rss_kib": 189832,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.0750885830000243,
+          "cpu": 0.07512783300000003,
+          "rss_kib": 189924,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.06398566699999719,
+          "cpu": 0.06397658300000009,
+          "rss_kib": 189924,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.7958402090000618,
+          "cpu": 0.79563304,
+          "rss_kib": 189812,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.8620687919999455,
+          "cpu": 0.8620310389999999,
+          "rss_kib": 189832
+        },
+        "candidate": {
+          "wall": 0.06827737499997966,
+          "cpu": 0.06827995799999997,
+          "rss_kib": 189924
+        }
+      }
+    },
+    "synteny/count-selected-large.json": {
+      "case": "count-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/karyotype_selected_candidate.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.05517695799971989,
+          "cpu": 0.05516879099999994,
+          "rss_kib": 189884,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.6820405419998679,
+          "cpu": 0.681996037,
+          "rss_kib": 189992,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.6158424169998398,
+          "cpu": 0.6158091219999999,
+          "rss_kib": 189960,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.05413624999982858,
+          "cpu": 0.054127833000000014,
+          "rss_kib": 189884,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.056425708000006125,
+          "cpu": 0.056428208000000035,
+          "rss_kib": 189964,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.6115528750001431,
+          "cpu": 0.611498706,
+          "rss_kib": 189960,
+          "output_sha256": "40dd2a42969836fd95fadd5b279341e80b9fdbb597ab7ada08a688e914ffa44a"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 0.6158424169998398,
+          "cpu": 0.6158091219999999,
+          "rss_kib": 189960
+        },
+        "candidate": {
+          "wall": 0.05517695799971989,
+          "cpu": 0.05516879099999994,
+          "rss_kib": 189884
+        }
+      }
+    },
+    "synteny/count-selected-small.json": {
+      "case": "count-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 3.258300012021209e-05,
+          "cpu": 3.070900000001764e-05,
+          "rss_kib": 58048,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.2083999990863958e-05,
+          "cpu": 1.0000000000010001e-05,
+          "rss_kib": 58024,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.1749999885068974e-05,
+          "cpu": 9.499999999995623e-06,
+          "rss_kib": 58036,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 3.608399993026978e-05,
+          "cpu": 3.4084000000017545e-05,
+          "rss_kib": 58056,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 3.0207999770937022e-05,
+          "cpu": 2.8333999999990978e-05,
+          "rss_kib": 58056,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.037499987432966e-05,
+          "cpu": 8.665999999990515e-06,
+          "rss_kib": 58036,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 1.1749999885068974e-05,
+          "cpu": 9.499999999995623e-06,
+          "rss_kib": 58036
+        },
+        "candidate": {
+          "wall": 3.258300012021209e-05,
+          "cpu": 3.070900000001764e-05,
+          "rss_kib": 58056
+        }
+      }
+    },
+    "synteny/count-selected-sparse.json": {
+      "case": "count-sparse",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/karyotype_selected_candidate.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.00508795799987638,
+          "cpu": 0.00508695800000003,
+          "rss_kib": 196408,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.007480334000319999,
+          "cpu": 0.007480083000000026,
+          "rss_kib": 196332,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.00740475000020524,
+          "cpu": 0.0074104170000000025,
+          "rss_kib": 196336,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.004840541999783454,
+          "cpu": 0.004840791999999983,
+          "rss_kib": 196404,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.004770292000102927,
+          "cpu": 0.004770541999999933,
+          "rss_kib": 196392,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.007604500000070402,
+          "cpu": 0.007606583999999916,
+          "rss_kib": 196400,
+          "output_sha256": "82e1eb1dabb9e7ee0a922de47c7f1e7f6caf15014c53ebe1bdd0434dca102857"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 0.007480334000319999,
+          "cpu": 0.007480083000000026,
+          "rss_kib": 196336
+        },
+        "candidate": {
+          "wall": 0.004840541999783454,
+          "cpu": 0.004840791999999983,
+          "rss_kib": 196404
+        }
+      }
+    },
+    "synteny/count-small.json": {
+      "case": "count-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "51df91833045d07da1061b88fabd7630103804ea0963ad6ccc0d02e978c1c0e3"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 4.100000001017179e-05,
+          "cpu": 3.9166000000034895e-05,
+          "rss_kib": 57768,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.137499998549174e-05,
+          "cpu": 9.499999999995623e-06,
+          "rss_kib": 57848,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.2083000001439359e-05,
+          "cpu": 1.0249999999989434e-05,
+          "rss_kib": 57836,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 4.754199994749797e-05,
+          "cpu": 4.524999999999668e-05,
+          "rss_kib": 57760,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 3.199999991920777e-05,
+          "cpu": 2.9959000000023828e-05,
+          "rss_kib": 57820,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.1541000048964634e-05,
+          "cpu": 9.833000000014636e-06,
+          "rss_kib": 57772,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 1.1541000048964634e-05,
+          "cpu": 9.833000000014636e-06,
+          "rss_kib": 57836
+        },
+        "candidate": {
+          "wall": 4.100000001017179e-05,
+          "cpu": 3.9166000000034895e-05,
+          "rss_kib": 57768
+        }
+      }
+    },
+    "synteny/harness-check.json": {
+      "case": "count-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 3.1292000130633824e-05,
+          "cpu": 2.925000000003619e-05,
+          "rss_kib": 58052,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.104199964174768e-05,
+          "cpu": 9.083000000020824e-06,
+          "rss_kib": 58004,
+          "output_sha256": "09df7a71c90016dfe6f11b644f78bf28a940cba7680844b246d326f80104dc58"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 1.104199964174768e-05,
+          "cpu": 9.083000000020824e-06,
+          "rss_kib": 58004
+        },
+        "candidate": {
+          "wall": 3.1292000130633824e-05,
+          "cpu": 2.925000000003619e-05,
+          "rss_kib": 58052
+        }
+      }
+    },
+    "synteny/render-large.json": {
+      "case": "render-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "51df91833045d07da1061b88fabd7630103804ea0963ad6ccc0d02e978c1c0e3"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 9.003360545000078,
+          "cpu": 8.941643517,
+          "rss_kib": 650716,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 9.6537177539999,
+          "cpu": 9.62384472,
+          "rss_kib": 650696,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 10.992174546999877,
+          "cpu": 10.957815131,
+          "rss_kib": 650756,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 8.470805878999954,
+          "cpu": 8.444310221,
+          "rss_kib": 650728,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 9.052058170999999,
+          "cpu": 9.007046593,
+          "rss_kib": 650804,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 9.885099212000114,
+          "cpu": 9.866789333,
+          "rss_kib": 650744,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 9.885099212000114,
+          "cpu": 9.866789333,
+          "rss_kib": 650744
+        },
+        "candidate": {
+          "wall": 9.003360545000078,
+          "cpu": 8.941643517,
+          "rss_kib": 650728
+        }
+      }
+    },
+    "synteny/render-selected-large.json": {
+      "case": "render-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "d52eac9d7a773fb9fe861e924939afaacb40d88b555084e0944b4d167c629150"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 7.846904086999984,
+          "cpu": 7.832682259,
+          "rss_kib": 650464,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 8.542648629000269,
+          "cpu": 8.522350472,
+          "rss_kib": 650880,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 8.113458461999926,
+          "cpu": 8.099967386,
+          "rss_kib": 650808,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 7.227017878999959,
+          "cpu": 7.214588387,
+          "rss_kib": 650952,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 7.586688919999688,
+          "cpu": 7.572332670999999,
+          "rss_kib": 652648,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 8.17824050299987,
+          "cpu": 8.162169972,
+          "rss_kib": 650708,
+          "output_sha256": "1628a1d7470ab51b62f544c94ddc6aa4a284a092d12a86d7c369d7880b798e28"
+        }
+      ],
+      "output_equivalent": true,
+      "medians": {
+        "baseline": {
+          "wall": 8.17824050299987,
+          "cpu": 8.162169972,
+          "rss_kib": 650808
+        },
+        "candidate": {
+          "wall": 7.586688919999688,
+          "cpu": 7.572332670999999,
+          "rss_kib": 650952
+        }
+      }
+    },
+    "synteny/render-small.json": {
+      "case": "render-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "7bc6287e12a40313f2289cfe3826366fdd2c6b65057541315b38bc6f870bdf05"
+        },
+        "candidate": {
+          "path": "workflow/support/pairwise_synteny_karyotype.py",
+          "sha256": "51df91833045d07da1061b88fabd7630103804ea0963ad6ccc0d02e978c1c0e3"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 1.399189292000301,
+          "cpu": 1.388387831,
+          "rss_kib": 204020,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.4329886249997799,
+          "cpu": 1.422524534,
+          "rss_kib": 204164,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.395757918000072,
+          "cpu": 1.385417317,
+          "rss_kib": 204040,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 1.3809150839997528,
+          "cpu": 1.370043541,
+          "rss_kib": 204052,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 1.3822987089997696,
+          "cpu": 1.372150492,
+          "rss_kib": 203972,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.3716295429999263,
+          "cpu": 1.3613928720000001,
+          "rss_kib": 204152,
+          "output_sha256": "dc90729f058c436185e62f246b6a70b61b87eed2f19ab71750378da6501d5296"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 1.395757918000072,
+          "cpu": 1.385417317,
+          "rss_kib": 204152
+        },
+        "candidate": {
+          "wall": 1.3822987089997696,
+          "cpu": 1.372150492,
+          "rss_kib": 204020
+        }
+      }
+    },
+    "synteny/resource-fasta-control.json": {
+      "case": "resource-fasta-control",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resource_profile.py",
+          "sha256": "eb177509bcdeffaac9e11fdc23c686890816642b45a4d64afeb0694bfd655a57"
+        },
+        "candidate": {
+          "path": "workflow/support/resource_profile.py",
+          "sha256": "c3c8aa291072179512ecdc43ac3e67b90451d657ef8ed22377481c9125216171"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.2851970840001741,
+          "cpu": 0.284271902,
+          "rss_kib": 20472,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.2834783750004135,
+          "cpu": 0.282366455,
+          "rss_kib": 20292,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.2844660829996428,
+          "cpu": 0.283526291,
+          "rss_kib": 20352,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.28197533399998065,
+          "cpu": 0.281030086,
+          "rss_kib": 20484,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.2851718750002874,
+          "cpu": 0.284115495,
+          "rss_kib": 20420,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.2818797079999058,
+          "cpu": 0.280876919,
+          "rss_kib": 20356,
+          "output_sha256": "813d7ac3c66b04fb2048468cbf9f05a3e8b54bf7459df19bfa86afbf092387c3"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.2834783750004135,
+          "cpu": 0.282366455,
+          "rss_kib": 20352
+        },
+        "candidate": {
+          "wall": 0.2851718750002874,
+          "cpu": 0.284115495,
+          "rss_kib": 20472
+        }
+      }
+    },
+    "synteny/resource-fastq-gzip.json": {
+      "case": "resource-fastq-gzip",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resource_profile.py",
+          "sha256": "eb177509bcdeffaac9e11fdc23c686890816642b45a4d64afeb0694bfd655a57"
+        },
+        "candidate": {
+          "path": "workflow/support/resource_profile.py",
+          "sha256": "c3c8aa291072179512ecdc43ac3e67b90451d657ef8ed22377481c9125216171"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.8253923340000711,
+          "cpu": 0.82473933,
+          "rss_kib": 20612,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.299626334000095,
+          "cpu": 1.2979374529999999,
+          "rss_kib": 20468,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.0038715010000487,
+          "cpu": 1.002911243,
+          "rss_kib": 20484,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.9126725839998926,
+          "cpu": 0.91165825,
+          "rss_kib": 20612,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.7311786669999947,
+          "cpu": 0.7303781659999999,
+          "rss_kib": 20608,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.8453307089998816,
+          "cpu": 0.8448858300000001,
+          "rss_kib": 20420,
+          "output_sha256": "f3eca6b44597cfe544d22a570b2a1402ef0e472de2c67b6894f596b5a4a5726e"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 1.0038715010000487,
+          "cpu": 1.002911243,
+          "rss_kib": 20468
+        },
+        "candidate": {
+          "wall": 0.8253923340000711,
+          "cpu": 0.82473933,
+          "rss_kib": 20612
+        }
+      }
+    },
+    "synteny/resource-fastq-large.json": {
+      "case": "resource-fastq-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resource_profile.py",
+          "sha256": "eb177509bcdeffaac9e11fdc23c686890816642b45a4d64afeb0694bfd655a57"
+        },
+        "candidate": {
+          "path": "workflow/support/resource_profile.py",
+          "sha256": "c3c8aa291072179512ecdc43ac3e67b90451d657ef8ed22377481c9125216171"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.8158451669999067,
+          "cpu": 0.741580099,
+          "rss_kib": 20336,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.8611173340000278,
+          "cpu": 0.818488632,
+          "rss_kib": 20356,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.9707188750001023,
+          "cpu": 0.910212712,
+          "rss_kib": 20356,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.9134735420000197,
+          "cpu": 0.832473314,
+          "rss_kib": 20292,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.8814244580000832,
+          "cpu": 0.8348105,
+          "rss_kib": 20292,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.0635402500001874,
+          "cpu": 0.9926026320000001,
+          "rss_kib": 20292,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 1.049391875999845,
+          "cpu": 0.99134304,
+          "rss_kib": 20352,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.8759290840000631,
+          "cpu": 0.786811697,
+          "rss_kib": 20356,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.8659039589999793,
+          "cpu": 0.796550927,
+          "rss_kib": 20292,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.9220176669998636,
+          "cpu": 0.877243876,
+          "rss_kib": 20292,
+          "output_sha256": "69a629c2fa65d051362b214d59fa34be651fd23c6185380ab0aec22ef8e5e92c"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.9707188750001023,
+          "cpu": 0.910212712,
+          "rss_kib": 20352
+        },
+        "candidate": {
+          "wall": 0.8759290840000631,
+          "cpu": 0.796550927,
+          "rss_kib": 20292
+        }
+      }
+    },
+    "synteny/resource-fastq-small.json": {
+      "case": "resource-fastq-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/resource_profile.py",
+          "sha256": "eb177509bcdeffaac9e11fdc23c686890816642b45a4d64afeb0694bfd655a57"
+        },
+        "candidate": {
+          "path": "workflow/support/resource_profile.py",
+          "sha256": "c3c8aa291072179512ecdc43ac3e67b90451d657ef8ed22377481c9125216171"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.0003209999999853608,
+          "cpu": 0.00021291599999999702,
+          "rss_kib": 20472,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.0005937079999966954,
+          "cpu": 0.0003604160000000023,
+          "rss_kib": 20356,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.0003920420003851177,
+          "cpu": 0.00026958500000000274,
+          "rss_kib": 20352,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.0003926250001313747,
+          "cpu": 0.00021508199999999839,
+          "rss_kib": 20484,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.00039912500005812035,
+          "cpu": 0.00022758299999999995,
+          "rss_kib": 20480,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.00040837500000634464,
+          "cpu": 0.000285291,
+          "rss_kib": 20368,
+          "output_sha256": "b6d226ed224a00c900ab226af0e8a3fcd46152018dafc8a075826a065e93a989"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.00040837500000634464,
+          "cpu": 0.000285291,
+          "rss_kib": 20356
+        },
+        "candidate": {
+          "wall": 0.0003926250001313747,
+          "cpu": 0.00021508199999999839,
+          "rss_kib": 20480
+        }
+      }
+    },
+    "synteny/scaffold-render-large.json": {
+      "case": "scaffold-render-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/scaffold_size_histogram.py",
+          "sha256": "d4a4d7559f2204aca92673fc9353328e58c5f6c56f1fcde45d52e737524e38b0"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/scaffold_size_histogram_candidate.py",
+          "sha256": "d417b466c6565cddd919cc9ac651b7c236792b1b03f7596a56c0cde4aaec35bc"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 8.73165304600002,
+          "cpu": 8.53579627,
+          "rss_kib": 239116,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 8.540058004000002,
+          "cpu": 8.412524586,
+          "rss_kib": 239136,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 8.52257112899997,
+          "cpu": 8.34650514,
+          "rss_kib": 239384,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 7.70400179499984,
+          "cpu": 7.519877011999999,
+          "rss_kib": 239052,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 7.52075162899996,
+          "cpu": 7.406715602,
+          "rss_kib": 239280,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 7.4013054199999715,
+          "cpu": 7.328887647999999,
+          "rss_kib": 239260,
+          "output_sha256": "8a421f79090805576882913bc2d9150908a219613a4a4abe86577f36b2e7143f"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 8.52257112899997,
+          "cpu": 8.34650514,
+          "rss_kib": 239260
+        },
+        "candidate": {
+          "wall": 7.70400179499984,
+          "cpu": 7.519877011999999,
+          "rss_kib": 239116
+        }
+      }
+    },
+    "synteny/scatter-large.json": {
+      "case": "scatter-large",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/scaffold_size_histogram.py",
+          "sha256": "d4a4d7559f2204aca92673fc9353328e58c5f6c56f1fcde45d52e737524e38b0"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/scaffold_size_histogram_candidate.py",
+          "sha256": "d417b466c6565cddd919cc9ac651b7c236792b1b03f7596a56c0cde4aaec35bc"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.6992138749999413,
+          "cpu": 0.689326833,
+          "rss_kib": 280020,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.7389870829999836,
+          "cpu": 0.7073641199999999,
+          "rss_kib": 276180,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.7815234170000167,
+          "cpu": 0.7129461690000001,
+          "rss_kib": 276240,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.4967175000001589,
+          "cpu": 0.471928085,
+          "rss_kib": 275900,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.6406436249999388,
+          "cpu": 0.627199203,
+          "rss_kib": 275772,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.8237487510000392,
+          "cpu": 0.796884245,
+          "rss_kib": 276116,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.7624406249999538,
+          "cpu": 0.729564956,
+          "rss_kib": 276240,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.5151364589999048,
+          "cpu": 0.46034012300000005,
+          "rss_kib": 277620,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.49363162500003455,
+          "cpu": 0.474674789,
+          "rss_kib": 278040,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.7217578750000939,
+          "cpu": 0.685378955,
+          "rss_kib": 274672,
+          "output_sha256": "d96b6ec81cb4a966ed61f732b6a7f52e8bdb1701a061096493e6240cede654cf"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.7624406249999538,
+          "cpu": 0.7129461690000001,
+          "rss_kib": 276180
+        },
+        "candidate": {
+          "wall": 0.5151364589999048,
+          "cpu": 0.474674789,
+          "rss_kib": 277620
+        }
+      }
+    },
+    "synteny/scatter-small.json": {
+      "case": "scatter-small",
+      "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+      "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+      "sources": {
+        "baseline": {
+          "path": "tmp/performance-20261026-ykv8mdhu/baseline/workflow/support/scaffold_size_histogram.py",
+          "sha256": "d4a4d7559f2204aca92673fc9353328e58c5f6c56f1fcde45d52e737524e38b0"
+        },
+        "candidate": {
+          "path": "tmp/performance-20261026-ykv8mdhu/synteny/scaffold_size_histogram_candidate.py",
+          "sha256": "d417b466c6565cddd919cc9ac651b7c236792b1b03f7596a56c0cde4aaec35bc"
+        }
+      },
+      "samples": [
+        {
+          "implementation": "candidate",
+          "wall": 0.0049022499997590785,
+          "cpu": 0.0047604159999999895,
+          "rss_kib": 76464,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.004554416999781097,
+          "cpu": 0.0043950010000000095,
+          "rss_kib": 76400,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.0045296670000425365,
+          "cpu": 0.00414716599999998,
+          "rss_kib": 76336,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.004724207999970531,
+          "cpu": 0.004486333000000009,
+          "rss_kib": 76644,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        },
+        {
+          "implementation": "candidate",
+          "wall": 0.00459683299959579,
+          "cpu": 0.0044407909999999995,
+          "rss_kib": 76512,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        },
+        {
+          "implementation": "baseline",
+          "wall": 0.004928166999889072,
+          "cpu": 0.004731789999999986,
+          "rss_kib": 76384,
+          "output_sha256": "ab9e0a6a22ae448e7d7d0acd96e3c7c9edbf9f3de7d1be2b420576857c519f6b"
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "wall": 0.004554416999781097,
+          "cpu": 0.0043950010000000095,
+          "rss_kib": 76384
+        },
+        "candidate": {
+          "wall": 0.004724207999970531,
+          "cpu": 0.004486333000000009,
+          "rss_kib": 76512
+        }
+      }
+    }
+  }
+}

@@ -1179,16 +1179,21 @@ def _status_from_results(
     else:
         model_keys = [column for column in ("analysis_id", "model_id") if column in results]
         model_count = int(results[model_keys].drop_duplicates().shape[0]) if model_keys else len(results)
-        estimable = _association_results(results[_usable_result_mask(results)])
-        estimable_count = int(estimable[model_keys].drop_duplicates().shape[0]) if model_keys else len(estimable)
+        usable_results = results[_usable_result_mask(results)]
+        association_results = _association_results(usable_results)
+        estimable_count = (
+            int(association_results[model_keys].drop_duplicates().shape[0])
+            if model_keys else len(association_results)
+        )
         if estimable_count > 0:
             status = "ok"
         else:
             status = "not_estimable"
             reason = add_reason(reason, "nwkit_returned_no_estimable_models")
 
-    usable_results = results[_usable_result_mask(results)]
-    association_results = _association_results(usable_results)
+    if results.empty:
+        usable_results = results[_usable_result_mask(results)]
+        association_results = _association_results(usable_results)
     p_values = pandas.to_numeric(
         association_results.get("p_value", pandas.Series(dtype=float)), errors="coerce"
     )
@@ -1210,7 +1215,7 @@ def _status_from_results(
         "n_usable_result_rows": int(usable_results.shape[0]),
         "n_nonconverged_result_rows": int(
             results.shape[0]
-            - results[_usable_result_mask(results)].shape[0]
+            - usable_results.shape[0]
             - (
                 0
                 if "inference_status" not in results
