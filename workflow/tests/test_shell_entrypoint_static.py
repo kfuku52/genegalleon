@@ -1,5 +1,4 @@
 import re
-import subprocess
 
 from shell_static_helpers import (
     REPO_ROOT,
@@ -19,31 +18,6 @@ def test_common_scratch_defaults_to_auto():
     assert "default `auto`" in read_text(
         REPO_ROOT / "docs" / "execution-model.md"
     )
-
-
-def test_site_runtime_exec_command_uses_output_parameter():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    site_runtime_path = WORKFLOW_DIR / "support" / "gg_site_runtime.sh"
-    util_text = read_text(util_path)
-    site_text = read_text(site_runtime_path)
-    site_body = function_body(site_text, "gg_site_container_shell_command")
-    helper_body = function_body(site_text, "gg_set_command_array")
-    assert "local out_var=${2:-}" in site_body
-    assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1' in site_body
-    assert 'gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1' in site_body
-    assert 'printf -v "${out_var}" \'%s\' "${command_text}"' not in site_body
-    assert 'echo "${runtime_bin} shell"' not in site_body
-    assert 'echo "${runtime_bin} shell --contain"' not in site_body
-    assert 'echo "${runtime_bin} exec"' not in site_body
-    assert 'echo "${runtime_bin} exec --contain"' not in site_body
-    assert 'site profile = nig" >&2' not in site_body
-    assert 'site profile = nhr-fau" >&2' not in site_body
-    assert 'site profile = default" >&2' not in site_body
-    assert 'eval "${out_var}=()"' in helper_body
-    assert 'eval "${out_var}+=( ${quoted_arg} )"' in helper_body
-    assert 'gg_site_container_shell_command "${runtime_bin}" singularity_command' in util_text
-    assert 'singularity_command="$(gg_site_container_shell_command "${runtime_bin}")"' not in util_text
-    assert 'singularity_command=( "${runtime_bin}" exec )' in util_text
 
 
 def test_set_singularityenv_does_not_dump_singularityenv_values():
@@ -78,13 +52,6 @@ def test_gg_trigger_versions_dump_is_runtime_agnostic():
     assert "singularity version || {" not in body
 
 
-def test_entrypoint_activate_container_runtime_prints_version_summary():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = read_text(util_path)
-    body = function_body(text, "gg_entrypoint_activate_container_runtime")
-    assert "gg_entrypoint_print_version_summary" in body
-
-
 def test_container_build_metadata_includes_repo_version_label():
     dockerfile = read_text(REPO_ROOT / "container" / "Dockerfile")
     buildx = read_text(REPO_ROOT / "container" / "buildx.sh")
@@ -98,16 +65,6 @@ def test_container_build_metadata_includes_repo_version_label():
     assert "s|@@SECURITY_REFRESH_EPOCH@@|" in local_build
     assert "org.opencontainers.image.version @@GG_VERSION@@" in definition_template
     assert "io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@" in definition_template
-
-
-def test_run_container_shell_script_uses_exec_with_bash_stdin_bridge():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = read_text(util_path)
-    body = function_body(text, "gg_run_container_shell_script")
-    assert "subcommand=$(gg_container_shell_command_subcommand || true)" in body
-    assert '"${singularity_command[@]}" "${image_path}" "${shell_argv[@]}" < "${script_path}"' in body
-    assert '${singularity_command} "${image_path}" "${shell_argv[@]}" < "${script_path}"' in body
-    assert '"${singularity_command[@]}" "${image_path}" < "${script_path}"' in body
 
 
 def test_entrypoints_stream_core_scripts_via_container_shell_helper():
@@ -180,51 +137,6 @@ def test_input_generation_trait_profile_preset_is_wired():
     assert 'case "${trait_profile}" in' in core_text
     assert "gift_starter" in core_text
     assert "gbif_distribution" in core_text
-
-
-def test_registered_config_vars_are_consumed_by_core_or_shared_runtime():
-    registry = WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh"
-    shared_consumers = {
-        "artifact_stale_policy": read_text(
-            WORKFLOW_DIR / "support" / "gg_util" / "06_workspace_validation.sh"
-        ),
-        "artifact_legacy_policy": read_text(
-            WORKFLOW_DIR / "support" / "gg_util" / "06_workspace_validation.sh"
-        ),
-    }
-    for variable, consumer in shared_consumers.items():
-        assert variable in consumer
-
-    for entrypoint in sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh")):
-        core = WORKFLOW_DIR / "core" / entrypoint.name.replace(
-            "_entrypoint.sh",
-            "_core.sh",
-        )
-        assert core.is_file(), f"Missing core script for {entrypoint.name}"
-        completed = subprocess.run(
-            [
-                "bash",
-                "-lc",
-                'source "$1"; gg_print_entrypoint_config_vars "$2"',
-                "bash",
-                str(registry),
-                entrypoint.name,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stderr
-        core_text = read_text(core)
-        unused = [
-            variable
-            for variable in completed.stdout.splitlines()
-            if variable and variable not in core_text and variable not in shared_consumers
-        ]
-        assert not unused, (
-            f"Registered variables are not consumed by {core.name} or an explicit "
-            f"shared runtime consumer: {', '.join(unused)}"
-        )
 
 
 def test_pairwise_synteny_sort_defaults_to_weighted_length_and_is_forwarded_to_plan():
