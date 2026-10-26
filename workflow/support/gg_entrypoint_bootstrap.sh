@@ -85,6 +85,7 @@ for required in (expected_bootstrap, manifest_path):
 if bootstrap_path.resolve(strict=True) != expected_bootstrap.resolve(strict=True):
     fail("Explicit runtime release bootstrap was shadowed: {}".format(bootstrap_path))
 
+manifest_info = manifest_path.lstat()
 try:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -195,28 +196,74 @@ required_paths.update(
 if not required_paths.issubset(inventory):
     fail("Explicit runtime release support closure is incomplete.")
 
+def fingerprint(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def directory_identity(info):
+    return info.st_dev, info.st_ino, info.st_mode
+
+
+# Open each shared directory once while traversing sorted inventory paths.
+# Descriptor-relative O_NOFOLLOW opens retain the exact directory even during
+# a rename; final path fences reject replacement before startup can continue.
+# Keep only the current ancestry open, independently of inventory width.
 verified_sha256 = {}
-for relative in sorted(inventory):
-    item = inventory[relative]
-    path = release_root.joinpath(*item["parts"])
-    current = release_root
-    for part in item["parts"]:
-        current /= part
-        if current.is_symlink():
+directories = {}
+file_fences = {}
+stack = []
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+try:
+    root_fd = os.open(release_root, directory_flags)
+    stack.append(((), root_fd))
+    directories[()] = directory_identity(os.fstat(root_fd))
+    for relative in sorted(inventory):
+        item = inventory[relative]
+        parents = item["parts"][:-1]
+        while stack[-1][0] != parents[:len(stack[-1][0])]:
+            os.close(stack.pop()[1])
+        for part in parents[len(stack[-1][0]):]:
+            prefix = stack[-1][0] + (part,)
+            descriptor = os.open(part, directory_flags, dir_fd=stack[-1][1])
+            stack.append((prefix, descriptor))
+            identity = directory_identity(os.fstat(descriptor))
+            if prefix in directories and directories[prefix] != identity:
+                fail("Explicit runtime release directory changed: {}".format(relative))
+            directories[prefix] = identity
+        leaf = item["parts"][-1]
+        leaf_info = os.stat(leaf, dir_fd=stack[-1][1], follow_symlinks=False)
+        if not stat.S_ISREG(leaf_info.st_mode):
             fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
-    if not path.is_file():
-        fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
-    try:
-        resolved_path = path.resolve(strict=True)
-        resolved_path.relative_to(release_root)
-        payload = path.read_bytes()
-        observed_mode = stat.S_IMODE(path.stat().st_mode)
-    except (OSError, ValueError) as exc:
-        fail("Explicit runtime release file is unsafe or unreadable: {} ({})".format(relative, exc))
-    observed = hashlib.sha256(payload).hexdigest()
-    if observed != item["sha256"] or observed_mode != item["mode"]:
-        fail("Explicit runtime release file changed: {}".format(relative))
-    verified_sha256[relative] = observed
+        descriptor = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=stack[-1][1])
+        with os.fdopen(descriptor, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or fingerprint(before) != fingerprint(leaf_info):
+                fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
+            hasher = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(chunk)
+            if fingerprint(os.fstat(stream.fileno())) != fingerprint(before):
+                fail("Explicit runtime release file changed: {}".format(relative))
+        observed = hasher.hexdigest()
+        if observed != item["sha256"] or stat.S_IMODE(before.st_mode) != item["mode"]:
+            fail("Explicit runtime release file changed: {}".format(relative))
+        verified_sha256[relative] = observed
+        file_fences[item["parts"]] = fingerprint(before)
+    for parts, identity in directories.items():
+        if directory_identity(release_root.joinpath(*parts).lstat()) != identity:
+            fail("Explicit runtime release directory changed: {}".format("/".join(parts)))
+    for parts, identity in file_fences.items():
+        if fingerprint(release_root.joinpath(*parts).lstat()) != identity:
+            fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+    if fingerprint(manifest_path.lstat()) != fingerprint(manifest_info):
+        fail("Explicit runtime release manifest changed during verification.")
+except OSError as exc:
+    fail("Explicit runtime release file is unsafe or unreadable: {}".format(exc))
+finally:
+    for _, descriptor in reversed(stack):
+        os.close(descriptor)
 
 file_sha256 = {relative: verified_sha256[relative] for relative in sorted(snapshot_paths)}
 

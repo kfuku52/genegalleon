@@ -59,6 +59,12 @@ Advanced path overrides that can be exported before launch:
 - `GG_CONTAINER_RUNTIME=docker`
 - `GG_CONTAINER_DOCKER_IMAGE=ghcr.io/kfuku52/genegalleon:latest`
 
+Explicit immutable releases validate every inventoried file's current content
+and mode before startup. The verifier traverses shared directory descriptors
+with no-follow opens, streams each file once, and checks directory, file and
+manifest identities before returning. No persistent checksum cache is used.
+See [runtime verification measurements](runtime-release-validation.md).
+
 ## Scheduler normalization
 
 Before the container starts, `gg_entrypoint_prepare_container_runtime`:
