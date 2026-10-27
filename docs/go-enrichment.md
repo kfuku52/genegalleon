@@ -7,6 +7,11 @@ the workflow forwards it explicitly. Direct R calls accept an optional eleventh
 `annotation_species` argument. Without that argument, both native
 `Species_annotation.tsv` and legacy `Species.annotation.tsv` names are accepted.
 An unmatched reference species stops instead of silently losing annotations.
+For a table outside the workflow workspace, set
+`GG_CONTAINER_PROJECT_ROOT_BIND=/path/to/project:/path/to/project` to the
+project directory containing both the workspace and the annotation table.
+SHIROKANE, NIG and audrey1 honor this explicit same-path project mount;
+unrelated host directories are not added automatically.
 
 When species sampling changes, map a previous CAFE target by descendant taxa:
 
