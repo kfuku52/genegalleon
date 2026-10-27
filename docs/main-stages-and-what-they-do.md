@@ -207,7 +207,7 @@ Purpose:
 - UniProt annotation (`blastp` or `mmseqs2`),
 - `cdskit localize` targeting-peptide and peroxisome localization prediction (enabled by default),
 - optional MMseqs2 taxonomy and contamination removal,
-- optional genome analyses (SubPhaser, dotplot, GenomeScope and [Smudgeplot](smudgeplot.md)).
+- optional genome analyses (SubPhaser, dotplot, [GenomeScope](genomescope.md) and [Smudgeplot](smudgeplot.md)).
 
 Main outputs:
 

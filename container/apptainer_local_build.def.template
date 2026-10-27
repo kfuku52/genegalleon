@@ -88,8 +88,14 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     rapidnj_arm_repo_ref="@@RAPIDNJ_ARM_REPO_REF@@"
     rapidnj_arm_repo_sha="@@RAPIDNJ_ARM_REPO_SHA@@"
     smudgeplot_repo_url="@@SMUDGEPLOT_REPO_URL@@"
+    kmc_repo_url="@@KMC_REPO_URL@@"
+    genomescope_repo_url="@@GENOMESCOPE_REPO_URL@@"
     smudgeplot_repo_ref="@@SMUDGEPLOT_REPO_REF@@"
+    kmc_repo_ref="@@KMC_REPO_REF@@"
+    genomescope_repo_ref="@@GENOMESCOPE_REPO_REF@@"
     smudgeplot_repo_sha="@@SMUDGEPLOT_REPO_SHA@@"
+    kmc_repo_sha="@@KMC_REPO_SHA@@"
+    genomescope_repo_sha="@@GENOMESCOPE_REPO_SHA@@"
     testnh_tarball_sha256="@@TESTNH_TARBALL_SHA256@@"
     cafe5_tarball_sha256="@@CAFE5_TARBALL_SHA256@@"
 
@@ -178,6 +184,12 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     bash /opt/pg/scripts/build_source_artifact.sh smudgeplot smudgeplot \
         "${smudgeplot_repo_url}" "${smudgeplot_repo_sha:-${smudgeplot_repo_ref}}" \
         "${artifact_root}/smudgeplot"
+    bash /opt/pg/scripts/build_source_artifact.sh kmc kmc \
+        "${kmc_repo_url}" "${kmc_repo_sha:-${kmc_repo_ref}}" \
+        "${artifact_root}/kmc"
+    bash /opt/pg/scripts/build_source_artifact.sh genomescope genomescope \
+        "${genomescope_repo_url}" "${genomescope_repo_sha:-${genomescope_repo_ref}}" \
+        "${artifact_root}/genomescope"
     rapidnj_kind=rapidnj
     rapidnj_arm_kind=source
     if [[ "${target_arch}" == arm64 ]]; then

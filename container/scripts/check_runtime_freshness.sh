@@ -201,6 +201,8 @@ sha_variables=(
   RAPIDNJ_REPO_SHA
   RAPIDNJ_ARM_REPO_SHA
   SMUDGEPLOT_REPO_SHA
+  KMC_REPO_SHA
+  GENOMESCOPE_REPO_SHA
 )
 resolution_variables=(
   "${sha_variables[@]}"
@@ -229,11 +231,15 @@ resolution_variables=(
   RAPIDNJ_ARM_REPO_URL
   RAPIDNJ_ARM_REPO_REF
   SMUDGEPLOT_REPO_URL
+  KMC_REPO_URL
+  GENOMESCOPE_REPO_URL
   SMUDGEPLOT_REPO_REF
+  KMC_REPO_REF
+  GENOMESCOPE_REPO_REF
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
-    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == ASTER_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* || "${variable}" == RAPIDNJ_REPO_* || "${variable}" == RAPIDNJ_ARM_REPO_* ) ]]; then
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == ASTER_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == KMC_REPO_* || "${variable}" == GENOMESCOPE_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* || "${variable}" == RAPIDNJ_REPO_* || "${variable}" == RAPIDNJ_ARM_REPO_* ) ]]; then
       continue
     fi
     printf '%s=%s\n' "${variable}" "${!variable:-}"
@@ -312,6 +318,8 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       rapidnj) variable=RAPIDNJ_REPO_SHA ;;
       rapidnjArm) variable=RAPIDNJ_ARM_REPO_SHA ;;
       smudgeplot) variable=SMUDGEPLOT_REPO_SHA ;;
+      kmc) variable=KMC_REPO_SHA ;;
+      genomescope) variable=GENOMESCOPE_REPO_SHA ;;
       *)
         echo "Unknown source in runtime manifest: ${source_name}" >&2
         exit 1

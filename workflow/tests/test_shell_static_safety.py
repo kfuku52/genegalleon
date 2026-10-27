@@ -576,8 +576,8 @@ def test_genome_annotation_core_uses_clean_safe_mkdir_for_task_tmp_dirs():
     assert "if [[ -e input_gff ]]; then" in text
     assert "mkdir -p input_gff" in text
     assert "mkdir ./tmp" not in text
-    assert "if [[ -e ./tmp ]]; then" in text
-    assert "mkdir -p ./tmp" in text
+    assert 'mktemp -d "${dir_sp_tmp}/genomescope-kmc.XXXXXX"' in text
+    assert 'rm -rf -- "${genomescope_count_tmp}"' in text
 
 
 def test_gene_evolution_core_cleans_stale_packaging_dirs_before_mkdir():
@@ -2365,7 +2365,7 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert 'if [[ ! -d "${dir_sp_cds}" ]]; then' in text
     assert 'echo "Input directory not found: ${dir_sp_cds}. Exiting."' in text
     assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
-    assert "find \"${dir_sp_dnaseq}/${sp_ub}\" -type f ! -name '.*'" in text
+    assert '--list-reads "${dir_sp_dnaseq}/${sp_ub}"' in text
     guard = 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then'
     task_index = "task_index=$((GG_ARRAY_TASK_ID - 1))"
     assert guard in text

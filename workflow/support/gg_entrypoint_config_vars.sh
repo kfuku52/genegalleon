@@ -368,6 +368,15 @@ run_genome_contamination_removal
 run_genome_fx2tab
 run_genome_mmseqs2taxonomy
 run_genomescope
+genomescope_kmer_length
+genomescope_kmer_lower
+genomescope_kmer_upper
+genomescope_ploidy
+genomescope_initial_coverage
+genomescope_coverage_source
+genomescope_max_kmercov
+genomescope_histogram
+genomescope_program
 run_smudgeplot
 smudgeplot_kmer_length
 smudgeplot_lower_count

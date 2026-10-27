@@ -84,7 +84,7 @@ def run_stage(workspace, *, lower="4", policy="stop", enabled="1"):
     # Execute the actual ordered stage in a temporary workspace, with the real
     # provenance and publication helpers. Other annotation stages need not run.
     source = CORE.read_text()
-    stage = 'task="Smudgeplot"' + source.split('task="Smudgeplot"', 1)[1].split('task="JCVI synteny dotplot"', 1)[0]
+    stage = 'task="Smudgeplot"' + source.split('task="Smudgeplot"', 1)[1].split('task="GenomeScope"', 1)[0]
     task_tmp = workspace / "output/tmp/task"
     task_tmp.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ, gg_support_dir=str(SCRIPT.parent),

@@ -32,6 +32,11 @@ Parameters:
 | `smudgeplot_lower_count` | `auto` | Smudgeplot histogram cutoff, or an explicit positive count |
 | `smudgeplot_aggregation_distance` | 2 | Smudgeplot's local aggregation neighbourhood |
 
+Enabling [GenomeScope](genomescope.md) also enables this stage by default and
+uses native `haploid_coverage` as its initial lambda, with the same reads and k.
+A positive manual GenomeScope lambda or its `auto` source bypasses this
+dependency. The model ploidy is never set from the Smudgeplot class.
+
 Inspect the histogram together with GenomeScope before interpreting the plot.
 Smudgeplot's automatic cutoff is at least 10, which can remove genuine
 heterozygous k-mers in low-coverage datasets. Set the cutoff explicitly when

@@ -43,6 +43,15 @@ cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
 cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
+genomescope_kmer_length="${genomescope_kmer_length:-21}"
+genomescope_kmer_lower="${genomescope_kmer_lower:-1}"
+genomescope_kmer_upper="${genomescope_kmer_upper:-1000}"
+genomescope_ploidy="${genomescope_ploidy:-2}"
+genomescope_initial_coverage="${genomescope_initial_coverage:--1}"
+genomescope_coverage_source="${genomescope_coverage_source:-smudgeplot}"
+genomescope_max_kmercov="${genomescope_max_kmercov:--1}"
+genomescope_histogram="${genomescope_histogram:-}"
+genomescope_program="${genomescope_program:-/usr/local/bin/genomescope2.0/genomescope.R}"
 run_smudgeplot="${run_smudgeplot:-0}"
 smudgeplot_kmer_length="${smudgeplot_kmer_length:-21}"
 smudgeplot_lower_count="${smudgeplot_lower_count:-auto}"
@@ -1383,62 +1392,18 @@ else
   gg_step_skip "${task}"
 fi
 
-task="GenomeScope"
-if [[ ! -e "${dir_sp_dnaseq}/${sp_ub}" ]]; then
-  echo "dir_sp_dnaseq/sp not found. Skipping ${task}"
-  run_genomescope=0
-fi
-genomescope_needs_update=0
-gg_artifact_contract_init genomescope_provenance_args "genome_annotation_genomescope" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genomescope.json"
-gg_artifact_add_input_if_present genomescope_provenance_args "dna_reads" "${dir_sp_dnaseq}/${sp_ub}"
-genomescope_provenance_args+=(
-  --output "archive=${file_sp_genomescope}"
-  --parameter "kmer_length=21"
-  --parameter "kmer_lower=1"
-  --parameter "kmer_upper=1000"
-)
-gg_artifact_prepare_stage genomescope_needs_update run_genomescope "${genomescope_provenance_args[@]}" || exit $?
-if [[ ${genomescope_needs_update} -eq 1 && ${run_genomescope} -eq 1 ]]; then
-  gg_step_start "${task}"
-
-  if [[ -e "${sp_ub}.genomescope" ]]; then
-    rm -rf -- "${sp_ub}.genomescope"
-  fi
-  mkdir -p "${sp_ub}.genomescope"
-
-  fastq_files=()
-  mapfile -t fastq_files < <(find "${dir_sp_dnaseq}/${sp_ub}" -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
-  if [[ ${#fastq_files[@]} -eq 0 ]]; then
-    echo "No FASTQ files were found in: ${dir_sp_dnaseq}/${sp_ub}. Skipping ${task}."
-  else
-    printf '%s\n' "${fastq_files[@]}" > input_fastq_files.txt
-    klength=21
-    kmer_lower=1
-    kmer_upper=1000 # Could be automatically calculated with the file from species_genome
-    if [[ -e ./tmp ]]; then
-      rm -rf -- ./tmp
+# Read k-mer profiling: prepare Smudgeplot before consuming its native H estimate.
+genomescope_guided=0
+if [[ "${genomescope_initial_coverage}" == -1 && "${genomescope_coverage_source}" == smudgeplot ]]; then
+  genomescope_guided=1
+  if [[ ${run_genomescope} -eq 1 || ( "${artifact_stale_policy:-stop}" == rebuild &&
+        ( -e "${file_sp_genomescope}" || -s "${annotation_provenance_dir}/${sp_ub}.genomescope.json" ) ) ]]; then
+    if [[ -n "${genomescope_histogram}" || "${smudgeplot_kmer_length}" != "${genomescope_kmer_length}" ]]; then
+      echo "Smudgeplot-guided GenomeScope requires the same reads and k. For histogram-only input select genomescope_coverage_source=auto or a manual lambda." >&2
+      exit 1
     fi
-    mkdir -p ./tmp
-    kmc -k${klength} -t${GG_TASK_CPUS} -m${GG_MEM_TOOL_GB} -ci${kmer_lower} -cs${kmer_upper} @input_fastq_files.txt tmp.reads ./tmp
-    kmc_tools transform tmp.reads histogram tmp.reads.histo -cx${kmer_upper}
-    rm -rf -- ./tmp
-    /usr/local/bin/genomescope2.0/genomescope.R -i "tmp.reads.histo" -o "${sp_ub}.genomescope" -k ${klength}
-
-    if [[ -s "${sp_ub}.genomescope/transformed_linear_plot.png" ]]; then
-      echo "GenomeScope output file was detected. Start compressing."
-      mv_out "tmp.reads.histo" "${sp_ub}.genomescope/kmc.histo.tsv"
-      rm -f -- "${sp_ub}.genomescope.zip"
-      zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
-      python "${gg_support_dir}/atomic_zip_publish.py" \
-        --source "${sp_ub}.genomescope.zip" \
-        --destination "${file_sp_genomescope}" \
-        --expected-prefix "${sp_ub}.genomescope" \
-        --remove-source
-      gg_artifact_record "${genomescope_provenance_args[@]}"
-    fi
+    run_smudgeplot=1
   fi
-else
-  gg_step_skip "${task}"
 fi
 
 task="Smudgeplot"
@@ -1496,6 +1461,109 @@ if [[ ${smudgeplot_needs_update} -eq 1 && ${run_smudgeplot} -eq 1 ]]; then
       --destination "${file_sp_smudgeplot}" \
       --expected-prefix "${sp_ub}.smudgeplot" --remove-source
     gg_artifact_record "${smudgeplot_provenance_args[@]}"
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
+task="GenomeScope"
+if [[ ! -e "${dir_sp_dnaseq}/${sp_ub}" && -z "${genomescope_histogram}" ]]; then
+  echo "dir_sp_dnaseq/sp not found. Skipping ${task}"
+  run_genomescope=0
+fi
+genomescope_needs_update=0
+gg_artifact_contract_init genomescope_provenance_args "genome_annotation_genomescope" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.genomescope.json"
+fastq_files=()
+if [[ -n "${genomescope_histogram}" ]]; then
+  genomescope_provenance_args+=(--input "histogram=${genomescope_histogram}")
+elif [[ -d "${dir_sp_dnaseq}/${sp_ub}" ]] && \
+     [[ ${run_genomescope} -eq 1 || -e "${file_sp_genomescope}" || -s "${annotation_provenance_dir}/${sp_ub}.genomescope.json" ]]; then
+  genomescope_read_list="${dir_sp_tmp}/genomescope.reads.nul"
+  python "${gg_support_dir}/run_smudgeplot.py" --list-reads "${dir_sp_dnaseq}/${sp_ub}" > "${genomescope_read_list}"
+  while IFS= read -r -d '' fastq_file; do
+    fastq_files+=("${fastq_file}")
+    genomescope_provenance_args+=(--input "dna_read_${#fastq_files[@]}=${fastq_file}")
+  done < "${genomescope_read_list}"
+  rm -f -- "${genomescope_read_list}"
+fi
+if [[ ${genomescope_guided} -eq 1 ]]; then
+  genomescope_provenance_args+=(--input "smudgeplot_archive=${file_sp_smudgeplot}")
+fi
+genomescope_provenance_args+=(
+  --parameter "coverage_source=${genomescope_coverage_source}"
+  --parameter "coverage_protocol=smudgeplot_H_sensitivity_v1"
+  --output "archive=${file_sp_genomescope}"
+  --parameter "kmer_length=${genomescope_kmer_length}"
+  --parameter "kmer_lower=${genomescope_kmer_lower}"
+  --parameter "kmer_upper=${genomescope_kmer_upper}"
+  --parameter "ploidy=${genomescope_ploidy}"
+  --parameter "initial_coverage=${genomescope_initial_coverage}"
+  --parameter "max_kmercov=${genomescope_max_kmercov}"
+  --parameter "histogram=${genomescope_histogram}"
+  --parameter "program=${genomescope_program}"
+)
+gg_artifact_prepare_stage genomescope_needs_update run_genomescope "${genomescope_provenance_args[@]}" || exit $?
+if [[ ${genomescope_needs_update} -eq 1 && ${run_genomescope} -eq 1 ]]; then
+  gg_step_start "${task}"
+
+  python "${gg_support_dir}/genomescope_histogram.py" validate \
+    --kmer-length "${genomescope_kmer_length}" --lower "${genomescope_kmer_lower}" \
+    --upper "${genomescope_kmer_upper}" --ploidy "${genomescope_ploidy}" \
+    --initial-coverage "${genomescope_initial_coverage}" --max-kmercov "${genomescope_max_kmercov}"
+  if [[ ${#fastq_files[@]} -eq 0 && -z "${genomescope_histogram}" ]]; then
+    echo "No FASTQ files were found in: ${dir_sp_dnaseq}/${sp_ub}. Skipping ${task}."
+    if [[ -e "${file_sp_genomescope}" || -s "${annotation_provenance_dir}/${sp_ub}.genomescope.json" ]]; then
+      echo "Cannot rebuild the existing GenomeScope artifact without inputs." >&2
+      exit 1
+    fi
+    gg_step_skip "${task}"
+  else
+    if ! command -v "${genomescope_program}" >/dev/null 2>&1; then
+      echo "GenomeScope executable not found: ${genomescope_program}" >&2
+      exit 1
+    fi
+    if [[ -e "${sp_ub}.genomescope" ]]; then
+      rm -rf -- "${sp_ub}.genomescope"
+    fi
+    mkdir -p "${sp_ub}.genomescope"
+    genomescope_plan_args=(--initial "${genomescope_initial_coverage}" --source "${genomescope_coverage_source}"
+      --species "${sp_ub}" --kmer-length "${genomescope_kmer_length}"
+      --output "${sp_ub}.genomescope/coverage_selection.json" --reads "${fastq_files[@]}")
+    if [[ ${genomescope_guided} -eq 1 ]]; then
+      genomescope_plan_args+=(--archive "${file_sp_smudgeplot}")
+    fi
+    python "${gg_support_dir}/genomescope_coverage.py" plan "${genomescope_plan_args[@]}"
+    if [[ -n "${genomescope_histogram}" ]]; then
+      cp -- "${genomescope_histogram}" "${sp_ub}.genomescope/kmc.histo.tsv"
+    else
+      printf '%s\n' "${fastq_files[@]}" > input_fastq_files.txt
+      genomescope_count_tmp=$(mktemp -d "${dir_sp_tmp}/genomescope-kmc.XXXXXX")
+      # Keep counts above the reporting ceiling as saturated boundary counts,
+      # rather than discarding them with KMC's default maximum-count filter.
+      kmc -k"${genomescope_kmer_length}" -t"${GG_TASK_CPUS}" -m"${GG_MEM_TOOL_GB}" \
+        -ci"${genomescope_kmer_lower}" -cx4294967295 -cs"${genomescope_kmer_upper}" \
+        @input_fastq_files.txt "${genomescope_count_tmp}/reads" "${genomescope_count_tmp}"
+      kmc_tools transform "${genomescope_count_tmp}/reads" histogram \
+        "${sp_ub}.genomescope/kmc.histo.tsv" -cx"${genomescope_kmer_upper}"
+      rm -rf -- "${genomescope_count_tmp}"
+    fi
+    python "${gg_support_dir}/genomescope_histogram.py" prepare \
+      --input "${sp_ub}.genomescope/kmc.histo.tsv" \
+      --output "${sp_ub}.genomescope/model.histo.tsv" \
+      --metadata "${sp_ub}.genomescope/histogram_metadata.json" \
+      --ceiling "${genomescope_kmer_upper}"
+    python "${gg_support_dir}/genomescope_coverage.py" fit \
+      --selection "${sp_ub}.genomescope/coverage_selection.json" \
+      --output "${sp_ub}.genomescope" --histogram "${sp_ub}.genomescope/model.histo.tsv" \
+      --program "${genomescope_program}" --kmer-length "${genomescope_kmer_length}" \
+      --ploidy "${genomescope_ploidy}" --max-kmercov "${genomescope_max_kmercov}"
+    rm -f -- "${sp_ub}.genomescope.zip"
+    zip -rq "${sp_ub}.genomescope.zip" "${sp_ub}.genomescope"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${sp_ub}.genomescope.zip" \
+      --destination "${file_sp_genomescope}" \
+      --expected-prefix "${sp_ub}.genomescope" --remove-source
+    gg_artifact_record "${genomescope_provenance_args[@]}"
   fi
 else
   gg_step_skip "${task}"

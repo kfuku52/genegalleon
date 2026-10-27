@@ -34,6 +34,8 @@ SOURCE_SHA_VARS = (
     "RAPIDNJ_REPO_SHA",
     "RAPIDNJ_ARM_REPO_SHA",
     "SMUDGEPLOT_REPO_SHA",
+    "KMC_REPO_SHA",
+    "GENOMESCOPE_REPO_SHA",
 )
 
 
@@ -401,6 +403,8 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
     rapidnj_sha = env.pop("RAPIDNJ_REPO_SHA")
     rapidnj_arm_sha = env.pop("RAPIDNJ_ARM_REPO_SHA")
     smudgeplot_sha = env.pop("SMUDGEPLOT_REPO_SHA")
+    kmc_sha = env.pop("KMC_REPO_SHA")
+    genomescope_sha = env.pop("GENOMESCOPE_REPO_SHA")
     aster_sha = env.pop("ASTER_REPO_SHA")
 
     bin_dir = tmp_path / "bin"
@@ -421,6 +425,8 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         f"    printf 'rapidnj\\t%s\\n' '{rapidnj_sha}'\n"
         f"    printf 'rapidnjArm\\t%s\\n' '{rapidnj_arm_sha}'\n"
         f"    printf 'smudgeplot\\t%s\\n' '{smudgeplot_sha}'\n"
+        f"    printf 'kmc\\t%s\\n' '{kmc_sha}'\n"
+        f"    printf 'genomescope\\t%s\\n' '{genomescope_sha}'\n"
         f"    printf 'ASTER\\t%s\\n' '{aster_sha}'\n"
         "    ;;\n"
         "  *) exit 1 ;;\n"
@@ -752,6 +758,57 @@ def test_fetch_git_repo_propagates_clone_failures_with_or_without_a_ref(tmp_path
         assert completed.returncode != 0
         assert "failed to fetch" in completed.stderr
         assert not destination.exists()
+
+
+def test_source_archive_with_submodules_uses_complete_recursive_checkout(tmp_path: Path):
+    real_git = shutil.which("git")
+    assert real_git
+
+    def git(directory, *arguments):
+        return subprocess.check_output(
+            [real_git, "-c", "protocol.file.allow=always", "-C", str(directory), *arguments],
+            text=True, stderr=subprocess.PIPE,
+        ).strip()
+
+    dependency = tmp_path / "dependency"
+    parent = tmp_path / "parent"
+    for directory in (dependency, parent):
+        directory.mkdir()
+        git(directory, "init")
+        git(directory, "config", "user.name", "Test")
+        git(directory, "config", "user.email", "test@example.invalid")
+    (dependency / "header.h").write_text("native submodule source\n")
+    git(dependency, "add", ".")
+    git(dependency, "commit", "-m", "dependency")
+    git(parent, "submodule", "add", str(dependency), "3rd_party/dependency")
+    git(parent, "commit", "-m", "parent")
+    revision = git(parent, "rev-parse", "HEAD")
+    archive = tmp_path / "source.tar.gz"
+    git(parent, "archive", "--format=tar.gz", "--prefix=source/", "-o", str(archive), revision)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy2(FETCH_GIT_TOOL, scripts / FETCH_GIT_TOOL.name)
+    (scripts / "download_url.sh").write_text('#!/bin/bash\ncp "$TEST_SOURCE_ARCHIVE" "$2"\n')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "git"
+    shim.write_text(
+        '#!/bin/bash\n'
+        'if [[ "$1" == -C && "$3" == remote && "$4" == add ]]; then\n'
+        '  exec "$TEST_REAL_GIT" -C "$2" remote add origin "$TEST_SOURCE_PARENT"\n'
+        'fi\nexec "$TEST_REAL_GIT" "$@"\n'
+    )
+    shim.chmod(0o755)
+    destination = tmp_path / "checkout"
+    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+               TEST_REAL_GIT=real_git, TEST_SOURCE_PARENT=str(parent), TEST_SOURCE_ARCHIVE=str(archive),
+               GIT_ALLOW_PROTOCOL="file", FETCH_GIT_MAX_ATTEMPTS="1")
+    result = _run("bash", str(scripts / FETCH_GIT_TOOL.name),
+                  "https://github.com/example/source.git", revision, str(destination), env=env)
+    assert result.returncode == 0, result.stderr
+    assert "recursive git checkout required" in result.stderr
+    assert git(destination, "rev-parse", "HEAD") == revision
+    assert (destination / "3rd_party/dependency/header.h").read_text() == "native submodule source\n"
 
 
 def test_docker_to_sif_conversion_preserves_existing_output_on_failure(tmp_path: Path):

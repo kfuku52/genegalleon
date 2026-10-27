@@ -61,3 +61,6 @@ base	Fastrm
 base	smudgeplot
 base	rapidnj
 base	gg-kmer-distance
+base	kmc
+base	kmc_tools
+base	genomescope.R

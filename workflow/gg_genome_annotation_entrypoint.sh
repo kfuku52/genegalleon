@@ -144,6 +144,15 @@ run_jcvi_dotplot=0 # Self-self synteny dotplot
 
 # DNA-seq workflow flags
 run_genomescope=0 # GenomeScope
+genomescope_kmer_length=21 # Canonical read k-mer length.
+genomescope_kmer_lower=1 # Minimum count retained by KMC.
+genomescope_kmer_upper=1000 # KMC counter/histogram ceiling; boundary counts are reported.
+genomescope_ploidy=2 # GenomeScope model ploidy (1 to 6).
+genomescope_initial_coverage=-1 # Positive manual lambda overrides the coverage source.
+genomescope_coverage_source="smudgeplot" # smudgeplot (native H) or auto (GenomeScope initialization).
+genomescope_max_kmercov=-1 # -1 uses the complete supplied histogram for modelling.
+genomescope_histogram="" # Optional existing two-column histogram; skips read counting.
+genomescope_program="/usr/local/bin/genomescope2.0/genomescope.R" # GenomeScope executable in the runtime.
 run_smudgeplot=0 # Reference-free k-mer pair structure with FastK and Smudgeplot
 smudgeplot_kmer_length=21 # Length of read k-mers counted by FastK.
 smudgeplot_lower_count="auto" # Set explicitly after inspecting the histogram for low-coverage reads.
