@@ -21,7 +21,8 @@ import tempfile
 import threading
 import uuid
 import zlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
 from shared_namespace_lock import namespace_lock
@@ -76,7 +77,19 @@ def _db_signature(path):
         raise ValueError(f"Metadata database must be an owned regular file: {path}")
     if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
         raise ValueError("Published metadata must be a closed, standalone SQLite database")
-    return value
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if (opened.st_dev, opened.st_ino) != value[:2]:
+            raise ValueError("Metadata database changed while opening its header")
+        header = handle.read(100)
+    if signature(path) != value:
+        raise ValueError("Metadata database changed while reading its header")
+    if len(header) != 100 or header[:16] != b"SQLite format 3\0":
+        raise ValueError("Unsupported metadata database header")
+    # SQLite commits increment this counter even when file size and coarse
+    # filesystem timestamps remain unchanged. No full-database hash is needed.
+    return (*value, int.from_bytes(header[24:28], "big"), int.from_bytes(header[92:96], "big"))
 
 
 @contextlib.contextmanager
@@ -114,7 +127,7 @@ def _connection(root, observe=None):
         cache = _LOCAL.connections = OrderedDict()
     key = (str(path), identity)
     if key not in cache:
-        db = sqlite3.connect(path.absolute().as_uri() + "?mode=ro&immutable=1", uri=True)
+        db = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True)
         try:
             db.execute("PRAGMA query_only=ON")
             db.execute("PRAGMA trusted_schema=OFF")
@@ -248,9 +261,33 @@ def _eligible(root, key, closed):
     return key.endswith(".paths")  # output-inventory; state and queues excluded
 
 
+def _closed_observations(root):
+    def load(entry):
+        if entry.is_symlink():
+            raise ValueError("Symlinked metadata directory")
+        return entry.name, (_eligible(root, entry.name + "/run.json", {})
+                            if entry.is_dir(follow_symlinks=False) else False)
+    closed = {}
+    # Run bodies are independent, bounded reads; retain a small submission
+    # window and join every worker before publication or an exception escapes.
+    with os.scandir(root) as entries, ThreadPoolExecutor(max_workers=16) as pool:
+        pending = deque()
+        for entry in entries:
+            if re.fullmatch(r"[0-9a-f]{32}", entry.name) is None:
+                continue
+            pending.append(pool.submit(load, entry))
+            if len(pending) >= 32:
+                key, value = pending.popleft().result()
+                closed[key] = value
+        while pending:
+            key, value = pending.popleft().result()
+            closed[key] = value
+    return closed
+
+
 def _inventory(root, max_files):
     selected = []
-    closed = {}
+    closed = _closed_observations(root) if root.name == "observations" else {}
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in dirs:
@@ -422,10 +459,13 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                         "removed_files": len(expected) if delete_originals else 0,
                         "removed_this_call": removed, "database_bytes": (root / DATABASE).stat().st_size,
                         "operation_id": operation_id, "idempotent_replay": True}
+        if root.name == "version_inventory" and keys:
+            generation = 1 + (original[0].execute("SELECT coalesce(max(generation),0) FROM files").fetchone()[0]
+                              if original is not None else 0)
         if cache_limit is not None:
             if root.name != "version_inventory" or type(cache_limit) is not int or not 1 <= cache_limit <= 1024 or keys or original is None:
                 raise ValueError("Cache expiry requires a collected version inventory and a bounded limit")
-            rows = original[0].execute("SELECT path FROM files ORDER BY mtime_ns DESC,path").fetchall()
+            rows = original[0].execute("SELECT path FROM files ORDER BY generation DESC,mtime_ns DESC,path").fetchall()
             contexts = [key[:-4] for (key,) in rows if re.fullmatch(r"[0-9a-f]{64}\.log", key)]
             expired = set(contexts[cache_limit:])
             keep = {key for (key,) in rows if not (key.endswith((".log", ".json")) and key.rsplit(".", 1)[0] in expired)}

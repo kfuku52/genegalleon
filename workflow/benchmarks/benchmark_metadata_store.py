@@ -17,12 +17,24 @@ parser.add_argument("--support", type=Path, default=Path(__file__).resolve().par
 parser.add_argument("--work-dir", type=Path, required=True)
 parser.add_argument("--attempts", type=int, default=1000)
 parser.add_argument("--layout", choices=("observations", "version-cache"), default="observations")
+parser.add_argument("--inventory-only", action="store_true")
+parser.add_argument("--run-read-latency-ms", type=float, default=0)
 args = parser.parse_args()
+if not 0 <= args.run_read_latency_ms <= 100:
+    parser.error("choose a simulated run-read latency from 0 to 100 ms")
 if not 1 <= args.attempts <= 10000 or not args.work_dir.is_dir():
     parser.error("choose 1..10000 attempts and an existing owned work directory")
 support, base, count = args.support.resolve(), args.work_dir.resolve(), args.attempts
 sys.path.insert(0, str(support))
 import metadata_store as m  # noqa: E402
+
+original_read = m._read_source
+if args.run_read_latency_ms:
+    def delayed_read(path, **kwargs):
+        if Path(path).name == "run.json":
+            time.sleep(args.run_read_latency_ms / 1000)
+        return original_read(path, **kwargs)
+    m._read_source = delayed_read
 
 with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
     work = Path(raw)
@@ -75,14 +87,21 @@ with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
             gate.mkdir(parents=True)
             (gate / "owner.json").write_text("{}")
     start = time.monotonic()
-    result = m.pack(root, scratch=work, writers_stopped=True, delete_originals=True, operation_id="collector-benchmark")
-    elapsed = time.monotonic() - start
-    with sqlite3.connect(root / m.DATABASE) as db:
-        after = {
-            key: hashlib.sha256(zlib.decompress(body)).hexdigest()
-            for key, body in db.execute("SELECT path,body FROM files")
-        }
-    assert before == after and result["removed_files"] == len(before)
+    if args.inventory_only:
+        selected = m._inventory(root, 500000)
+        elapsed = time.monotonic() - start
+        assert selected == sorted(before) and not (root / m.DATABASE).exists()
+        after = {key: hashlib.sha256((root / key).read_bytes()).hexdigest() for key in selected}
+        assert before == after
+    else:
+        result = m.pack(root, scratch=work, writers_stopped=True, delete_originals=True, operation_id="collector-benchmark")
+        elapsed = time.monotonic() - start
+        with sqlite3.connect(root / m.DATABASE) as db:
+            after = {
+                key: hashlib.sha256(zlib.decompress(body)).hexdigest()
+                for key, body in db.execute("SELECT path,body FROM files")
+            }
+        assert before == after and result["removed_files"] == len(before)
     print(
         json.dumps(
             {
@@ -93,6 +112,8 @@ with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
                 "platform": platform.platform(),
                 "records_sha256": hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
                 "files": len(after),
+                "inventory_only": args.inventory_only,
+                "simulated_run_read_latency_ms": args.run_read_latency_ms,
             }
         )
     )

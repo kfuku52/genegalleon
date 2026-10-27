@@ -32,7 +32,10 @@ owner/mode and standalone publication. `files` preserves zlib-compressed exact
 bytes, SHA-256, mode and mtime; `records` indexes workflow, attempt/family/step,
 runtime, scheduler identity and resource fields. `archive_entries` indexes ZIP
 locators and member hashes without importing their scientific TSV contents.
-Database identity fences invalidate observations spanning a replacement.
+Database identity fences invalidate observations spanning a replacement or an
+in-place SQLite commit. Read-only connections and the 100-byte SQLite header
+change counters detect same-size commits even when filesystem timestamps have
+only second precision; lookups do not hash the complete database.
 
 Restore before running an older reader. Restoration retains the DB and refuses
 to overwrite changed raw files; native provenance tombstones and newer ZIP
@@ -45,7 +48,11 @@ python workflow/support/metadata_store.py restore \
 
 For `version_inventory` only, a separate `pack --cache-limit N` call after
 collection expires regenerable contexts, retaining the newest N (1–1024)
-64-hex log/JSON pairs. Unknown names remain. Once activated, the producer uses
+64-hex log/JSON pairs. Newly collected publications receive increasing values
+in the existing `generation` field. Retention orders by that generation, then
+observed mtime and path, so a new publication survives equal timestamps. An
+initial legacy batch uses its observed mtimes and stable path ties; original
+file metadata is preserved exactly. Unknown names remain. Once activated, the producer uses
 one cache lock and reuses the persisted retention policy. Historical per-run
 version reports are separate lossless records. Existing lock namespaces must
 not be removed while any older writer can hold their inodes.
@@ -84,3 +91,19 @@ matched. These are local collector measurements, not Shirokane throughput.
 Use `--layout version-cache` to include a legacy coordination tree for every
 flat cache context. Flat metadata collection preserves these opaque trees and
 only scans the payload level.
+
+Closed-observation run headers are prefetched with at most 16 readers and 32
+pending tasks. The existing inventory, eligibility checks, symlink rejection,
+source signatures and publication checks still determine the exact collected set.
+All workers join before errors return or publication proceeds.
+
+For an inventory-only comparison, `--inventory-only --run-read-latency-ms 1`
+simulates one millisecond per run-header read. Three 500-attempt/five-JSON local
+repetitions on Python 3.13.16/macOS arm64 took 0.818/0.851/0.853 seconds before
+and 0.115/0.114/0.122 afterward, with identical body digests. Warm inventory
+medians were 0.081/0.112 seconds; complete warm collection medians were
+0.999/1.098 seconds, with peak child RSS medians 33.8/35.4 MiB. This is a
+controlled latency experiment and a local overhead measurement, not a cluster
+throughput prediction. On Shirokane, a read-only comparison of all 366,053
+eligible observation files returned the exact same membership as the original
+inventory; different cache states prevent a comparable wall-time claim there.

@@ -46,6 +46,7 @@ def test_pack_restore_and_idempotent_reimport(tmp_path):
     path.write_bytes(raw)
     os.chmod(path, 0o640)
     os.utime(path, ns=(1234567890, 1234567890))
+    original_mtime = path.stat().st_mtime_ns
     result = pack(root)
     assert result["removed_files"] == 1 and not path.exists()
     assert observer.read_regular_bytes(path) == raw
@@ -54,7 +55,7 @@ def test_pack_restore_and_idempotent_reimport(tmp_path):
         assert db.execute("SELECT workflow,cpus,wall_seconds FROM records").fetchone() == ("gg_gene_evolution", 4, 12.25)
     assert pack(root)["removed_files"] == 0
     assert store.restore(root, writers_stopped=True)["restored_files"] == 1
-    assert path.read_bytes() == raw and path.stat().st_mtime_ns == 1234567890
+    assert path.read_bytes() == raw and path.stat().st_mtime_ns == original_mtime
     assert path.stat().st_mode & 0o777 == 0o640
     assert store.restore(root, writers_stopped=True)["restored_files"] == 0
     path.write_bytes(b'{"cpus":8}')
@@ -181,7 +182,8 @@ def test_observation_fence_detects_database_replacement(tmp_path):
         with observer.observe_files():
             observer.read_regular_json(attempt / "run.json")
             info = (root / store.DATABASE).stat()
-            os.utime(root / store.DATABASE, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+            os.utime(root / store.DATABASE, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+            assert (root / store.DATABASE).stat().st_mtime_ns != info.st_mtime_ns
 
 
 def test_inventory_journal_round_trip(tmp_path):
@@ -319,7 +321,7 @@ def test_sqlite_version_cache_and_bounded_context_retention(tmp_path, monkeypatc
         (root / (key + ".log")).write_bytes(raw)
         (root / (key + ".json")).write_text(json.dumps({"schema_version": 1, "key": key,
                                                        "sha256": hashlib.sha256(raw).hexdigest()}))
-        os.utime(root / (key + ".log"), ns=(i + 1, i + 1))
+        os.utime(root / (key + ".log"), ns=((i + 1) * 1_000_000_000, (i + 1) * 1_000_000_000))
     pack(root)
     assert all(versions.cache_ready(root / (key + ".log"), key) for key in keys)
     store.pack(root, writers_stopped=True, cache_limit=2)
@@ -417,3 +419,144 @@ def test_flat_record_collection_preserves_opaque_lock_namespaces(tmp_path):
     assert store.archived_bytes(root / "fixture.log") == b"verified version body"
     assert pointer.is_symlink() and pointer.lstat().st_ino == before
     assert (outside / "owner.json").read_bytes() == b"coordination state"
+
+
+def coarse_database_stamps(monkeypatch):
+    original = store.signature
+    def coarse(path):
+        value = original(path)
+        return (*value[:4], 0, 0, *value[6:]) if Path(path).name == store.DATABASE else value
+    monkeypatch.setattr(store, "signature", coarse)
+
+
+@pytest.mark.parametrize("mutation", ["corrupt_sha", "unsafe_path"])
+def test_same_stamp_sqlite_commits_invalidate_cached_reads(tmp_path, monkeypatch, mutation):
+    root = tmp_path / "versions"
+    root.mkdir()
+    path = root / "run.test.log"
+    path.write_bytes(b"exact")
+    coarse_database_stamps(monkeypatch)
+    pack(root)
+    assert store.archived_bytes(path) == b"exact"
+    database = root / store.DATABASE
+    before = store.signature(database)
+    with sqlite3.connect(database) as db:
+        if mutation == "corrupt_sha":
+            db.execute("UPDATE files SET sha256=?", ("0" * 64,))
+        else:
+            db.execute("UPDATE files SET path='../outside.log'")
+    assert store.signature(database) == before
+    with pytest.raises(ValueError, match="corrupt" if mutation == "corrupt_sha" else "Unsafe"):
+        if mutation == "corrupt_sha":
+            store.archived_bytes(path)
+        else:
+            store.restore(root, writers_stopped=True)
+    assert not path.exists() and not (tmp_path / "outside.log").exists()
+
+
+def test_observation_fence_sees_sqlite_commit_with_coarse_stamps(tmp_path, monkeypatch):
+    root = tmp_path / "observations"
+    attempt = closed_attempt(root)
+    coarse_database_stamps(monkeypatch)
+    original = observer.path_signature
+    def coarse(path):
+        value = original(path)
+        return (*value[:4], 0, 0) if value is not None and Path(path).name == store.DATABASE else value
+    monkeypatch.setattr(observer, "path_signature", coarse)
+    pack(root)
+    with pytest.raises(ValueError, match="changed"):
+        with observer.observe_files():
+            observer.read_regular_json(attempt / "run.json")
+            with sqlite3.connect(root / store.DATABASE) as db:
+                db.execute("UPDATE files SET sha256=?", ("0" * 64,))
+
+
+def test_tied_cache_timestamps_keep_latest_publication(tmp_path):
+    import version_report_identity as versions
+    root = tmp_path / "version_inventory"
+    versions.private_cache(root)
+    keys = [f"{i:064x}" for i in range(3)]
+    for i, key in enumerate(keys):
+        path = root / (key + ".log")
+        raw = f"tool version {i}\n".encode()
+        path.write_bytes(raw)
+        (root / (key + ".json")).write_text(json.dumps({"schema_version": 1, "key": key,
+                                                       "sha256": hashlib.sha256(raw).hexdigest()}))
+        os.utime(path, ns=(0, 0))
+        pack(root)
+        store.pack(root, writers_stopped=True, cache_limit=1)
+        assert versions.cache_ready(path, key)
+        assert all(not versions.cache_ready(root / (old + ".log"), old) for old in keys[:i])
+        with sqlite3.connect(root / store.DATABASE) as db:
+            assert db.execute("SELECT mtime_ns FROM files WHERE path=?", (path.name,)).fetchone() == (0,)
+
+
+def test_observation_inventory_overlaps_independent_run_reads(tmp_path, monkeypatch):
+    import threading
+    root = tmp_path / "observations"
+    closed = [closed_attempt(root, i) for i in range(8)]
+    live = closed_attempt(root, 8, "started")
+    original = store._read_source
+    lock = threading.Lock()
+    overlap = threading.Event()
+    active = 0
+    def read(path, **kwargs):
+        nonlocal active
+        if Path(path).name != "run.json":
+            return original(path, **kwargs)
+        with lock:
+            active += 1
+            if active >= 2:
+                overlap.set()
+        try:
+            assert overlap.wait(2), "run headers were serialized"
+            return original(path, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(store, "_read_source", read)
+    expected = sorted(str(p.relative_to(root)) for directory in closed for p in directory.glob("*.json"))
+    assert store._inventory(root, 100) == expected
+    assert (live / "run.json").exists() and active == 0
+
+
+def test_observation_prefetch_rejects_symlink_before_read(tmp_path):
+    root = tmp_path / "observations"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    path = outside / "run.json"
+    path.write_bytes(b"do not read or retire")
+    (root / ("a" * 32)).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="Symlinked"):
+        pack(root)
+    assert path.read_bytes() == b"do not read or retire" and not (root / store.DATABASE).exists()
+
+
+def test_snapshot_checks_only_bounded_database_headers(tmp_path, monkeypatch):
+    root = tmp_path / "versions"
+    root.mkdir()
+    for i in range(100):
+        (root / f"run.{i}.log").write_bytes(f"version {i}".encode())
+    pack(root)
+    original = os.fdopen
+    sizes = []
+    class HeaderReader:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def fileno(self):
+            return self.stream.fileno()
+        def read(self, size=-1):
+            sizes.append(size)
+            return self.stream.read(size)
+    monkeypatch.setattr(store.os, "fdopen", lambda *args, **kwargs: HeaderReader(original(*args, **kwargs)))
+    monkeypatch.setattr(store, "_file_sha", lambda *_: pytest.fail("full database hashing during lookup"))
+    with store.read_snapshot():
+        for i in range(100):
+            assert store.archived_bytes(root / f"run.{i}.log") == f"version {i}".encode()
+    assert sizes and -1 not in sizes and sum(sizes) <= 400
