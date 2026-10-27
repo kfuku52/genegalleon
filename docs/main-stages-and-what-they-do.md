@@ -572,6 +572,12 @@ Notable defaults:
   orthogroup trees exist and `grampa_h1` is set,
 - `run_cafe=0`, `run_orthogroup_copy_number_trait_pgls=0`, and
   `run_go_enrichment=0` by default,
+- CAFE inference and rendering have separate content contracts, `cafe.inference.json`
+  and `cafe.plots.json`. A rendering failure retains `cafe_output/`; rerun the
+  normal entrypoint with the same scientific inputs and parameters to regenerate
+  plots while reusing the verified fit. The existing `cafe.json` aggregate
+  contract is retained. Complete older fits follow `artifact_legacy_policy`;
+  changed inputs or incomplete fits still obey the normal strict stale policy.
 - `orthogroup_copy_number/orthogroup_copy_number.tsv` is a shared
   species-by-orthogroup copy-number matrix used by CAFE and by trait PGLS,
 - `run_orthogroup_copy_number_trait_selection=1` optionally runs exploratory joint

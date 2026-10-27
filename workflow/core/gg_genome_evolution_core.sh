@@ -6668,13 +6668,30 @@ cafe_provenance_args+=(
   --parameter "gamma_categories=${n_gamma_cats_cafe}"
   --parameter "pvalue=0.05"
 )
-gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
-if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
+# Keep the native inference contract separate from rendering. A failed plot
+# must not delete a completed CAFE fit or force the optimizer to run again.
+# Existing aggregate manifests are still checked before adopting a substage.
+if [[ -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
+  gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
+fi
+cafe_inference_needs_update=0
+gg_artifact_contract_init cafe_inference_provenance_args "cafe_inference" "all_orthogroups" "${genome_evolution_provenance_dir}/cafe.inference.json"
+cafe_inference_provenance_args+=(
+  --input "copy_number=${file_orthogroup_copy_number}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --output "ancestral_tree=${dir_cafe_output}/Gamma_asr.tre"
+  --output "ancestral_counts=${dir_cafe_output}/Gamma_count.tab"
+  --output "branch_changes=${dir_cafe_output}/Gamma_change.tab"
+  --output "branch_probabilities=${dir_cafe_output}/Gamma_branch_probabilities.tab"
+  --output "family_results=${dir_cafe_output}/Gamma_family_results.txt"
+  --parameter "gamma_categories=${n_gamma_cats_cafe}"
+  --parameter "pvalue=0.05"
+)
+gg_artifact_prepare_stage cafe_inference_needs_update run_cafe "${cafe_inference_provenance_args[@]}" || exit $?
+if [[ ${run_cafe} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -rf -- "${dir_cafe}"
   ensure_dir "${dir_cafe}"
-
-  if [[ ! -s "${dir_cafe_output}/Gamma_asr.tre" || ! -s "${dir_cafe_output}/Gamma_count.tab" || ! -s "${dir_cafe_output}/Gamma_change.tab" || ! -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
+  if [[ ${cafe_inference_needs_update} -eq 1 ]]; then
     if [[ -d "${dir_cafe_output}" ]]; then
       rm -rf -- "${dir_cafe_output}"
     fi
@@ -6685,11 +6702,29 @@ if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
       --pvalue 0.05 \
       --cores "${GG_TASK_CPUS}" \
       --output_prefix "${dir_cafe_output}"
+    gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
-    echo "CAFE output files already exist. Skipping CAFE run."
+    echo "CAFE inference outputs verified. Skipping CAFE run."
   fi
 
-  if [[ -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" ]]; then
+  cafe_plots_needs_update=0
+  gg_artifact_contract_init cafe_plot_provenance_args "cafe_plots" "all_orthogroups" "${genome_evolution_provenance_dir}/cafe.plots.json"
+  cafe_plot_provenance_args+=(
+    --input "ancestral_tree=${dir_cafe_output}/Gamma_asr.tre"
+    --input "ancestral_counts=${dir_cafe_output}/Gamma_count.tab"
+    --input "branch_changes=${dir_cafe_output}/Gamma_change.tab"
+    --input "family_renderer=${gg_support_dir}/cafe_plot_each_family.r"
+    --input "summary_renderer=${gg_support_dir}/cafe_plot_summary.r"
+    --input "branch_renderer=${gg_support_dir}/cafe_plot_branch_id.r"
+    --input "cafe_labels=${gg_support_dir}/cafe_plot_labels.R"
+    --input "species_labels=${gg_support_dir}/tree_label_formatting.R"
+    --output "summary_all=${file_cafe_summary_all_pdf}"
+    --output "summary_significant=${file_cafe_summary_significant_pdf}"
+    --optional-output "family_plots=${dir_cafe}/each_family_plot"
+    --optional-output "summary_plots=$(dirname "${file_cafe_summary_all_pdf}")"
+  )
+  gg_artifact_prepare_stage cafe_plots_needs_update run_cafe "${cafe_plot_provenance_args[@]}" || exit $?
+  if [[ ${cafe_plots_needs_update} -eq 1 ]]; then
     if [[ -d "${dir_cafe}/each_family_plot" ]]; then
       rm -rf -- "${dir_cafe}/each_family_plot"
     fi
@@ -6702,7 +6737,6 @@ if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
       echo "Error in Rscript cafe_plot_each_family.r. Exiting."
       exit 1
     fi
-
     if [[ -d "$(dirname "${file_cafe_summary_all_pdf}")" ]]; then
       rm -rf -- "$(dirname "${file_cafe_summary_all_pdf}")"
     fi
@@ -6710,16 +6744,16 @@ if [[ ${cafe_needs_update} -eq 1 && ${run_cafe} -eq 1 ]]; then
       "${dir_cafe_output}/Gamma_asr.tre" \
       "${dir_cafe_output}/Gamma_change.tab" \
       "$(dirname "${file_cafe_summary_all_pdf}")"
-
     Rscript "${gg_support_dir}/cafe_plot_branch_id.r" \
       "${dir_cafe_output}/Gamma_asr.tre" \
       "$(dirname "${file_cafe_summary_all_pdf}")"
+    gg_artifact_record "${cafe_plot_provenance_args[@]}"
   else
-    echo "CAFE did not finish successfully. Exiting."
-    exit 1
+    echo "CAFE plots verified. Skipping rendering."
   fi
-
-  gg_artifact_record "${cafe_provenance_args[@]}"
+  if [[ ${cafe_needs_update} -eq 1 || ${cafe_inference_needs_update} -eq 1 || ${cafe_plots_needs_update} -eq 1 || ! -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
+    gg_artifact_record "${cafe_provenance_args[@]}"
+  fi
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"

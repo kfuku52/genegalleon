@@ -49,33 +49,7 @@ read_tsv_base <- function(path, na = character()) {
   )
 }
 
-# Normalize labels:
-# - drop "_{copynumber}"
-# - strip "*"
-norm_key <- function(lbl) {
-  x <- gsub("\\*", "", lbl)
-  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
-    species_label <- extract_species_label(x)
-    if (nzchar(species_label)) {
-      return(species_label)
-    }
-  }
-  sub("_[^_]+$", "", x)
-}
-
-# Extract species name for tip labels
-get_species <- function(lbl) {
-  x <- gsub("\\*", "", lbl)
-  x <- sub("<.*$", "", x)
-  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
-    species_label <- extract_species_label(x)
-    if (nzchar(species_label)) {
-      return(scientific_name_from_label(species_label))
-    }
-  }
-  x <- sub("_[^_]+$", "", x)
-  gsub("_", " ", x)
-}
+source(file.path(script_dir, "cafe_plot_labels.R"))
 
 # Per-OG annotation
 create_annotation_df <- function(og, tree, changes_tbl) {
