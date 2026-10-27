@@ -2,8 +2,11 @@
 
 import argparse
 import gzip
+import hashlib
+import json
 import os
 import re
+from pathlib import Path
 
 import pandas
 
@@ -217,14 +220,86 @@ def load_best_diamond_hits(path):
     return df
 
 
+def refresh_go_annotations(annotation_paths, metadata_path, output_dir, audit_path=''):
+    """Refresh only GO fields from saved best accessions, without a new search."""
+    go_columns = ['go_ids', 'go_aspects', 'go_terms', 'go_evidence']
+    paths = [Path(path) for path in annotation_paths]
+    if len({path.name for path in paths}) != len(paths):
+        raise ValueError('Input annotation basenames must be unique')
+    frames = [pandas.read_csv(path, sep='\t', dtype=str, keep_default_na=False) for path in paths]
+    accessions = set()
+    for frame in frames:
+        if not {'gene_id', 'sprot_best'}.issubset(frame.columns) or frame['gene_id'].duplicated().any():
+            raise ValueError('Existing annotations require unique gene_id and a saved sprot_best column')
+        accessions.update(uniprot_accession(value) for value in frame['sprot_best'] if value)
+    header = pandas.read_csv(metadata_path, sep='\t', nrows=0)
+    if not set(go_columns).issubset(header.columns):
+        raise ValueError('GO refresh requires all four aligned GO metadata columns from the source DAT')
+    metadata = read_uniprot_metadata(metadata_path, accessions)
+    missing = accessions - set(metadata['accession'])
+    if missing:
+        raise ValueError(f'Metadata does not cover {len(missing)} saved best accessions; use the matching source DAT')
+    for row in metadata.itertuples(index=False):
+        ids = row.go_ids.split(';') if row.go_ids else []
+        aspects = row.go_aspects.split(';') if row.go_aspects else []
+        terms = row.go_terms.split('; ') if row.go_terms else []
+        evidence = row.go_evidence.split(';') if ids else []
+        if len({len(ids), len(aspects), len(terms), len(evidence)}) != 1:
+            raise ValueError('Unaligned GO metadata; rebuild it from the source DAT')
+        if any(not re.fullmatch(r'GO:\d{7}', go_id) for go_id in ids) or any(not term for term in terms):
+            raise ValueError('Invalid GO metadata ID or empty term')
+        if any(aspect.strip() not in {'C', 'F', 'P', 'CC', 'MF', 'BP'} for aspect in aspects):
+            raise ValueError('Invalid GO metadata aspect')
+    lookup = metadata.set_index('accession')
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    destinations = [output / path.name for path in paths]
+    if any(path.exists() for path in destinations) or (audit_path and Path(audit_path).exists()):
+        raise ValueError('Refreshed annotation outputs already exist')
+    records = []
+    for path, target, frame in zip(paths, destinations, frames, strict=True):
+        result = frame.copy()
+        keys = frame['sprot_best'].map(uniprot_accession)
+        protected = [column for column in frame.columns if column not in go_columns]
+        for column in go_columns:
+            result[column] = keys.map(lookup[column]).fillna('')
+        if not result[protected].equals(frame[protected]):
+            raise ValueError('GO refresh changed accepted hits or another annotation field')
+        opener = gzip.open if target.name.endswith('.gz') else open
+        with opener(target, 'xt') as handle:
+            result.to_csv(handle, sep='\t', index=False)
+        records.append({'input': str(path), 'output': str(target), 'genes': len(frame),
+                        'GO_annotated_genes': int(result['go_ids'].ne('').sum()),
+                        'input_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                        'output_sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                        'protected_columns_preserved': True})
+    audit = {'homology_search_repeated': False, 'saved_best_accessions_preserved': True,
+             'metadata_sha256': hashlib.sha256(Path(metadata_path).read_bytes()).hexdigest(), 'records': records}
+    if audit_path:
+        with Path(audit_path).open('x') as handle:
+            json.dump(audit, handle, indent=2)
+    return audit
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--diamond_tsv', metavar='PATH', default='', type=str)
     parser.add_argument('--query_fasta', metavar='PATH', default='', type=str)
     parser.add_argument('--uniprot_fasta', metavar='PATH', default='', type=str)
     parser.add_argument('--uniprot_meta_tsv', metavar='PATH', default='', type=str)
-    parser.add_argument('--outfile', metavar='PATH', required=True, type=str)
+    parser.add_argument('--existing_annotation_tsv', metavar='PATH', action='append', default=[])
+    parser.add_argument('--outdir', metavar='PATH', default='', type=str)
+    parser.add_argument('--audit_json', metavar='PATH', default='', type=str)
+    parser.add_argument('--outfile', metavar='PATH', default='', type=str)
     args = parser.parse_args()
+
+    if args.existing_annotation_tsv:
+        if not args.uniprot_meta_tsv or not args.outdir or args.outfile or args.diamond_tsv or args.query_fasta or args.uniprot_fasta:
+            parser.error('Saved-annotation GO refresh requires --uniprot_meta_tsv and --outdir only')
+        refresh_go_annotations(args.existing_annotation_tsv, args.uniprot_meta_tsv, args.outdir, args.audit_json)
+        return
+    if not args.outfile or args.outdir or args.audit_json:
+        parser.error('Search formatting requires --outfile; --outdir/--audit_json are for GO refresh')
 
     query_ids = read_fasta_ids(args.query_fasta)
     hits = load_best_diamond_hits(args.diamond_tsv)

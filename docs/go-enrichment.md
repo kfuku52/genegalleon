@@ -13,6 +13,24 @@ project directory containing both the workspace and the annotation table.
 SHIROKANE, NIG and audrey1 honor this explicit same-path project mount;
 unrelated host directories are not added automatically.
 
+Native UniProt GO cross-references retain one aspect, term and evidence entry
+per GO ID. The GO reader accepts aligned C/F/P or CC/MF/BP aspects and native or
+legacy semicolon spacing. Older metadata that independently deduplicated aspects
+has lost those associations; rebuild it from the matching cached DAT, rather than
+guessing the missing associations. Completed best hits can be reused:
+
+```bash
+python workflow/support/build_uniprot_metadata_from_dat.py \
+  --uniprot_dat frozen/uniprot_sprot.dat.gz --outfile fixed.meta.tsv.gz
+python workflow/support/reformat_uniprot_diamond.py \
+  --existing_annotation_tsv completed/Arabidopsis_thaliana_annotation.tsv \
+  --uniprot_meta_tsv fixed.meta.tsv.gz --outdir refreshed --audit_json refresh.json
+```
+
+Repeat `--existing_annotation_tsv` for a batch. Only the four GO columns are
+refreshed; gene order, accepted accessions, search statistics, orthogroups and
+all other annotations are preserved. No homology search is repeated.
+
 When species sampling changes, map a previous CAFE target by descendant taxa:
 
 ```bash

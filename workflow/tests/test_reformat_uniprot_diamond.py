@@ -9,6 +9,61 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_uniprot_diamond.py"
 
 
+def test_refresh_go_from_saved_hits_preserves_every_other_field(tmp_path):
+    from workflow.support.reformat_uniprot_diamond import refresh_go_annotations
+    first = tmp_path / 'First_annotation.tsv'
+    first.write_text('gene_id\tsprot_best\tsprot_identity\torthogroup\tgo_ids\tgo_aspects\tgo_terms\n'
+                     'NA\tsp|P12345|ENTRY\t99.00\tOG001\tGO:0000001;GO:0000002\tC\tfirst; second\n'
+                     '002\t\t\t\t\t\t\n')
+    second = tmp_path / 'Second_annotation.tsv'
+    second.write_text(first.read_text())
+    metadata = tmp_path / 'metadata.tsv'
+    metadata.write_text('accession\tgo_ids\tgo_aspects\tgo_terms\tgo_evidence\n'
+                        'P12345\tGO:0000001;GO:0000002\tC;C\tfirst; second\tIEA;IEA\n')
+    out = tmp_path / 'refreshed'
+    audit = refresh_go_annotations([str(first), str(second)], str(metadata), str(out))
+    assert not audit['homology_search_repeated'] and audit['saved_best_accessions_preserved']
+    actual = pandas.read_csv(out / first.name, sep='\t', dtype=str, keep_default_na=False)
+    original = pandas.read_csv(first, sep='\t', dtype=str, keep_default_na=False)
+    assert actual[original.columns.difference(['go_ids', 'go_aspects', 'go_terms'])].equals(
+        original[original.columns.difference(['go_ids', 'go_aspects', 'go_terms'])])
+    assert actual.gene_id.tolist() == ['NA', '002'] and actual.go_aspects.tolist() == ['C;C', '']
+    assert len(audit['records']) == 2
+    with pytest.raises(ValueError, match='already exist'):
+        refresh_go_annotations([str(first)], str(metadata), str(out))
+
+
+@pytest.mark.parametrize('problem', ['missing_accession', 'lost_aspect'])
+def test_go_refresh_rejects_mismatched_or_damaged_metadata(tmp_path, problem):
+    from workflow.support.reformat_uniprot_diamond import refresh_go_annotations
+    table = tmp_path / 'annotation.tsv'
+    table.write_text('gene_id\tsprot_best\ng1\tP12345\n')
+    metadata = tmp_path / 'metadata.tsv'
+    metadata.write_text('accession\tgo_ids\tgo_aspects\tgo_terms\n' +
+                        ('P99999\t\t\t\n' if problem == 'missing_accession' else
+                         'P12345\tGO:0000001;GO:0000002\tC\tfirst; second\n'))
+    with pytest.raises(ValueError):
+        refresh_go_annotations([str(table)], str(metadata), str(tmp_path / 'out'))
+    assert not (tmp_path / 'out/annotation.tsv').exists()
+
+
+def test_saved_annotation_refresh_cli_supports_gzip_and_empty_evidence(tmp_path):
+    import gzip
+    table = tmp_path / 'Species_annotation.tsv.gz'
+    with gzip.open(table, 'wt') as handle:
+        handle.write('gene_id\tsprot_best\torthogroup\ng1\tP12345\tOG1\n')
+    metadata = tmp_path / 'metadata.tsv'
+    metadata.write_text('accession\tgo_ids\tgo_aspects\tgo_terms\tgo_evidence\n'
+                        'P12345\tGO:0000001\tP\tprocess\t\n')
+    audit = tmp_path / 'audit.json'
+    subprocess.run([sys.executable, str(SCRIPT_PATH), '--existing_annotation_tsv', str(table),
+                    '--uniprot_meta_tsv', str(metadata), '--outdir', str(tmp_path / 'out'),
+                    '--audit_json', str(audit)], check=True)
+    actual = pandas.read_csv(tmp_path / 'out' / table.name, sep='\t', dtype=str, keep_default_na=False)
+    assert actual.orthogroup.tolist() == ['OG1'] and actual.go_evidence.tolist() == ['']
+    assert audit.is_file()
+
+
 @pytest.mark.parametrize('compressed', [False, True])
 @pytest.mark.parametrize('prefix', ['sp', 'tr'])
 def test_official_uniprot_headers_match_saved_accessions_and_retain_product(tmp_path, compressed, prefix):

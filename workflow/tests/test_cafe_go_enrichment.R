@@ -12,6 +12,15 @@ stopifnot(e$resolve_go_reference_species('Arabidopsis_thaliana_annotation.tsv', 
 expect_error(e$resolve_go_reference_species('other_annotation.tsv', 'Arabidopsis_thaliana'))
 expect_error(e$resolve_go_reference_species('Arabidopsis_annotation.tsv', c('Arabidopsis_thaliana', 'Arabidopsis_lyrata')))
 
+# Native Swiss-Prot and legacy annotation cells describe the same GO records.
+ann_native <- data.frame(gene_id='g1', go_ids='GO:0000001;GO:0000002;GO:0000003',
+  go_aspects='C;C;F', go_terms='first; second; function')
+ann_legacy <- transform(ann_native, go_ids='GO:0000001; GO:0000002; GO:0000003', go_aspects='CC; CC; MF')
+normal <- e$normalise_go_annotations(ann_native)
+stopifnot(identical(normal, e$normalise_go_annotations(ann_legacy)),
+  identical(normal$go_aspects,c('CC','CC','MF')), nrow(normal)==3)
+expect_error(e$normalise_go_annotations(transform(ann_native,go_aspects='C;F')))
+
 # Existing family-wide P values are adjusted before branch/sign screening.
 ids <- c('gain','loss','broad','mixed','flat','background','unreported')
 changes <- data.frame(FamilyID=ids,check.names=FALSE)

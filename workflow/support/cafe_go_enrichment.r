@@ -96,6 +96,31 @@ explode_rows_multi <- function(df, cols, sep) {
   out
 }
 
+normalise_go_annotations <- function(df) {
+  # Native UniProt uses C/F/P and semicolons without spaces. Legacy tables use
+  # CC/MF/BP and "; ". Both require one aspect and term for each GO ID.
+  fields <- c("go_ids", "go_aspects", "go_terms")
+  split_go <- function(value, field) {
+    if (is.na(value) || !nzchar(value)) return(character())
+    if (field == "go_terms") trimws(strsplit(value, "; ", fixed=TRUE)[[1]])
+    else trimws(strsplit(value, ";", fixed=TRUE)[[1]])
+  }
+  pieces <- lapply(fields, function(field) lapply(df[[field]], split_go, field=field))
+  counts <- lapply(pieces, lengths)
+  bad <- counts[[1]] != counts[[2]] | counts[[1]] != counts[[3]]
+  if (any(bad)) stop("GO IDs, aspects and terms are not aligned for gene ", df$gene_id[which(bad)[1]],
+    ". Rebuild UniProt metadata from its source DAT; independently deduplicated aspects cannot be recovered.")
+  out <- df[rep(seq_len(nrow(df)), counts[[1]]), , drop=FALSE]
+  for (i in seq_along(fields)) out[[fields[i]]] <- unlist(pieces[[i]], use.names=FALSE)
+  aliases <- c(C="CC", F="MF", P="BP", CC="CC", MF="MF", BP="BP")
+  mapped <- unname(aliases[out$go_aspects])
+  if (anyNA(mapped)) stop("Invalid GO annotation aspect; expected C/F/P or CC/MF/BP.")
+  out$go_aspects <- mapped
+  if (any(!grepl("^GO:", out$go_ids)) || any(!nzchar(out$go_terms))) stop("Invalid GO ID or empty GO term.")
+  rownames(out) <- NULL
+  out
+}
+
 pivot_longer_base <- function(df, id_col) {
   if (nrow(df) == 0) {
     return(data.frame(FamilyID = character(), branch = character(), is_change = numeric(), stringsAsFactors = FALSE))
@@ -492,7 +517,7 @@ for (col in c("gene_id", "sprot_recname", "go_ids", "go_aspects", "go_terms")) {
   }
 }
 ref_annotation_df <- ref_annotation_df[, c("gene_id", "sprot_recname", "go_ids", "go_aspects", "go_terms"), drop = FALSE]
-ref_annotation_df <- explode_rows_multi(ref_annotation_df, c("go_ids", "go_aspects", "go_terms"), sep = "; ")
+ref_annotation_df <- normalise_go_annotations(ref_annotation_df)
 ref_annotation_df <- ref_annotation_df[ref_annotation_df$go_aspects %in% go_category, , drop = FALSE]
 
 orthogroup_go_df <- merge(orthogroup_map_df, ref_annotation_df, by = "gene_id", all.x = TRUE, sort = FALSE)
