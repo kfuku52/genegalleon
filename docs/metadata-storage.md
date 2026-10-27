@@ -107,3 +107,22 @@ controlled latency experiment and a local overhead measurement, not a cluster
 throughput prediction. On Shirokane, a read-only comparison of all 366,053
 eligible observation files returned the exact same membership as the original
 inventory; different cache states prevent a comparable wall-time claim there.
+
+Small metadata bodies are also prefetched during collection and the final
+prepublication source verification. At most 16 reads/results, each bounded by
+8 MiB, run ahead of the current record. SQLite inserts remain ordered on the
+caller thread. Both source-reader and caller failures join every worker before
+cleanup. The 128-MiB native index formats retain serial reads. Database readback,
+source signatures/body checks and immediate retirement checks are unchanged.
+
+For a controlled source-read latency comparison, add
+`--source-read-latency-ms 1`; `--keep-originals` isolates publication from
+retirement. Three 500-attempt/five-JSON repetitions on Python 3.13.16/macOS
+arm64, compared with 0.8.433, had median complete collection times of
+17.191/7.692 seconds and publication-only times of 10.219/1.101 seconds.
+Every body digest and structured-record row digest matched. Complete warm
+collection medians were 1.023/1.267 seconds: read-ahead adds local scheduling
+overhead when storage is already fast. Modified runs used 35.7–39.5 MiB peak
+RSS for these small bodies; the read-ahead byte bound is larger for maximum-size
+records. The latency is simulated, so these results do not predict cluster
+throughput or the duration of a whole migration.
