@@ -55,6 +55,7 @@ synteny_search_distance="${synteny_search_distance:-20}"
 synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
 synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
 synteny_karyotype_sort="${synteny_karyotype_sort:-both_length}"
+synteny_karyotype_panels_file="${synteny_karyotype_panels_file:-}"
 synteny_karyotype_color="${synteny_karyotype_color:-chromosome}"
 synteny_karyotype_scale="${synteny_karyotype_scale:-shared}"
 synteny_karyotype_track_order="${synteny_karyotype_track_order:-target-query}"
@@ -284,6 +285,7 @@ run_pairwise_synteny_stage() (
   plan_file="${work_dir}/plan.json"
   local -a representative_synteny_args=()
   [[ -z "${representative_inputs}" ]] || representative_synteny_args+=(--representative-inputs "${representative_inputs}")
+  [[ -z "${synteny_karyotype_panels_file}" ]] || representative_synteny_args+=(--karyotype-panels "${synteny_karyotype_panels_file}")
   python "${gg_support_dir}/pairwise_synteny.py" plan "${representative_synteny_args[@]}" \
     --workspace "${gg_workspace_dir}" --pairs "${synteny_pairs_file}" \
     --sequence-mode "${synteny_sequence_mode}" --genetic-code "${genetic_code}" \

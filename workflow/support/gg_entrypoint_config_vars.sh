@@ -429,6 +429,7 @@ synteny_search_distance
 synteny_minimum_mapping_fraction
 synteny_plot_formats
 synteny_karyotype_sort
+synteny_karyotype_panels_file
 synteny_karyotype_color
 synteny_karyotype_scale
 synteny_karyotype_track_order

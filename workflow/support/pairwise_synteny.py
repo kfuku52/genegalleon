@@ -248,6 +248,19 @@ def build_plan(args):
             if pair["ds"]["target"]["genetic_code"] != pair["ds"]["query"]["genetic_code"]:
                 raise ValueError("dS estimation requires the same genetic code for both species; use orientation coloring for mixed-code pairs")
         pairs.append(pair)
+    panels_path = getattr(args, "karyotype_panels", None)
+    panels = []
+    if panels_path:
+        try:
+            from synteny_multitrack import load_panels
+        except ImportError:
+            from .synteny_multitrack import load_panels
+        panels_path = Path(panels_path)
+        panels_path = (panels_path if panels_path.is_absolute() else workspace / panels_path).resolve()
+        boundary.read([panels_path])
+        panels = load_panels(panels_path, pairs)
+        if "panels" in identifiers:
+            raise ValueError("analysis_id 'panels' is reserved when karyotype panels are enabled")
     layout_source = Path(__file__).with_name("pairwise_synteny_layout.py").resolve()
     inputs = {str(Path(__file__).resolve()): None, str(layout_source): None,
               str(pairs_file.resolve()): pairs_digest}
@@ -259,6 +272,11 @@ def build_plan(args):
         inputs[str(path)] = None
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
     inputs[str(reader_source)] = None
+    if panels_path or args.karyotype_sort == "order_orientation":
+        for helper in ("synteny_layout.py", "synteny_multitrack.py"):
+            inputs[str(Path(__file__).with_name(helper).resolve())] = None
+    if panels_path:
+        inputs[str(panels_path)] = None
     if representative_path or effective_inputs:
         if representative_path:
             inputs[str(representative_path)] = None
@@ -311,6 +329,8 @@ def build_plan(args):
     }
     if effective_manifest:
         plan["representative_inputs"] = str(effective_manifest)
+    if panels_path:
+        plan.update(karyotype_panels_file=str(panels_path), karyotype_panels=panels)
     boundary.check()
     return plan
 
@@ -380,6 +400,12 @@ def contract_args(plan, phase):
         parameters.update(dotplot_min_length=plan.get("dotplot_min_length", 1_000_000),
                           dotplot_sort=plan.get("dotplot_sort", "homoeolog"),
                           length_sources=[p.get("dotplot_lengths", {}) for p in plan["pairs"]])
+        if plan.get("karyotype_panels") or plan.get("karyotype_sort") == "order_orientation":
+            for helper in ("synteny_layout.py", "synteny_multitrack.py"):
+                result.extend(("--input", f"{helper}={Path(__file__).with_name(helper).resolve()}"))
+        if plan.get("karyotype_panels"):
+            result.extend(("--input", "karyotype_panels=" + plan["karyotype_panels_file"]))
+            parameters["karyotype_panels"] = plan["karyotype_panels"]
         if plan.get("dotplot_color") == "ds":
             result.extend(("--input", f"ds={phase_root(plan, 'ds')}"))
             result.extend(("--input", f"ds_renderer={Path(__file__).with_name('pairwise_synteny_ds.py').resolve()}"))
@@ -695,11 +721,27 @@ def selected_seqids(value, genes):
 
 
 def order_karyotype(selected, genomes, anchors, mode, simple=None, scale_mode="shared"):
-    """Order chromosomes without changing chromosome or gene orientations."""
-    if mode not in {"none", "target", "query", "target_length", "query_length", "both_length"}:
-        raise ValueError("karyotype-sort must be none, target, query, target_length, query_length or both_length")
+    """Keep legacy order modes intact; opt in to the signed layout solver."""
+    if mode not in {"none", "target", "query", "target_length", "query_length", "both_length", "order_orientation"}:
+        raise ValueError("karyotype-sort must be none, target, query, target_length, query_length, both_length or order_orientation")
     if scale_mode not in {"shared", "independent"}:
         raise ValueError("karyotype-scale must be shared or independent")
+    if mode == "order_orientation":
+        if simple is None:
+            raise ValueError("Order/orientation optimization requires JCVI simple blocks")
+        try:
+            from synteny_layout import optimize_layout
+        except ImportError:
+            from .synteny_layout import optimize_layout
+        tracks = [{"species": side, "seqids": list(row)} for side, row in zip(("target", "query"), selected, strict=True)]
+        ordered, _, metadata = optimize_layout(tracks, genomes, [{"tracks": [0, 1], "blocks": str(simple)}],
+                                              scale_mode=scale_mode, ys=[.7, .3])
+        # Keep the existing pairwise report's scalar objective fields while
+        # adding the signed solver's individually inspectable components.
+        for when in ("before", "after"):
+            metadata[f"objective_components_{when}"] = metadata[f"objective_{when}"]
+            metadata[f"objective_{when}"] = metadata[f"objective_components_{when}"]["total"]
+        return ordered, metadata
     if mode.endswith("_length"):
         if simple is None:
             raise ValueError("Ribbon-length sorting requires the JCVI simple blocks")
@@ -792,7 +834,10 @@ def render(plan, output):
             for line in (directory / "target.query.screened.simple").read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     handle.write(colors[target_by_id[line.split()[0]]] + "*" + line + "\n")
-        (directory / "seqids").write_text("\n".join(",".join(seqids) for seqids in selected) + "\n", encoding="utf-8")
+        directions = ordering.get("display_orientation", {})
+        (directory / "seqids").write_text("\n".join(",".join(
+            sid + ("-" if directions.get(side, {}).get(sid) == "-" else "") for sid in seqids)
+            for side, seqids in zip(("target", "query"), selected, strict=True)) + "\n", encoding="utf-8")
         (directory / "layout").write_text(
             "# y, xstart, xend, rotation, color, label, va, bed, label_va\n"
             f"0.7,0.12,0.92,0,,{pair['target_species'].replace('_', ' ')} (gene rank),top,target.bed,top\n"
@@ -832,6 +877,12 @@ def render(plan, output):
                 if not (directory / f"{name}.{fmt}").is_file() or not (directory / f"{name}.{fmt}").stat().st_size:
                     raise ValueError(f"Missing or empty {name}.{fmt}")
         shutil.rmtree(directory / ".mplconfig", ignore_errors=True)
+    if plan.get("karyotype_panels"):
+        try:
+            from synteny_multitrack import render_workflow_panels
+        except ImportError:
+            from .synteny_multitrack import render_workflow_panels
+        render_workflow_panels(plan, phase_root(plan, "analysis"), output)
 
 
 def validate_dotplot_lengths(plan):
@@ -879,8 +930,9 @@ def main(argv=None):
     planning.add_argument("--dotplot-sort", choices=("homoeolog", "karyotype", "none"), default="homoeolog",
                           help="Adjacent supported 2x2 chromosome groups, ribbon order, or original BED order")
     planning.add_argument("--ds-color-max", type=float, default=2.0, help="Upper display color limit only; anchors are never filtered")
-    planning.add_argument("--karyotype-sort", choices=("none", "target", "query", "target_length", "query_length", "both_length"), default="both_length",
-                          help="Minimize width-weighted ribbon length (default both_length); target/query use dominant-anchor partners")
+    planning.add_argument("--karyotype-sort", choices=("none", "target", "query", "target_length", "query_length", "both_length", "order_orientation"), default="both_length",
+                          help="Legacy length sorting (default both_length), dominant partners, or signed order_orientation layout")
+    planning.add_argument("--karyotype-panels", type=Path, help="Optional JSON combining existing comparisons into multi-track plots")
     planning.add_argument("--karyotype-color", choices=("chromosome", "homoeolog"), default="chromosome",
                           help="Soft chromosome colors (default); homoeolog shares supported 2x2 group colors")
     planning.add_argument("--karyotype-track-order", choices=("target-query", "query-target"), default="target-query",

@@ -190,13 +190,14 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         # Use native JCVI ranks/geometry and ribbon primitives; never infer bp
         # length from the last gene or label a gene-rank scale as Mbp.
         for entry, line in zip(layout, selected, strict=True):
-            entry.seqids = [sid.strip() for sid in line.split(",")]
+            tokens = [sid.strip() for sid in line.split(",")]
+            entry.rev = {sid[:-1] for sid in tokens if sid.endswith("-")}
+            entry.seqids = [sid[:-1] if sid.endswith("-") else sid for sid in tokens]
             if not all(entry.seqids) or len(entry.seqids) != len(set(entry.seqids)):
                 raise ValueError("Each karyotype track requires unique nonempty chromosome IDs.")
             identifiers = [gene.accn for gene in entry.bed]
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("Karyotype BED gene IDs must be unique within each track.")
-            entry.rev = set()
             selected_seqids = set(entry.seqids)
             chromosome_counts = Counter(gene.seqid for gene in entry.bed if gene.seqid in selected_seqids)
             entry.sizes = {sid: chromosome_counts[sid] for sid in entry.seqids}
@@ -230,7 +231,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
                                                   lw=0.5, ec="#707070", fc=colors["chromosomes"][side][sid],
                                                   style="rect")
                 chromosome.set_transform(track.tr)
-                label = root.annotate(sid, (start + length / 2, track.y), xytext=(0, direction * 5),
+                label = root.annotate(sid + (" (rev)" if sid in track.rev else ""), (start + length / 2, track.y), xytext=(0, direction * 5),
                                       textcoords="offset points", rotation=90, rotation_mode="anchor",
                                       ha="left" if direction == 1 else "right", va="center")
                 track_labels.append(label)
@@ -335,6 +336,8 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             "track_order": list(display_sides),
             "display_species_order": [pair[f"{side}_species"] for side in display_sides],
             "track_metadata_order": list(sides),
+            "display_orientation": {side: {sid: "-" if sid in track.rev else "+" for sid in track.seqids}
+                                    for side, track in zip(sides, tracks, strict=True)},
             "scale_bar_count": len(scale_lines), "track_gene_counts": [track.total for track in tracks],
             "scale_label_position": "above",
             "track_extents": [[track.xstart, track.xend] for track in tracks], "track_alignment": "left",
