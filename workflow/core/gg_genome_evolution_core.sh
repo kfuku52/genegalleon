@@ -2716,6 +2716,13 @@ if annotation_species_resolved=$(gg_resolve_annotation_species "${annotation_spe
     file_go_annotation="${gg_workspace_output_dir}/species_cds_annotation/${annotation_species_resolved}_annotation.tsv"
   fi
 fi
+if [[ -n "${go_annotation_file:-}" ]]; then
+  if [[ "${go_annotation_file}" != /* ]]; then
+    echo "go_annotation_file must be an absolute annotation-table path." >&2
+    exit 1
+  fi
+  file_go_annotation="${go_annotation_file}"
+fi
 
 # Species tree
 dir_species_tree="${gg_workspace_output_dir}/species_tree"
@@ -6979,6 +6986,7 @@ go_enrichment_provenance_args+=(
 go_enrichment_provenance_args+=(
   --input "adapter=${gg_support_dir}/cafe_go_enrichment.r"
   --parameter "method=${go_enrichment_method}"
+  --parameter "annotation_species=${annotation_species_resolved}"
 )
 if [[ "${go_enrichment_method}" == cafe_branch_flags* ]]; then
   go_enrichment_provenance_args+=(
@@ -7010,7 +7018,8 @@ if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
     "${change_direction_go}" \
     "${go_category}" \
     "${go_enrichment_method}" \
-    "${go_family_alpha}"; then
+    "${go_family_alpha}" \
+    "${annotation_species_resolved}"; then
     echo "Error in Rscript cafe_go_enrichment.r. Exiting."
     exit 1
   fi

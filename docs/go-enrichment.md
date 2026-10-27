@@ -1,5 +1,30 @@
 # CAFE GO enrichment
 
+The native workflow accepts `go_annotation_file` as an absolute path to an
+existing annotation table when annotations were produced in another workspace.
+Set the ordinary `annotation_species` to the exact orthogroup species column;
+the workflow forwards it explicitly. Direct R calls accept an optional eleventh
+`annotation_species` argument. Without that argument, both native
+`Species_annotation.tsv` and legacy `Species.annotation.tsv` names are accepted.
+An unmatched reference species stops instead of silently losing annotations.
+
+When species sampling changes, map a previous CAFE target by descendant taxa:
+
+```bash
+python workflow/support/cafe_branch_map.py \
+  --old-tree old/Gamma_asr.tre --new-tree new/Gamma_asr.tre \
+  --old-target '<9>' --new-branch-table new/Gamma_change.tab \
+  --output branch_mapping.json
+```
+
+This reads the first native tree, preserves full species keys, and reports added
+or missing taxa and all matching non-root clades. A unique match may include
+explicitly reported added species. A split edge, missing target species, or
+non-monophyletic target gives exit 2 and no selected branch. Resolve biological
+intent before analysis in those cases; old numeric branch IDs alone are not
+stable identifiers between runs. The mapping does not infer orthology or
+ancestral gene content.
+
 `go_enrichment_method="event"` remains the default. Its event counts, numerical
 results for the same inputs, GO candidate set and output paths are unchanged.
 The optional `cafe_branch_flags` method consumes standard, unmodified CAFE

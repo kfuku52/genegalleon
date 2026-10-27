@@ -295,6 +295,7 @@ change_direction_go="increase" # increase|decrease (also both with cafe_branch_f
 go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.
 go_enrichment_method="event" # event (legacy default) | cafe_branch_flags | cafe_branch_flags_all_go (fixed background GO set, recommended); see docs/go-enrichment.md.
 go_family_alpha=0.05 # BH-adjusted native family-wide P-value cutoff; used only by cafe_branch_flags.
+go_annotation_file="" # Optional absolute path to a completed annotation table outside this workspace; annotation_species selects its exact species column.
 
 ### End: Modify this block to tailor your analysis ###
 

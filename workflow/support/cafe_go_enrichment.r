@@ -45,6 +45,15 @@ resolve_target_branch_id <- function(target_branch, branch_columns) {
   stop("Target branch not found in the CAFE tree: ", target_branch, suffix)
 }
 
+resolve_go_reference_species <- function(path, species_columns, explicit = "") {
+  species <- if (nzchar(explicit)) explicit else sub("[._]annotation\\.tsv$", "", basename(path))
+  if (sum(species_columns == species) != 1L) {
+    stop("GO reference species must match exactly one orthogroup column: ", species,
+         ". Use a native *_annotation.tsv / legacy *.annotation.tsv filename or supply annotation_species.")
+  }
+  species
+}
+
 split_tokens <- function(x, sep) {
   if (is.na(x) || x == "") {
     return(NA_character_)
@@ -335,7 +344,7 @@ summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.0
 # Input
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 8) {
-  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags|cafe_branch_flags_all_go] [family_alpha] ")
+  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags|cafe_branch_flags_all_go] [family_alpha] [annotation_species] ")
 }
 outdir <- args[5]
 target_branch <- args[6]
@@ -369,7 +378,8 @@ if (go_method != "event" && (length(family_alpha) != 1 || !is.finite(family_alph
 p_value_threshold <- 0.05
 
 target_branch_id <- resolve_target_branch_id(target_branch, colnames(change_df))
-go_ref_sp <- sub("\\.annotation\\.tsv$", "", basename(args[4]))
+go_ref_sp <- resolve_go_reference_species(args[4], setdiff(colnames(orthogroup_df), "Orthogroup"),
+  if (length(args) >= 11) args[11] else "")
 if (!all(go_category %in% c("BP", "MF", "CC"))) {
   stop("Invalid GO category specified. Valid categories are 'BP', 'MF', or 'CC'. Use comma to separate multiple categories.")
 }

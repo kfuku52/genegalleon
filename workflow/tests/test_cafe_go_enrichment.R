@@ -6,6 +6,12 @@ for (x in parse('workflow/support/cafe_go_enrichment.r')) {
 }
 expect_error <- function(expr) stopifnot(inherits(tryCatch(force(expr), error = identity), 'error'))
 
+stopifnot(e$resolve_go_reference_species('Arabidopsis_thaliana_annotation.tsv', 'Arabidopsis_thaliana') == 'Arabidopsis_thaliana',
+  e$resolve_go_reference_species('Arabidopsis_thaliana.annotation.tsv', 'Arabidopsis_thaliana') == 'Arabidopsis_thaliana',
+  e$resolve_go_reference_species('any-name.tsv', 'Arabidopsis_thaliana', 'Arabidopsis_thaliana') == 'Arabidopsis_thaliana')
+expect_error(e$resolve_go_reference_species('other_annotation.tsv', 'Arabidopsis_thaliana'))
+expect_error(e$resolve_go_reference_species('Arabidopsis_annotation.tsv', c('Arabidopsis_thaliana', 'Arabidopsis_lyrata')))
+
 # Existing family-wide P values are adjusted before branch/sign screening.
 ids <- c('gain','loss','broad','mixed','flat','background','unreported')
 changes <- data.frame(FamilyID=ids,check.names=FALSE)
@@ -89,16 +95,22 @@ tryCatch({
   annotation <- rows[, c('go_ids', 'go_aspects', 'go_terms')]
   annotation$gene_id <- paste0('g', match(rows$FamilyID, events$FamilyID))
   put(annotation, 'ref.annotation.tsv')
-  run <- function(out, extra = character()) {
+  run <- function(out, extra = character(), annotation_name = 'ref.annotation.tsv') {
     argv <- c(file.path(root, 'workflow/support/cafe_go_enrichment.r'),
-              file.path(tmp, c('change.tsv', 'prob.tsv', 'ids.tsv', 'ref.annotation.tsv')),
+              file.path(tmp, c('change.tsv', 'prob.tsv', 'ids.tsv', annotation_name)),
               file.path(tmp, out), 'A', 'increase', 'BP', extra)
     result <- suppressWarnings(system2(file.path(R.home('bin'), 'Rscript'), shQuote(argv), stdout = TRUE, stderr = TRUE))
     if (!is.null(attr(result, 'status'))) stop(paste(result, collapse = '\n'))
   }
   run('default'); run('explicit', 'event')
+  file.copy(file.path(tmp, 'ref.annotation.tsv'), file.path(tmp, 'ref_annotation.tsv'))
+  file.copy(file.path(tmp, 'ref.annotation.tsv'), file.path(tmp, 'arbitrary.tsv'))
+  run('native_name', annotation_name='ref_annotation.tsv')
+  run('explicit_species', c('event', '.05', 'ref'), annotation_name='arbitrary.tsv')
   for (name in list.files(file.path(tmp, 'default'))) {
     stopifnot(identical(readLines(file.path(tmp, 'default', name)), readLines(file.path(tmp, 'explicit', name))))
+    stopifnot(identical(readLines(file.path(tmp, 'default', name)), readLines(file.path(tmp, 'native_name', name))),
+      identical(readLines(file.path(tmp, 'default', name)), readLines(file.path(tmp, 'explicit_species', name))))
   }
   actual <- e$read_tsv_base(file.path(tmp, 'default', 'enrichment_significant_increase_A_all_go.tsv'))
   stopifnot(nrow(actual) == 2, abs(actual$p_value_adjusted[actual$go_ids == 'GO:T'] - .01644975288516) < 1e-12)

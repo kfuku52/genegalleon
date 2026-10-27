@@ -447,6 +447,7 @@ grampa_locus_null_calibration
 go_category
 go_enrichment_method
 go_family_alpha
+go_annotation_file
 input_sequence_mode
 representative_inputs
 max_gene_orthogroup_grampa
