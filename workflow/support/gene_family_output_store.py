@@ -15,6 +15,7 @@ import contextlib
 import contextvars
 import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -36,6 +37,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from content_digest_cache import cached_sha256_file
+from metadata_store import DATABASE as METADATA_DATABASE
+from metadata_store import archived_bytes, archived_children, archived_info, journal_paths, maximum_generation
+from metadata_store import pack as pack_metadata
+from metadata_store import read_bytes as metadata_read_bytes
 from shared_namespace_lock import NamespaceLockError, namespace_lock
 from workflow_observation import observe_files, observe_path
 
@@ -148,6 +153,22 @@ def _equivalent_output_logical_paths(subdir: str, name: str) -> Set[str]:
     return logical_paths
 
 
+def _index_file_exists(path):
+    return path.is_file() or archived_info(path, observe=observe_path) is not None
+
+
+def _index_file_names(directory):
+    return sorted(set(directory.glob("*.json")) | {
+        path for path in archived_children(directory, observe=observe_path) if path.suffix == ".json"})
+
+
+def _index_json(path):
+    raw = metadata_read_bytes(path, observe=observe_path)
+    if raw is None:
+        raise FileNotFoundError(path)
+    return json.loads(raw)
+
+
 class ArchiveStoreError(RuntimeError):
     """Raised when the logical archive store is inconsistent or corrupt."""
 
@@ -166,6 +187,7 @@ class Artifact:
     sha256: Optional[str] = None
     mtime_ns: Optional[int] = None
     family_id: Optional[str] = None
+    metadata_path: Optional[Path] = None
 
     @property
     def is_live(self) -> bool:
@@ -905,7 +927,15 @@ class GeneFamilyOutputStore:
             self._index_update_active = False
             raise
         else:
-            self._finish_index_update()
+            try:
+                for name in (INDEX_DIR_NAME, SUBDIR_INDEX_DIR_NAME):
+                    directory = self.archive_root / name
+                    if (directory / METADATA_DATABASE).exists():
+                        pack_metadata(directory, scratch="/tmp", writers_stopped=True, delete_originals=True)
+                self._finish_index_update()
+            except BaseException:
+                self._index_update_active = False
+                raise
 
     def _load_tombstones(self) -> None:
         if self._tombstones_loaded:
@@ -1339,13 +1369,13 @@ class GeneFamilyOutputStore:
                 raise ArchiveStoreError(f"Archive index catalog has invalid buckets: {catalog_path}")
             for bucket in buckets:
                 bucket_path = self.archive_root / INDEX_DIR_NAME / f"{bucket}.json"
-                if not bucket_path.is_file():
+                if not _index_file_exists(bucket_path):
                     raise ArchiveStoreError(
                         f"ZIP members are absent from the archive index because the "
                         f"catalog references a missing bucket: {bucket_path}"
                     )
             physical_buckets = {
-                path.stem for path in (self.archive_root / INDEX_DIR_NAME).glob("*.json") if path.is_file()
+                path.stem for path in _index_file_names(self.archive_root / INDEX_DIR_NAME) if _index_file_exists(path)
             }
             if physical_buckets != set(buckets):
                 raise ArchiveStoreError(f"Archive index catalog and bucket files disagree: {catalog_path}")
@@ -1385,12 +1415,12 @@ class GeneFamilyOutputStore:
                 if file_name != _subdir_index_name(str(subdir)):
                     raise ArchiveStoreError(f"Archive index catalog has an invalid subdirectory index for {subdir}")
                 subdir_path = self.archive_root / SUBDIR_INDEX_DIR_NAME / str(file_name)
-                if not subdir_path.is_file():
+                if not _index_file_exists(subdir_path):
                     raise ArchiveStoreError(
                         f"Archive index catalog references a missing subdirectory index: {subdir_path}"
                     )
             physical_subdir_indexes = {
-                path.name for path in (self.archive_root / SUBDIR_INDEX_DIR_NAME).glob("*.json") if path.is_file()
+                path.name for path in _index_file_names(self.archive_root / SUBDIR_INDEX_DIR_NAME) if _index_file_exists(path)
             }
             if physical_subdir_indexes != set(subdir_indexes.values()):
                 raise ArchiveStoreError(f"Archive catalog and subdirectory index files disagree: {catalog_path}")
@@ -1470,13 +1500,12 @@ class GeneFamilyOutputStore:
         if re.fullmatch(r"[0-9a-f]{2}", bucket) is None:
             raise ArchiveStoreError(f"Invalid archive index bucket: {bucket!r}")
         index_path = self.archive_root / INDEX_DIR_NAME / f"{bucket}.json"
-        if not index_path.is_file():
+        if not _index_file_exists(index_path):
             return {}
         if index_path.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive indexes are not supported: {index_path}")
         try:
-            with index_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            payload = _index_json(index_path)
             if not isinstance(payload, dict):
                 raise ArchiveStoreError(f"Archive index bucket is not a JSON object: {index_path}")
             if int(payload.get("schema_version", -1)) != INDEX_SCHEMA_VERSION:
@@ -1634,7 +1663,7 @@ class GeneFamilyOutputStore:
                 raise ArchiveStoreError(f"Symlinked archive index directories are not supported: {index_dir}")
             catalog = self._load_index_catalog()
             if self.family_filter is None:
-                index_paths = sorted(index_dir.glob("*.json"))
+                index_paths = _index_file_names(index_dir)
             else:
                 buckets = {
                     _family_index_bucket(self.family_filter),
@@ -1643,7 +1672,7 @@ class GeneFamilyOutputStore:
                 index_paths = [
                     index_dir / f"{bucket}.json"
                     for bucket in sorted(buckets)
-                    if (index_dir / f"{bucket}.json").is_file()
+                    if _index_file_exists(index_dir / f"{bucket}.json")
                 ]
             if catalog is not None and self.family_filter is not None:
                 catalog_buckets = set(catalog["buckets"])
@@ -1662,8 +1691,7 @@ class GeneFamilyOutputStore:
             for index_path in index_paths:
                 if index_path.is_symlink():
                     raise ArchiveStoreError(f"Symlinked archive indexes are not supported: {index_path}")
-                with index_path.open("r", encoding="utf-8") as handle:
-                    payload = json.load(handle)
+                payload = _index_json(index_path)
                 if not isinstance(payload, dict):
                     raise ArchiveStoreError(f"Archive index is not a JSON object: {index_path}")
                 if int(payload.get("schema_version", -1)) != INDEX_SCHEMA_VERSION:
@@ -1907,8 +1935,7 @@ class GeneFamilyOutputStore:
             if index_path.is_symlink():
                 raise ArchiveStoreError(f"Symlinked subdirectory indexes are not supported: {index_path}")
             try:
-                with index_path.open("r", encoding="utf-8") as handle:
-                    payload = json.load(handle)
+                payload = _index_json(index_path)
                 if not isinstance(payload, dict):
                     raise ArchiveStoreError(f"Subdirectory index is not a JSON object: {index_path}")
                 if (
@@ -2020,7 +2047,20 @@ class GeneFamilyOutputStore:
         live_artifact = self._live_artifact(subdir, name, include_digest=include_digest)
         if live_artifact is not None:
             return live_artifact
-        return self._archived_artifact_unchecked(subdir, name)
+        archived = self._archived_artifact_unchecked(subdir, name)
+        if subdir != "artifact_provenance":
+            return archived
+        info = archived_info(self.root / subdir / name, observe=observe_path)
+        if info is None:
+            return archived
+        candidate = Artifact(logical_path=_safe_logical_path(subdir, name), subdir=subdir, name=name,
+                             generation=info["generation"], metadata_path=info["database"], member_name=name,
+                             size=info["size"], sha256=info["sha256"], mtime_ns=info["mtime_ns"])
+        if self._archived_artifact_is_deleted(candidate):
+            return archived
+        if archived is not None and archived.generation >= candidate.generation:
+            return archived
+        return candidate
 
     def _artifact_unchecked(self, subdir: str, name: str, *, include_digest: bool = True) -> Optional[Artifact]:
         artifact = self._physical_artifact_unchecked(subdir, name, include_digest=include_digest)
@@ -2102,7 +2142,11 @@ class GeneFamilyOutputStore:
             )
             and not self._archived_artifact_is_deleted(artifact)
         }
-        return sorted(live_names | archived_names)
+        metadata_names = set()
+        if subdir == "artifact_provenance":
+            metadata_names = {path.name for path in archived_children(live_dir, observe=observe_path)
+                              if selected_name(path.name) and self._artifact_unchecked(subdir, path.name) is not None}
+        return sorted(live_names | archived_names | metadata_names)
 
     def _file_names_unlocked(
         self,
@@ -2164,6 +2208,13 @@ class GeneFamilyOutputStore:
             if artifact.live_path is not None:
                 observe_path(artifact.live_path)
                 with artifact.live_path.open("rb") as handle:
+                    yield handle
+                return
+            if artifact.metadata_path is not None:
+                raw = archived_bytes(self.root / subdir / name, observe=observe_path)
+                if raw is None:
+                    raise ArchiveStoreError("Archived metadata disappeared")
+                with io.BytesIO(raw) as handle:
                     yield handle
                 return
             assert artifact.zip_path is not None
@@ -2430,7 +2481,8 @@ class GeneFamilyOutputStore:
             # recover the generation used in physical ZIP filenames/manifests.
             for zip_path in _physical_archive_paths(self.root):
                 self._index_generation = max(self._index_generation, int(self._read_manifest(zip_path)["generation"]))
-        self._index_generation = max(self._index_generation, counter_generation) + 1
+        self._index_generation = max(self._index_generation, counter_generation,
+                                     maximum_generation(self.root / "artifact_provenance")) + 1
         self._write_generation_counter(self._index_generation)
         return self._index_generation
 
@@ -2517,7 +2569,7 @@ class GeneFamilyOutputStore:
             }
             encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
             try:
-                if index_path.is_file() and index_path.read_bytes() == encoded:
+                if _index_file_exists(index_path) and metadata_read_bytes(index_path, observe=observe_path) == encoded:
                     continue
             except OSError:
                 pass
@@ -2552,7 +2604,7 @@ class GeneFamilyOutputStore:
             }
             encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
             try:
-                if subdir_path.is_file() and subdir_path.read_bytes() == encoded:
+                if _index_file_exists(subdir_path) and metadata_read_bytes(subdir_path, observe=observe_path) == encoded:
                     continue
             except OSError:
                 pass
@@ -3664,14 +3716,14 @@ def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str
     directory = family_inventory_path(root, family_id)
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ArchiveStoreError(f"Symlinked output inventory: {directory}")
-    journals = sorted(directory.glob("*.paths"))
+    journals = journal_paths(directory)
     if not directory.is_dir() or not journals:
         raise ArchiveStoreError(f"Missing output inventory: {directory}")
     paths: Set[Path] = set()
     for journal in journals:
         if journal.is_symlink():
             raise ArchiveStoreError(f"Symlinked output inventory journal: {journal}")
-        data = journal.read_bytes()
+        data = metadata_read_bytes(journal, observe=observe_path)
         if data and not data.endswith(b"\0"):
             raise ArchiveStoreError(f"Incomplete output inventory journal: {journal}")
         for value in data.split(b"\0"):
@@ -3695,10 +3747,10 @@ def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str
 def _compact_family_inventory(root: Path, family_id: str) -> None:
     """Caller must hold the exclusive family lock, excluding publishers."""
     inventory = family_inventory_path(root, family_id)
-    journals = sorted(inventory.glob("*.paths"))
+    journals = journal_paths(inventory)
     entries = set()
     for journal in journals:
-        for value in journal.read_bytes().split(b"\0"):
+        for value in metadata_read_bytes(journal, observe=observe_path).split(b"\0"):
             if value:
                 path = Path(os.fsdecode(value))
                 entries.add(os.fsencode(path.relative_to(root) if path.is_absolute() else path))
@@ -3713,7 +3765,7 @@ def _compact_family_inventory(root: Path, family_id: str) -> None:
         os.replace(temporary, target)
         _fsync_directory(inventory)
         for journal in journals:
-            if journal != target:
+            if journal != target and journal.exists():
                 journal.unlink()
         _fsync_directory(inventory)
     finally:
@@ -6340,7 +6392,7 @@ def _indexed_final_archives_for_repair(root: Path) -> Set[Path]:
         directory = archive_root / name
         if directory.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive index directories are not supported: {directory}")
-        index_paths.extend(directory.glob("*.json"))
+        index_paths.extend(_index_file_names(directory))
     legacy = archive_root / INDEX_FILE
     if legacy.exists() or legacy.is_symlink():
         index_paths.append(legacy)
@@ -6349,7 +6401,7 @@ def _indexed_final_archives_for_repair(root: Path) -> Set[Path]:
         if index_path.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive indexes are not supported: {index_path}")
         try:
-            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            payload = _index_json(index_path)
         except (json.JSONDecodeError, UnicodeError):
             # Rebuilding damaged index JSON from ZIP manifests is repair's job.
             continue

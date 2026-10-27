@@ -31,12 +31,15 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
+from metadata_store import archived_bytes, archived_exists, archived_info
+from metadata_store import writer as metadata_writer
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from artifact_audit_runtime import AuditCapacityError, AuditDigests, AuditProgress, source_identity
-from artifact_audit_runtime import signature as audit_signature
+from artifact_audit_runtime import signature as physical_audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
@@ -191,12 +194,28 @@ def observation_artifact(path):
     return store.source_artifact(*relative.parts)
 
 
+def _metadata_visible(path):
+    if path.parent.name == "artifact_provenance" and archived_info(path, observe=observe_path) is not None:
+        with read_only_observation():
+            return GeneFamilyOutputStore(path.parent.parent).source_artifact(path.parent.name, path.name) is not None
+    return archived_exists(path, observe=observe_path)
+
+
+def audit_signature(path):
+    if not Path(path).exists():
+        info = archived_info(path, observe=observe_path)
+        if info is not None and _metadata_visible(Path(path)):
+            return ("sqlite", physical_audit_signature(info["database"]), str(path), info["sha256"])
+    return physical_audit_signature(path)
+
+
 def declared_path_exists(path):
     path = _runtime_path(Path(path))
     observe_path(path)
     if os.path.lexists(path) or observation_artifact(path) is not None:
         return True
-    return (managed_directory_exists(path, observe=observe_path)
+    return (_metadata_visible(path)
+            or managed_directory_exists(path, observe=observe_path)
             or managed_file_location(path, observe=observe_path) is not None)
 
 
@@ -212,9 +231,21 @@ def open_declared_binary(path):
                 raise ProvenanceError(f"Declared path must be a regular file: {path}")
             yield handle
         return
+    if (_LOGICAL_OBSERVATION_STORE.get() is None and path.parent.name == "artifact_provenance"
+            and archived_info(path, observe=observe_path) is not None):
+        logical = GeneFamilyOutputStore(path.parent.parent)
+        with read_only_observation(), logical.read_snapshot():
+            with logical.open_binary(path.parent.name, path.name) as handle:
+                yield handle
+        return
     artifact = observation_artifact(path)
     if artifact is not None:
         with _LOGICAL_OBSERVATION_STORE.get().open_binary(artifact.subdir, artifact.name) as handle:
+            yield handle
+        return
+    raw = archived_bytes(path, observe=observe_path) if _metadata_visible(path) else None
+    if raw is not None:
+        with io.BytesIO(raw) as handle:
             yield handle
         return
     location = managed_file_location(path, observe=observe_path)
@@ -299,6 +330,10 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    if not path.exists() and archived_exists(path, observe=observe_path):
+        with open_declared_binary(path) as handle:
+            digest, size = sha256_stream(handle)
+        return digest, size, "file"
     if not path.exists() and managed_directory_exists(path, observe=observe_path):
         digest, size, _count = raw_or_zip_directory_digest(path)
         return digest, size, "directory"
@@ -331,7 +366,7 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
             memo.guard((str(path), "logical_source"), _audit_artifact_identity(artifact),
                        scoped_digest_reader(lambda: _audit_artifact_identity(
                            store.source_artifact(artifact.subdir, artifact.name))))
-            digest, size = memo.read(artifact.zip_path, compute, member=artifact.member_name)
+            digest, size = memo.read(artifact.zip_path or artifact.metadata_path, compute, member=artifact.member_name)
             return digest, size, "file"
         memo.guard((str(path), "absent"), os.path.lexists(path), lambda: os.path.lexists(path))
         raise FileNotFoundError(path)
@@ -1013,6 +1048,12 @@ def load_manifest(path: Path) -> dict[str, object]:
 
 def write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    with metadata_writer(path):
+        _write_manifest_atomic(path, payload)
+
+
+def _write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     try:
@@ -1448,7 +1489,7 @@ def open_reference(
 def _audit_artifact_identity(artifact):
     if artifact is None:
         return None
-    path = artifact.live_path or artifact.zip_path
+    path = artifact.live_path or artifact.zip_path or artifact.metadata_path
     return (str(path), audit_signature(path), artifact.member_name, artifact.generation)
 
 
@@ -1484,7 +1525,7 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
                        scoped_digest_reader(lambda: _audit_artifact_identity(store.source_artifact(*pure.parts))))
             if artifact is None:
                 raise FileNotFoundError(logical_root / raw)
-            return memo.read(artifact.live_path or artifact.zip_path,
+            return memo.read(artifact.live_path or artifact.zip_path or artifact.metadata_path,
                              scoped_digest_reader(lambda: audit_entry_digest(entry, store, logical_root, workspace_root)),
                              member=artifact.member_name)
         path = resolve_reference(entry, logical_root, workspace_root)

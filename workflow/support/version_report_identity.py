@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from input_generation_array_state import _stat_identity, atomic_json, digest
+from metadata_store import DATABASE, cache_policy, pack, read_bytes
 from performance_metrics import measure
 from shared_namespace_lock import namespace_lock
 
@@ -44,7 +45,9 @@ def image_identity(path):
 
 def environment_identity():
     diagnostic = {"PWD", "OLDPWD", "SHLVL", "_", "GG_PERFORMANCE_DIR", "GG_JOB_ID", "GG_ARRAY_TASK_ID",
-                  "JOB_ID", "GG_RESOURCE_OWNER_PID"}
+                  "JOB_ID", "GG_RESOURCE_OWNER_PID", "GG_ARRAY_JOB_ID", "GG_TASK_CPUS", "GG_MEM_TOTAL_GB",
+                  "GG_OBSERVATION_ATTEMPT_DIR", "GG_RESOURCE_EVENT_FILE", "GG_RESOURCE_TIMES_FILE",
+                  "GG_RESOURCE_PROFILE"}
     context = {}
     for key, value in os.environ.items():
         suffix = key.removeprefix("SINGULARITYENV_").removeprefix("APPTAINERENV_")
@@ -59,8 +62,13 @@ def cache_ready(path, key):
     try:
         if path.is_symlink() or path.with_suffix(".json").is_symlink():
             return False
-        saved = json.loads(path.with_suffix(".json").read_text())
-        return saved == {"schema_version": 1, "key": key, "sha256": digest(path)}
+        metadata = read_bytes(path.with_suffix(".json"))
+        if metadata is None:
+            return False
+        saved = json.loads(metadata)
+        raw = read_bytes(path)
+        return raw is not None and saved == {"schema_version": 1, "key": key,
+                                             "sha256": hashlib.sha256(raw).hexdigest()}
     except (OSError, ValueError, KeyError):
         return False
 
@@ -96,10 +104,11 @@ def private_cache(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("image", "environment", "cache-ready", "publish-cache", "private-cache"))
+    parser.add_argument("action", choices=("image", "environment", "cache-ready", "publish-cache", "private-cache", "copy-cache"))
     parser.add_argument("--image", type=Path)
     parser.add_argument("--cache-file", type=Path)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--destination", type=Path)
     parser.add_argument("--key")
     args = parser.parse_args()
     if args.action == "image":
@@ -113,6 +122,10 @@ def main():
         private_cache(args.cache_file)
     elif args.action == "cache-ready":
         raise SystemExit(0 if cache_ready(args.cache_file, args.key) else 1)
+    elif args.action == "copy-cache":
+        if not cache_ready(args.cache_file, args.key):
+            raise ValueError("Version inventory is not verified for this context")
+        args.destination.write_bytes(read_bytes(args.cache_file))
     else:
         if args.cache_file.is_symlink():
             raise ValueError("Symlinked version cache file")
@@ -122,6 +135,12 @@ def main():
             os.replace(temporary, args.cache_file)
             atomic_json(args.cache_file.with_suffix(".json"), {"schema_version": 1, "key": args.key,
                         "sha256": digest(args.cache_file)})
+            if (args.cache_file.parent / DATABASE).is_file():
+                # The caller holds the version-cache singleton namespace lock.
+                limit = cache_policy(args.cache_file.parent)
+                pack(args.cache_file.parent, scratch="/tmp", writers_stopped=True, delete_originals=True)
+                if limit is not None:
+                    pack(args.cache_file.parent, scratch="/tmp", writers_stopped=True, cache_limit=limit)
         finally:
             temporary.unlink(missing_ok=True)
 

@@ -126,6 +126,9 @@ gg_trigger_versions_dump() {
   "${identity_python}" "${identity_helper}" private-cache --cache-file "${cache_dir}" || return 1
   cache_file="${cache_dir}/${container_key_hash}.log"
   lock_file="${cache_file}.lock"
+  if [[ -f "${cache_dir}/.gg-metadata.sqlite3" ]]; then
+    lock_file="${cache_dir}/.versions-cache.lock"
+  fi
   # Preserve per-invocation host/time provenance even on an inventory cache hit.
   {
     echo "$(date): ${trigger_name}; image_identity=${image_file_hash:-unavailable}; context=${container_key_hash}"
@@ -154,7 +157,8 @@ gg_trigger_versions_dump() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   if "${identity_python}" "${identity_helper}" cache-ready --cache-file "${cache_file}" --key "${container_key_hash}"; then
-    cp -- "${cache_file}" "${tmp_log_file}" || return 1
+    "${identity_python}" "${identity_helper}" copy-cache --cache-file "${cache_file}" \
+      --key "${container_key_hash}" --destination "${tmp_log_file}" || return 1
     mv_out "${tmp_log_file}" "${log_file}" || return 1
     echo "gg_trigger_versions_dump: reused verified ${log_file}"
     return 0

@@ -182,7 +182,8 @@ printf '%s\\n' "${{APPTAINERENV_transcriptome_metadata_input_subdir}}" "${{SINGU
     ]
 
 
-def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path):
+@pytest.mark.parametrize("sqlite_cache", [False, True])
+def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path, sqlite_cache):
     image = tmp_path / "fixture.sif"
     image.write_text("fixture runtime identity")
     workspace = tmp_path / "workspace"
@@ -211,6 +212,11 @@ gg_require_versions_dump fixture
                                 env={**os.environ, "GG_TEST_VERSION_RC": str(code), "GG_TEST_CALLS": str(tmp_path / "calls")}, capture_output=True, text=True)
         assert result.returncode == expected, result.stdout + result.stderr
         assert not list(workspace.rglob("gate/owner.json"))
+        if sqlite_cache and code == 0:
+            sys.path.insert(0, str(GG_UTIL_PATH.parent))
+            import metadata_store
+            metadata_store.pack(workspace / "downloads/version_inventory", writers_stopped=True, delete_originals=True)
+
     assert len(list(workspace.rglob("*.versions.log"))) == 1
     assert len(list(workspace.rglob("*.versions.failed.*.log"))) == 1
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called"]

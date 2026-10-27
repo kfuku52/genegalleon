@@ -17,6 +17,10 @@ import time
 import uuid
 from pathlib import Path
 
+from metadata_store import archived_bytes
+from metadata_store import read_snapshot as metadata_snapshot
+from metadata_store import writer as metadata_writer
+
 SCHEMA = "genegalleon-observation-v1"
 _OBSERVED_PATHS = contextvars.ContextVar("genegalleon_observed_paths", default=None)
 
@@ -88,8 +92,9 @@ def observe_files():
     paths = {}
     token = _OBSERVED_PATHS.set(paths)
     try:
-        yield
-        _verify_observed_paths(paths)
+        with metadata_snapshot():
+            yield
+            _verify_observed_paths(paths)
     finally:
         _OBSERVED_PATHS.reset(token)
 
@@ -97,7 +102,13 @@ def observe_files():
 def read_regular_bytes(path, limit=8 * 1024 * 1024):
     path = Path(path)
     observe_path(path)
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raw = archived_bytes(path, limit=limit, observe=observe_path)
+        if raw is None:
+            raise
+        return raw
     with os.fdopen(descriptor, "rb") as handle:
         before = os.fstat(handle.fileno())
         if not stat.S_ISREG(before.st_mode):
@@ -138,6 +149,12 @@ def json_digest(payload):
 
 
 def atomic_json(path, payload):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with metadata_writer(path):
+        _atomic_json(path, payload)
+
+
+def _atomic_json(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from metadata_store import archived_children, archived_exists
+
 # Disable bytecode and the optional persistent digest cache before importing
 # workflow libraries: even a query against a read-only workspace must work.
 sys.dont_write_bytecode = True
@@ -64,6 +66,15 @@ def inventory(directory, *, pattern=None, directories=False, limit=10000):
             selected.append(Path(entry.path))
             if len(selected) > limit:
                 raise ValueError("observation inventory exceeds configured bound")
+    selected = set(selected)
+    for path in archived_children(directory, directories=directories, observe=provenance.observe_path):
+        if path.name.startswith("."):
+            continue
+        if pattern is not None and not (path.name.startswith(pattern) and path.name.endswith(".json")):
+            continue
+        selected.add(path)
+        if len(selected) > limit:
+            raise ValueError("observation inventory exceeds configured bound")
     return sorted(selected)
 
 
@@ -128,6 +139,7 @@ def capabilities(_args):
         "errors": "owned-boundary-codes-v1",
         "progress": "step-progress-v1",
         "input_inventory": "input-generation-receipt-inventory-v1",
+        "metadata_storage": "sqlite-lossless-v1",
     }, provenance_schema_versions=[provenance.SCHEMA_VERSION],
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
@@ -584,7 +596,7 @@ def _verify(args, store, memo):
             completion = "unverified"
         for row in rows:
             path = args.attempt / ("contract-" + digest([args.family_id, row["step"]]) + ".json")
-            receipt = read_contract(path, attempt_id) if path.exists() else {}
+            receipt = read_contract(path, attempt_id) if (path.exists() or archived_exists(path, observe=provenance.observe_path)) else {}
             if receipt:
                 memo.guard((str(path), "receipt"), (provenance.audit_signature(path), digest(receipt)),
                            lambda path=path: (provenance.audit_signature(path), digest(read_contract(path, attempt_id))))
