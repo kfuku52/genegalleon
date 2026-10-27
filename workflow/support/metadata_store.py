@@ -206,11 +206,11 @@ def writer(path):
             yield
 
 
-def _read_source(path):
+def _read_source(path, *, root=None):
     before = signature(path)
     if not stat.S_ISREG(before[2]) or before[6] != os.getuid() or before[7] != 1:
         raise ValueError(f"Metadata source must be an owned, unlinked regular file: {path}")
-    limit = body_limit(scope(path))
+    limit = body_limit(scope(path) if root is None else root)
     if before[3] > limit:
         raise ValueError(f"Metadata source exceeds bound: {path}")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -232,7 +232,7 @@ def _eligible(root, key, closed):
             return False
         if parts[0] not in closed:
             run = root / parts[0] / "run.json"
-            raw = _read_source(run)[0] if run.exists() else archived_bytes(run)
+            raw = _read_source(run, root=root)[0] if run.exists() else archived_bytes(run)
             value = json.loads(raw) if raw is not None else {}
             closed[parts[0]] = (value.get("execution_state") == "exited"
                                 and type(value.get("finished_at_ns")) is int)
@@ -256,6 +256,8 @@ def _inventory(root, max_files):
         for name in dirs:
             if (Path(directory) / name).is_symlink():
                 raise ValueError("Symlinked metadata directory")
+        if root.name in {"versions", "version_inventory", "artifact_provenance", *INDEX_ROOTS}:
+            dirs.clear()  # Flat record roots never consume nested coordination namespaces.
         for name in sorted(files):
             path = Path(directory) / name
             key = _key(root, path)
@@ -364,18 +366,29 @@ def index_members(root):
 def _retire(root, expected, operation_id):
     # Replays may remove only the exact files bound before this operation's publication.
     removed = 0
-    for key, (before, sha) in expected.items():
-        path = root / key
-        if not os.path.lexists(path):
-            continue
-        raw, current = _read_source(path)
-        if list(current) != list(before) or hashlib.sha256(raw).hexdigest() != sha or archived_bytes(path) != raw:
-            raise ValueError("Source changed or archive cannot restore it; originals retained")
-        if signature(path) != current:
-            raise ValueError("Source identity changed before retirement")
-        path.unlink()
-        _sync_dir(path.parent)
-        removed += 1
+    touched = set()
+    try:
+        # The exclusive namespace guard excludes participating publications.
+        # Pin one immutable DB; retain the before/after identity fence.
+        with read_snapshot():
+            for key, (before, sha) in expected.items():
+                path = root / key
+                _key(root, path)
+                if not os.path.lexists(path):
+                    continue
+                raw, current = _read_source(path, root=root)
+                if list(current) != list(before) or hashlib.sha256(raw).hexdigest() != sha or archived_bytes(path) != raw:
+                    raise ValueError("Source changed or archive cannot restore it; originals retained")
+                if signature(path) != current:
+                    raise ValueError("Source identity changed before retirement")
+                path.unlink()
+                touched.add(path.parent)
+                removed += 1
+    finally:
+        # The database is already durable. Flush every changed directory once,
+        # including successful removals before a later interruption.
+        for directory in sorted(touched):
+            _sync_dir(directory)
     return removed
 
 
@@ -472,7 +485,7 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                     db.execute("INSERT INTO metadata VALUES('kind',?)", (root.name,))
                 db.execute("DELETE FROM operation_files")
                 for key in keys:
-                    raw, before = _read_source(root / key)
+                    raw, before = _read_source(root / key, root=root)
                     snapshots[key] = (before, hashlib.sha256(raw).hexdigest())
                     db.execute("INSERT INTO operation_files VALUES(?,?,?)", (key, json.dumps(before), snapshots[key][1]))
                     db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?,?)",
@@ -522,7 +535,7 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                 if _inventory(root, max_files) != keys:
                     raise ValueError("Metadata source membership changed")
                 for key, (before, sha) in snapshots.items():
-                    raw, current = _read_source(root / key)
+                    raw, current = _read_source(root / key, root=root)
                     if current != before or hashlib.sha256(raw).hexdigest() != sha:
                         raise ValueError("Metadata source changed before publication")
                 if (None if not (root / DATABASE).exists() else _db_signature(root / DATABASE)) != before_db:

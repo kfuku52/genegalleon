@@ -85,9 +85,9 @@ def test_source_change_before_publication_keeps_originals(tmp_path, monkeypatch)
     path.write_bytes(b"original")
     original = store._read_source
     count = 0
-    def changed(path):
+    def changed(path, **kwargs):
         nonlocal count
-        result = original(path)
+        result = original(path, **kwargs)
         count += 1
         if count == 1:
             path.write_bytes(b"changed")
@@ -371,3 +371,49 @@ def test_cache_publish_and_copy_use_sqlite_policy(tmp_path):
         assert destination.read_bytes() == source.read_bytes()
     assert not versions.cache_ready(root / (f"{0:064x}" + ".log"), f"{0:064x}")
     assert store.cache_policy(root) == 1
+
+
+def test_interrupted_retirement_flushes_completed_directory_and_resumes(tmp_path, monkeypatch):
+    root = tmp_path / "versions"
+    root.mkdir()
+    for name in ["one.log", "two.log"]:
+        (root / name).write_bytes(name.encode())
+    unlink, sync = Path.unlink, store._sync_dir
+    events = []
+    def interrupted(path, *args, **kwargs):
+        if path == root / "two.log":
+            raise RuntimeError("retirement interrupted")
+        result = unlink(path, *args, **kwargs)
+        if path == root / "one.log":
+            events.append("removed-one")
+        return result
+    def synced(path):
+        events.append("synced-" + path.name)
+        return sync(path)
+    monkeypatch.setattr(Path, "unlink", interrupted)
+    monkeypatch.setattr(store, "_sync_dir", synced)
+    with pytest.raises(RuntimeError, match="retirement interrupted"):
+        pack(root, operation_id="interrupted-directory-flush")
+    assert events.index("removed-one") < len(events) - 1 and events[-1] == "synced-versions"
+    assert store.archived_bytes(root / "one.log") == b"one.log"
+    assert (root / "two.log").read_bytes() == b"two.log"
+    monkeypatch.setattr(Path, "unlink", unlink)
+    assert pack(root, operation_id="interrupted-directory-flush")["removed_this_call"] == 1
+
+
+def test_flat_record_collection_preserves_opaque_lock_namespaces(tmp_path):
+    root = tmp_path / "version_inventory"
+    root.mkdir()
+    (root / "fixture.log").write_bytes(b"verified version body")
+    control = root / "fixture.log.lock" / "gate"
+    control.mkdir(parents=True)
+    outside = tmp_path / "unrelated-control"
+    outside.mkdir()
+    (outside / "owner.json").write_bytes(b"coordination state")
+    pointer = control / "owner"
+    pointer.symlink_to(outside, target_is_directory=True)
+    before = pointer.lstat().st_ino
+    assert pack(root)["removed_files"] == 1
+    assert store.archived_bytes(root / "fixture.log") == b"verified version body"
+    assert pointer.is_symlink() and pointer.lstat().st_ino == before
+    assert (outside / "owner.json").read_bytes() == b"coordination state"

@@ -60,3 +60,27 @@ tradeoff favors fewer shared-filesystem entries; SQLite reads are not claimed
 to be faster. Runtime tests cover publication/retirement races, checksum failure,
 restore, mixed raw/DB reads, index update/repair, provenance generations and
 cache producer/consumer behavior.
+
+
+Collector publication retains the same source/body checks and namespace exclusion.
+Retirement pins one immutable DB snapshot and fsyncs each changed directory once,
+including successful removals before an interruption. Verified collector roots
+avoid repeating ancestor lookups for every source. These changes reduce repeated
+filesystem operations; they do not permit packing with active workspace writers.
+
+For an owned engineering workspace, reproduce collector measurements with:
+
+```bash
+python workflow/benchmarks/benchmark_metadata_store.py --work-dir /owned/workspace --attempts 1000
+```
+
+An optional `--support /baseline/support` selects the comparison implementation.
+A local 5,000-file fixture used one 100-attempt warmup and three fresh
+1,000-attempt repetitions on Python 3.13.16/macOS arm64. Collection took
+3.042/2.865/2.766 seconds before and 2.229/2.093/2.095 after (median 27% lower).
+Peak RSS ranges were 39.7–40.5 MB and 40.2–41.7 MB; every logical body digest
+matched. These are local collector measurements, not Shirokane throughput.
+
+Use `--layout version-cache` to include a legacy coordination tree for every
+flat cache context. Flat metadata collection preserves these opaque trees and
+only scans the payload level.
