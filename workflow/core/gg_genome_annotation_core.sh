@@ -28,6 +28,8 @@ oriongeno_no_download="${oriongeno_no_download:-0}"
 oriongeno_batch_size="${oriongeno_batch_size:-1}"
 oriongeno_output_utrs="${oriongeno_output_utrs:-1}"
 oriongeno_output_repeat="${oriongeno_output_repeat:-1}"
+oriongeno_prediction_mode="${oriongeno_prediction_mode:-predict}"
+oriongeno_prediction_support_root="${oriongeno_prediction_support_root:-}"
 annevo_model_profile="${annevo_model_profile:-Magnoliopsida}"
 annevo_taxid_map="${annevo_taxid_map:-}"
 annevo_genome_metadata="${annevo_genome_metadata:-}"
@@ -223,6 +225,13 @@ gg_generate_annevo_annotation() {
       gg_shared_lock_release "${prediction_lock}"
     }
     trap cleanup_annevo_prediction_lock EXIT
+    if [[ "${genome_annotation_backend}" == oriongeno && "${oriongeno_prediction_mode}" == reuse ]]; then
+      python "${gg_support_dir}/oriongeno_prediction_reuse.py" \
+        --workspace "${gg_workspace_dir}" --species "${sp_ub}" --genome "${file_sp_genome}" \
+        --gff "${native_gff}" --receipt "${native_receipt}" \
+        --support-root "${oriongeno_prediction_support_root}" || exit $?
+      gg_step_skip "${prediction_label} native genome prediction (verified existing output)"
+    else
     local resolved_profile="${annevo_model_profile}"
     local taxid_map="${annevo_taxid_map}" genome_metadata="${annevo_genome_metadata}"
     local taxonomy_db="${annevo_taxonomy_db}" no_download="${annevo_no_download}"
@@ -342,6 +351,8 @@ PYPROFILE
       gg_artifact_record "${prediction_provenance_args[@]}" || exit $?
     else
       gg_step_skip "${prediction_label} native genome prediction"
+    fi
+
     fi
 
     python "${gg_support_dir}/annevo_gene_models.py" --engine "${genome_annotation_backend}" --species "${sp_ub}" \

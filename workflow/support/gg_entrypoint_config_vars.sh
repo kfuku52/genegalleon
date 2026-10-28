@@ -334,6 +334,8 @@ oriongeno_taxid_map
 oriongeno_genome_metadata
 oriongeno_taxonomy_db
 oriongeno_source_ref
+oriongeno_prediction_mode
+oriongeno_prediction_support_root
 oriongeno_python
 oriongeno_checkpoint
 oriongeno_source_commit

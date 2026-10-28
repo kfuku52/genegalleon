@@ -297,7 +297,9 @@ def is_probable_genome_filename(provider, name):
         "pep",
         "protein",
     )
-    if any(marker in lower for marker in non_genome_markers):
+    # Roles are filename tokens, not substrings of a species name (pepo,
+    # peplus and Peperomia all contain "pep"). Keep CDS/protein bundles out.
+    if re.search(r"(?:^|[._-])(?:" + "|".join(non_genome_markers) + r")(?:[._-]|$)", lower):
         return False
     if provider == "fernbase":
         # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.

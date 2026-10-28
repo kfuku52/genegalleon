@@ -126,6 +126,8 @@ oriongeno_no_download=0 # Set 1 to require existing verified runtime/model asset
 oriongeno_batch_size=1 # Native GPU prediction batch size.
 oriongeno_output_utrs=1 # Emit explicit terminal exonic UTR rows without changing CDSs.
 oriongeno_output_repeat=1 # Publish the native repeat_region GFF3 beside the gene annotation.
+oriongeno_prediction_mode="predict" # predict|reuse; reuse verifies existing prediction and runs only CPU formatting.
+oriongeno_prediction_support_root="" # Original prediction's immutable workflow/support directory; required by reuse.
 annevo_model_profile="Magnoliopsida" # auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi.
 annevo_taxid_map="" # Explicit species/taxid TSV for auto model selection.
 annevo_genome_metadata="" # Trusted species/taxid/genome_sha256 TSV; optional scientific_name.
@@ -185,7 +187,15 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1
 fi
-if [[ "${genome_annotation_backend}" == "annevo" || "${genome_annotation_backend}" == "oriongeno" ]]; then
+if [[ "${oriongeno_prediction_mode}" != predict && "${oriongeno_prediction_mode}" != reuse ]]; then
+  echo "Invalid oriongeno_prediction_mode; expected predict or reuse." >&2
+  exit 1
+fi
+if [[ "${oriongeno_prediction_mode}" == reuse && "${genome_annotation_backend}" != oriongeno ]]; then
+  echo "Prediction reuse is supported only for OrionGeno." >&2
+  exit 1
+fi
+if [[ "${genome_annotation_backend}" == "annevo" || ( "${genome_annotation_backend}" == "oriongeno" && "${oriongeno_prediction_mode}" != reuse ) ]]; then
   # Request only the scheduler-visible GPU; the Docker shim translates --nv.
   annotation_gpu_devices="${CUDA_VISIBLE_DEVICES:-${GG_CONTAINER_DOCKER_GPU_DEVICES:-}}"
   if [[ -z "${annotation_gpu_devices}" || "${annotation_gpu_devices}" == ,* || "${annotation_gpu_devices}" == *, || "${annotation_gpu_devices}" == *,,* ]]; then
