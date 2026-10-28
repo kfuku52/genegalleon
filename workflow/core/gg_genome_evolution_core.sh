@@ -259,7 +259,6 @@ if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" 
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
   if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
     run_orthofinder=0
-    run_cds_translation=0
   fi
   artifact_stale_policy=stop
   artifact_legacy_policy=stop
@@ -3221,7 +3220,7 @@ cd "${dir_tmp}"
 enable_all_run_flags_for_debug_mode
 if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   while IFS= read -r config_name; do
-    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection ]]; then
+    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection && "${config_name}" != run_cds_translation ]]; then
       printf -v "${config_name}" '%s' 0
     fi
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
@@ -5618,6 +5617,12 @@ if [[ "${orthogroup_catalog_name:-Orthogroups_filtered}" != Orthogroups_filtered
   og_selection_family="all_species.${orthogroup_catalog_name}"
   og_selection_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.${orthogroup_catalog_name}.json"
 fi
+# A cache covers unchanged families; excluded members need new representatives
+# and a real annotation search for the changed families.
+og_selection_needs_annotation=1
+if [[ -n "${orthogroup_annotation_cache_name}" && -z "${orthogroup_exclude_gene_ids}" ]]; then
+  og_selection_needs_annotation=0
+fi
 og_selection_needs_update=0
 gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "${og_selection_family}" "${og_selection_manifest}"
 og_selection_provenance_args+=(
@@ -5656,10 +5661,10 @@ fi
 gg_artifact_prepare_stage og_selection_needs_update run_og_selection "${og_selection_provenance_args[@]}" || exit $?
 if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
   gg_step_start "${task}"
-  if [[ -z "${orthogroup_annotation_cache_name}" ]]; then prepare_species_protein_tmp; fi
+  if [[ ${og_selection_needs_annotation} -eq 1 ]]; then prepare_species_protein_tmp; fi
   rm -rf -- "${dir_orthofinder_filtered}"
   ensure_dir "${dir_orthofinder_filtered}"
-  if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+  if [[ ${og_selection_needs_annotation} -eq 0 ]]; then
     uniprot_db_prefix=/dev/null # Native provenance verifies the original reference; no new search is requested.
   elif [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then

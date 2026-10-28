@@ -19,9 +19,11 @@ parser.add_argument("--attempts", type=int, default=1000)
 parser.add_argument("--layout", choices=("observations", "version-cache"), default="observations")
 parser.add_argument("--inventory-only", action="store_true")
 parser.add_argument("--run-read-latency-ms", type=float, default=0)
+parser.add_argument("--source-read-latency-ms", type=float, default=0)
+parser.add_argument("--keep-originals", action="store_true")
 args = parser.parse_args()
-if not 0 <= args.run_read_latency_ms <= 100:
-    parser.error("choose a simulated run-read latency from 0 to 100 ms")
+if not 0 <= args.run_read_latency_ms <= 100 or not 0 <= args.source_read_latency_ms <= 100:
+    parser.error("choose simulated read latencies from 0 to 100 ms")
 if not 1 <= args.attempts <= 10000 or not args.work_dir.is_dir():
     parser.error("choose 1..10000 attempts and an existing owned work directory")
 support, base, count = args.support.resolve(), args.work_dir.resolve(), args.attempts
@@ -29,10 +31,13 @@ sys.path.insert(0, str(support))
 import metadata_store as m  # noqa: E402
 
 original_read = m._read_source
-if args.run_read_latency_ms:
+if args.run_read_latency_ms or args.source_read_latency_ms:
     def delayed_read(path, **kwargs):
+        delay = args.source_read_latency_ms
         if Path(path).name == "run.json":
-            time.sleep(args.run_read_latency_ms / 1000)
+            delay += args.run_read_latency_ms
+        if delay:
+            time.sleep(delay / 1000)
         return original_read(path, **kwargs)
     m._read_source = delayed_read
 
@@ -86,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
             gate = root / (key + ".log.lock") / "gate"
             gate.mkdir(parents=True)
             (gate / "owner.json").write_text("{}")
+    records_values_sha256 = None
     start = time.monotonic()
     if args.inventory_only:
         selected = m._inventory(root, 500000)
@@ -94,14 +100,19 @@ with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
         after = {key: hashlib.sha256((root / key).read_bytes()).hexdigest() for key in selected}
         assert before == after
     else:
-        result = m.pack(root, scratch=work, writers_stopped=True, delete_originals=True, operation_id="collector-benchmark")
+        result = m.pack(root, scratch=work, writers_stopped=True, delete_originals=not args.keep_originals, operation_id="collector-benchmark")
         elapsed = time.monotonic() - start
         with sqlite3.connect(root / m.DATABASE) as db:
             after = {
                 key: hashlib.sha256(zlib.decompress(body)).hexdigest()
                 for key, body in db.execute("SELECT path,body FROM files")
             }
-        assert before == after and result["removed_files"] == len(before)
+            records_values_sha256 = hashlib.sha256(
+                json.dumps(db.execute("SELECT * FROM records ORDER BY path").fetchall()).encode()
+            ).hexdigest()
+        assert before == after and result["removed_files"] == (0 if args.keep_originals else len(before))
+        if args.keep_originals:
+            assert all(hashlib.sha256((root / key).read_bytes()).hexdigest() == sha for key, sha in before.items())
     print(
         json.dumps(
             {
@@ -112,8 +123,11 @@ with tempfile.TemporaryDirectory(prefix="pack-bench-", dir=base) as raw:
                 "platform": platform.platform(),
                 "records_sha256": hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
                 "files": len(after),
+                "records_values_sha256": records_values_sha256,
                 "inventory_only": args.inventory_only,
                 "simulated_run_read_latency_ms": args.run_read_latency_ms,
+                "simulated_source_read_latency_ms": args.source_read_latency_ms,
+                "delete_originals": not args.keep_originals,
             }
         )
     )

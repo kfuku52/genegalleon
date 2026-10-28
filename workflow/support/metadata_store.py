@@ -236,6 +236,30 @@ def _read_source(path, *, root=None):
     return raw, before
 
 
+@contextlib.contextmanager
+def _source_reads(root, keys):
+    """Bound small-record read-ahead; keep SQLite writes on the caller thread."""
+    def read(key):
+        raw, identity = _read_source(root / key, root=root)
+        return key, raw, identity
+    if root.name in INDEX_ROOTS or len(keys) < 2:
+        # Native index bodies may be 128 MiB; never queue several of them.
+        yield map(read, keys)
+        return
+    def ordered(pool):
+        pending = deque()
+        for key in keys:
+            pending.append(pool.submit(read, key))
+            if len(pending) >= 16:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+    # At most 16 reads/results (8 MiB each) ahead of the current record.
+    # Join every reader on both source and caller errors before cleanup.
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        yield ordered(pool)
+
+
 def _eligible(root, key, closed):
     if any(part.startswith(".") for part in PurePosixPath(key).parts):
         return False
@@ -524,28 +548,28 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                     db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     db.execute("INSERT INTO metadata VALUES('kind',?)", (root.name,))
                 db.execute("DELETE FROM operation_files")
-                for key in keys:
-                    raw, before = _read_source(root / key, root=root)
-                    snapshots[key] = (before, hashlib.sha256(raw).hexdigest())
-                    db.execute("INSERT INTO operation_files VALUES(?,?,?)", (key, json.dumps(before), snapshots[key][1]))
-                    db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?,?)",
-                               (key, zlib.compress(raw, 1), snapshots[key][1], len(raw),
-                                stat.S_IMODE(before[2]), before[4], json.dumps(_fields(raw), sort_keys=True), generation))
-                    if root.name == "index":
-                        entries = json.loads(raw)["artifacts"]
-                        db.execute("DELETE FROM archive_entries WHERE bucket_path=?", (key,))
-                        for logical_path, record in entries.items():
-                            db.execute("INSERT INTO archive_entries VALUES(?,?,?,?,?,?,?,?,?,?)",
-                                       (logical_path, key, logical_path.split("/", 1)[0], record.get("family_id"),
-                                        record["generation"], record["zip_path"], record["zip_location"],
-                                        record["member_name"], record.get("sha256"), record["size"]))
-                    fields = _fields(raw)
-                    names = ("workflow", "attempt_id", "family_id", "step", "runtime_id", "exit_code",
-                             "started_at", "finished_at", "cpus", "memory_gb", "wall_seconds", "cpu_seconds",
-                             "peak_process_rss_gb", "job_id", "array_task_id")
-                    values = [fields.get(name) for name in names]
-                    if all(v is None or type(v) in (str, int, float) for v in values):
-                        db.execute("INSERT OR REPLACE INTO records VALUES(" + ",".join(["?"] * (len(names) + 1)) + ")", (key, *values))
+                with _source_reads(root, keys) as sources:
+                    for key, raw, before in sources:
+                        snapshots[key] = (before, hashlib.sha256(raw).hexdigest())
+                        db.execute("INSERT INTO operation_files VALUES(?,?,?)", (key, json.dumps(before), snapshots[key][1]))
+                        db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?,?)",
+                                   (key, zlib.compress(raw, 1), snapshots[key][1], len(raw),
+                                    stat.S_IMODE(before[2]), before[4], json.dumps(_fields(raw), sort_keys=True), generation))
+                        if root.name == "index":
+                            entries = json.loads(raw)["artifacts"]
+                            db.execute("DELETE FROM archive_entries WHERE bucket_path=?", (key,))
+                            for logical_path, record in entries.items():
+                                db.execute("INSERT INTO archive_entries VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                           (logical_path, key, logical_path.split("/", 1)[0], record.get("family_id"),
+                                            record["generation"], record["zip_path"], record["zip_location"],
+                                            record["member_name"], record.get("sha256"), record["size"]))
+                        fields = _fields(raw)
+                        names = ("workflow", "attempt_id", "family_id", "step", "runtime_id", "exit_code",
+                                 "started_at", "finished_at", "cpus", "memory_gb", "wall_seconds", "cpu_seconds",
+                                 "peak_process_rss_gb", "job_id", "array_task_id")
+                        values = [fields.get(name) for name in names]
+                        if all(v is None or type(v) in (str, int, float) for v in values):
+                            db.execute("INSERT OR REPLACE INTO records VALUES(" + ",".join(["?"] * (len(names) + 1)) + ")", (key, *values))
                 if keep is not None:
                     for (key,) in db.execute("SELECT path FROM files").fetchall():
                         if key not in keep:
@@ -574,10 +598,11 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                 db.close()
                 if _inventory(root, max_files) != keys:
                     raise ValueError("Metadata source membership changed")
-                for key, (before, sha) in snapshots.items():
-                    raw, current = _read_source(root / key, root=root)
-                    if current != before or hashlib.sha256(raw).hexdigest() != sha:
-                        raise ValueError("Metadata source changed before publication")
+                with _source_reads(root, snapshots) as sources:
+                    for key, raw, current in sources:
+                        before, sha = snapshots[key]
+                        if current != before or hashlib.sha256(raw).hexdigest() != sha:
+                            raise ValueError("Metadata source changed before publication")
                 if (None if not (root / DATABASE).exists() else _db_signature(root / DATABASE)) != before_db:
                     raise ValueError("Metadata database changed before publication")
                 with local.open("rb") as source, pending.open("xb") as target:

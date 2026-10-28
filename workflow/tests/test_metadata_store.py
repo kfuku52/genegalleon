@@ -560,3 +560,165 @@ def test_snapshot_checks_only_bounded_database_headers(tmp_path, monkeypatch):
         for i in range(100):
             assert store.archived_bytes(root / f"run.{i}.log") == f"version {i}".encode()
     assert sizes and -1 not in sizes and sum(sizes) <= 400
+
+
+def test_collection_prefetch_preserves_order_and_bounded_read_ahead(tmp_path, monkeypatch):
+    import threading
+    import time
+    root = tmp_path / "versions"
+    root.mkdir()
+    bodies = {f"{i:03d}.log": json.dumps({"workflow": "gg_gene_evolution", "number": i}).encode() for i in range(64)}
+    for key, raw in bodies.items():
+        (root / key).write_bytes(raw)
+    identities = {key: list(store.signature(root / key)) for key in bodies}
+    original_read, original_fields = store._read_source, store._fields
+    lock, overlap = threading.Lock(), threading.Event()
+    active = peak = started = 0
+    checked = False
+    def read(path, **kwargs):
+        nonlocal active, peak, started
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            started += 1
+            if active >= 2:
+                overlap.set()
+        try:
+            assert overlap.wait(2), "metadata source bodies were serialized"
+            return original_read(path, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+    def fields(raw):
+        nonlocal checked
+        if not checked:
+            checked = True
+            # Completed future results must not accumulate for the full input.
+            time.sleep(0.03)
+            with lock:
+                assert 2 <= started <= 16
+        return original_fields(raw)
+    monkeypatch.setattr(store, "_read_source", read)
+    monkeypatch.setattr(store, "_fields", fields)
+    result = pack(root, operation_id="bounded-source-prefetch")
+    assert result["removed_files"] == len(bodies) and active == 0 and 2 <= peak <= 16
+    with sqlite3.connect(root / store.DATABASE) as db:
+        assert [r[0] for r in db.execute("SELECT path FROM files ORDER BY rowid")] == sorted(bodies)
+        assert {key: json.loads(value) for key, value in db.execute("SELECT path,source_identity FROM operation_files")} == identities
+    assert {key: store.archived_bytes(root / key) for key in bodies} == bodies
+
+
+def test_collection_prefetch_failure_joins_workers_and_keeps_sources(tmp_path, monkeypatch):
+    import threading
+    import time
+    root = tmp_path / "versions"
+    root.mkdir()
+    bodies = {f"{i:03d}.log": f"version {i}".encode() for i in range(8)}
+    for key, raw in bodies.items():
+        (root / key).write_bytes(raw)
+    original = store._read_source
+    other_started, lock = threading.Event(), threading.Lock()
+    active = 0
+    def read(path, **kwargs):
+        nonlocal active
+        with lock:
+            active += 1
+        try:
+            if Path(path).name == "000.log":
+                assert other_started.wait(2), "failed read did not overlap another worker"
+                raise ValueError("prefetched source failed validation")
+            other_started.set()
+            time.sleep(0.02)
+            return original(path, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(store, "_read_source", read)
+    with pytest.raises(ValueError, match="prefetched source failed validation"):
+        pack(root)
+    assert active == 0 and not (root / store.DATABASE).exists()
+    assert not list(root.glob(store.DATABASE + ".partial.*"))
+    assert {key: (root / key).read_bytes() for key in bodies} == bodies
+
+
+@pytest.mark.parametrize("name", ["index", "index-by-subdir"])
+def test_native_index_read_budget_stays_serial(tmp_path, monkeypatch, name):
+    from gene_family_output_store import archive_completed_outputs, orthogroup_id_from_name
+    root = tmp_path / "orthogroup"
+    families = [f"OG{i:07d}" for i in range(16)]
+    for subdir in ("mafft", "muscle"):
+        directory = root / subdir
+        directory.mkdir(parents=True)
+        for family in families:
+            (directory / (family + ".aln.fa")).write_bytes(b">gene\nACGT\n")
+    assert archive_completed_outputs(root, "orthogroup", families, orthogroup_id_from_name, include_incomplete=True)
+    directory = root / ".gg_store" / name
+    assert len(list(directory.glob("*.json"))) >= 2
+    def no_pool(*args, **kwargs):
+        pytest.fail("128 MiB native index records must not be prefetched concurrently")
+    monkeypatch.setattr(store, "ThreadPoolExecutor", no_pool)
+    assert pack(directory)["removed_files"] >= 2
+
+
+def test_prefetched_source_mutation_with_same_signature_prevents_publication(tmp_path, monkeypatch):
+    root = tmp_path / "versions"
+    root.mkdir()
+    bodies = {f"{i:03d}.log": b"original" for i in range(8)}
+    for key, raw in bodies.items():
+        (root / key).write_bytes(raw)
+    path = root / "000.log"
+    identity = store.signature(path)
+    signature, fields = store.signature, store._fields
+    changed = False
+    def same_stamp(candidate):
+        return identity if Path(candidate) == path else signature(candidate)
+    def mutate(raw):
+        nonlocal changed
+        if not changed:
+            changed = True
+            path.write_bytes(b"modified")
+        return fields(raw)
+    monkeypatch.setattr(store, "signature", same_stamp)
+    monkeypatch.setattr(store, "_fields", mutate)
+    with pytest.raises(ValueError, match="Metadata source changed before publication"):
+        pack(root)
+    assert not (root / store.DATABASE).exists()
+    assert path.read_bytes() == b"modified"
+    assert all((root / key).read_bytes() == value for key, value in bodies.items() if key != path.name)
+
+
+def test_prefetch_caller_failure_joins_readers_before_cleanup(tmp_path, monkeypatch):
+    import threading
+    import time
+    root = tmp_path / "versions"
+    root.mkdir()
+    bodies = {f"{i:03d}.log": b"original" for i in range(8)}
+    for key, raw in bodies.items():
+        (root / key).write_bytes(raw)
+    original = store._read_source
+    other_started, failed, lock = threading.Event(), threading.Event(), threading.Lock()
+    active = 0
+    def read(path, **kwargs):
+        nonlocal active
+        with lock:
+            active += 1
+        try:
+            if Path(path).name == "000.log":
+                assert other_started.wait(2)
+            else:
+                other_started.set()
+                assert failed.wait(2)
+                time.sleep(0.02)
+            return original(path, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+    def caller_failed(raw):
+        failed.set()
+        raise ValueError("collector caller failed")
+    monkeypatch.setattr(store, "_read_source", read)
+    monkeypatch.setattr(store, "_fields", caller_failed)
+    with pytest.raises(ValueError, match="collector caller failed"):
+        pack(root)
+    assert active == 0 and not (root / store.DATABASE).exists()
+    assert {key: (root / key).read_bytes() for key in bodies} == bodies

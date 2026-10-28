@@ -90,10 +90,22 @@ def test_all_backend_options_are_forwarded():
     expected = {"genome_annotation_backend", "annevo_model_profile", "annevo_runtime_manifest",
                 "annevo_no_download", "annevo_batch_size", "annevo_sequence_threshold",
                 "oriongeno_model_profile", "oriongeno_taxid_map", "oriongeno_genome_metadata", "oriongeno_taxonomy_db",
-                "oriongeno_output_utrs", "oriongeno_output_repeat"}
+                "oriongeno_output_utrs", "oriongeno_output_repeat",
+                "oriongeno_prediction_mode", "oriongeno_prediction_support_root"}
     assert expected <= set(result.stdout.splitlines())
     assert 'genome_annotation_backend="oriongeno"' in ENTRY.read_text()
     assert 'oriongeno_model_profile="auto"' in ENTRY.read_text()
+
+
+def test_retained_older_config_block_gets_host_resume_defaults():
+    text = ENTRY.read_text()
+    start = text.index('### End: Modify this block to tailor your analysis ###')
+    end = text.index('source "${gg_support_dir}/gg_util.sh"', start)
+    command = text[start:end] + '\nprintf "%s\\t%s" "$oriongeno_prediction_mode" "$oriongeno_prediction_support_root"'
+    env = {k: v for k, v in os.environ.items() if k not in {'oriongeno_prediction_mode', 'oriongeno_prediction_support_root'}}
+    result = subprocess.run(['bash', '-eu', '-c', command], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'predict\t'
 
 
 @pytest.mark.parametrize("backend", ["none", "annevo", "oriongeno"])
@@ -215,6 +227,35 @@ def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False,
     result = source_function(command, env=env)
     calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     return result, calls, workspace
+
+
+@pytest.mark.parametrize('damage', [False, True])
+def test_oriongeno_cpu_format_resume_preserves_native_outputs_and_original_threads(tmp_path, monkeypatch, damage):
+    first, calls, workspace = run_selected_stage(tmp_path, backend='oriongeno')
+    assert first.returncode == 0, first.stdout + first.stderr
+    prediction = workspace / 'output/genome_prediction/oriongeno/Test_species'
+    proof = prediction / 'prediction.provenance.json'
+    payload = json.loads(proof.read_text())
+    payload['parameters']['threads'] = '8'
+    proof.write_text(json.dumps(payload))
+    (prediction / 'format.provenance.json').unlink()
+    preserved = {p.name: p.read_bytes() for p in prediction.iterdir() if p.is_file()}
+    if damage:
+        (prediction / 'Test_species.gff3').write_text('changed')
+    monkeypatch.setenv('oriongeno_prediction_mode', 'reuse')
+    monkeypatch.setenv('oriongeno_prediction_support_root', str(tmp_path / 'support'))
+    monkeypatch.delenv('CUDA_VISIBLE_DEVICES', raising=False)
+    resumed, later_calls, _ = run_selected_stage(tmp_path, backend='oriongeno', no_download=True, fail=True)
+    assert later_calls == calls  # Neither prepare nor run may execute.
+    if damage:
+        assert resumed.returncode != 0 and 'not current' in resumed.stderr
+        assert not (prediction / 'format.provenance.json').exists()
+    else:
+        assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+        assert 'verified existing output' in resumed.stdout
+        assert (prediction / 'format.provenance.json').is_file()
+        for name, body in preserved.items():
+            assert (prediction / name).read_bytes() == body
 
 
 def test_real_formatter_and_resume_use_generated_inputs_without_mutating_curated_genome(tmp_path):
@@ -339,11 +380,12 @@ def test_actual_runtime_warm_no_download_core_resume_requires_no_native_executio
     assert 'LAYOUT=' in resumed.stdout
 
 
-@pytest.mark.parametrize('backend,devices,success', [('none', '', True), ('annevo', '', False),
-                                                    ('annevo', '0', True), ('annevo', 'all', False),
-                                                    ('oriongeno', '0', True), ('oriongeno', '', False)])
+@pytest.mark.parametrize('backend,devices,success,mode', [('none', '', True, 'predict'), ('annevo', '', False, 'predict'),
+                                                    ('annevo', '0', True, 'predict'), ('annevo', 'all', False, 'predict'),
+                                                    ('oriongeno', '0', True, 'predict'), ('oriongeno', '', False, 'predict'),
+                                                    ('oriongeno', '', True, 'reuse')])
 @pytest.mark.parametrize('representation', ['array', 'legacy_string'])
-def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, success, representation):
+def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, success, mode, representation):
     text = ENTRY.read_text()
     start = text.index('if [[ "${genome_annotation_backend}" == "annevo" ||')
     end = text.index('gg_entrypoint_activate_container_runtime', start)
@@ -352,11 +394,12 @@ def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, suc
     command = declaration + ';\n' + text[start:end] + '\nprintf "%s\\n" "${singularity_command[@]}"'
     result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
                             env={**os.environ, 'genome_annotation_backend': backend,
-                                 'CUDA_VISIBLE_DEVICES': devices, 'GG_CONTAINER_DOCKER_GPU_DEVICES': ''})
+                                 'CUDA_VISIBLE_DEVICES': devices, 'GG_CONTAINER_DOCKER_GPU_DEVICES': '',
+                                 'oriongeno_prediction_mode': mode})
     assert (result.returncode == 0) == success, result.stderr
     if success:
         expected = ['fixture', 'exec'] if representation == 'array' else ['fixture exec']
-        if backend != 'none':
+        if backend != 'none' and mode != 'reuse':
             if representation == 'array':
                 expected.append('--nv')
             else:

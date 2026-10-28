@@ -2802,7 +2802,10 @@ def test_frozen_selection_prefix_is_retained_and_revalidated(tmp_path, failure):
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("stale", [False, True])
-def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tmp_path, stale):
+@pytest.mark.parametrize("translation", ["0", "1"])
+def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(
+    tmp_path, stale, translation,
+):
     workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
     settings = {**config, "genome_evolution_mode": "orthogroups", "artifact_stale_policy": "rebuild",
                 "run_orthofinder": "1", "run_og_selection": "0"}
@@ -2815,7 +2818,8 @@ def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tm
         (workspace / "output/orthofinder/hog2og/Orthogroups.GeneCount.tsv").write_text("changed\n")
     tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
     original_tree = tree.read_bytes()
-    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection"})
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection",
+                                   "run_cds_translation": translation})
     assert not calls.exists()
     assert tree.read_bytes() == original_tree
     if stale:
@@ -2823,6 +2827,7 @@ def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tm
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "run_orthofinder=0" in result.stdout
+        assert f"run_cds_translation={translation}" in result.stdout
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
@@ -2975,3 +2980,80 @@ def test_orthogroup_modes_verify_historical_busco_plots_without_new_rendering(tm
     assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in saved} == saved
     if not changed:
         assert "Frozen plot data and outputs verified" in result.stdout + result.stderr
+
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("cache", ["", "preserved"])
+@pytest.mark.parametrize("exclusions", ["", "excluded.txt"])
+@pytest.mark.parametrize("method", ["blastp", "mmseqs2"])
+def test_selection_cache_prepares_real_annotation_prerequisites_for_exclusions(
+    tmp_path, cache, exclusions, method,
+):
+    source = tmp_path / "native"
+    source.mkdir()
+    for name in ("Orthogroups.tsv", "Orthogroups.GeneCount.tsv"):
+        (source / name).write_text("native source\n")
+    core = CORE_PATH.read_text()
+    block = "og_selection_needs_annotation=1" + core.split("og_selection_needs_annotation=1", 1)[1].split(
+        "og_selection_needs_update=0", 1)[0]
+    start = 'if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then'
+    block += start + core.split(start, 1)[1].split(
+        '\nif [[ "${genome_evolution_mode}" == "orthogroups"', 1)[0]
+    prelude = r"""
+set -euo pipefail
+og_selection_prefix_args=(); og_annotation_cache_args=(); og_exclusion_args=(); og_selection_provenance_args=()
+gg_step_start() { :; }
+gg_artifact_record() { :; }
+ensure_dir() { mkdir -p -- "$1"; }
+cp_out() { cp -- "$1" "$2"; }
+gg_memory_fraction_gb() { echo 1; }
+gg_artifact_add_input_if_present() { :; }
+prepare_species_protein_tmp() {
+  mkdir -p -- "${dir_sp_protein}"
+  printf '>A_gene1\nMK\n' > "${dir_sp_protein}/A.fa"
+  echo proteins >> "${capture}/prepared"
+}
+ensure_uniprot_sprot_blast_db() { echo blastp >> "${capture}/prepared"; echo "${capture}/real-db"; }
+ensure_uniprot_sprot_mmseqs_db() { echo mmseqs2 >> "${capture}/prepared"; echo "${capture}/real-db"; }
+validate_uniprot_sprot_db_prefix() { [[ "$1" == "${capture}/real-db" ]]; }
+python() {
+  printf '%s\0' "$@" > "${capture}/selection-argv"
+}
+"""
+    env = {**os.environ, "capture": str(tmp_path), "orthogroup_annotation_cache_name": cache,
+        "orthogroup_exclude_gene_ids": exclusions, "orthogroup_annotation_method": method,
+        "og_selection_needs_update": "1", "run_og_selection": "1", "task": "selection",
+        "dir_sp_protein": str(tmp_path / "proteins"), "dir_orthofinder_filtered": str(tmp_path / "new"),
+        "dir_orthogroup_selection_input": str(source), "gg_workspace_dir": str(tmp_path),
+        "gg_workspace_downloads_dir": str(tmp_path / "downloads"), "gg_support_dir": str(WORKFLOW_DIR / "support"),
+        "min_num_gene": "4", "max_num_gene": "9930", "min_num_species": "2",
+        "min_percent_species_coverage": "0", "remove_unannotated_orthogroups": "no",
+        "GG_MEM_TOOL_GB": "4", "GG_TASK_CPUS": "1"}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", prelude + block], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    argv = (tmp_path / "selection-argv").read_bytes().decode().rstrip("\0").split("\0")
+    needs_search = not cache or bool(exclusions)
+    assert argv[argv.index("--path_search_db") + 1] == (str(tmp_path / "real-db") if needs_search else "/dev/null")
+    assert (tmp_path / "proteins/A.fa").exists() == needs_search
+    if needs_search:
+        assert (tmp_path / "prepared").read_text().splitlines() == ["proteins", method]
+    else:
+        assert not (tmp_path / "prepared").exists()
+
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("translation", ["0", "1"])
+@pytest.mark.parametrize("mode", ["orthogroups", "orthogroup_selection"])
+def test_selection_mode_preserves_explicit_translation_permission(tmp_path, translation, mode):
+    core = CORE_PATH.read_text()
+    block = 'orthogroup_requested_stale_policy=' + core.split('orthogroup_requested_stale_policy=', 1)[1].split(
+        '# Synteny-only execution', 1)[0]
+    program = 'set -euo pipefail\ngg_print_entrypoint_config_vars() { printf "%s\\n" run_orthofinder run_og_selection run_cds_translation run_plot_species_trees; }\n'
+    program += block + '\nprintf "%s\\n" "$run_cds_translation" "$run_plot_species_trees" "$run_orthofinder"\n'
+    result = subprocess.run([BASH_FOR_TESTS, "-c", program], capture_output=True, text=True,
+        env={**os.environ, "genome_evolution_mode": mode, "run_cds_translation": translation,
+             "run_orthofinder": "1", "run_og_selection": "1", "run_plot_species_trees": "1"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [translation, "0", "0" if mode == "orthogroup_selection" else "1"]
