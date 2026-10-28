@@ -97,6 +97,17 @@ def test_all_backend_options_are_forwarded():
     assert 'oriongeno_model_profile="auto"' in ENTRY.read_text()
 
 
+def test_retained_older_config_block_gets_host_resume_defaults():
+    text = ENTRY.read_text()
+    start = text.index('### End: Modify this block to tailor your analysis ###')
+    end = text.index('source "${gg_support_dir}/gg_util.sh"', start)
+    command = text[start:end] + '\nprintf "%s\\t%s" "$oriongeno_prediction_mode" "$oriongeno_prediction_support_root"'
+    env = {k: v for k, v in os.environ.items() if k not in {'oriongeno_prediction_mode', 'oriongeno_prediction_support_root'}}
+    result = subprocess.run(['bash', '-eu', '-c', command], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'predict\t'
+
+
 @pytest.mark.parametrize("backend", ["none", "annevo", "oriongeno"])
 def test_actual_input_discovery_selects_cds_or_genomes_only(backend, tmp_path):
     cds = tmp_path / "species_cds"

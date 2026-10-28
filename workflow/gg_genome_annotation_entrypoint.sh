@@ -176,6 +176,10 @@ contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # O
 
 ### End: Modify this block to tailor your analysis ###
 
+# Older retained project config blocks do not declare these resume controls.
+oriongeno_prediction_mode="${oriongeno_prediction_mode-predict}"
+oriongeno_prediction_support_root="${oriongeno_prediction_support_root-}"
+
 # Misc
 exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is already running.
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
