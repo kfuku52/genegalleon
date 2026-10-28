@@ -3220,7 +3220,7 @@ cd "${dir_tmp}"
 enable_all_run_flags_for_debug_mode
 if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   while IFS= read -r config_name; do
-    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection ]]; then
+    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection && "${config_name}" != run_cds_translation ]]; then
       printf -v "${config_name}" '%s' 0
     fi
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)

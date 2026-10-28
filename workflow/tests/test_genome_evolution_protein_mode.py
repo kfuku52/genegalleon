@@ -2802,7 +2802,10 @@ def test_frozen_selection_prefix_is_retained_and_revalidated(tmp_path, failure):
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("stale", [False, True])
-def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tmp_path, stale):
+@pytest.mark.parametrize("translation", ["0", "1"])
+def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(
+    tmp_path, stale, translation,
+):
     workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
     settings = {**config, "genome_evolution_mode": "orthogroups", "artifact_stale_policy": "rebuild",
                 "run_orthofinder": "1", "run_og_selection": "0"}
@@ -2815,7 +2818,8 @@ def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tm
         (workspace / "output/orthofinder/hog2og/Orthogroups.GeneCount.tsv").write_text("changed\n")
     tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
     original_tree = tree.read_bytes()
-    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection"})
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection",
+                                   "run_cds_translation": translation})
     assert not calls.exists()
     assert tree.read_bytes() == original_tree
     if stale:
@@ -2823,6 +2827,7 @@ def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tm
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         assert "run_orthofinder=0" in result.stdout
+        assert f"run_cds_translation={translation}" in result.stdout
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
