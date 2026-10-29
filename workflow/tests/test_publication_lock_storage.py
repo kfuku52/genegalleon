@@ -1,4 +1,5 @@
 """Offline publication metadata retirement preserves real data and live owners."""
+import os
 import sys
 from pathlib import Path
 
@@ -30,14 +31,14 @@ def fixture(tmp_path):
 
 def test_exact_retirement_preserves_outputs_current_stripes_and_resume(fixture):
     root, output, marker, namespace, journal, stripes = fixture
-    before = output.stat()
+    before = storage._identity(output)
     expected = storage.snapshot(root)
     assert expected["groups"] == 1 and expected["entries"] == 3
     result = storage.retire(root, journal, expected, writers_stopped=True)
     assert result["verified"] and result["retired_entries"] == 3
     assert not marker.exists() and not namespace.exists()
     assert output.read_bytes() == b"scientific output remains exact"
-    assert output.stat() == before
+    assert storage._identity(output) == before
     assert (stripes / "00.lock").read_bytes() == b"current stripe unchanged"
     assert storage.retire(root, journal, expected, writers_stopped=True) == result
 
@@ -83,7 +84,8 @@ def test_symlink_and_nonempty_marker_are_rejected(fixture, tmp_path):
 def test_changed_inventory_and_added_guard_rejected_before_deletion(fixture):
     root, _, marker, namespace, journal, _ = fixture
     expected = storage.snapshot(root)
-    marker.touch()
+    before = marker.stat()
+    os.utime(marker, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
     with pytest.raises(storage.PublicationLockError, match="snapshot changed"):
         storage.retire(root, journal, expected, writers_stopped=True)
     assert marker.exists() and namespace.exists()
