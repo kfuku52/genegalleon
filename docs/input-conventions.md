@@ -72,6 +72,22 @@ as a whole field, excluding species names found only in descriptions.
 Organelle filtering requires an affirmative organelle label; nuclear insertions
 or negated labels such as `non-mitochondrial` are retained.
 
+Downstream FASTA prefix removal treats species labels literally. GFF attribute
+identification treats `#` inside attributes as data and validates all annotation
+rows as nine columns, including rows after its first match. An embedded FASTA
+section is consumed through EOF so gzip/encoding failures remain visible.
+See the [GFF3 format specification](https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md).
+BUSCO transcript-coordinate removal requires a complete `:start-end` or
+`:start..end` range; literal numeric/version suffixes such as `gene:001` and
+`gene:1.2` are retained. Multiple full tables resolving to one species are an
+error rather than additional species columns.
+Trait and BUSCO annotation readers preserve literal hashes and quoted multiline
+values while skipping whole-line comments. Trait-index reuse also binds the
+shared comment reader's source identity.
+Assembly summaries distinguish `isoform`, `longestCDS` and
+`longestCDS_contamination_removal` using filename roles, independently of their
+parent directory names.
+
 Typical examples:
 
 - `Arabidopsis_thaliana_Araport11.fa.gz`

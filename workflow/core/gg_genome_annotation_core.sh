@@ -1623,7 +1623,11 @@ if [[ ${jcvi_needs_update} -eq 1 && ${run_jcvi_dotplot} -eq 1 ]]; then
   echo "Detected GFF attribute that matches to the FASTA sequence names: ${gff_attribute}"
   echo "Selected sequences for the dot-plot visualization: ${selected_scaffolds}"
 
-  seqkit seq "${file_sp_cds}" | sed -e "s/^>${sp_ub}_/>/" > tmp.jcvi_input.cds.fasta
+  seqkit seq "${file_sp_cds}" | GG_FASTA_SPECIES="${sp_ub}" awk '
+    BEGIN { prefix = ">" ENVIRON["GG_FASTA_SPECIES"] "_" }
+    index($0, prefix) == 1 { $0 = ">" substr($0, length(prefix) + 1) }
+    { print }
+  ' > tmp.jcvi_input.cds.fasta
   python -m jcvi.formats.gff bed --primary_only --type="${gff_feature}" --key="${gff_attribute}" "${file_sp_gff}" -o tmp.species1.bed
   python -m jcvi.formats.fasta format tmp.jcvi_input.cds.fasta species1.cds
   touch species1.bed

@@ -3,7 +3,9 @@
 import re
 
 BUSCO_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-SOURCE_COORDINATE_PATTERN = re.compile(r":[-\.0-9]*$")
+# BUSCO transcript coordinates contain a complete range. A literal namespace
+# suffix such as gene:001, gene:1.2 or gene: is not a coordinate.
+SOURCE_COORDINATE_PATTERN = re.compile(r":(?:[0-9]+-[0-9]+|[0-9]+\.\.[0-9]+)$")
 
 
 def normalize_species_label(path_label):

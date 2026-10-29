@@ -66,28 +66,47 @@ def identify_attribute_key(args):
         .drop_duplicates()
         .reset_index(drop=True)
     )
-    gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
-    gff = pandas.read_csv(args.gff_file, sep="\t", header=None, comment="#", low_memory=False, quoting=3)
-    gff.columns = gff_cols
-    gff = gff.loc[(gff["feature"] == args.gff_feature), :].reset_index(drop=True)
     # Ordinary inputs match immediately. Defer the extra hash table until
     # repeated misses justify its construction, retaining row/key priority.
     direct_comparisons = 16
     candidate_lookup = None
-    for raw_attributes in gff["attributes"]:
-        attrs = parse_gff_attributes(raw_attributes)
-        for key, value in attrs.items():
-            if candidate_lookup is not None:
-                matches = value in candidate_lookup
-            elif direct_comparisons:
-                direct_comparisons -= 1
-                matches = (value == candidate_seq_names).any()
-            else:
-                candidate_lookup = set(candidate_seq_names.to_numpy(copy=False))
-                matches = value in candidate_lookup
-            if matches:
-                return key
-    return None
+    selected_key = None
+    has_rows = False
+    in_fasta = False
+    opener = gzip.open if str(args.gff_file).lower().endswith(".gz") else open
+    with opener(args.gff_file, "rt", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            # GFF comments occupy entire lines. '#' inside an attribute is data.
+            # Continue through EOF even after a match or ##FASTA so corrupt
+            # gzip trailers, invalid UTF-8 and later malformed rows still fail.
+            if in_fasta:
+                continue
+            if line.rstrip("\r\n") == "##FASTA" or line.startswith(">"):
+                in_fasta = True
+                continue
+            if not line.strip() or line.startswith("#"):
+                continue
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) != 9:
+                raise pandas.errors.ParserError(f"Expected 9 fields in line {line_number}, saw {len(fields)}")
+            has_rows = True
+            if selected_key is not None or fields[2] != args.gff_feature:
+                continue
+            for key, value in parse_gff_attributes(fields[8]).items():
+                if candidate_lookup is not None:
+                    matches = value in candidate_lookup
+                elif direct_comparisons:
+                    direct_comparisons -= 1
+                    matches = (value == candidate_seq_names).any()
+                else:
+                    candidate_lookup = set(candidate_seq_names.to_numpy(copy=False))
+                    matches = value in candidate_lookup
+                if matches:
+                    selected_key = key
+                    break
+    if not has_rows:
+        raise pandas.errors.EmptyDataError("No columns to parse from file")
+    return selected_key
 
 
 def main():

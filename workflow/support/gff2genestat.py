@@ -25,6 +25,7 @@ try:
     from gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
     from input_generation_array_state import FreshDigestBatch
+    from line_comment_stream import LineCommentStream
     from representative_selection import load_representative_map, matching_identifier
     from species_labeling import extract_species_label, strip_species_label
     from trait_table_index import read_subset
@@ -36,6 +37,7 @@ except ImportError:  # pragma: no cover - package import path used in tests
     from .gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
     from .input_generation_array_state import FreshDigestBatch
+    from .line_comment_stream import LineCommentStream
     from .representative_selection import load_representative_map, matching_identifier
     from .species_labeling import extract_species_label, strip_species_label
     from .trait_table_index import read_subset
@@ -1164,15 +1166,15 @@ def read_gff_table(gff_path, *, coding_only=False):
     if coding_only:
         return read_coding_gff_table(gff_path)
     try:
-        return pandas.read_csv(
-            gff_path,
-            sep="\t",
-            header=None,
-            comment="#",
-            low_memory=False,
-            quoting=3,
-            converters={0: gff_sequence_identifier},
-        )
+        with LineCommentStream(gff_path, gff=True) as source:
+            return pandas.read_csv(
+                source,
+                sep="\t",
+                header=None,
+                low_memory=False,
+                quoting=3,
+                converters={0: gff_sequence_identifier},
+            )
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
     except (pandas.errors.ParserError, ValueError):

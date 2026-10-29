@@ -17,6 +17,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("stage", ["jcvi", "genome_translation"])
+def test_downstream_fasta_prefix_processors_match_literal_species(tmp_path, stage):
+    species = "Plant_cf._alpha"
+    near_match = "Plant_cfX_alpha_g2"
+    payload = f">{species}_g1\nATG\n>{near_match}\nAAA\n>other_gene3\nCCC\n"
+    if stage == "jcvi":
+        source = (CORE_PATH.parent / "gg_genome_annotation_core.sh").read_text()
+        processor = source.split('seqkit seq "${file_sp_cds}" |', 1)[1].split('> tmp.jcvi_input.cds.fasta', 1)[0]
+        expected = ["g1", near_match, "other_gene3"]
+    else:
+        source = (CORE_PATH.parent / "gg_genome_evolution_core.sh").read_text()
+        processor = source.split('seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |', 1)[1]
+        processor = processor.split("sed -e '/^1 1$/d'", 1)[0].rstrip().removesuffix("|")
+        expected = [f"{species}_g1", f"{species}_{near_match}", f"{species}_other_gene3"]
+    result = subprocess.run(["bash", "-c", processor], input=payload, text=True, capture_output=True,
+                            cwd=tmp_path, env=dict(os.environ, sp_ub=species), check=True)
+    assert [line[1:] for line in result.stdout.splitlines() if line.startswith(">")] == expected
+    assert [line for line in result.stdout.splitlines() if not line.startswith(">")] == ["ATG", "AAA", "CCC"]
+
+
 @pytest.mark.parametrize("known_species", ["", "Standard_species", "Ciliate_species"])
 def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(tmp_path, known_species):
     cds = tmp_path / "mixed.fa"

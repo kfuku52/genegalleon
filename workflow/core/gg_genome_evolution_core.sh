@@ -1668,7 +1668,15 @@ prepare_species_protein_tmp() {
     seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
       gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
-      sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
+      GG_FASTA_SPECIES="${sp_ub}" awk '
+        BEGIN { species = ENVIRON["GG_FASTA_SPECIES"]; prefix = ">" species }
+        /^>/ {
+          if (index($0, prefix) == 1 && substr($0, length(prefix) + 1, 1) ~ /^[-_.]$/)
+            $0 = ">" substr($0, length(prefix) + 2)
+          $0 = ">" species "_" substr($0, 2)
+        }
+        { print }
+      ' |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${dir_sp_protein}/${translated_file}"
   done

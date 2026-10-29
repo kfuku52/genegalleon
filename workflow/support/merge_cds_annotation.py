@@ -9,6 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas
 
+try:
+    from busco_table_utils import SOURCE_COORDINATE_PATTERN
+    from line_comment_stream import LineCommentStream
+except ImportError:  # package import used by tests and library callers
+    from workflow.support.busco_table_utils import SOURCE_COORDINATE_PATTERN
+    from workflow.support.line_comment_stream import LineCommentStream
+
 
 def identifier_text(value):
     """Keep numeric-looking and NA-like identifiers literal, while empty stays missing."""
@@ -106,10 +113,11 @@ def load_busco(path):
         "busco_orthodb_url",
         "busco_description",
     ]
-    tmp = pandas.read_csv(path, sep="\t", header=None, index_col=None, comment="#", low_memory=False, names=colnames,
-                          converters={"busco_sequence": identifier_text})
+    with LineCommentStream(path, quoted=True) as source:
+        tmp = pandas.read_csv(source, sep="\t", header=None, index_col=None, low_memory=False, names=colnames,
+                              converters={"busco_sequence": identifier_text})
     tmp = tmp.dropna(subset=["busco_sequence"]).copy()
-    tmp["gene_id"] = tmp["busco_sequence"].astype(str).str.replace(":.*", "", regex=True)
+    tmp["gene_id"] = tmp["busco_sequence"].astype(str).str.replace(SOURCE_COORDINATE_PATTERN, "", regex=True)
     tmp = tmp.loc[tmp["gene_id"].notna() & (tmp["gene_id"] != ""), :].copy()
     if tmp.empty:
         return None

@@ -207,7 +207,7 @@ def test_identify_attribute_key_scans_multiple_chunks_in_input_order(
         elif index == 9:
             feature, attributes = "gene", "Decoy=gene1"
         elif index == 15:
-            attributes = "Name=absent#;Decoy=gene1"
+            attributes = "Name=absent#;Decoy=absent"
         elif index == 23 and match_position != "missing":
             attributes = "ID=gene1"
         if index == 0 and match_position == "first":
@@ -257,5 +257,56 @@ def test_identify_attribute_key_rejects_truncated_gff_gzip_after_first_match(tmp
     gff.write_bytes(gzip.compress(payload, mtime=0)[:-5])
     args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
 
+    with pytest.raises(EOFError, match="end-of-stream"):
+        mod.identify_attribute_key(args)
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("attributes,identifier", [
+    ("ID=gene#1;Name=other", "gene#1"),
+    ("Note=literal#annotation;ID=gene1", "gene1"),
+])
+def test_gff_hash_inside_attributes_is_literal(tmp_path, compressed, attributes, identifier):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, f">Arabidopsis_thaliana_{identifier}\nATG\n".encode(), False)
+    gff = tmp_path / ("input.gff3.gz" if compressed else "input.gff3")
+    payload = f"# comment\nchr1\tsrc\tmRNA\t1\t3\t.\t+\t.\t{attributes}\n".encode()
+    gff.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+    assert mod.identify_attribute_key(args) == "ID"
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_gff_embedded_fasta_is_not_an_annotation_row(tmp_path, compressed):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    gff = tmp_path / ("input.gff3.gz" if compressed else "input.gff3")
+    payload = b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tID=gene1\n##FASTA\n>chr1\nATG\n"
+    gff.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+    assert mod.identify_attribute_key(args) == "ID"
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("tail", [b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\n", b"\xff\n"])
+def test_gff_late_invalid_rows_and_encoding_are_not_hidden_by_a_match(tmp_path, compressed, tail):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    gff = tmp_path / ("input.gff3.gz" if compressed else "input.gff3")
+    payload = b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tID=gene1\n" + b"# padding\n" * 2000 + tail
+    gff.write_bytes(gzip.compress(payload, mtime=0) if compressed else payload)
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
+    error = UnicodeDecodeError if tail.startswith(b"\xff") else mod.pandas.errors.ParserError
+    with pytest.raises(error):
+        mod.identify_attribute_key(args)
+
+
+def test_embedded_fasta_does_not_hide_gzip_truncation(tmp_path):
+    mod = load_module()
+    fasta = write_fasta(tmp_path, b">Arabidopsis_thaliana_gene1\nATG\n", False)
+    gff = tmp_path / "input.gff3.gz"
+    payload = b"chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tID=gene1\n##FASTA\n>chr1\n" + b"ATG\n" * 2000
+    gff.write_bytes(gzip.compress(payload, mtime=0)[:-5])
+    args = type("Args", (), {"fasta_file": str(fasta), "gff_file": str(gff), "gff_feature": "mRNA"})()
     with pytest.raises(EOFError, match="end-of-stream"):
         mod.identify_attribute_key(args)
