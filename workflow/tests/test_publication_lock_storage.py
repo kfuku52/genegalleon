@@ -163,9 +163,13 @@ def test_new_inode_after_original_journal_is_rejected(fixture, monkeypatch):
     assert marker.exists() and namespace.exists() and original.exists()
 
 
-def test_native_zip_materialization_preserves_complete_and_failed_states(fixture, tmp_path):
+@pytest.mark.parametrize("retain_stripes", [True, False])
+def test_native_zip_materialization_preserves_complete_and_failed_states(fixture, tmp_path, retain_stripes):
     import gene_family_output_store as store_module
-    root, output, _, _, journal, _ = fixture
+    root, output, _, _, journal, stripes = fixture
+    if not retain_stripes:
+        (stripes / "00.lock").unlink()
+        stripes.rmdir()
     other = output.with_name("OG0000002_cds.aln.fa.gz")
     other.write_bytes(b"failed family partial output")
     store = store_module.GeneFamilyOutputStore(root)
@@ -195,3 +199,15 @@ def test_unguarded_primary_lease_is_also_rejected(fixture):
     with pytest.raises(storage.PublicationLockError, match="Primary publication lease"):
         storage.retire(root, journal, expected, writers_stopped=True)
     assert marker.exists() and lease.exists() and not list(journal.iterdir())
+
+
+def test_retirement_verifies_after_native_empty_directory_retirement(fixture):
+    root, output, _, _, journal, stripes = fixture
+    expected = storage.snapshot(root)
+    storage.retire(root, journal, expected, writers_stopped=True)
+    # Native ZIP conversion can retire an empty original output directory.
+    output.unlink()
+    (stripes / "00.lock").unlink()
+    stripes.rmdir()
+    output.parent.rmdir()
+    assert storage.verify_retired(root, journal, expected)["verified"]

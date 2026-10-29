@@ -60,6 +60,8 @@ def _inspect(root, directory, name, *, partial=False):
     if not _PATTERN.fullmatch(name) or name.endswith(".namespace-v1"):
         raise PublicationLockError("Invalid legacy publication guard")
     parent = root / directory
+    if partial and not os.path.lexists(parent):
+        return [None, None, None]
     _identity(parent, True)
     marker = parent / name
     lease = parent / name[1:-len(".guard")]
