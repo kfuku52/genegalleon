@@ -121,6 +121,11 @@ The upgrade leaves old lock markers intact. Retire their exact namespaces only
 during separately authorized offline maintenance after verifying all old users
 have stopped; an empty readers directory alone does not establish inactivity.
 
+SQLite-packed inventories remain usable after their empty physical family
+directories are retired. Collection reads those journals through the metadata
+reader and does not recreate them merely to compact an already immutable
+inventory. New live journals still merge with the preserved packed inventory.
+
 ## Upgrade and recovery
 
 **Stop every job using an output root before switching to this locking layout.**
