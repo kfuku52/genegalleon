@@ -722,3 +722,61 @@ def test_prefetch_caller_failure_joins_readers_before_cleanup(tmp_path, monkeypa
         pack(root)
     assert active == 0 and not (root / store.DATABASE).exists()
     assert {key: (root / key).read_bytes() for key in bodies} == bodies
+
+
+@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("in_place", [False, True])
+def test_materialize_families_with_packed_provenance(tmp_path, archived, in_place):
+    from gene_family_output_store import (
+        GeneFamilyOutputStore,
+        archive_completed_outputs,
+        orthogroup_id_from_name,
+    )
+    root = tmp_path / "orthogroup"
+    families = ["OG0000001", "OG0000002"]
+    expected = {}
+    for family in families:
+        for subdir, name, raw in (
+            ("mafft", family + "_cds.aln.fa", b">gene\nACGT\n"),
+            ("artifact_provenance", family + ".clipkit.json",
+             json.dumps({"schema_version": 1, "family_id": family, "step": "clipkit"}).encode()),
+        ):
+            path = root / subdir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+            os.utime(path, ns=(123000000000, 123000000000))
+            expected[path.relative_to(root)] = (raw, path.stat().st_mtime_ns)
+    directory = root / "artifact_provenance"
+    pack(directory)
+    database = directory / store.DATABASE
+    before = hashlib.sha256(database.read_bytes()).hexdigest()
+    if archived:
+        archive_completed_outputs(root, "orthogroup", families, orthogroup_id_from_name,
+                                  include_incomplete=True)
+    destination = root if in_place else tmp_path / "restored"
+    restored = GeneFamilyOutputStore(root).materialize_families(
+        {families[0]}, orthogroup_id_from_name, destination_root=destination)
+    assert destination / "artifact_provenance" / (families[0] + ".clipkit.json") in restored
+    for relative, (raw, mtime_ns) in expected.items():
+        path = destination / relative
+        if families[0] in relative.name:
+            assert path.read_bytes() == raw
+            assert path.stat().st_mtime_ns == mtime_ns
+        elif not in_place:
+            assert not path.exists()
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
+    assert not (directory / (families[1] + ".clipkit.json")).exists()
+
+
+def test_materialize_packed_provenance_propagates_missing_record(tmp_path, monkeypatch):
+    import gene_family_output_store as output_store
+    root = tmp_path / "orthogroup"
+    directory = root / "artifact_provenance"
+    directory.mkdir(parents=True)
+    (directory / "OG0000001.clipkit.json").write_bytes(b'{"step":"clipkit"}\n')
+    pack(directory)
+    monkeypatch.setattr(output_store, "archived_bytes", lambda *_args, **_kwargs: None)
+    with pytest.raises(output_store.ArchiveStoreError, match="Archived metadata disappeared"):
+        output_store.GeneFamilyOutputStore(root).materialize_family(
+            "OG0000001", output_store.orthogroup_id_from_name,
+            destination_root=tmp_path / "restored")
