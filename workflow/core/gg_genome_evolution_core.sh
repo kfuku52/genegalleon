@@ -6642,6 +6642,13 @@ run_orthogroup_copy_number_stage=0
 if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 || ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
+if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
+  # Validate current raw counts even when a prepared matrix is being reused.
+  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+    --genecount "${file_orthogroup_genecount_selected}" \
+    --dated_species_tree "${file_dated_species_tree}" \
+    --validate-only || exit $?
+fi
 copy_number_needs_update=0
 gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
 copy_number_provenance_args+=(
@@ -6686,6 +6693,14 @@ cafe_provenance_args+=(
 # Keep the native inference contract separate from rendering. A failed plot
 # must not delete a completed CAFE fit or force the optimizer to run again.
 # Existing aggregate manifests are still checked before adopting a substage.
+# A manifest-free native fit must also match this input before it can be
+# adopted. Generic artifact adoption alone establishes no scientific identity.
+if [[ ${run_cafe} -eq 1 && "${artifact_legacy_policy:-adopt}" != rebuild && ! -s "${genome_evolution_provenance_dir}/cafe.inference.json" && -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" && -s "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
+  python "${gg_support_dir}/validate_cafe_outputs.py" \
+    --copy-number "${file_orthogroup_copy_number}" \
+    --tree "${file_dated_species_tree}" \
+    --output-dir "${dir_cafe_output}" || exit $?
+fi
 if [[ -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
   gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
 fi
@@ -6717,8 +6732,16 @@ if [[ ${run_cafe} -eq 1 ]]; then
       --pvalue 0.05 \
       --cores "${GG_TASK_CPUS}" \
       --output_prefix "${dir_cafe_output}"
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
     gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
     echo "CAFE inference outputs verified. Skipping CAFE run."
   fi
 
@@ -6979,8 +7002,8 @@ fi
 
 task="GO enrichment analysis"
 go_enrichment_extra_args=()
-if [[ "${go_enrichment_method}" == event_all_go && ${run_go_enrichment} -eq 1 ]]; then
-  if [[ -z "${go_fixed_universe_file}" || "${go_fixed_universe_file}" != /* || ! -s "${go_fixed_universe_file}" ]]; then
+if [[ "${go_enrichment_method}" == event_all_go ]]; then
+  if [[ ${run_go_enrichment} -eq 1 && ( -z "${go_fixed_universe_file}" || "${go_fixed_universe_file}" != /* || ! -s "${go_fixed_universe_file}" ) ]]; then
     echo "event_all_go requires an existing absolute go_fixed_universe_file created by --freeze-event-go-universe." >&2
     exit 1
   fi

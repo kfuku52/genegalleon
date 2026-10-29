@@ -93,8 +93,8 @@ cafe5() {{ echo "unexpected optimizer invocation" >&2; exit 93; }}
 
 def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_path):
     native = saved_cafe(tmp_path / "output/cafe/cafe_output")
-    (tmp_path / "copies.tsv").write_text("Desc\tFamilyID\tDioncophyllum_thollonii\n(null)\tOG000001\t2\n")
-    (tmp_path / "tree.nwk").write_text("(Dioncophyllum_thollonii:1,Dionaea_muscipula:1);\n")
+    (tmp_path / "copies.tsv").write_text("Desc\tFamilyID\tDioncophyllum_thollonii\tDionaea_muscipula\tAmborella_trichopoda\n(null)\tOG000001\t2\t4\t1\n(null)\tOG000002\t2\t4\t1\n")
+    (tmp_path / "tree.nwk").write_text("((Dioncophyllum_thollonii:1,Dionaea_muscipula:1):1,Amborella_trichopoda:2);\n")
     before = hashes(native)
     first = run_cafe_stage(tmp_path)
     assert first.returncode == 0, first.stdout + first.stderr
@@ -115,3 +115,26 @@ def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_pat
     assert rejected.returncode != 0
     assert "Skipping CAFE run" not in rejected.stdout
     assert hashes(native) == before
+
+
+def test_native_stage_rejects_foreign_legacy_fit_before_adoption(tmp_path):
+    native = saved_cafe(tmp_path / "output/cafe/cafe_output")
+    before = hashes(native)
+    (tmp_path / "copies.tsv").write_text("Desc\tFamilyID\tDioncophyllum_thollonii\n(null)\tOG000001\t2\n")
+    (tmp_path / "tree.nwk").write_text("(Dioncophyllum_thollonii:1,Dionaea_muscipula:1);\n")
+    result = run_cafe_stage(tmp_path)
+    assert result.returncode != 0
+    assert "CAFE semantic validation failed" in result.stderr
+    assert not (tmp_path / "provenance/cafe.inference.json").exists()
+    assert hashes(native) == before
+
+
+def test_native_stage_allows_explicit_legacy_rebuild(tmp_path, monkeypatch):
+    saved_cafe(tmp_path / "output/cafe/cafe_output")
+    (tmp_path / "copies.tsv").write_text("Desc\tFamilyID\tDioncophyllum_thollonii\tDionaea_muscipula\n(null)\tOG000001\t2\t4\n")
+    (tmp_path / "tree.nwk").write_text("(Dioncophyllum_thollonii:1,Dionaea_muscipula:1);\n")
+    monkeypatch.setenv("artifact_legacy_policy", "rebuild")
+    result = run_cafe_stage(tmp_path)
+    assert result.returncode == 93
+    assert "unexpected optimizer invocation" in result.stderr
+    assert "CAFE semantic validation failed" not in result.stderr

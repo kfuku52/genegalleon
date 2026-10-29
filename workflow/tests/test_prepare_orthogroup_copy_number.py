@@ -39,8 +39,13 @@ def test_count_table_keeps_missing_error_precedence_and_numeric_domain():
     data = pd.DataFrame({"a": [-1.0, np.nan], "b": [np.nan, -2.0]})
     with pytest.raises(SystemExit, match="non-numeric copy numbers in species column\\(s\\): b, a"):
         get_species_count_table(data, ["b", "a"])
-    valid = pd.DataFrame({"a": [0.5, np.inf], "b": [0.0, 2.5]})
+    valid = pd.DataFrame({"a": [0., 2.], "b": [0.0, 3.]})
     pd.testing.assert_frame_equal(get_species_count_table(valid, ["b", "a"]), valid[["b", "a"]])
+    for values, message in [([0.5, 2.0], "fractional copy numbers"),
+                            ([0.0, np.inf], "non-finite copy numbers"),
+                            ([True, False], "boolean copy numbers")]:
+        with pytest.raises(SystemExit, match=message):
+            get_species_count_table(pd.DataFrame({"a": values}), ["a"])
 
 
 def _run_prepare(tmp_path: Path, genecount_text: str, tree_text: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
@@ -226,3 +231,84 @@ def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
     assert trait_input_check in core
     assert 'cafe5 \\' in core
     assert '--infile "${file_orthogroup_copy_number}"' in core
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_count_reader_rejects_ambiguous_raw_species_headers(tmp_path, compressed):
+    import gzip
+
+    from workflow.support.prepare_orthogroup_copy_number import load_gene_count_table
+    path = tmp_path / ("counts.tsv.gz" if compressed else "counts.tsv")
+    contents = "besthit_0.95\tOrthogroup\tsp1\tsp1\tsp2\nhit\tOG1\t1\t99\t2\n"
+    if compressed:
+        with gzip.open(path, "wt") as handle:
+            handle.write(contents)
+    else:
+        path.write_text(contents)
+    with pytest.raises(SystemExit, match="duplicate column names: sp1"):
+        load_gene_count_table(str(path))
+
+
+@pytest.mark.parametrize("value,message", [("0.5", "fractional copy numbers"),
+    ("inf", "non-finite copy numbers"), ("True", "boolean copy numbers")])
+def test_prepare_rejects_invalid_discrete_counts_before_writing(tmp_path, value, message):
+    proc = _run_prepare(tmp_path,
+        f"besthit_0.95\tOrthogroup\tsp1\tsp2\nhit\tOG1\t{value}\t2\n",
+        "(sp1:1,sp2:1);\n")
+    assert proc.returncode != 0 and message in proc.stderr
+    assert not (tmp_path / "orthogroup_copy_number").exists()
+
+
+def test_count_helper_rejects_duplicate_dataframe_columns_and_object_booleans():
+    import pandas as pd
+
+    from workflow.support.prepare_orthogroup_copy_number import get_species_count_table
+    with pytest.raises(SystemExit, match="duplicate column names"):
+        get_species_count_table(pd.DataFrame([[1, 9]], columns=["A", "A"]), ["A"])
+    with pytest.raises(SystemExit, match="boolean copy numbers"):
+        get_species_count_table(pd.DataFrame({"A": pd.Series([True, 2], dtype=object)}), ["A"])
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_count_reader_rejects_extra_fields_instead_of_shifting_family_and_counts(tmp_path, compressed):
+    import gzip
+
+    from workflow.support.prepare_orthogroup_copy_number import load_gene_count_table
+
+    path = tmp_path / ("counts.tsv.gz" if compressed else "counts.tsv")
+    contents = "besthit_0.95\tOrthogroup\tA\tB\nhit\tOG1\t1\t2\t999\n"
+    if compressed:
+        with gzip.open(path, "wt") as handle:
+            handle.write(contents)
+    else:
+        path.write_text(contents)
+    original = path.read_bytes()
+    with pytest.raises(SystemExit, match="Could not read orthogroup gene-count table"):
+        load_gene_count_table(str(path))
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("count,success", [("0", True), ("2", True), ("0.5", False), ("inf", False)])
+def test_validate_only_cli_needs_no_output_directory_and_never_writes(tmp_path, count, success):
+    genecount = tmp_path / "counts.tsv"
+    tree = tmp_path / "tree.nwk"
+    genecount.write_text(f"besthit_0.95\tOrthogroup\tsp1\tsp2\nhit\tOG1\t{count}\t2\n")
+    tree.write_text("(sp1:1,sp2:1);\n")
+    original = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    env = {**os.environ, "MPLCONFIGDIR": str(tmp_path / "must-not-create-plot-cache")}
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--genecount", str(genecount),
+        "--dated_species_tree", str(tree), "--validate-only"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, env=env, check=False)
+    assert (proc.returncode == 0) == success, proc.stdout + proc.stderr
+    if success:
+        assert "no outputs written" in proc.stdout
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == original
+
+
+def test_regular_cli_still_requires_output_directory(tmp_path):
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--genecount", str(tmp_path / "counts.tsv"),
+        "--dated_species_tree", str(tmp_path / "tree.nwk")], cwd=str(REPO_ROOT),
+        capture_output=True, text=True, check=False)
+    assert proc.returncode != 0
+    assert "--output_dir is required" in proc.stderr
+    assert not list(tmp_path.iterdir())

@@ -13,6 +13,16 @@
 cat(as.character(Sys.time()), "Starting cafe_go_enrichment.r\n")
 
 read_tsv_base <- function(path, na = character()) {
+  widths <- count.fields(path, sep = "\t", quote = "", comment.char = "", blank.lines.skip = TRUE)
+  if (!length(widths) || anyNA(widths) || any(widths != widths[1])) {
+    stop("Malformed TSV row width: ", path)
+  }
+  header <- names(read.delim(path, nrows = 0, sep = "\t", quote = "", comment.char = "",
+    check.names = FALSE, row.names = NULL, fill = FALSE))
+  classes <- rep(NA_character_, length(header))
+  classes[header %in% c("FamilyID", "#FamilyID", "Orthogroup", "gene_id")] <- "character"
+  # Orthogroup membership tables contain identifiers in species columns too.
+  if ("Orthogroup" %in% header) classes[] <- "character"
   read.delim(
     path,
     header = TRUE,
@@ -21,9 +31,56 @@ read_tsv_base <- function(path, na = character()) {
     comment.char = "",
     stringsAsFactors = FALSE,
     check.names = FALSE,
+    row.names = NULL,
+    fill = FALSE,
+    colClasses = classes,
     na.strings = na
   )
 }
+
+
+validate_event_cafe_tables <- function(changes, probabilities) {
+  normalize_ids <- function(x, label) {
+    if (length(names(x)) && names(x)[1] == "#FamilyID") names(x)[1] <- "FamilyID"
+    if (!"FamilyID" %in% names(x) || anyDuplicated(names(x)) || anyNA(x$FamilyID) ||
+        anyDuplicated(x$FamilyID) || any(!nzchar(x$FamilyID))) {
+      stop("Invalid FamilyID/header in ", label)
+    }
+    x
+  }
+  changes <- normalize_ids(changes, "changes")
+  probabilities <- normalize_ids(probabilities, "branch probabilities")
+  branches <- setdiff(names(changes), "FamilyID")
+  if (!length(branches) || !setequal(names(changes), names(probabilities)) ||
+      !all(probabilities$FamilyID %in% changes$FamilyID)) {
+    stop("CAFE change/probability branch columns or family identities disagree.")
+  }
+  if (!all(vapply(changes[branches], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(changes[branches]))) ||
+      any(as.matrix(changes[branches]) != trunc(as.matrix(changes[branches])))) {
+    stop("CAFE changes must be finite integer values.")
+  }
+  # Absent rows are CAFE's unreported families, not zero-probability flags.
+  # Missing cells in a reported row must not silently remove that family's
+  # otherwise valid events through rowSums(NA). Preserve the legacy root-column
+  # convention only when the whole probability column is missing and every
+  # reconstructed change in that column is zero. Native family mode additionally
+  # validates the exact root identity against its ASR tree below.
+  if (nrow(probabilities)) {
+    for (branch in branches) {
+      values <- probabilities[[branch]]
+      missing <- is.na(values)
+      root_column <- all(missing) && all(changes[[branch]] == 0)
+      if (root_column) next
+      if (!is.numeric(values) || any(missing) || any(!is.finite(values)) ||
+          any(values < 0 | values > 1)) {
+        stop("Incomplete or invalid branch probabilities in reported family rows: ", branch)
+      }
+    }
+  }
+  list(changes = changes, probabilities = probabilities)
+}
+
 
 write_tsv_base <- function(df, path) {
   write.table(df, file = path, sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE, na = "NA")
@@ -291,6 +348,7 @@ freeze_event_go_universe <- function(change_file, gene_id_file, annotation_file,
     stop("Invalid fixed GO background aspects.")
   }
   change <- read_tsv_base(change_file)
+  if (length(names(change)) && names(change)[1] == "#FamilyID") names(change)[1] <- "FamilyID"
   if (!"FamilyID" %in% names(change) || anyNA(change$FamilyID) || anyDuplicated(change$FamilyID)) {
     stop("Fixed GO background requires unique CAFE FamilyID rows.")
   }
@@ -507,14 +565,17 @@ if (go_method == "event_all_go") {
   if (length(args) != 12 || !nzchar(args[12])) stop("event_all_go requires an explicitly frozen GO universe as argument 12.")
   warning("Fixed GO event sensitivity analysis still repeats families across branches; Tarone error bounds assume calibrated conditional event tests. This is not a branch-rate contrast.", call. = FALSE)
 }
-if (go_method %in% c("event_all_go", "cafe_branch_flags", "cafe_branch_flags_all_go")) {
+if (go_method %in% c("event", "event_all_go", "cafe_branch_flags", "cafe_branch_flags_all_go")) {
   if (!direction %in% c("increase", "decrease", "both") || grepl("[/\\\\]", target_branch)) {
     stop("Invalid native GO direction or target branch.")
   }
   # Invalidate published summaries before reading or validating new inputs.
   # Other evidence remains available for a subsequent corrected request.
-  result_names <- c("family_branch_flags.tsv", "branch_flags_metadata.tsv",
-    paste0("enrichment_significant_", direction, "_", target_branch, c("_all_go.tsv", "_significant_go.tsv")))
+  result_names <- paste0("enrichment_significant_", direction, "_", target_branch,
+    c("_all_go.tsv", "_significant_go.tsv"))
+  if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
+    result_names <- c("family_branch_flags.tsv", "branch_flags_metadata.tsv", result_names)
+  }
   if (go_method == "event_all_go") {
     if (direction == "both") stop("event_all_go requires one direction per invocation.")
     result_names <- c(paste0("enrichment_significant_", direction, "_", target_branch,
@@ -527,8 +588,9 @@ if (go_method %in% c("event_all_go", "cafe_branch_flags", "cafe_branch_flags_all
   }
   unlink(file.path(outdir, result_names))
 }
-change_df <- read_tsv_base(args[1])
-branch_probabilities_df <- read_tsv_base(args[2], na = c("N/A"))
+validated_tables <- validate_event_cafe_tables(read_tsv_base(args[1]), read_tsv_base(args[2], na = c("N/A")))
+change_df <- validated_tables$changes
+branch_probabilities_df <- validated_tables$probabilities
 native_branch_probabilities_df <- branch_probabilities_df
 orthogroup_df <- read_tsv_base(args[3])
 ref_annotation_df <- read_tsv_base(args[4])

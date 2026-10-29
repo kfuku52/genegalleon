@@ -116,6 +116,8 @@ Detailed guides are split by topic:
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Pairwise Genome Synteny](docs/pairwise-synteny.md)
 - [Native WGD Candidates and Duplication Origins (experimental)](docs/wgd-ssd.md)
+- [Copy-number and CAFE Validation](docs/copy-number-cafe-validation.md)
+- [GO Enrichment and Fixed-background Sensitivity](docs/go-enrichment.md)
 - [GRAMPA Replacement with NWKIT MUL-Tree Reconciliation](docs/grampa-replacement.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)

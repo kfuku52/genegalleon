@@ -36,6 +36,8 @@
     "test_alignment_stats_runtime.py",
     "test_cafe_branch_flags_runtime.py",
     "test_cafe_plots_runtime.py",
+    "test_validate_cafe_outputs.py",
+    "test_cafe_summary_counts_runtime.py",
     "test_mcmctree_calibration_runtime.py",
     "test_gift_retrieval.py",
     "test_public_plant_traits.py",

@@ -193,3 +193,97 @@ tryCatch({
     isTRUE(all.equal(fixed_table$p_value_adjusted,p.adjust(fixed_table$p_value,'BH'))))
 },finally=unlink(tmp,recursive=TRUE))
 cat('CAFE GO empty-report and internal-target CLI regressions passed\n')
+
+# Reject corrupt event inputs before joining, for both legacy and fixed-GO
+# modes. Missing native probability rows remain unreported; they are not imputed.
+tmp <- tempfile('cafe-go-event-input-');dir.create(tmp)
+tryCatch({
+  put <- function(d,name)write.table(d,file.path(tmp,name),sep='\t',quote=FALSE,row.names=FALSE,na='N/A')
+  ids <- paste0('F',1:20)
+  ch <- data.frame(FamilyID=ids,A=c(rep(-1,10),rep(0,10)),B=c(rep(0,10),rep(-1,10)),Root=0L)
+  pr <- data.frame(FamilyID=ids,A=.001,B=.001,Root=NA_real_)
+  put(ch,'change.tsv');put(pr,'prob.tsv')
+  put(data.frame(Orthogroup=ids,ref=paste0('g',1:20)),'ids.tsv')
+  put(data.frame(gene_id=paste0('g',1:20),go_ids=c(rep('GO:0000001',5),rep('GO:0000002',15)),
+    go_aspects='BP',go_terms=c(rep('one',5),rep('two',15))),'ann.tsv')
+  e$freeze_event_go_universe(file.path(tmp,'change.tsv'),file.path(tmp,'ids.tsv'),file.path(tmp,'ann.tsv'),
+    file.path(tmp,'frozen.tsv'),'BP','ref')
+  cli <- function(label,method='event',prob=pr,changes=ch,missing_file=FALSE,success=TRUE) {
+    put(changes,'change.tsv');put(prob,'prob.tsv')
+    inputs <- file.path(tmp,c('change.tsv','prob.tsv','ids.tsv','ann.tsv'))
+    if(missing_file)inputs[1]<-file.path(tmp,'missing.tsv')
+    argv <- c(file.path(root,'workflow/support/cafe_go_enrichment.r'),inputs,
+      file.path(tmp,label),'A','decrease','BP',method,'.05','ref',
+      if(method=='event_all_go')file.path(tmp,'frozen.tsv') else character())
+    output <- suppressWarnings(system2(file.path(R.home('bin'),'Rscript'),shQuote(argv),stdout=TRUE,stderr=TRUE))
+    status <- attr(output,'status');if(is.null(status))status<-0
+    if(success && status!=0)stop(paste(output,collapse='\n'))
+    stopifnot(if(success)status==0 else status!=0)
+    file.path(tmp,label)
+  }
+  for(method in c('event','event_all_go')) {
+    out <- cli(paste0(method,'-valid'),method)
+    event_table <- function(p)e$read_tsv_base(file.path(p,'enrichment_significant_decrease_A_all_go.tsv'))
+    original <- event_table(out)
+    stopifnot(original$n_change_in_target_in_go[original$go_ids=='GO:0000001']==5)
+    bad <- pr;bad$B[1]<-NA_real_
+    cli(paste0(method,'-missing-cell'),method,bad,success=FALSE)
+    cli(paste0(method,'-duplicate-prob'),method,rbind(pr,pr[1,]),success=FALSE)
+    bad <- pr;bad$FamilyID[1]<-'unknown'
+    cli(paste0(method,'-unknown-prob'),method,bad,success=FALSE)
+    for(value in c(-.2,1.2,Inf)) {
+      bad <- pr;bad$A[1]<-value
+      cli(paste0(method,'-prob-domain-',value),method,bad,success=FALSE)
+    }
+    cli(paste0(method,'-duplicate-change'),method,changes=rbind(ch,ch[1,]),success=FALSE)
+    bad <- ch;bad$A[1]<--1.5
+    cli(paste0(method,'-fractional-change'),method,changes=bad,success=FALSE)
+    bad <- ch;bad$A[1]<-Inf
+    cli(paste0(method,'-nonfinite-change'),method,changes=bad,success=FALSE)
+    # A native report can omit families with no significant flags entirely.
+    partial <- event_table(cli(paste0(method,'-unreported-row'),method,pr[-1,]))
+    stopifnot(partial$n_change_in_target_in_go[partial$go_ids=='GO:0000001']==4)
+    # ID-based joins, rather than row positions, preserve counts for reordering.
+    shuffled <- event_table(cli(paste0(method,'-reordered'),method,pr[20:1,]))
+    fields <- c('go_ids','n_change_in_target_in_go','n_change_out_target_in_go',
+      'n_change_in_target_out_go','n_change_out_target_out_go','p_value','p_value_adjusted')
+    stopifnot(identical(original[,fields],shuffled[,fields]))
+    evidence <- file.path(out,'retained-evidence.txt');writeLines('retained',evidence)
+    cli(basename(out),method,missing_file=TRUE,success=FALSE)
+    stopifnot(!file.exists(file.path(out,'enrichment_significant_decrease_A_all_go.tsv')),
+      !file.exists(file.path(out,'enrichment_significant_decrease_A_significant_go.tsv')),
+      identical(readLines(evidence),'retained'),file.exists(file.path(tmp,'frozen.tsv')))
+  }
+},finally=unlink(tmp,recursive=TRUE))
+cat('CAFE event input domains, unreported families, join cardinality and failed-publication regressions passed\n')
+
+
+# Preserve literal identifiers, while allowing probabilities and counts to keep
+# numeric types. Extra fields must never become inferred row names.
+tmp <- tempfile('cafe-go-tsv-reader-');dir.create(tmp)
+tryCatch({
+  path <- file.path(tmp,'input.tsv')
+  writeLines(c('FamilyID\tA\tB','001\t1\t0'),path)
+  d <- e$read_tsv_base(path)
+  stopifnot(identical(d$FamilyID,'001'),is.integer(d$A),is.integer(d$B))
+  writeLines(c('#FamilyID\tA\tRoot','001\t0.001\tN/A'),path)
+  d <- e$read_tsv_base(path,na='N/A')
+  stopifnot(identical(d[['#FamilyID']],'001'),is.numeric(d$A),is.na(d$Root))
+  writeLines(c('Orthogroup\tref','001\t0001'),path)
+  d <- e$read_tsv_base(path)
+  stopifnot(identical(d$Orthogroup,'001'),identical(d$ref,'0001'))
+  writeLines(c('gene_id\tvalue','0001\t0.02'),path)
+  d <- e$read_tsv_base(path);stopifnot(identical(d$gene_id,'0001'),is.numeric(d$value))
+  for(line in c('F1\t1\t0\t9','F1\t1')) {
+    writeLines(c('FamilyID\tA\tB',line),path);expect_error(e$read_tsv_base(path))
+  }
+  writeLines('FamilyID\tA\tRoot',path)
+  d <- e$read_tsv_base(path,na='N/A');stopifnot(nrow(d)==0,identical(d$FamilyID,character()))
+  # The freeze path and event reader agree on native #FamilyID spelling.
+  writeLines(c('#FamilyID\tA','001\t-1'),file.path(tmp,'change.tsv'))
+  writeLines(c('Orthogroup\tref','001\t0001'),file.path(tmp,'ids.tsv'))
+  writeLines(c('gene_id\tgo_ids\tgo_aspects\tgo_terms','0001\tGO:0000001\tBP\tone'),file.path(tmp,'ann.tsv'))
+  frozen <- e$freeze_event_go_universe(file.path(tmp,'change.tsv'),file.path(tmp,'ids.tsv'),file.path(tmp,'ann.tsv'),file.path(tmp,'frozen.tsv'),'BP','ref')
+  stopifnot(nrow(frozen)==1,frozen$n_background_families==1)
+},finally=unlink(tmp,recursive=TRUE))
+cat('CAFE TSV literal identifiers, exact row widths, zero rows and native freeze header regressions passed\n')
