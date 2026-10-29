@@ -517,7 +517,7 @@ gg_share_runtime_file() (
 	local digest mode object pool_uid pool_mode object_mode object_uid temporary=""
 	[[ -f "${source}" ]] || return 1
 	[[ ! -L "${pool}" && ! -L "${destination}" ]] || return 1
-	mkdir -p -m 700 -- "${pool}"
+	(umask 077; mkdir -p -- "${pool}")
 	pool_uid=$(stat -c '%u' -- "${pool}" 2>/dev/null || stat -f '%u' "${pool}")
 	pool_mode=$(stat -c '%a' -- "${pool}" 2>/dev/null || stat -f '%Lp' "${pool}")
 	[[ "${pool_uid}" == "${EUID}" && "$((8#${pool_mode} & 8#22))" == 0 ]] || return 1
@@ -555,7 +555,7 @@ gg_share_runtime_file() (
 			trap '[[ -z "${temporary}" ]] || rm -rf -- "${temporary}"' EXIT
 		fi
 		ln -- "${object}" "${temporary}/replacement"
-		mv -- "${temporary}/replacement" "${destination}" </dev/null
+		mv -- "${temporary}/replacement" "${destination}"
 	else
 		ln -- "${object}" "${destination}" || {
 			[[ -f "${destination}" && ! -L "${destination}" ]] && cmp -s -- "${object}" "${destination}"
