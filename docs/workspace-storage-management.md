@@ -501,3 +501,5 @@ references; rollback restores the original bytes and metadata from that archive.
 Empty output-inventory directories may be removed only after metadata has been
 collected successfully and compatible SQLite readers are active. Preserve the
 SQLite database, its permanent guard, and all namespace-owner directories.
+
+For an offline cutover from per-output publication locks to the bounded striped layout, `publication_lock_storage.snapshot()` seals the exact obsolete guard identities and `retire(..., writers_stopped=True)` retains a streamed recovery journal before removing only empty legacy guards. The caller must fence every old runtime and independently verify that no producer, pending job or primary lease remains. An empty namespace is insufficient evidence. Never use this API for automatic online lock cleanup; current stripes and family ownership records are preserved. A partial same-operation retirement resumes from its original journal and fails on new or changed guards.
