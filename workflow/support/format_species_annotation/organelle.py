@@ -51,6 +51,9 @@ ORGANELLE_CHROMOSOME_TERMS = frozenset(
     }
 )
 
+ORGANELLE_GENOME_LABEL = re.compile(
+    r"(?:" + "|".join(sorted(ORGANELLE_GENOME_TERMS)) + r")(?:[ _-]+(?:dna|genome|chromosome))?$")
+
 
 def _normalized_values(attrs, keys):
     values = []
@@ -66,7 +69,7 @@ def is_organelle_annotation(feature_type, attrs):
     """Return true only for strong GFF evidence of an organellar record."""
     genome_values = _normalized_values(attrs, ("genome", "genome_type", "organelle"))
     if any(
-        value in ORGANELLE_GENOME_TERMS or "mitochond" in value or "chloroplast" in value
+        ORGANELLE_GENOME_LABEL.fullmatch(value) is not None
         for value in genome_values
     ):
         return True

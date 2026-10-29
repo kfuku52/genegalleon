@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from format_species_accessions import select_ncbi_bundle
 from format_species_annotation.cds_normalisation import (
     applicable as cds_normalisation_applicable,
 )
@@ -56,7 +57,9 @@ from format_species_annotations import (
     write_repaired_gff,
 )
 from format_species_common import (
-    is_fasta_filename,
+    is_fasta_filename as is_fasta_filename,
+)
+from format_species_common import (
     is_gbff_filename,
     is_gff_filename,
     is_probable_cds_filename,
@@ -283,7 +286,8 @@ def discover_ensembl_like_tasks(input_dir, provider, allowed_species_keys=None):
         species_key = normalize_species_key_for_runtime(species_prefix_from_value(name))
         if species_key == "":
             continue
-        if is_fasta_filename(name) and ENSEMBL_CDS_PATTERN.search(name):
+        if (ENSEMBL_CDS_PATTERN.search(name)
+                and is_probable_cds_filename(provider, name, species_key=species_key)):
             cds_by_species[species_key].append(path)
             continue
         if is_gff_filename(name):
@@ -292,7 +296,7 @@ def discover_ensembl_like_tasks(input_dir, provider, allowed_species_keys=None):
         if is_gbff_filename(name):
             gbff_by_species[species_key].append(path)
             continue
-        if is_probable_genome_filename(provider, name):
+        if is_probable_genome_filename(provider, name, species_key=species_key):
             genome_by_species[species_key].append(path)
 
     for species_key in sorted(
@@ -383,12 +387,12 @@ def discover_phycocosm_tasks(input_dir, allowed_species_keys=None):
         cds_matches = [
             path
             for path in files
-            if is_probable_cds_filename("phycocosm", path.name)
-            and not is_probable_genome_filename("phycocosm", path.name)
+            if is_probable_cds_filename("phycocosm", path.name, species_key=species_key)
+            and not is_probable_genome_filename("phycocosm", path.name, species_key=species_key)
         ]
         gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
         gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-        genome_matches = [path for path in files if is_probable_genome_filename("phycocosm", path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename("phycocosm", path.name, species_key=species_key)]
 
         cds_path = pick_single_file(cds_matches, "phycocosm", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phycocosm", species_key, "GFF", warnings)
@@ -438,11 +442,12 @@ def discover_phytozome_tasks(input_dir, allowed_species_keys=None):
         cds_matches = [
             path
             for path in files
-            if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
+            if ("cds_" in path.name.lower() or ".cds." in path.name.lower())
+            and is_probable_cds_filename("phytozome", path.name, species_key=species_key)
         ]
         gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
         gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-        genome_matches = [path for path in files if is_probable_genome_filename("phytozome", path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename("phytozome", path.name, species_key=species_key)]
 
         cds_path = pick_single_file(cds_matches, "phytozome", species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, "phytozome", species_key, "GFF", warnings)
@@ -490,60 +495,23 @@ def discover_ncbi_like_tasks(input_dir, provider, allowed_species_keys=None):
 
         files = [path for path in species_dir.iterdir() if path.is_file()]
         cds_matches = [
-            path for path in files if "cds_from_genomic" in path.name.lower() and is_fasta_filename(path.name)
+            path for path in files if "cds_from_genomic" in path.name.lower()
+            and is_probable_cds_filename(provider, path.name, species_key=species_key)
         ]
         gff_matches = [path for path in files if "genomic.gff" in path.name.lower() and is_gff_filename(path.name)]
         gbff_matches = [path for path in files if "genomic.gbff" in path.name.lower() and is_gbff_filename(path.name)]
-        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
 
-        all_matches = cds_matches + gff_matches + gbff_matches + genome_matches
-        accessions = sorted(
-            {
-                match.group(1).upper()
-                for path in all_matches
-                for match in [re.search(r"(GC[AF]_[0-9]+\.[0-9]+)", path.name, re.IGNORECASE)]
-                if match is not None
-            }
-        )
-        selected_accession = ""
-        if len(accessions) > 0:
-            candidate_bundles = []
-            for accession in accessions:
-                bundle_cds = [path for path in cds_matches if accession.lower() in path.name.lower()]
-                bundle_gff = [path for path in gff_matches if accession.lower() in path.name.lower()]
-                bundle_gbff = [path for path in gbff_matches if accession.lower() in path.name.lower()]
-                bundle_genome = [path for path in genome_matches if accession.lower() in path.name.lower()]
-                coherent = len(bundle_gbff) > 0 or len(bundle_gff) > 0 and (
-                    len(bundle_cds) > 0 or len(bundle_genome) > 0
-                )
-                if coherent:
-                    candidate_bundles.append(
-                        (
-                            -(len(bundle_cds) > 0) - (len(bundle_gff) > 0) - (len(bundle_genome) > 0),
-                            accession,
-                            bundle_cds,
-                            bundle_gff,
-                            bundle_gbff,
-                            bundle_genome,
-                        )
-                    )
-            if len(candidate_bundles) == 0 and len(accessions) > 1:
-                errors.append(
-                    "[{}] {}: annotation files span incompatible assembly accessions: {}".format(
-                        provider, species_key, ",".join(accessions)
-                    )
-                )
-                continue
-            if len(candidate_bundles) > 0:
-                _score, selected_accession, cds_matches, gff_matches, gbff_matches, genome_matches = sorted(
-                    candidate_bundles, key=lambda item: (item[0], item[1])
-                )[0]
-                if len(accessions) > 1:
-                    warnings.append(
-                        "[{}] {}: multiple assembly bundles found. Using coherent bundle '{}'.".format(
-                            provider, species_key, selected_accession
-                        )
-                    )
+        try:
+            selected_accession, groups, accessions = select_ncbi_bundle(
+                (cds_matches, gff_matches, gbff_matches, genome_matches))
+        except ValueError as exc:
+            errors.append("[{}] {}: {}".format(provider, species_key, exc))
+            continue
+        cds_matches, gff_matches, gbff_matches, genome_matches = groups
+        if len(accessions) > 1:
+            warnings.append("[{}] {}: multiple assembly bundles found. Using coherent bundle '{}'.".format(
+                provider, species_key, selected_accession))
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)

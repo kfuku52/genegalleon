@@ -13,6 +13,16 @@
 cat(as.character(Sys.time()), "Starting cafe_go_enrichment.r\n")
 
 read_tsv_base <- function(path, na = character()) {
+  widths <- count.fields(path, sep = "\t", quote = "", comment.char = "", blank.lines.skip = TRUE)
+  if (!length(widths) || anyNA(widths) || any(widths != widths[1])) {
+    stop("Malformed TSV row width: ", path)
+  }
+  header <- names(read.delim(path, nrows = 0, sep = "\t", quote = "", comment.char = "",
+    check.names = FALSE, row.names = NULL, fill = FALSE))
+  classes <- rep(NA_character_, length(header))
+  classes[header %in% c("FamilyID", "#FamilyID", "Orthogroup", "gene_id")] <- "character"
+  # Orthogroup membership tables contain identifiers in species columns too.
+  if ("Orthogroup" %in% header) classes[] <- "character"
   read.delim(
     path,
     header = TRUE,
@@ -21,9 +31,56 @@ read_tsv_base <- function(path, na = character()) {
     comment.char = "",
     stringsAsFactors = FALSE,
     check.names = FALSE,
+    row.names = NULL,
+    fill = FALSE,
+    colClasses = classes,
     na.strings = na
   )
 }
+
+
+validate_event_cafe_tables <- function(changes, probabilities) {
+  normalize_ids <- function(x, label) {
+    if (length(names(x)) && names(x)[1] == "#FamilyID") names(x)[1] <- "FamilyID"
+    if (!"FamilyID" %in% names(x) || anyDuplicated(names(x)) || anyNA(x$FamilyID) ||
+        anyDuplicated(x$FamilyID) || any(!nzchar(x$FamilyID))) {
+      stop("Invalid FamilyID/header in ", label)
+    }
+    x
+  }
+  changes <- normalize_ids(changes, "changes")
+  probabilities <- normalize_ids(probabilities, "branch probabilities")
+  branches <- setdiff(names(changes), "FamilyID")
+  if (!length(branches) || !setequal(names(changes), names(probabilities)) ||
+      !all(probabilities$FamilyID %in% changes$FamilyID)) {
+    stop("CAFE change/probability branch columns or family identities disagree.")
+  }
+  if (!all(vapply(changes[branches], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(changes[branches]))) ||
+      any(as.matrix(changes[branches]) != trunc(as.matrix(changes[branches])))) {
+    stop("CAFE changes must be finite integer values.")
+  }
+  # Absent rows are CAFE's unreported families, not zero-probability flags.
+  # Missing cells in a reported row must not silently remove that family's
+  # otherwise valid events through rowSums(NA). Preserve the legacy root-column
+  # convention only when the whole probability column is missing and every
+  # reconstructed change in that column is zero. Native family mode additionally
+  # validates the exact root identity against its ASR tree below.
+  if (nrow(probabilities)) {
+    for (branch in branches) {
+      values <- probabilities[[branch]]
+      missing <- is.na(values)
+      root_column <- all(missing) && all(changes[[branch]] == 0)
+      if (root_column) next
+      if (!is.numeric(values) || any(missing) || any(!is.finite(values)) ||
+          any(values < 0 | values > 1)) {
+        stop("Incomplete or invalid branch probabilities in reported family rows: ", branch)
+      }
+    }
+  }
+  list(changes = changes, probabilities = probabilities)
+}
+
 
 write_tsv_base <- function(df, path) {
   write.table(df, file = path, sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE, na = "NA")
@@ -250,6 +307,123 @@ summarise_go_enrichment <- function(event_go_df, total_target_events, total_othe
 }
 
 
+event_go_universe <- function(orthogroup_go_df, family_ids) {
+  # Eligibility uses CAFE family identities and fixed reference annotation only.
+  # Neither observed changes, branch flags nor the requested direction enter here.
+  background <- unique(orthogroup_go_df[orthogroup_go_df$FamilyID %in% family_ids,
+    c("FamilyID", "go_ids", "go_aspects", "go_terms"), drop = FALSE])
+  metadata <- unique(background[, c("go_ids", "go_aspects", "go_terms"), drop = FALSE])
+  if (!nrow(metadata) || anyNA(metadata) || anyDuplicated(metadata$go_ids)) {
+    stop("A nonempty fixed GO universe requires consistent GO ID, aspect and term metadata.")
+  }
+  counts <- table(background$go_ids)
+  metadata$n_background_families <- as.integer(counts[metadata$go_ids])
+  metadata <- metadata[order(metadata$go_ids), , drop = FALSE]
+  rownames(metadata) <- NULL
+  metadata
+}
+
+
+annotation_go_map <- function(orthogroups, annotation, reference_species, go_category) {
+  if (!all(c("Orthogroup", reference_species) %in% names(orthogroups)) ||
+      anyNA(orthogroups$Orthogroup) || anyDuplicated(orthogroups$Orthogroup)) {
+    stop("Fixed GO background requires unique, nonmissing orthogroup identities.")
+  }
+  required <- c("gene_id", "go_ids", "go_aspects", "go_terms")
+  if (!all(required %in% names(annotation))) stop("GO annotation columns are missing.")
+  mapping <- orthogroups[, c("Orthogroup", reference_species), drop = FALSE]
+  mapping <- explode_rows(mapping, reference_species, sep = ", ")
+  names(mapping) <- c("FamilyID", "gene_id")
+  annotation <- normalise_go_annotations(annotation[, required, drop = FALSE])
+  annotation <- annotation[annotation$go_aspects %in% go_category, , drop = FALSE]
+  out <- merge(mapping, annotation, by = "gene_id", all.x = TRUE, sort = FALSE)
+  unique(out[!is.na(out$go_ids), c("FamilyID", "go_ids", "go_aspects", "go_terms"), drop = FALSE])
+}
+
+
+freeze_event_go_universe <- function(change_file, gene_id_file, annotation_file, output_file,
+                                     go_category, reference_species = "") {
+  if (file.exists(output_file)) stop("Fixed GO universe already exists; use a new path.")
+  if (!length(go_category) || anyDuplicated(go_category) || !all(go_category %in% c("BP", "MF", "CC"))) {
+    stop("Invalid fixed GO background aspects.")
+  }
+  change <- read_tsv_base(change_file)
+  if (length(names(change)) && names(change)[1] == "#FamilyID") names(change)[1] <- "FamilyID"
+  if (!"FamilyID" %in% names(change) || anyNA(change$FamilyID) || anyDuplicated(change$FamilyID)) {
+    stop("Fixed GO background requires unique CAFE FamilyID rows.")
+  }
+  groups <- read_tsv_base(gene_id_file)
+  ref <- resolve_go_reference_species(annotation_file, setdiff(names(groups), "Orthogroup"), reference_species)
+  mapping <- annotation_go_map(groups, read_tsv_base(annotation_file), ref, go_category)
+  universe <- event_go_universe(mapping, change$FamilyID)
+  write_tsv_base(universe, output_file)
+  invisible(universe)
+}
+
+
+tarone_testability <- function(minimum_p, alpha = 0.05) {
+  if (!is.numeric(minimum_p) || !length(minimum_p) || any(!is.finite(minimum_p)) ||
+      any(minimum_p < 0 | minimum_p > 1) || length(alpha) != 1 || !is.finite(alpha) || alpha <= 0 || alpha >= 1) {
+    stop("Tarone requires finite minimum P values in [0,1] and alpha in (0,1).")
+  }
+  factors <- seq_along(minimum_p)
+  # Strict decisions match P < alpha. M(k) is distinct from the factor k:
+  # choose the smallest k with #{p_min < alpha/k} <= k (Tarone, 1990).
+  counts <- findInterval(alpha / factors, sort(minimum_p), left.open = TRUE)
+  factor <- factors[which(counts <= factors)[1]]
+  threshold <- alpha / factor
+  testable <- minimum_p < threshold
+  list(factor = factor, threshold = threshold, testable = testable,
+       n_testable = sum(testable), union_bound = sum(testable) * threshold)
+}
+
+
+summarise_event_all_go <- function(event_go_df, total_target_events, total_other_events, universe, alpha = 0.05) {
+  required <- c("go_ids", "go_aspects", "go_terms", "n_background_families")
+  if (!identical(names(universe), required) || !nrow(universe) || anyNA(universe) || anyDuplicated(universe$go_ids)) {
+    stop("Invalid frozen event GO universe.")
+  }
+  totals <- c(total_target_events, total_other_events)
+  if (any(!is.finite(totals)) || any(totals < 0 | totals != floor(totals))) stop("Invalid event totals.")
+  out <- universe[, c("go_ids", "go_aspects", "go_terms"), drop = FALSE]
+  positions <- match(event_go_df$go_ids, out$go_ids)
+  if (anyNA(positions) || anyNA(event_go_df$is_target)) stop("Event annotation is outside the frozen GO universe.")
+  out$n_change_in_target_in_go <- tabulate(positions[event_go_df$is_target], nbins = nrow(out))
+  out$n_change_out_target_in_go <- tabulate(positions[!event_go_df$is_target], nbins = nrow(out))
+  out$n_change_in_target_out_go <- total_target_events - out$n_change_in_target_in_go
+  out$n_change_out_target_out_go <- total_other_events - out$n_change_out_target_in_go
+  if (any(out$n_change_in_target_out_go < 0 | out$n_change_out_target_out_go < 0)) {
+    stop("GO counts exceed event totals; duplicate event annotations are not allowed.")
+  }
+  # Reuse the legacy exact estimates for its observed GO rows. Zero-target rows
+  # have one-sided P=1 and remain in the fixed hypothesis family.
+  legacy <- summarise_go_enrichment(event_go_df, total_target_events, total_other_events, alpha)$all
+  out$odds_ratio <- ifelse(out$n_change_in_target_in_go == 0 & out$n_change_out_target_in_go > 0 &
+    total_target_events > 0 & total_other_events > 0 & out$n_change_out_target_in_go < sum(totals), 0, NA_real_)
+  out$p_value <- rep(1, nrow(out))
+  out$orthogroup_in_target <- rep("", nrow(out))
+  idx <- match(legacy$go_ids, out$go_ids)
+  if (anyNA(idx)) stop("Observed GO is outside the frozen hypothesis family.")
+  out[idx, c("odds_ratio", "p_value", "orthogroup_in_target")] <- legacy[, c("odds_ratio", "p_value", "orthogroup_in_target"), drop = FALSE]
+  out$p_value_adjusted <- p.adjust(out$p_value, "BH")
+  successes <- out$n_change_in_target_in_go + out$n_change_out_target_in_go
+  max_overlap <- pmin(total_target_events, successes)
+  out$minimum_attainable_log_p <- dhyper(max_overlap, successes, sum(totals) - successes,
+                                        total_target_events, log = TRUE)
+  out$minimum_attainable_p <- exp(out$minimum_attainable_log_p)
+  if (any(out$minimum_attainable_p > out$p_value + 1e-12)) stop("Minimum attainable P exceeds observed P.")
+  screen <- tarone_testability(out$minimum_attainable_p, alpha)
+  out$tarone_testable <- screen$testable
+  out$tarone_rejected <- out$tarone_testable & out$p_value < screen$threshold
+  out$p_value_bonferroni <- pmin(1, out$p_value * nrow(out))
+  out$bonferroni_rejected <- out$p_value < alpha / nrow(out)
+  out <- out[order(out$p_value_adjusted, out$p_value, out$go_ids), , drop = FALSE]
+  rownames(out) <- NULL
+  list(all = out, significant = out[out$p_value_adjusted < alpha, , drop = FALSE],
+       tarone_significant = out[out$tarone_rejected, , drop = FALSE], screen = screen)
+}
+
+
 # Native-output screening only: branch flags are not target/background LRTs.
 read_cafe_root_branch <- function(path) {
   con <- file(path, "r"); on.exit(close(con))
@@ -368,8 +542,14 @@ summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.0
 
 # Input
 args <- commandArgs(trailingOnly = TRUE)
+if (length(args) && args[1] == "--freeze-event-go-universe") {
+  if (length(args) != 7) stop("Usage: --freeze-event-go-universe change.tsv orthogroups.tsv annotation.tsv universe.tsv BP,MF,CC annotation_species")
+  freeze_event_go_universe(args[2], args[3], args[4], args[5], strsplit(args[6], ",", fixed = TRUE)[[1]], args[7])
+  cat("Fixed event GO universe written without selecting a target, direction or branch flags.\n")
+  quit(save = "no", status = 0)
+}
 if (length(args) < 8) {
-  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags|cafe_branch_flags_all_go] [family_alpha] [annotation_species] ")
+  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|event_all_go|cafe_branch_flags|cafe_branch_flags_all_go] [family_alpha] [annotation_species] [fixed_event_go_universe.tsv]")
 }
 outdir <- args[5]
 target_branch <- args[6]
@@ -377,22 +557,40 @@ direction <- args[7]
 go_category <- strsplit(args[8], ",")[[1]]
 
 go_method <- if (length(args) >= 9) args[9] else "event"
-if (!go_method %in% c("event", "cafe_branch_flags", "cafe_branch_flags_all_go")) stop("Invalid GO method: ", go_method)
+if (!go_method %in% c("event", "event_all_go", "cafe_branch_flags", "cafe_branch_flags_all_go")) stop("Invalid GO method: ", go_method)
 if (go_method == "event") {
   warning("Legacy event GO analysis selects hypotheses after observing target events and repeats families across branches; adjusted P values are exploratory. Use cafe_branch_flags_all_go for a fixed GO universe and one observation per family.", call. = FALSE)
 }
-if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
+if (go_method == "event_all_go") {
+  if (length(args) != 12 || !nzchar(args[12])) stop("event_all_go requires an explicitly frozen GO universe as argument 12.")
+  warning("Fixed GO event sensitivity analysis still repeats families across branches; Tarone error bounds assume calibrated conditional event tests. This is not a branch-rate contrast.", call. = FALSE)
+}
+if (go_method %in% c("event", "event_all_go", "cafe_branch_flags", "cafe_branch_flags_all_go")) {
   if (!direction %in% c("increase", "decrease", "both") || grepl("[/\\\\]", target_branch)) {
     stop("Invalid native GO direction or target branch.")
   }
   # Invalidate published summaries before reading or validating new inputs.
   # Other evidence remains available for a subsequent corrected request.
-  result_names <- c("family_branch_flags.tsv", "branch_flags_metadata.tsv",
-    paste0("enrichment_significant_", direction, "_", target_branch, c("_all_go.tsv", "_significant_go.tsv")))
+  result_names <- paste0("enrichment_significant_", direction, "_", target_branch,
+    c("_all_go.tsv", "_significant_go.tsv"))
+  if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
+    result_names <- c("family_branch_flags.tsv", "branch_flags_metadata.tsv", result_names)
+  }
+  if (go_method == "event_all_go") {
+    if (direction == "both") stop("event_all_go requires one direction per invocation.")
+    result_names <- c(paste0("enrichment_significant_", direction, "_", target_branch,
+                            c("_all_go.tsv", "_significant_go.tsv", "_tarone_significant_go.tsv")),
+                      "event_all_go_metadata.tsv")
+    if (basename(args[12]) %in% result_names &&
+        normalizePath(dirname(args[12]), mustWork = FALSE) == normalizePath(outdir, mustWork = FALSE)) {
+      stop("Frozen GO input must not alias an output table.")
+    }
+  }
   unlink(file.path(outdir, result_names))
 }
-change_df <- read_tsv_base(args[1])
-branch_probabilities_df <- read_tsv_base(args[2], na = c("N/A"))
+validated_tables <- validate_event_cafe_tables(read_tsv_base(args[1]), read_tsv_base(args[2], na = c("N/A")))
+change_df <- validated_tables$changes
+branch_probabilities_df <- validated_tables$probabilities
 native_branch_probabilities_df <- branch_probabilities_df
 orthogroup_df <- read_tsv_base(args[3])
 ref_annotation_df <- read_tsv_base(args[4])
@@ -590,7 +788,7 @@ if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
 all_families_with_go <- intersect(significant_change_df$FamilyID, orthogroup_go_df$FamilyID)
 target_families_with_go <- intersect(significant_change_df$FamilyID[significant_change_df[[target_branch_id]] == 1], all_families_with_go)
 
-if (length(target_families_with_go) == 0) {
+if (length(target_families_with_go) == 0 && go_method != "event_all_go") {
   stop("No significant families with GO annotation in the target branch: ", target_branch_id)
 }
 
@@ -604,15 +802,40 @@ other_events <- event_df[!event_df$is_target, , drop = FALSE]
 total_target_events <- nrow(target_events)
 total_other_events <- nrow(other_events)
 
-if (total_target_events == 0) {
+if (total_target_events == 0 && go_method != "event_all_go") {
   stop("No change events in the target branch after filtering.")
 }
-if (total_other_events == 0) {
+if (total_other_events == 0 && go_method != "event_all_go") {
   stop("No change events in other branches after filtering.")
 }
 
 event_go_df <- merge(event_df, orthogroup_go_df, by = "FamilyID", all.x = TRUE, sort = FALSE)
 event_go_df <- event_go_df[!is.na(event_go_df$go_ids), , drop = FALSE]
+
+if (go_method == "event_all_go") {
+  frozen <- read_tsv_base(args[12])
+  expected <- event_go_universe(orthogroup_go_df, change_df$FamilyID)
+  rownames(frozen) <- NULL
+  if (!identical(frozen, expected)) stop("Frozen GO universe does not match the eligible families and annotation.")
+  go_out <- summarise_event_all_go(event_go_df, total_target_events, total_other_events, frozen, p_value_threshold)
+  write_tsv_base(go_out$all, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_all_go.tsv")))
+  write_tsv_base(go_out$significant, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_significant_go.tsv")))
+  write_tsv_base(go_out$tarone_significant, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_tarone_significant_go.tsv")))
+  write_tsv_base(data.frame(method = go_method, target_branch = target_branch_id, direction = direction,
+    annotation_species = go_ref_sp, go_category = paste(go_category, collapse = ","), alpha = p_value_threshold,
+    go_scope = "all_annotated_cafe_eligible_background_go", fixed_go_universe = normalizePath(args[12], mustWork = TRUE),
+    n_background_go = nrow(frozen), n_background_families = length(intersect(change_df$FamilyID, orthogroup_go_df$FamilyID)),
+    total_target_events = total_target_events, total_other_events = total_other_events,
+    n_BH_significant = nrow(go_out$significant), n_Bonferroni_significant = sum(go_out$all$bonferroni_rejected),
+    tarone_variant = "Tarone_1990_min_k_with_M(k)_le_k_strict_pmin_and_P", tarone_factor = go_out$screen$factor,
+    n_tarone_testable = go_out$screen$n_testable, tarone_threshold = go_out$screen$threshold,
+    n_tarone_significant = nrow(go_out$tarone_significant), tarone_union_bound = go_out$screen$union_bound,
+    interpretation = "exploratory_fixed_go_event_counts_not_a_rate_contrast",
+    error_bound_assumption = "valid_conditional_event_tests; repeated_families_not_repaired_by_multiplicity_correction"
+  ), file.path(outdir, "event_all_go_metadata.tsv"))
+  cat("Fixed-universe event GO and Tarone sensitivity completed.\n")
+  quit(save = "no", status = 0)
+}
 
 go_out <- summarise_go_enrichment(
   event_go_df = event_go_df,

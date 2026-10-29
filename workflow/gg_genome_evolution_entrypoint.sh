@@ -294,9 +294,10 @@ file_trait="auto" # Species trait table path for orthogroup copy-number trait PG
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # increase|decrease (also both with cafe_branch_flags); reconstructed change direction for GO enrichment.
 go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.
-go_enrichment_method="event" # event (legacy default) | cafe_branch_flags | cafe_branch_flags_all_go (fixed background GO set, recommended); see docs/go-enrichment.md.
+go_enrichment_method="event" # event (legacy default) | event_all_go (fixed GO event/BH/Tarone sensitivity) | cafe_branch_flags | cafe_branch_flags_all_go; see docs/go-enrichment.md.
 go_family_alpha=0.05 # BH-adjusted native family-wide P-value cutoff; used only by cafe_branch_flags.
 go_annotation_file="" # Optional absolute path to a completed annotation table outside this workspace; annotation_species selects its exact species column.
+go_fixed_universe_file="" # Required absolute frozen event GO universe for event_all_go; create with cafe_go_enrichment.r --freeze-event-go-universe.
 
 ### End: Modify this block to tailor your analysis ###
 

@@ -29,6 +29,14 @@ SCRIPT = ROOT / 'workflow/support/orthogroup_statistics.py'
         'nan': ('3', '4', ''), 'root': ('4', '', '1,0,2,3'),
     }),
     ('a:1;', {'a': ('0', '', '')}),
+    ('((a:1,b:2,c:3)x:4,d:5)root;', {
+        'a': ('0', '3,5', ''), 'b': ('1', '3,5', ''), 'c': ('2', '3,5', ''),
+        'x': ('3', '5', '0,1,2'), 'd': ('4', '5', ''), 'root': ('5', '', '3,4,0,1,2'),
+    }),
+    ('((a:1)x:2,b:3)root;', {
+        'a': ('1', '0,3', ''), 'x': ('0', '3', '1'), 'b': ('2', '3', ''),
+        'root': ('3', '', '0,2,1'),
+    }),
 ])
 def test_cli_preserves_nearest_ancestor_and_level_order_descendant_strings(tmp_path, newick, expected):
     tree = tmp_path / 'rooted.nwk'
@@ -43,6 +51,10 @@ def test_cli_preserves_nearest_ancestor_and_level_order_descendant_strings(tmp_p
                 for row in result.itertuples(index=False)}
     assert observed == expected
     assert len(result) == len(expected)
+    for row in result.itertuples(index=False):
+        siblings = result.loc[(result.parent == row.parent) & (result.branch_id != row.branch_id)]
+        expected_sister = siblings.iloc[0].branch_id if row.parent != '-999' and len(siblings) == 1 else '-999'
+        assert row.sister == expected_sister
     summary = pd.read_csv(tmp_path / 'orthogroup.tree.tsv', sep='\t')
     assert len(summary) == 1
     assert summary.loc[0, 'num_branch'] == len(expected)

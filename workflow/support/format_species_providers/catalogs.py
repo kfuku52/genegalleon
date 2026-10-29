@@ -1,6 +1,7 @@
 """Provider resolver implementation: catalogs."""
 
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request
@@ -27,6 +28,8 @@ from format_species_provider_urls import (
     resolve_cngb_cnsa_base_url,
     resolve_coge_api_base_url,
     resolve_coge_web_base_url,
+    resolve_ncbi_datasets_base_url,
+    resolve_ncbi_ftp_base_url,
     resolve_plantaedb_web_base_url,
     strip_provider_prefix,
 )
@@ -272,8 +275,13 @@ def extract_plantaedb_ncbi_accession(page_url, page_text):
     links = parse_links_from_document(page_url, page_text)
     preferred_links = []
     fallback_links = []
+    configured = {(p.scheme, p.netloc.lower()) for p in map(urlparse, (
+        resolve_ncbi_datasets_base_url(), resolve_ncbi_ftp_base_url()))}
     for link in links:
-        if "ncbi.nlm.nih.gov" not in link.lower():
+        parsed = urlparse(link)
+        hostname = (parsed.hostname or "").lower()
+        if (hostname != "ncbi.nlm.nih.gov" and not hostname.endswith(".ncbi.nlm.nih.gov")
+                and (parsed.scheme, parsed.netloc.lower()) not in configured):
             continue
         accession = extract_ncbi_accession_from_source_id(link)
         if accession == "":
@@ -285,7 +293,31 @@ def extract_plantaedb_ncbi_accession(page_url, page_text):
     for accession in preferred_links + fallback_links:
         if accession != "":
             return accession
-    return extract_ncbi_accession_from_source_id(page_text)
+    # Accessions inside unrelated link attributes or script data are not
+    # evidence that the page identifies an NCBI assembly. Retain visible-text
+    # fallback for pages that print the assembly number without a hyperlink.
+    class VisibleText(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.hidden = 0
+            self.parts = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in {"script", "style"}:
+                self.hidden += 1
+
+        def handle_endtag(self, tag):
+            if tag in {"script", "style"} and self.hidden:
+                self.hidden -= 1
+
+        def handle_data(self, data):
+            if not self.hidden:
+                self.parts.append(data)
+
+    visible = VisibleText()
+    visible.feed(str(page_text or ""))
+    visible.close()
+    return extract_ncbi_accession_from_source_id(" ".join(visible.parts))
 
 
 def resolve_plantaedb_download_urls_from_id(source_id, species_key, timeout, headers):

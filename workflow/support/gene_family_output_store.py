@@ -3717,7 +3717,7 @@ def _inventory_paths(root: Path, family_id: str, family_from_name: Callable[[str
     if any(parent.is_symlink() for parent in (directory, directory.parent, directory.parent.parent)):
         raise ArchiveStoreError(f"Symlinked output inventory: {directory}")
     journals = journal_paths(directory)
-    if not directory.is_dir() or not journals:
+    if (directory.exists() and not directory.is_dir()) or not journals:
         raise ArchiveStoreError(f"Missing output inventory: {directory}")
     paths: Set[Path] = set()
     for journal in journals:
@@ -3748,6 +3748,10 @@ def _compact_family_inventory(root: Path, family_id: str) -> None:
     """Caller must hold the exclusive family lock, excluding publishers."""
     inventory = family_inventory_path(root, family_id)
     journals = journal_paths(inventory)
+    # Immutable packed journals already provide a compact inventory. Reusing
+    # them also avoids recreating retired per-family directories and files.
+    if journals and not any(journal.is_file() for journal in journals):
+        return
     entries = set()
     for journal in journals:
         for value in metadata_read_bytes(journal, observe=observe_path).split(b"\0"):

@@ -201,8 +201,9 @@ grampa_locus_null_calibration="${grampa_locus_null_calibration:-plug-in}"
 target_branch_go="${target_branch_go:-}"
 go_enrichment_method="${go_enrichment_method:-event}"
 go_family_alpha="${go_family_alpha:-0.05}"
+go_fixed_universe_file="${go_fixed_universe_file:-}"
 case "${go_enrichment_method}" in
-  event|cafe_branch_flags|cafe_branch_flags_all_go) ;;
+  event|event_all_go|cafe_branch_flags|cafe_branch_flags_all_go) ;;
   *) echo "Invalid go_enrichment_method: ${go_enrichment_method}" >&2; exit 1 ;;
 esac
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
@@ -1667,7 +1668,15 @@ prepare_species_protein_tmp() {
     seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
       gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
-      sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
+      GG_FASTA_SPECIES="${sp_ub}" awk '
+        BEGIN { species = ENVIRON["GG_FASTA_SPECIES"]; prefix = ">" species }
+        /^>/ {
+          if (index($0, prefix) == 1 && substr($0, length(prefix) + 1, 1) ~ /^[-_.]$/)
+            $0 = ">" substr($0, length(prefix) + 2)
+          $0 = ">" species "_" substr($0, 2)
+        }
+        { print }
+      ' |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${dir_sp_protein}/${translated_file}"
   done
@@ -3684,6 +3693,7 @@ concat_iqtree_pep_provenance_args+=(
   --output "tree=${file_concat_iqtree_pep}"
   --parameter "sequence_type=AA"
   --parameter "model=${protein_model}"
+  --parameter "tree_output=treefile"
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
@@ -3697,11 +3707,10 @@ if [[ -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_pep_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
 fi
 concat_iqtree_pep_legacy_policy="${artifact_legacy_policy:-adopt}"
+# Untracked trees may be historical bootstrap consensus outputs.
+if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep_legacy_policy=rebuild; fi
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_pep_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_pep}/topology_constraint.result.json")
-  concat_iqtree_pep_constraint_args+=(-redo)
-  # A tree without provenance cannot establish a constrained/selected search.
-  if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep_legacy_policy=rebuild; fi
 fi
 artifact_legacy_policy="${concat_iqtree_pep_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
@@ -3739,6 +3748,7 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    -redo \
     "${concat_iqtree_pep_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
@@ -3751,11 +3761,7 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
     exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
-    if [[ ${ntaxa} -lt 4 ]]; then
-      out_nwk="${concat_pep_local}.treefile"
-    else
-      out_nwk="${concat_pep_local}.contree"
-    fi
+    out_nwk="${concat_pep_local}.treefile"
     if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
       python "${gg_support_dir}/species_tree_constraint.py" \
         --alignment "${file_concat_pep}" --taxa-list "${species_tree_iqtree_taxa}" \
@@ -3811,6 +3817,7 @@ concat_iqtree_dna_provenance_args+=(
   --output "tree=${file_concat_iqtree_dna}"
   --parameter "sequence_type=DNA"
   --parameter "model=${nucleotide_model}"
+  --parameter "tree_output=treefile"
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
@@ -3824,11 +3831,10 @@ if [[ -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_dna_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
 fi
 concat_iqtree_dna_legacy_policy="${artifact_legacy_policy:-adopt}"
+# Untracked trees may be historical bootstrap consensus outputs.
+if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna_legacy_policy=rebuild; fi
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_dna_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_dna}/topology_constraint.result.json")
-  concat_iqtree_dna_constraint_args+=(-redo)
-  # A tree without provenance cannot establish a constrained/selected search.
-  if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna_legacy_policy=rebuild; fi
 fi
 artifact_legacy_policy="${concat_iqtree_dna_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
@@ -3866,6 +3872,7 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    -redo \
     "${concat_iqtree_dna_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
@@ -3878,11 +3885,7 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
     exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
-    if [[ ${ntaxa} -lt 4 ]]; then
-      out_nwk="${concat_cds_local}.treefile"
-    else
-      out_nwk="${concat_cds_local}.contree"
-    fi
+    out_nwk="${concat_cds_local}.treefile"
     if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
       python "${gg_support_dir}/species_tree_constraint.py" \
         --alignment "${file_concat_cds}" --taxa-list "${species_tree_iqtree_taxa}" \
@@ -6641,6 +6644,13 @@ run_orthogroup_copy_number_stage=0
 if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 || ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
+if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
+  # Validate current raw counts even when a prepared matrix is being reused.
+  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+    --genecount "${file_orthogroup_genecount_selected}" \
+    --dated_species_tree "${file_dated_species_tree}" \
+    --validate-only || exit $?
+fi
 copy_number_needs_update=0
 gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
 copy_number_provenance_args+=(
@@ -6685,6 +6695,15 @@ cafe_provenance_args+=(
 # Keep the native inference contract separate from rendering. A failed plot
 # must not delete a completed CAFE fit or force the optimizer to run again.
 # Existing aggregate manifests are still checked before adopting a substage.
+# A manifest-free native fit must also match this input before it can be
+# adopted. Generic artifact adoption alone establishes no scientific identity.
+# gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
+if [[ ${run_cafe} -eq 1 && "${artifact_legacy_policy:-adopt}" != rebuild && ! -s "${genome_evolution_provenance_dir}/cafe.inference.json" && -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" && -s "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
+  python "${gg_support_dir}/validate_cafe_outputs.py" \
+    --copy-number "${file_orthogroup_copy_number}" \
+    --tree "${file_dated_species_tree}" \
+    --output-dir "${dir_cafe_output}" || exit $?
+fi
 if [[ -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
   gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
 fi
@@ -6716,8 +6735,16 @@ if [[ ${run_cafe} -eq 1 ]]; then
       --pvalue 0.05 \
       --cores "${GG_TASK_CPUS}" \
       --output_prefix "${dir_cafe_output}"
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
     gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
     echo "CAFE inference outputs verified. Skipping CAFE run."
   fi
 
@@ -6977,6 +7004,15 @@ else
 fi
 
 task="GO enrichment analysis"
+go_enrichment_extra_args=()
+if [[ "${go_enrichment_method}" == event_all_go ]]; then
+  # gg-cache-guard: audited - required frozen input validation, not an output reuse decision.
+  if [[ ${run_go_enrichment} -eq 1 && ( -z "${go_fixed_universe_file}" || "${go_fixed_universe_file}" != /* || ! -s "${go_fixed_universe_file}" ) ]]; then
+    echo "event_all_go requires an existing absolute go_fixed_universe_file created by --freeze-event-go-universe." >&2
+    exit 1
+  fi
+  go_enrichment_extra_args+=("${go_fixed_universe_file}")
+fi
 disable_if_no_input_file "run_go_enrichment" "${dir_cafe_output}/Gamma_change.tab" "${dir_cafe_output}/Gamma_branch_probabilities.tab" "${file_gene_id}" "${file_go_annotation}"
 go_enrichment_needs_update=0
 gg_artifact_contract_init go_enrichment_provenance_args "cafe_go_enrichment" "${target_branch_go:-unset}" "${genome_evolution_provenance_dir}/cafe.go_enrichment.json"
@@ -7009,6 +7045,18 @@ if [[ "${go_enrichment_method}" == cafe_branch_flags* ]]; then
     --output "all_enrichment=${file_go_enrichment_significant%_significant_go.tsv}_all_go.tsv"
   )
 fi
+if [[ "${go_enrichment_method}" == event_all_go ]]; then
+  go_enrichment_provenance_args+=(
+    --parameter "go_hypothesis_scope=all_annotated_cafe_eligible_background_go"
+    --parameter "event_GO_adjustment=BH_within_requested_branch_and_direction"
+    --parameter "tarone_alpha=0.05"
+    --parameter "tarone_variant=Tarone_1990_min_k_with_M(k)_le_k_strict_pmin_and_P"
+    --output "all_enrichment=${file_go_enrichment_significant%_significant_go.tsv}_all_go.tsv"
+    --output "tarone_significant=${file_go_enrichment_significant%_significant_go.tsv}_tarone_significant_go.tsv"
+    --output "event_all_go_metadata=${dir_go_enrichment}/event_all_go_metadata.tsv"
+  )
+  gg_artifact_add_input_if_present go_enrichment_provenance_args "fixed_event_go_universe" "${go_fixed_universe_file}"
+fi
 gg_artifact_add_input_if_present go_enrichment_provenance_args "go_annotation" "${file_go_annotation}"
 gg_artifact_prepare_stage go_enrichment_needs_update run_go_enrichment "${go_enrichment_provenance_args[@]}" || exit $?
 if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
@@ -7026,7 +7074,8 @@ if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
     "${go_category}" \
     "${go_enrichment_method}" \
     "${go_family_alpha}" \
-    "${annotation_species_resolved}"; then
+    "${annotation_species_resolved}" \
+    "${go_enrichment_extra_args[@]}"; then
     echo "Error in Rscript cafe_go_enrichment.r. Exiting."
     exit 1
   fi

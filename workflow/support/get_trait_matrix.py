@@ -15,6 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from line_comment_stream import LineCommentStream
 from species_labeling import extract_species_label, strip_species_label
 from trait_table_index import read_subset
 
@@ -54,7 +55,8 @@ def trait_filename_to_species_name(trait_file):
 
 def load_trait_table(trait_path):
     # Identifiers are literal text; numeric traits retain normal NA/type inference.
-    trait = pandas.read_csv(trait_path, sep="\t", header=0, comment="#", converters={0: str})
+    with LineCommentStream(trait_path, quoted=True) as source:
+        trait = pandas.read_csv(source, sep="\t", header=0, converters={0: str})
     if trait.shape[0] == 0:
         return trait
     if trait.index.values[0] != 0:

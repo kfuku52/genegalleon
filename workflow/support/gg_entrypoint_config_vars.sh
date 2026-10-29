@@ -10,6 +10,7 @@ gg_print_entrypoint_config_vars() {
 representative_inputs
 delete_tmp_dir
 kffractbias_pairs_file
+kffractbias_report_config
 run_kffractbias
 EOF
       ;;
@@ -460,6 +461,7 @@ go_category
 go_enrichment_method
 go_family_alpha
 go_annotation_file
+go_fixed_universe_file
 input_sequence_mode
 representative_inputs
 max_gene_orthogroup_grampa

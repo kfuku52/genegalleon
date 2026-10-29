@@ -531,9 +531,9 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
     for (file in files) {
         file_path <- file.path(dir_species_annotation, file)
         sp <- species_labels[[file]]
-        header <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '', nrows = 0)
+        header <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '', fill = TRUE, quote = '', nrows = 0)
         classes <- ifelse(names(header) %in% old_cols, NA_character_, 'NULL')
-        tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '', colClasses = classes)
+        tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '', fill = TRUE, quote = '', colClasses = classes)
         tmp2 <- apply(tmp, 2, function(x) { sum((!is.na(x)) & (x != '')) })
         tmp2 <- tmp2[old_cols]
         tmp2[is.na(tmp2)] <- 0

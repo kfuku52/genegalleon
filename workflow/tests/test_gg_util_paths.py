@@ -2285,6 +2285,64 @@ def test_mv_out_bundle_rejects_hardlinked_destination_aliases(tmp_path):
     assert second_source.read_text() == "second\n"
 
 
+def test_mv_out_bundle_stripe_collision_acquires_once_and_publishes_both(tmp_path):
+    buckets = {}
+    for index in range(512):
+        name = f"result-{index}.txt"
+        bucket = hashlib.sha256(os.fsencode(name)).hexdigest()[:2]
+        if bucket in buckets:
+            names = [buckets[bucket], name]
+            break
+        buckets[bucket] = name
+    else:
+        pytest.fail("expected a collision among 512 names and 256 buckets")
+    output = tmp_path / "out"
+    output.mkdir()
+    arguments = []
+    expected = {}
+    for index, name in enumerate(names):
+        source = tmp_path / f"source-{index}"
+        source.write_text(f"new-{index}\n")
+        destination = output / name
+        destination.write_text(f"old-{index}\n")
+        arguments.extend([str(source), str(destination)])
+        expected[destination] = source.read_bytes()
+    completed = subprocess.run(
+        ["bash", "-lc", f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+         "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=2; "
+         "mv_out_bundle " + shlex.join(arguments)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert {path: path.read_bytes() for path in expected} == expected
+    stripes = output / ".gg_publish_lock_stripes-v1"
+    assert len(list(stripes.glob("*.lock.guard"))) == 1
+    assert not list(output.glob(".*.gg-bundle.lock*"))
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+def test_mv_out_bundle_lock_paths_are_bounded_and_match_physical_aliases(tmp_path):
+    output = tmp_path / "out"
+    output.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(output, target_is_directory=True)
+    completed = subprocess.run(
+        ["bash", "-lc", f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+         'for ((i=0; i<768; i++)); do '
+         '_gg_bundle_lock_path "$(gg_resolve_physical_path "out/result-$i.txt")" || exit; done; '
+         '_gg_bundle_lock_path "$(gg_resolve_physical_path "alias/result-0.txt")"'],
+        cwd=tmp_path, capture_output=True, text=True, timeout=40,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    paths = completed.stdout.splitlines()
+    assert len(paths) == 769
+    assert paths[-1] == paths[0]
+    assert 200 <= len(set(paths)) <= 256
+    assert all(Path(path).parent == output / ".gg_publish_lock_stripes-v1" for path in paths)
+    assert not list(output.iterdir())
+
+
 def test_mv_out_bundle_serializes_concurrent_publishers(tmp_path):
     destination = tmp_path / "out" / "result.txt"
     destination.parent.mkdir()

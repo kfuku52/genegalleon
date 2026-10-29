@@ -836,3 +836,14 @@ parser fallback. An upstream reader fix is needed for plotting those inputs.
 
 For dated-tree plots, root selection, and the copy-number regression model, see
 [NWKIT tree and regression integration](nwkit-tree-and-regression-integration.md).
+
+
+### Reference-based fractionation reports
+
+Set `kffractbias_report_config` in `gg_fractionation_bias_entrypoint.sh` to a JSON file and run task 1 once. Pairwise/self mode remains unchanged when unset. The report delegates numerical aggregation and plotting to `kffractbias report` through its Python API. It requires the copy-aware report API in the current kfFractBias development version; rebuild the runtime after updating the dependency.
+
+The JSON requires `manifest` (relative to the JSON file) and accepts `prefix`, `window_size`, `step_size`, `denominator`, `comparison_scope`, `minimum_callable_fraction`, `minimum_anchors`, `trim`, `raw`, `target_seqids`, and an inline `plot_config` object. Omit `plot_config` for tables only. Results are in `workspace/output/kffractbias_reports/`. See the [kfFractBias comparison format](https://github.com/kfuku52/kfFractBias/blob/master/docs/comparison.md) for assignment, missingness, fragment and plotting contracts. Copy labels are local and must be supplied independently of the outcome.
+
+Set `comparison_scope` to `pairwise` to aggregate each reference/query pair independently. With `raw: true` and `denominator: "syntenic"`, each pair selects its own detected reference genes before building complete windows. Adding another species cannot change existing pairs. Scope defaults to `shared` for compatibility. Pairwise reports use schema 2, per-analysis counts, and `callable_genes` rather than common-mask columns; see the owning dependency's format guide. Coloured raw tracks use each local copy independently and break when native evidence segments change. A missing syntelog is a detection result, not a demonstrated ancestral loss.
+
+Optional `statistics` keys are `block_size` (100), `replicates` (2000), `permutations` (100000), and `seed` (1). Statistics use paired differences in fractions of expected copies at shared callable reference loci, with disjoint, chromosome-local reference-rank blocks, cluster bootstrap confidence intervals, block sign flips and BH correction across every species pair in the report. Overlapping plotting windows are never treated as independent observations. `.contrasts.json` records the table/configuration hashes and sampling parameters. Inference is conditional on the annotation, alignments and callable subset; it does not establish ancestral gene loss. Statistics require `comparison_scope: "shared"`, masked profiles and at least two species. A pairwise report with `statistics` is rejected before creating outputs. Sensitivity to window size, block size, denominator and reference must be assessed for scientific use.

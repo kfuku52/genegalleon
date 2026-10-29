@@ -91,6 +91,11 @@ check_annotation_counts <- function() {
         invisible(capture.output(actual <- fn(fixture, 'unused')))
         stopifnot(identical(as.integer(actual[1, -1]), as.integer(expected)))
     }
+    # Annotation tables are generated TSVs: hashes inside their identifiers
+    # and annotation values are data, not end-of-line comments.
+    writeLines(c('gene_id\tbusco_id', 'g#1\tb#1', 'g2\tb2'), path)
+    invisible(capture.output(actual <- fn(fixture, 'unused')))
+    stopifnot(identical(as.integer(actual[1, -1]), c(2L, 0L, 0L, 0L, 2L)))
 }
 check_annotation_counts()
 cat('Selective annotation count checks passed.\n')

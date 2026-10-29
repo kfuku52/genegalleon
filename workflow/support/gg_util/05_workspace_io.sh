@@ -518,6 +518,16 @@ mv_out() {
 	mv -- "$@"
 }
 
+_gg_bundle_lock_path() {
+	# Bound persistent ownership metadata to 256 stripes per physical output
+	# directory. Aliases resolve before mapping; basename hashes are locale-free.
+	local canonical_destination=$1
+	local digest
+	digest=$(printf '%s' "${canonical_destination##*/}" | gg_runtime_file_sha256 /dev/stdin) || return 1
+	[[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
+	printf '%s/.gg_publish_lock_stripes-v1/%s.lock\n' "${canonical_destination%/*}" "${digest:0:2}"
+}
+
 _gg_publish_lock_acquire() {
 	gg_shared_lock_acquire "$1" "$2"
 }
@@ -605,7 +615,8 @@ mv_out_bundle() (
 		had_destination+=("no")
 		stage_attempted+=("no")
 		publish_attempted+=("no")
-		bundle_lock_paths+=("${parent}/.${basename}.gg-bundle.lock")
+		lock_path=$(_gg_bundle_lock_path "${canonical_destinations[pair_index]}") || return 1
+		bundle_lock_paths+=("${lock_path}")
 		if [[ -e "${staged[pair_index]}" || -L "${staged[pair_index]}" || -e "${backups[pair_index]}" || -L "${backups[pair_index]}" ]]; then
 			echo "mv_out_bundle: transaction path collision for destination: ${destination}"
 			return 1
@@ -675,7 +686,12 @@ mv_out_bundle() (
 		stage_attempted[pair_index]="yes"
 		mv -- "${sources[pair_index]}" "${staged[pair_index]}" || return 1
 	done
+	local previous_lock_path=""
 	for lock_path in "${bundle_lock_paths[@]}"; do
+		# Different destinations may map to one stripe. Reacquiring it would
+		# deadlock this transaction; the sorted order makes duplicates adjacent.
+		[[ "${lock_path}" == "${previous_lock_path}" ]] && continue
+		previous_lock_path=${lock_path}
 		if ! _gg_publish_lock_acquire "${lock_path}" "output bundle publication (${lock_path})"; then
 			echo "mv_out_bundle: failed to acquire publication lock: ${lock_path}" >&2
 			return 1

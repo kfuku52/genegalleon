@@ -51,10 +51,17 @@ The default target selection includes all of these retained result stores:
 | `genome_evolution/` | `busco_cds_fasta`, `busco_mafft`, `busco_trimal`, `busco_iqtree_dna`, `busco_iqtree_pep`, `busco_reconciliation_dna`, `busco_reconciliation_pep`, `busco_rooted_txt_dna`, `busco_rooted_txt_pep`, `busco_rooted_nwk_dna`, `busco_rooted_nwk_pep` |
 | `hgt/`, `query2family_hgt/` | `tree_plot`, `tree_plot_input`, `artifact_provenance`, `trait_focus` |
 | Each saved package under `analyses/` | `inputs/families`, `rendered_global/families`, `rendered_gall/families`, `package/provenance`, `preparation` |
+| Each closed batch under `scheduler_logs/` | `scheduler_output`; conversion requires `--writers-stopped` |
 
 Each directory store becomes one neighboring ZIP64 file. Files retain their
 logical paths, contents, modes and modification times. Empty directories also
 survive restoration. Existing gene-family shard layouts remain unchanged.
+
+Scheduler batches are collected only after their jobs and scheduler output
+delivery stop. See [closed scheduler-log storage](scheduler-log-storage.md) for
+submission paths, per-batch collection, logical reads and restoration. An idle
+workspace conversion that includes these batches requires `--writers-stopped`;
+use the exact-batch collector while other batches remain active.
 
 Curated `workspace/input/`, downloaded BUSCO databases, virtual environments,
 unknown output directories and shared species-tree summaries stay outside these
@@ -472,3 +479,27 @@ bash /path/to/genegalleon/workflow/gg_workspace_storage.sh convert \
 Use an absolute GeneGalleon path or load the project runtime explicitly. The
 storage command itself uses Python standard-library functionality and does not
 require Apptainer for ZIP management.
+
+## Provenance locks and runtime snapshots
+
+Provenance writers share 256 fixed lock buckets under
+`workspace/.gg_cache/artifact_provenance_lock_stripes-v1`. They use the same
+atomic shared-filesystem ownership protocol as the family store. Upgrade all
+writers and stop older runtimes before retiring the old per-manifest lock
+directory; never unlink active coordination files. A crashed owner remains
+protected for explicit verified recovery.
+
+New task runtime snapshots retain their existing paths and bytes. Byte-identical
+files share a content-addressed, read-only inode under
+`workspace/output/runtime/.shared-code-v1`. Mutable workflow sources are copied
+into the pool before linking, and changed bytes at an existing snapshot path
+are rejected. There is no new host Python dependency. Existing snapshots remain
+untouched during ordinary execution. An explicit offline maintenance operation
+may share their files after archiving the originals and checking current
+references; rollback restores the original bytes and metadata from that archive.
+
+Empty output-inventory directories may be removed only after metadata has been
+collected successfully and compatible SQLite readers are active. Preserve the
+SQLite database, its permanent guard, and all namespace-owner directories.
+
+For an offline cutover from per-output publication locks to the bounded striped layout, `publication_lock_storage.snapshot()` seals the exact obsolete guard identities and `retire(..., writers_stopped=True)` retains a streamed recovery journal before removing only empty legacy guards. The caller must fence every old runtime and independently verify that no producer, pending job or primary lease remains. An empty namespace is insufficient evidence. Never use this API for automatic online lock cleanup; current stripes and family ownership records are preserved. A partial same-operation retirement resumes from its original journal and fails on new or changed guards.

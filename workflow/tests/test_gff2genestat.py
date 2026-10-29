@@ -314,6 +314,19 @@ def test_gff_identifier_conversion_keeps_other_missing_values_and_numeric_column
     assert table[7].tolist() == ['0', '.', '2']
 
 
+@pytest.mark.parametrize("coding_only", [False, True])
+def test_gff_hash_attributes_survive_both_table_readers(tmp_path, coding_only):
+    from workflow.support.gff2genestat import read_gff_table
+
+    path = tmp_path / "Plant_species.gff"
+    attrs = ["ID=g#1;Note=literal#description", "ID=t#1;Parent=g#1", "Parent=t#1"]
+    path.write_text("# comment\n" + "".join(
+        f"chr1\ts\t{feature}\t1\t9\t.\t+\t{phase}\t{attributes}\n"
+        for feature, phase, attributes in zip(["gene", "mRNA", "CDS"], [".", ".", "0"], attrs, strict=True)))
+    table = read_gff_table(str(path), coding_only=coding_only)
+    assert table[8].tolist() == attrs
+
+
 def test_longest_selects_one_transcript_before_summarizing():
     gff = pandas.DataFrame(
         [

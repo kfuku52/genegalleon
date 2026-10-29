@@ -376,8 +376,10 @@ if (length(stat_files)==0) {
     df[,'SpeciesKey'] = gg_species_label_from_filename(df[['file']])
     df[,'species'] = gg_species_display_from_key(df[['SpeciesKey']])
     df[,'assembly_type'] = ''
-    df[grepl('isoform', df[['file']]),'assembly_type'] = 'isoform'
-    df[grepl('longestCDS', df[['file']]),'assembly_type'] = 'longestCDS'
+    assembly_names = basename(df[['file']])
+    df[grepl('[._-]isoform\\.(fa|fasta|fna|faa|ffn)(\\.gz)?$', assembly_names, ignore.case=TRUE),'assembly_type'] = 'isoform'
+    df[grepl('[._-]longestCDS\\.(fa|fasta|fna|faa|ffn)(\\.gz)?$', assembly_names, ignore.case=TRUE),'assembly_type'] = 'longestCDS'
+    df[grepl('[._-]longestCDS_contamination_removal\\.(fa|fasta|fna|faa|ffn)(\\.gz)?$', assembly_names, ignore.case=TRUE),'assembly_type'] = 'longestCDS_contamination_removal'
     gg_stop_on_duplicate_species_keys(paste(df[['SpeciesKey']], df[['assembly_type']], sep='|'), df[['file']], 'assembly stat rows')
     ordered_cols = c('species', 'assembly_type', original_cols[3:length(original_cols)], original_cols[1:2])
     df = df[,ordered_cols]

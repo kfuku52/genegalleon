@@ -763,6 +763,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   local translated_tmp="${og_id}.translated.pep.tmp.fasta"
   local species_code=""
   local sp_ub=""
+  local species_pattern=""
   local num_cds=0
   local num_protein=0
   local -a species_names=()
@@ -790,7 +791,8 @@ translate_orthogroup_cds_to_protein_fasta() {
   for sp_ub in "${species_names[@]}"; do
     species_code=$(gg_lookup_species_genetic_code "${sp_ub}" "${table_path}" "${genetic_code}")
     echo "Translation started: ${sp_ub} (genetic_code=${species_code}) -> $(basename "${protein_out}")"
-    seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${sp_ub}([_.-])" "${cds_fasta}" |
+    species_pattern=$(printf '%s' "${sp_ub}" | sed -e 's/[][\\.^$*+?{}()|]/\\&/g')
+    seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${species_pattern}([_.-])" "${cds_fasta}" |
       seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" |
       gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --allow-unknown-codon --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
@@ -3509,8 +3511,12 @@ iqtree_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "generax_enabled=${run_generax}"
   --parameter "fast_mode_threshold=${iqtree_fast_mode_gt}"
+  --parameter "tree_output=treefile"
 )
-gg_artifact_prepare_stage iqtree_needs_update run_iqtree "${iqtree_provenance_args[@]}" || exit $?
+iqtree_legacy_policy=${artifact_legacy_policy:-adopt}
+# Untracked trees may have come from the bootstrap consensus, not the ML tree.
+if [[ "${iqtree_legacy_policy}" == "adopt" ]]; then iqtree_legacy_policy=rebuild; fi
+artifact_legacy_policy="${iqtree_legacy_policy}" gg_artifact_prepare_stage iqtree_needs_update run_iqtree "${iqtree_provenance_args[@]}" || exit $?
 if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
   gg_step_start "${task}"
   num_seq=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
@@ -3518,27 +3524,25 @@ if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
     echo "Insufficient data for IQ-TREE: family=${og_id}, sequences=${num_seq}; at least 3 sequences are required. Preserve the alignment and review the query/search evidence." >&2
     exit 1
   fi
+  # UFBoot annotates the ML tree too; do not substitute its consensus topology.
+  file_tree="${og_id}.treefile"
   if [[ ${num_seq} -ge 4 ]]; then
     if [[ ${run_generax} -eq 1 ]]; then
       other_iqtree_params=()
-      file_tree="${og_id}.treefile"
       use_ufboot=0
       echo "run_generax=1: disabling UFBOOT in the initial IQ-TREE run. Support will be computed on the GeneRax topology."
     else
       other_iqtree_params=(--ufboot 1000 --bnni)
-      file_tree="${og_id}.contree"
       use_ufboot=1
     fi
   else
     other_iqtree_params=()
-    file_tree="${og_id}.treefile"
     use_ufboot=0
   fi
   if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} ]]; then
     if [[ ${use_ufboot} -eq 1 ]]; then
       echo "Disabling IQ-TREE UFBOOT because fast mode is enabled for large alignments (${num_seq} > ${iqtree_fast_mode_gt})."
       other_iqtree_params=()
-      file_tree="${og_id}.treefile"
       use_ufboot=0
     fi
     other_iqtree_params+=(--fast)
@@ -6702,6 +6706,7 @@ summary_provenance_args=(
   --output "stat_branch=${file_og_stat_branch}"
   --output "stat_tree=${file_og_stat_tree}"
   --parameter "association_summary=status_counts_v2"
+  --parameter "sister_semantics=unique_or_sentinel"
   --parameter "clade_ortholog_prefix=${treevis_clade_ortholog_prefix}"
   --parameter "mode_gene_evolution=${mode_gene_evolution}"
   --parameter "treevis_query_marker=${treevis_query_marker}"
@@ -6725,7 +6730,10 @@ if [[ "${mode_gene_evolution}" == "query2family" ]]; then
     fi
   done
 fi
-gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}" || exit $?
+summary_legacy_policy=${artifact_legacy_policy:-adopt}
+# Legacy tables may assign an arbitrary sister at a multifurcation.
+if [[ "${summary_legacy_policy}" == "adopt" ]]; then summary_legacy_policy=rebuild; fi
+artifact_legacy_policy="${summary_legacy_policy}" gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}" || exit $?
 disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
 if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"

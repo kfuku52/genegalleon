@@ -20,6 +20,7 @@ from format_species_constants import (
     GENBANK_EXTENSIONS,
     GFF_EXTENSIONS,
 )
+from format_species_file_roles import has_non_cds_role
 from format_species_taxonomy import (
     invalid_species_key_error,
     normalize_species_key_for_runtime,
@@ -193,12 +194,14 @@ def discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys
         files = [path for path in species_dir.iterdir() if path.is_file()]
         gff_matches = [path for path in files if is_gff_filename(path.name)]
         gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-        cds_matches = [path for path in files if is_probable_cds_filename(provider, path.name)]
+        cds_matches = [path for path in files if is_probable_cds_filename(provider, path.name, species_key=species_key)]
         genome_matches = [
-            path for path in files if path not in cds_matches and is_probable_genome_filename(provider, path.name)
+            path for path in files
+            if path not in cds_matches and is_probable_genome_filename(provider, path.name, species_key=species_key)
         ]
         if len(cds_matches) == 0:
-            unclassified_fasta = [path for path in files if is_fasta_filename(path.name) and path not in genome_matches]
+            unclassified_fasta = [path for path in files if is_fasta_filename(path.name)
+                                  and path not in genome_matches and not has_non_cds_role(path.name, species_key)]
             if (
                 provider == "direct"
                 and len(genome_matches) == 0

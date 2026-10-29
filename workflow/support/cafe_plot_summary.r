@@ -102,27 +102,30 @@ accumulate_branch_counts <- function(trees, changes_tbl, ogs, ref_tree) {
   agg$inc_sig <- 0L
   agg$dec_sig <- 0L
 
-  for (og in ogs) {
-    if (!og %in% names(trees)) next
-    ann <- create_annotation_df(og, trees[[og]], changes_tbl)
-    ann <- ann[ann$key %in% agg$key, , drop = FALSE]
+  if (anyNA(agg$key) || anyDuplicated(agg$key) || anyDuplicated(changes_tbl$FamilyID) ||
+      anyDuplicated(names(trees)) || !all(agg$key %in% names(changes_tbl))) {
+    stop("CAFE summary requires unique family and branch identities and matching change columns.")
+  }
+  selected <- ogs[ogs %in% names(trees)]
+  if (!length(selected)) return(agg)
+  values <- as.matrix(changes_tbl[match(selected, changes_tbl$FamilyID), agg$key, drop = FALSE])
+  if (!is.numeric(values)) stop("CAFE branch changes must be numeric.")
+  agg$inc <- as.integer(colSums(values > 0, na.rm = TRUE))
+  agg$dec <- as.integer(colSums(values < 0, na.rm = TRUE))
 
-    tmp <- data.frame(
-      key = ann$key,
-      inc = as.integer(!is.na(ann$change) & ann$change > 0),
-      dec = as.integer(!is.na(ann$change) & ann$change < 0),
-      inc_sig = as.integer(!is.na(ann$change) & ann$change > 0 & ann$has_star),
-      dec_sig = as.integer(!is.na(ann$change) & ann$change < 0 & ann$has_star),
-      stringsAsFactors = FALSE
-    )
-    tmp <- stats::aggregate(cbind(inc, dec, inc_sig, dec_sig) ~ key, data = tmp, FUN = sum)
-
-    agg <- merge(agg, tmp, by = "key", all.x = TRUE, suffixes = c(".x", ".y"), sort = FALSE)
-    agg$inc <- ifelse(is.na(agg$inc.x), 0L, agg$inc.x) + ifelse(is.na(agg$inc.y), 0L, agg$inc.y)
-    agg$dec <- ifelse(is.na(agg$dec.x), 0L, agg$dec.x) + ifelse(is.na(agg$dec.y), 0L, agg$dec.y)
-    agg$inc_sig <- ifelse(is.na(agg$inc_sig.x), 0L, agg$inc_sig.x) + ifelse(is.na(agg$inc_sig.y), 0L, agg$inc_sig.y)
-    agg$dec_sig <- ifelse(is.na(agg$dec_sig.x), 0L, agg$dec_sig.x) + ifelse(is.na(agg$dec_sig.y), 0L, agg$dec_sig.y)
-    agg <- agg[, c("key", "isTip", "x", "y", "inc", "dec", "inc_sig", "dec_sig"), drop = FALSE]
+  # Geometry is needed only for the reference tree. Native CAFE trees share
+  # branch identities; their labels carry the family-specific significance flags.
+  for (i in seq_along(selected)) {
+    tree <- trees[[selected[i]]]
+    labels <- c(tree$tip.label, tree$node.label)
+    keys <- norm_key(labels)
+    if (anyNA(keys) || anyDuplicated(keys) || !setequal(keys, agg$key)) {
+      stop("CAFE family tree branch identities differ from the reference: ", selected[i])
+    }
+    positions <- match(keys[grepl("*", labels, fixed = TRUE)], agg$key)
+    change <- values[i, positions]
+    agg$inc_sig[positions] <- agg$inc_sig[positions] + as.integer(!is.na(change) & change > 0)
+    agg$dec_sig[positions] <- agg$dec_sig[positions] + as.integer(!is.na(change) & change < 0)
   }
   agg
 }

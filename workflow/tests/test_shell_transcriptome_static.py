@@ -11,7 +11,9 @@ def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly(
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     extract_body = _function_body(text, "extract_sraid_metadata_rows_for_species")
-    assert 'grep -F -- "${species_name}" "${metadata_source}" || true' in extract_body
+    assert 'amalgkit_metadata_accessions.py' in extract_body
+    assert 'extract-species "${metadata_source}" "${species_name}" "${output_file}" --qualify-unmarked' in extract_body
+    assert 'grep -F' not in extract_body
     assert 'if ! metadata_table_has_data_rows "./metadata.tsv"; then' in text
     assert "No metadata rows matched species" in text
 

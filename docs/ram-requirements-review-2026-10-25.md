@@ -193,3 +193,32 @@ and swap limits. The two deliberately
 rejected candidate test failures are recorded separately and their production
 changes are absent. SIF and full scientific workflow validation were not run;
 these results do not establish SIF compatibility or production genome accuracy.
+
+## Follow-up: literal identifiers and GFF scanning (2026-10-29)
+
+GFF attribute identification now scans tab-delimited records directly. Unlike
+the rejected pandas chunk experiment, it checks every annotation row's nine
+columns even after finding a key and consumes gzip/UTF-8 input through EOF.
+Only whole-line comments are skipped, preserving literal hashes in attributes.
+
+Using the same qualified Docker image, Python 3.12.15 / pandas 3.0.6 on Linux
+ARM64, `benchmark_gff_attribute_memory.py --rows 500000 --small-rows 32
+--fasta-records 10000 --positions first last missing --codecs plain gzip
+--repeats 3` compared baseline `b055605a` with the direct reader. Each variant
+had one discarded warmup, alternating fresh workers and identical selected-key
+results. The plain GFF was about 58.7 MB. Across the six large cases, median
+peak RSS fell from 328–331 MiB to 76–78 MiB (76–77% lower), and wall time
+fell by 32–49%. For example, a final-row match in gzip took 1.021 → 0.652 s
+with 329.8 → 78.3 MiB. Small inputs remained around 0.17–0.20 s.
+
+The error qualification also passed for extra fields and truncated gzip. It
+compares ParserError class, row and expected/observed column counts while
+retaining complete diagnostic messages; other outcomes compare exactly.
+
+The shared literal-hash reader adds a small annotation-loading cost. In the
+existing BUSCO aggregation benchmark (three repeats), 50,000 single-row genes
+took 0.075 → 0.089 s; the 10,000-gene merge CLI took 0.099 → 0.109 s. Complete
+typed frames, TSV/CLI bytes, errors and logs matched for coordinate-suffix
+fixtures. Literal colon namespaces, hashes and multiline comments have separate
+regression tests because their corrected outputs intentionally differ.
+These measurements concern the named helpers, not complete GPU workflows.

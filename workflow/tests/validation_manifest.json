@@ -8,6 +8,7 @@
   "runtime_python_files": [
     "test_genomescope_runtime.py",
     "test_orthogroup_statistics_relations.py",
+    "test_iqtree_ml_outputs.py",
     "test_clipkit_runtime_selection.py",
     "test_transcript_utr_reassessment.py",
     "test_cloned_cds_models.py",
@@ -36,6 +37,8 @@
     "test_alignment_stats_runtime.py",
     "test_cafe_branch_flags_runtime.py",
     "test_cafe_plots_runtime.py",
+    "test_validate_cafe_outputs.py",
+    "test_cafe_summary_counts_runtime.py",
     "test_mcmctree_calibration_runtime.py",
     "test_gift_retrieval.py",
     "test_public_plant_traits.py",
@@ -61,6 +64,7 @@
     "test_rsc_runtime_integration.py",
     "test_pgls_multiplicity.py",
     "test_fractionation_bias_integration.py",
+    "test_fractionation_report.py",
     "test_fractionation_selected_inputs.py",
     "test_gbif_runtime_integration.py",
     "test_tree_plot_batch.py",
@@ -83,6 +87,7 @@
   ],
   "r_commands": [
     ["Rscript", "workflow/tests/test_cafe_go_enrichment.R"],
+    ["Rscript", "workflow/tests/test_cafe_go_tarone.R"],
     ["bash", "workflow/tests/check_treevis_package.sh"],
     ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
     ["Rscript", "workflow/tests/test_r_species_label_utils.R"],
