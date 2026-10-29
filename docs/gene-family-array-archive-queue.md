@@ -107,6 +107,20 @@ requests are additional files. This trades a bounded amount of per-family
 metadata for independent progress and removes repeated whole-tree work from
 array-task exits.
 
+### Atomic result publication locks
+
+Atomic bundle publication uses at most 256 persistent lock stripes per physical
+output directory. The destination basename selects a stripe after resolving
+path aliases. Bundles acquire stripes in a deterministic order and acquire a
+colliding stripe only once; output contents and rollback remain unchanged.
+Unrelated destinations in the same stripe may briefly serialize.
+
+Stop all publishers using the previous per-destination publication-lock layout
+before switching runtimes. Do not mix those publishers with the striped layout.
+The upgrade leaves old lock markers intact. Retire their exact namespaces only
+during separately authorized offline maintenance after verifying all old users
+have stopped; an empty readers directory alone does not establish inactivity.
+
 ## Upgrade and recovery
 
 **Stop every job using an output root before switching to this locking layout.**
