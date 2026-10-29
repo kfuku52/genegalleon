@@ -836,3 +836,12 @@ parser fallback. An upstream reader fix is needed for plotting those inputs.
 
 For dated-tree plots, root selection, and the copy-number regression model, see
 [NWKIT tree and regression integration](nwkit-tree-and-regression-integration.md).
+
+
+### Shared-reference fractionation reports
+
+Set `kffractbias_report_config` in `gg_fractionation_bias_entrypoint.sh` to a JSON file and run task 1 once. Pairwise/self mode remains unchanged when unset. The report delegates numerical aggregation and plotting to `kffractbias report` through its Python API. It requires the copy-aware report API in the current kfFractBias development version; rebuild the runtime after updating the dependency.
+
+The JSON requires `manifest` (relative to the JSON file) and accepts `prefix`, `window_size`, `step_size`, `denominator`, `minimum_callable_fraction`, `minimum_anchors`, `trim`, `raw`, `target_seqids`, and an inline `plot_config` object. Omit `plot_config` for tables only. Results are in `workspace/output/kffractbias_reports/`. See the [kfFractBias comparison format](https://github.com/kfuku52/kfFractBias/blob/master/docs/comparison.md) for assignment, missingness, fragment and plotting contracts. Copy labels are local and must be supplied independently of the outcome.
+
+Optional `statistics` keys are `block_size` (100), `replicates` (2000), `permutations` (100000), and `seed` (1). Statistics use paired differences in fractions of expected copies at shared callable reference loci, with disjoint, chromosome-local reference-rank blocks, cluster bootstrap confidence intervals, block sign flips and BH correction across every species pair in the report. Overlapping plotting windows are never treated as independent observations. `.contrasts.json` records the table/configuration hashes and sampling parameters. Inference is conditional on the annotation, alignments and callable subset; it does not establish ancestral gene loss. Statistics require masked profiles and at least two species. Sensitivity to window size, block size, denominator and reference must be assessed for scientific use.

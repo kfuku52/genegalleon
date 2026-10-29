@@ -16,6 +16,7 @@ run_kffractbias="${run_kffractbias:-1}"
 delete_tmp_dir="${delete_tmp_dir:-1}"
 kffractbias_pairs_file="${kffractbias_pairs_file:-}"
 representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
+kffractbias_report_config="${kffractbias_report_config:-}"
 if [[ -z "${kffractbias_pairs_file}" ]]; then
   kffractbias_pairs_file="${gg_workspace_input_dir}/fractionation_bias_pairs.tsv"
 fi
@@ -26,6 +27,23 @@ for binary_flag in run_kffractbias delete_tmp_dir; do
     exit 1
   fi
 done
+
+if [[ -n "${kffractbias_report_config}" ]]; then
+  if [[ "${GG_ARRAY_TASK_ID:-1}" != 1 ]]; then
+    echo "Shared-reference report requires one task (GG_ARRAY_TASK_ID=1)." >&2
+    exit 1
+  fi
+  if [[ ${run_kffractbias} -eq 0 ]]; then
+    gg_step_skip "kfFractBias shared-reference report"
+    exit 0
+  fi
+  gg_step_start "kfFractBias shared-reference report"
+  python "${gg_support_dir}/fractionation_report.py" \
+    --config "${kffractbias_report_config}" \
+    --output-dir "${gg_workspace_output_dir}/kffractbias_reports"
+  echo "kfFractBias shared-reference report completed."
+  exit 0
+fi
 
 if [[ ! -s "${kffractbias_pairs_file}" ]]; then
   if [[ ${run_kffractbias} -eq 0 ]]; then

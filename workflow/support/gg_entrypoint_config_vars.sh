@@ -10,6 +10,7 @@ gg_print_entrypoint_config_vars() {
 representative_inputs
 delete_tmp_dir
 kffractbias_pairs_file
+kffractbias_report_config
 run_kffractbias
 EOF
       ;;
