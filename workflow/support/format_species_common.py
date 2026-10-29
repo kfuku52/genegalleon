@@ -12,19 +12,30 @@ from format_species_constants import (
     GFF_EXTENSIONS,
     TRANSIENT_HTTP_STATUS_CODES,
 )
+from format_species_file_roles import (
+    ASSEMBLY_MARKER,
+    CDS_MARKER,
+    HAPLOTYPE_MARKER,
+    PROTEIN_MARKER,
+    REPEAT_MARKER,
+    TRANSCRIPT_MARKER,
+    filename_role_text,
+    has_filename_marker,
+    has_non_cds_role,
+)
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS, ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
 from format_species_writers import open_text
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
-    r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
+    r"(?:^|[._-])(?:" + REPEAT_MARKER + r")(?=[._-]|$)",
     re.IGNORECASE,
 )
 GFF_EXCLUDE_PATTERN = re.compile(
-    r"(?:^|[._-])(?:edta|red|repeat|repeats|te|teanno|transpos(?:on)?)(?:[._-]|$)",
+    r"(?:^|[._-])(?:edta|red|" + REPEAT_MARKER + r")(?=[._-]|$)",
     re.IGNORECASE,
 )
 GFF_REDUCED_MODEL_PATTERN = re.compile(
-    r"(?:only[._-]?long(?:est)?[._-]?transcripts?|primary[._-]?transcripts?|longest)",
+    r"(?:^|[._-])(?:only[._-]?long(?:est)?[._-]?transcripts?|primary[._-]?transcripts?|longest)(?=[._-]|$)",
     re.IGNORECASE,
 )
 
@@ -39,124 +50,61 @@ def parse_positive_int(value, fallback):
     return parsed
 
 
-def is_probable_cds_filename(provider, name):
-    lower = name.lower()
-    if provider == "fernbase" and (lower.endswith(".cds") or lower.endswith(".cds.gz")):
-        return True
-    if not is_fasta_filename(name):
+def is_probable_cds_filename(provider, name, *, species_key=""):
+    if not is_fasta_filename(name) or has_non_cds_role(name, species_key):
         return False
-    return any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "genecatalog_cds"))
+    return has_filename_marker(name, CDS_MARKER + "|" + TRANSCRIPT_MARKER, species_key)
 
 
-def provider_candidate_sort_key(provider, label, name):
+def provider_candidate_sort_key(provider, label, name, *, species_key=""):
     lower = str(name or "").lower()
+    role_text = filename_role_text(name, species_key)
     label_upper = str(label or "").upper()
+
+    def marked(pattern):
+        return has_filename_marker(role_text, pattern)
+
     if provider == ORYZA_MINUTA_PROVIDER:
         if label_upper == "CDS":
-            return (
-                0 if ".merged." in lower else 1,
-                0 if "cds" in lower else 1,
-                lower,
-            )
+            return (0 if marked("merged") else 1, 0 if marked(CDS_MARKER) else 1, lower)
         if label_upper == "GFF":
-            return (
-                0 if ".merged." in lower else 1,
-                lower,
-            )
+            return (0 if marked("merged") else 1, lower)
         if label_upper == "GENOME":
-            return (
-                0 if ".merged." in lower else 1,
-                0 if any(marker in lower for marker in ("dna", "genome", "toplevel")) else 1,
-                lower,
-            )
-    if provider == "citrusgenomedb":
+            return (0 if marked("merged") else 1, 0 if marked(ASSEMBLY_MARKER) else 1, lower)
+    if provider in ("citrusgenomedb", "figshare"):
         if label_upper == "CDS":
-            return (
-                0 if "cds" in lower else 1,
-                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
-                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
-                lower,
-            )
+            return (0 if marked(CDS_MARKER) else 1, int(marked(TRANSCRIPT_MARKER)),
+                    int(marked(PROTEIN_MARKER)), lower)
         if label_upper == "GFF":
-            return (
-                1 if any(marker in lower for marker in ("repeat", "interpro", "go", "ipr")) else 0,
-                lower,
-            )
+            if provider == "citrusgenomedb":
+                return (int(marked(REPEAT_MARKER + r"|interpro|go|ipr")), lower)
+            return (int(GFF_EXCLUDE_PATTERN.search(role_text) is not None),
+                    int(GFF_REDUCED_MODEL_PATTERN.search(role_text) is not None), lower)
         if label_upper == "GENOME":
-            return (
-                0 if any(marker in lower for marker in ("genome", "assembly", "hap", "chr", "chrom")) else 1,
-                lower,
-            )
-    if provider == "figshare":
-        if label_upper == "CDS":
-            return (
-                0 if "cds" in lower else 1,
-                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
-                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
-                lower,
-            )
-        if label_upper == "GFF":
-            return (
-                1 if GFF_EXCLUDE_PATTERN.search(lower) else 0,
-                1 if GFF_REDUCED_MODEL_PATTERN.search(lower) else 0,
-                lower,
-            )
-        if label_upper == "GENOME":
-            return (
-                0
-                if any(
-                    marker in lower for marker in ("genome", "assembly", "genomic", "chromosome", "_chr", ".chr", "hap")
-                )
-                else 1,
-                lower,
-            )
+            return (0 if marked(ASSEMBLY_MARKER + "|" + HAPLOTYPE_MARKER) else 1, lower)
     if provider != "fernbase":
         if provider in ENSEMBL_LIKE_PROVIDERS and label_upper == "GFF":
-            return (
-                1 if "abinitio" in lower else 0,
-                1 if re.search(r"(?:^|[._-])(?:chr|chromosome)(?:[._-])", lower) else 0,
-                1 if ".primary_assembly." in lower else 0,
-                lower,
-            )
+            return (int(marked("abinitio")), int(marked(r"chr|chromosome")),
+                    int(marked(r"primary[._-]assembly")), lower)
         if label_upper == "GENOME":
-            return (".chromosome." in lower, lower)
+            return (marked("chromosome"), lower)
         if label_upper == "CDS":
-            return (
-                0 if re.search(r"(?:^|[._-])cds(?:[._-]|$)", lower) else 1,
-                1 if any(marker in lower for marker in ("cdna", "mrna", "transcript")) else 0,
-                1 if any(marker in lower for marker in ("protein", "pep")) else 0,
-                lower,
-            )
+            return (0 if marked(CDS_MARKER) else 1, int(marked(TRANSCRIPT_MARKER)),
+                    int(marked(PROTEIN_MARKER)), lower)
         if label_upper == "GFF":
-            return (
-                1 if GFF_EXCLUDE_PATTERN.search(lower) else 0,
-                1 if GFF_REDUCED_MODEL_PATTERN.search(lower) else 0,
-                lower,
-            )
+            return (int(GFF_EXCLUDE_PATTERN.search(role_text) is not None),
+                    int(GFF_REDUCED_MODEL_PATTERN.search(role_text) is not None), lower)
         return (lower,)
     if label_upper == "CDS":
-        return (
-            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
-            0 if "highconfidence" in lower else 1,
-            1 if "lowconfidence" in lower else 0,
-            0 if "cds" in lower else 1,
-            1 if any(marker in lower for marker in ("transcript", "mrna", "cdna")) else 0,
-            lower,
-        )
+        return (0 if marked(FERNBASE_COMBINED_FILENAME_MARKER) else 1,
+                0 if marked("highconfidence") else 1, int(marked("lowconfidence")),
+                0 if marked(CDS_MARKER) else 1, int(marked(TRANSCRIPT_MARKER)), lower)
     if label_upper == "GFF":
-        return (
-            1 if FERNBASE_GFF_EXCLUDE_PATTERN.search(lower) else 0,
-            0 if FERNBASE_COMBINED_FILENAME_MARKER in lower else 1,
-            0 if "highconfidence" in lower else 1,
-            1 if "lowconfidence" in lower else 0,
-            lower,
-        )
+        return (int(FERNBASE_GFF_EXCLUDE_PATTERN.search(role_text) is not None),
+                0 if marked(FERNBASE_COMBINED_FILENAME_MARKER) else 1,
+                0 if marked("highconfidence") else 1, int(marked("lowconfidence")), lower)
     if label_upper == "GENOME":
-        return (
-            1 if "chloroplast" in lower else 0,
-            0 if any(marker in lower for marker in ("genome", "assembly", "chr", "chromosome")) else 1,
-            lower,
-        )
+        return (int(marked("chloroplast")), 0 if marked(ASSEMBLY_MARKER) else 1, lower)
     return (lower,)
 
 
@@ -175,17 +123,18 @@ def gff_contains_cds_feature(path):
     return False
 
 
-def gff_candidate_sort_key(provider, path):
+def gff_candidate_sort_key(provider, path, *, species_key=""):
     """Prefer full gene-model GFFs over repeat and reduced annotations."""
     name = str(path.name or "")
-    excluded_by_name = GFF_EXCLUDE_PATTERN.search(name) is not None
-    reduced_by_name = GFF_REDUCED_MODEL_PATTERN.search(name) is not None
+    role_text = filename_role_text(name, species_key)
+    excluded_by_name = GFF_EXCLUDE_PATTERN.search(role_text) is not None
+    reduced_by_name = GFF_REDUCED_MODEL_PATTERN.search(role_text) is not None
     contains_cds = False if excluded_by_name else gff_contains_cds_feature(path)
     return (
         1 if excluded_by_name else 0,
         1 if reduced_by_name else 0,
         0 if contains_cds else 1,
-        provider_candidate_sort_key(provider, "GFF", name),
+        provider_candidate_sort_key(provider, "GFF", name, species_key=species_key),
     )
 
 
@@ -277,74 +226,34 @@ def is_gbff_filename(name):
 
 
 def has_haplotype_assembly_marker(name):
-    lower = str(name or "").lower()
-    return re.search(r"(?:^|[._-])(?:hap[0-9][0-9a-z]*|haplotype[0-9a-z]*)(?:[._-]|$)", lower) is not None
+    return has_filename_marker(name, HAPLOTYPE_MARKER)
 
 
-def is_probable_genome_filename(provider, name):
-    if not is_fasta_filename(name):
-        return False
-    lower = name.lower()
-    non_genome_markers = (
-        "cds",
-        "mrna",
-        "trna",
-        "rrna",
-        "ncrna",
-        "rna_from_genomic",
-        "transcript",
-        "cdna",
-        "pep",
-        "protein",
-    )
-    # Roles are filename tokens, not substrings of a species name (pepo,
-    # peplus and Peperomia all contain "pep"). Keep CDS/protein bundles out.
-    if re.search(r"(?:^|[._-])(?:" + "|".join(non_genome_markers) + r")(?:[._-]|$)", lower):
+def is_probable_genome_filename(provider, name, *, species_key=""):
+    if (not is_fasta_filename(name) or has_non_cds_role(name, species_key)
+            or is_probable_cds_filename(provider, name, species_key=species_key)):
         return False
     if provider == "fernbase":
         # FernBase often exposes the assembly as a plain ".fa"/".fasta" filename.
         return True
     if provider == "plantgarden":
-        return any(
-            marker in lower
-            for marker in ("genomic", "genome", "assembly", "pseudomolecule", "pmol")
-        )
+        return has_filename_marker(name, r"genomic|genomes?|assembly|pseudomolecules?|pmol", species_key)
     if provider in ("ncbi", "refseq", "genbank", "plantaedb"):
-        return "genomic" in lower
+        return has_filename_marker(name, "genomic", species_key)
     if provider == "figshare":
-        return any(
-            marker in lower for marker in ("genome", "assembly", "genomic", "dna", "chromosome", "_chr", ".chr", "hap")
-        )
+        return has_filename_marker(name, ASSEMBLY_MARKER + "|" + HAPLOTYPE_MARKER, species_key)
     if provider in ENSEMBL_LIKE_PROVIDERS:
-        return any(marker in lower for marker in ("dna", "genome", "toplevel", "primary_assembly", "chromosome"))
-    return any(
-        marker in lower
-        for marker in (
-            "genome",
-            "assembly",
-            "genomic",
-            "dna",
-            "chromosome",
-            "_chr",
-            ".chr",
-            "chr.",
-            "chrm",
-            "scaffold",
-            "asm",
-            "softmasked",
-            "hardmasked",
-            "masked",
-        )
-    ) or has_haplotype_assembly_marker(lower)
+        return has_filename_marker(name, ASSEMBLY_MARKER, species_key)
+    return has_filename_marker(name, ASSEMBLY_MARKER + "|" + HAPLOTYPE_MARKER, species_key)
 
 
 def pick_single_file(matches, provider, species_key, label, warnings):
     if len(matches) == 0:
         return None
     if str(label or "").upper() == "GFF":
-        ordered = sorted(matches, key=lambda path: gff_candidate_sort_key(provider, path))
+        ordered = sorted(matches, key=lambda path: gff_candidate_sort_key(provider, path, species_key=species_key))
     else:
-        ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name))
+        ordered = sorted(matches, key=lambda path: provider_candidate_sort_key(provider, label, path.name, species_key=species_key))
     if len(ordered) > 1:
         warnings.append(
             "[{}] {}: multiple {} files found. Using '{}'".format(provider, species_key, label, ordered[0].name)

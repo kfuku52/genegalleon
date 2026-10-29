@@ -54,6 +54,15 @@ and genome URL/filename columns define each file's role. A genome named
 `Cmo.fasta`, for example, remains a genome even though its name has no assembly
 marker. Directory-only discovery still infers roles from filenames.
 
+Inferred roles use delimited filename markers, excluding parent directories and
+the known species prefix. CDS/transcript markers take precedence over assembly
+markers; protein, peptide, noncoding RNA and repeat FASTAs are not CDS fallbacks.
+Singular/plural roles and provider assembly names such as `ASM9206v1`, `Chr1`
+and `hap1` are recognized without matching substrings of species names.
+Figshare automatic selection requires a unique full species-name match when a
+species key is supplied. For opaque filenames or ambiguous versions, provide the
+explicit `cds_filename`, `gff_filename` or `genome_filename` instead.
+
 Typical examples:
 
 - `Arabidopsis_thaliana_Araport11.fa.gz`

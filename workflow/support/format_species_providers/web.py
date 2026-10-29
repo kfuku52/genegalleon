@@ -11,6 +11,7 @@ from format_species_annotations import (
     sanitize_identifier,
 )
 from format_species_common import (
+    GFF_EXCLUDE_PATTERN,
     is_fasta_filename,
     is_gff_filename,
     is_probable_cds_filename,
@@ -21,6 +22,13 @@ from format_species_constants import (
     INSECTBASE_IBG_ID_PATTERN,
     PLANTGARDEN_GENOME_ID_PATTERN,
     PLANTGARDEN_TAXID_PATTERN,
+)
+from format_species_file_roles import (
+    ASSEMBLY_MARKER,
+    CDS_MARKER,
+    filename_role_text,
+    has_filename_marker,
+    has_non_cds_role,
 )
 from format_species_manifest import manifest_has_usable_source_bundle
 from format_species_provider_urls import (
@@ -108,29 +116,10 @@ def filter_figshare_files_by_species_key(files, species_key):
     if text == "":
         return list(files)
     tokens = [token for token in re.split(r"[_\s]+", text) if token]
-    patterns = []
-    if len(tokens) >= 2:
-        patterns.extend(
-            (
-                "_".join(tokens),
-                "-".join(tokens),
-                "".join(tokens),
-                "{} {}".format(tokens[0], tokens[1]),
-                "{}_{}".format(tokens[0], tokens[-1]),
-                "{} {}".format(tokens[0], tokens[-1]),
-            )
-        )
-    patterns.extend(tokens)
-    unique_patterns = []
-    for pattern in patterns:
-        if pattern and pattern not in unique_patterns:
-            unique_patterns.append(pattern)
-    out = []
-    for file_record in files:
-        lowered = figshare_candidate_name(file_record).lower()
-        if any(pattern in lowered for pattern in unique_patterns):
-            out.append(file_record)
-    return out
+    if not tokens:
+        return []
+    pattern = re.compile(r"(?<![a-z0-9])" + r"[._\s-]*".join(map(re.escape, tokens)) + r"(?![a-z0-9])")
+    return [record for record in files if pattern.search(figshare_candidate_name(record).lower())]
 
 
 def select_figshare_file_record(files, provider_label, requested_name, species_key, article_id):
@@ -144,6 +133,9 @@ def select_figshare_file_record(files, provider_label, requested_name, species_k
                     requested_name,
                 )
             )
+        if len(requested_candidates) != 1:
+            raise ValueError("figshare article '{}' has duplicate filename '{}'; supply an explicit URL".format(
+                article_id, requested_name))
         ordered = sorted(
             requested_candidates,
             key=lambda record: provider_candidate_sort_key("figshare", provider_label, figshare_candidate_name(record)),
@@ -153,22 +145,22 @@ def select_figshare_file_record(files, provider_label, requested_name, species_k
     filtered = []
     for file_record in files:
         name = figshare_candidate_name(file_record)
-        if provider_label == "CDS" and is_probable_cds_filename("figshare", name):
+        if provider_label == "CDS" and is_probable_cds_filename("figshare", name, species_key=species_key):
             filtered.append(file_record)
         elif provider_label == "GFF" and is_probable_gff_url(name):
             filtered.append(file_record)
-        elif provider_label == "GENOME" and is_probable_genome_filename("figshare", name):
+        elif provider_label == "GENOME" and is_probable_genome_filename("figshare", name, species_key=species_key):
             filtered.append(file_record)
     if len(filtered) == 0:
         return None
     species_filtered = filter_figshare_files_by_species_key(filtered, species_key)
     if len(species_filtered) == 1:
         return species_filtered[0]
-    if len(filtered) == 1:
-        return filtered[0]
     raise ValueError(
-        "figshare article '{}' exposed multiple {} candidates; set {}_filename to disambiguate".format(
+        "figshare article '{}' did not uniquely match species '{}' to a {} candidate; "
+        "set {}_filename to disambiguate".format(
             article_id,
+            species_key,
             provider_label.lower(),
             provider_label.lower(),
         )
@@ -253,41 +245,35 @@ def infer_plantgarden_species_key(metadata, fallback):
     return str(fallback or "").strip()
 
 
-def select_best_plantgarden_candidate(links, label):
+def select_best_plantgarden_candidate(links, label, *, species_key=""):
     best_url = ""
     best_rank = None
     for link in links:
         parsed = urlparse(link)
-        filename = Path(parsed.path).name
+        filename = Path(unquote(parsed.path)).name
         lower = filename.lower()
         if lower in ("", ".", ".."):
             continue
         if label == "CDS":
-            if not is_fasta_filename(lower):
+            if not is_probable_cds_filename("plantgarden", filename, species_key=species_key):
                 continue
-            if any(marker in lower for marker in ("protein", "pep")):
-                continue
-            if "cds" in lower:
+            if has_filename_marker(filename, CDS_MARKER, species_key):
                 rank = (0, 0, lower)
-            elif any(marker in lower for marker in ("transcript", "mrna", "cdna")):
-                rank = (0, 1, lower)
             else:
-                continue
+                rank = (0, 1, lower)
         elif label == "GFF":
             if not is_gff_filename(lower):
                 continue
-            if any(marker in lower for marker in ("repeat", "repeatmask")):
+            if GFF_EXCLUDE_PATTERN.search(filename_role_text(filename, species_key)):
                 continue
-            rank = (0, lower)
+            rank = provider_candidate_sort_key("plantgarden", "GFF", filename, species_key=species_key)
         elif label == "GENOME":
             if not is_fasta_filename(lower):
                 continue
-            if any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "protein", "pep", "repeat")):
+            if (is_probable_cds_filename("plantgarden", filename, species_key=species_key)
+                    or has_non_cds_role(filename, species_key)):
                 continue
-            preferred = any(
-                marker in lower
-                for marker in ("genome", "assembly", ".chr", "chr.", "chrom", "scaffold", "pmol", "pseudomol")
-            )
+            preferred = has_filename_marker(filename, ASSEMBLY_MARKER, species_key)
             rank = (0 if preferred else 1, lower)
         else:
             continue
@@ -344,12 +330,12 @@ def resolve_plantgarden_download_urls_from_id(source_id, species_key, timeout, h
     download_page_url = resolve_plantgarden_download_page_url(page_url, timeout, headers)
     download_text = fetch_text_with_headers(download_page_url, timeout, headers)
     links = parse_links_from_document(download_page_url, download_text)
-    cds_url = select_best_plantgarden_candidate(links, "CDS")
-    gff_url = select_best_plantgarden_candidate(links, "GFF")
-    genome_url = select_best_plantgarden_candidate(links, "GENOME")
+    inferred_species_key = str(species_key or "").strip() or infer_plantgarden_species_key(metadata, species_key)
+    cds_url = select_best_plantgarden_candidate(links, "CDS", species_key=inferred_species_key)
+    gff_url = select_best_plantgarden_candidate(links, "GFF", species_key=inferred_species_key)
+    genome_url = select_best_plantgarden_candidate(links, "GENOME", species_key=inferred_species_key)
     if not manifest_has_usable_source_bundle(cds_url, gff_url, "", genome_url):
         raise ValueError("PlantGARDEN id '{}' did not resolve to a usable CDS-or-(GFF+genome) bundle".format(source_id))
-    inferred_species_key = str(species_key or "").strip() or infer_plantgarden_species_key(metadata, species_key)
     return {
         "species_key": inferred_species_key,
         "cds_url": cds_url,

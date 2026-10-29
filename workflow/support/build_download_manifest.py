@@ -846,12 +846,12 @@ def has_haplotype_assembly_marker(name):
     return species_common.has_haplotype_assembly_marker(name)
 
 
-def is_probable_genome_filename(provider, name):
-    return species_common.is_probable_genome_filename(provider, name)
+def is_probable_genome_filename(provider, name, *, species_key=""):
+    return species_common.is_probable_genome_filename(provider, name, species_key=species_key)
 
 
-def is_probable_cds_filename(provider, name):
-    return species_common.is_probable_cds_filename(provider, name)
+def is_probable_cds_filename(provider, name, *, species_key=""):
+    return species_common.is_probable_cds_filename(provider, name, species_key=species_key)
 
 
 def infer_fernbase_confidence_mode_from_files(files, cds_path, gff_path):
@@ -893,13 +893,13 @@ def discover_ensembl_like(input_dir, provider):
         species_key = extract_species_label(path.name, strip_extension=True)
         if species_key == "":
             continue
-        if ".cds." in path.name.lower() and is_fasta_filename(path.name):
+        if ".cds." in path.name.lower() and is_probable_cds_filename(provider, path.name, species_key=species_key):
             species_to_cds.setdefault(species_key, []).append(path)
         elif is_gff_filename(path.name):
             species_to_gff.setdefault(species_key, []).append(path)
         elif is_gbff_filename(path.name):
             species_to_gbff.setdefault(species_key, []).append(path)
-        elif is_probable_genome_filename(provider, path.name):
+        elif is_probable_genome_filename(provider, path.name, species_key=species_key):
             species_to_genome.setdefault(species_key, []).append(path)
 
     for species_key in sorted(
@@ -953,26 +953,28 @@ def discover_species_dir_based(provider, input_dir):
             cds_matches = [
                 path
                 for path in files
-                if is_probable_cds_filename(provider, path.name)
-                and not is_probable_genome_filename(provider, path.name)
+                if is_probable_cds_filename(provider, path.name, species_key=species_key)
+                and not is_probable_genome_filename(provider, path.name, species_key=species_key)
             ]
             gff_matches = [path for path in files if "gff" in path.name.lower() and is_gff_filename(path.name)]
             gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
         elif provider == "phytozome":
             cds_matches = [
                 path
                 for path in files
-                if ("cds_" in path.name.lower() or ".cds." in path.name.lower()) and is_fasta_filename(path.name)
+                if ("cds_" in path.name.lower() or ".cds." in path.name.lower())
+                and is_probable_cds_filename(provider, path.name, species_key=species_key)
             ]
             gff_matches = [path for path in files if "gene.gff3" in path.name.lower() and is_gff_filename(path.name)]
             gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
         elif provider == "ncbi":
             cds_matches = [
                 path
                 for path in files
-                if "cds_from_genomic" in path.name.lower() and is_fasta_filename(path.name)
+                if "cds_from_genomic" in path.name.lower()
+                and is_probable_cds_filename(provider, path.name, species_key=species_key)
             ]
             gff_matches = [
                 path
@@ -984,22 +986,24 @@ def discover_species_dir_based(provider, input_dir):
                 for path in files
                 if "genomic.gbff" in path.name.lower() and is_gbff_filename(path.name)
             ]
-            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
         else:
             cds_matches = [
                 path
                 for path in files
-                if is_probable_cds_filename(provider, path.name)
+                if is_probable_cds_filename(provider, path.name, species_key=species_key)
             ]
             if len(cds_matches) == 0:
                 cds_matches = [
                     path
                     for path in files
-                    if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+                    if is_fasta_filename(path.name)
+                    and not species_common.has_non_cds_role(path.name, species_key)
+                    and not is_probable_genome_filename(provider, path.name, species_key=species_key)
                 ]
             gff_matches = [path for path in files if is_gff_filename(path.name)]
             gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+            genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)

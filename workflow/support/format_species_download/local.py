@@ -12,9 +12,11 @@ from format_species_common import (
     is_fasta_filename,
     is_gbff_filename,
     is_gff_filename,
+    is_probable_cds_filename,
     is_probable_genome_filename,
     pick_single_file,
 )
+from format_species_file_roles import has_non_cds_role
 from format_species_manifest import (
     manifest_has_usable_source_bundle,
 )
@@ -246,18 +248,19 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
         cds_matches = [
             path
             for path in files
-            if is_fasta_filename(path.name)
-            and any(marker in path.name.lower() for marker in ("cds", "transcript", "mrna", "cdna"))
+            if is_probable_cds_filename(provider, path.name, species_key=species_key)
         ]
         if len(cds_matches) == 0:
             cds_matches = [
                 path
                 for path in files
-                if is_fasta_filename(path.name) and not is_probable_genome_filename(provider, path.name)
+                if is_fasta_filename(path.name)
+                and not has_non_cds_role(path.name, species_key)
+                and not is_probable_genome_filename(provider, path.name, species_key=species_key)
             ]
         gff_matches = [path for path in files if is_gff_filename(path.name)]
         gbff_matches = [path for path in files if is_gbff_filename(path.name)]
-        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name)]
+        genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
 
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
