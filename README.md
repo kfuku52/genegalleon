@@ -120,6 +120,7 @@ Detailed guides are split by topic:
 - [GO Enrichment and Fixed-background Sensitivity](docs/go-enrichment.md)
 - [GRAMPA Replacement with NWKIT MUL-Tree Reconciliation](docs/grampa-replacement.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
+- [Closed Scheduler-Log ZIP Storage](docs/scheduler-log-storage.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)
 - [Site Runtime Profiles](docs/site-runtime-profiles.md)
 - [SHIROKANE AGE Guide](docs/shirokane-age.md)

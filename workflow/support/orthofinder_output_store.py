@@ -502,9 +502,12 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
     return dict(directory=name, state="raw", files=len(files))
 
 
-def convert(root, *, to="zip", directories=None, workers=1, producer_lock_token=None, namespace="orthofinder", **options):
+def convert(root, *, to="zip", directories=None, workers=1, producer_lock_token=None, namespace="orthofinder",
+            writers_stopped=False, **options):
     root = Path(root).absolute()
     allowed = _namespace_directories(namespace)
+    _require(namespace != "scheduler_logs" or writers_stopped,
+             "Scheduler log conversion requires --writers-stopped after scheduler output delivery has finished")
     names = tuple(directories or allowed)
     _require(
         all(name in allowed for name in names) and len(names) == len(set(names)),

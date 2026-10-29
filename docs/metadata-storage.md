@@ -7,6 +7,10 @@ inside each existing metadata root. Scientific annotation/statistics TSV bodies,
 FASTA, trees and ZIP members keep their existing formats. Family state, archive
 queues and distributed locks remain under their existing ownership protocols.
 
+Scheduler stdout/stderr use [closed batch ZIP storage](scheduler-log-storage.md)
+instead. They can exceed the metadata body bound and are written by an external
+scheduler, so collect them only after its output delivery finishes.
+
 Stop **all** workspace writers, including older runtimes, before collection or
 restoration. Install the complete new reader/writer runtime first and select it
 explicitly for subsequent work. No online shared writable SQLite DB is used:

@@ -3,6 +3,7 @@
 import gzip
 import os
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from workflow.support import directory_output_store as DIRECTORY
 from workflow.support import orthofinder_output_store as STORE
 from workflow.support import workspace_output_storage as WORKSPACE
 from workflow.support.directory_storage_policy import DIRECTORY_SCOPES
+from workflow.support.shared_namespace_lock import namespace_lock
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -39,7 +41,7 @@ def test_all_retained_directory_scopes_preserve_content_metadata_and_provenance(
     contents = _fixture(root, names)
     before = PROVENANCE.sha256_path(root)
     directory_before = {name: PROVENANCE.sha256_path(root / name) for name in names}
-    DIRECTORY.convert(root, kind=kind, workers=2)
+    DIRECTORY.convert(root, kind=kind, workers=2, writers_stopped=kind == "scheduler_logs")
     assert PROVENANCE.sha256_path(root) == before
     for name in names:
         assert not (root / name).exists()
@@ -53,7 +55,7 @@ def test_all_retained_directory_scopes_preserve_content_metadata_and_provenance(
         assert (native / "result.tsv").read_bytes() == contents[names[0] + "/result.tsv"][0]
     assert not native.exists()
     assert (root / (names[0] + ".zip")).is_file()
-    DIRECTORY.convert(root, kind=kind, to="raw", workers=2)
+    DIRECTORY.convert(root, kind=kind, to="raw", workers=2, writers_stopped=kind == "scheduler_logs")
     assert PROVENANCE.sha256_path(root) == before
     for relative, expected in contents.items():
         p = root / relative
@@ -105,6 +107,68 @@ def test_generic_pack_conflict_keeps_both_forms_and_rejects_unmanaged_scope(tmp_
 def _function(core, name):
     text = (REPO / "workflow/core" / core).read_text()
     return name + "() {" + text.split(name + "() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+
+
+@pytest.mark.parametrize("to", ["zip", "raw"])
+def test_scheduler_conversion_requires_explicit_closed_writer_acknowledgement(tmp_path, to):
+    root = tmp_path / "batch_001"
+    _fixture(root, ["scheduler_output"])
+    if to == "raw":
+        DIRECTORY.convert(root, kind="scheduler_logs", writers_stopped=True)
+    before = PROVENANCE.sha256_path(root)
+    with pytest.raises(STORE.OrthoFinderStorageError, match="writers-stopped"):
+        STORE.convert(root, namespace="scheduler_logs", to=to)
+    assert PROVENANCE.sha256_path(root) == before
+
+
+def test_scheduler_batches_are_independent_and_workspace_conversion_is_guarded(tmp_path):
+    workspace = tmp_path / "workspace"
+    batches = workspace / "output/scheduler_logs"
+    one, two = batches / "batch_001", batches / "batch_002"
+    for root in (one, two):
+        _fixture(root, ["scheduler_output"])
+    command = ["convert", "--workspace", str(workspace), "--target", "scheduler_logs", "--to", "zip"]
+    code, report, _, _ = WORKSPACE.run(WORKSPACE.build_parser().parse_args(command))
+    assert code != 0 and all("writers-stopped" in row["error"] for row in report["targets"])
+    assert not list(batches.rglob("*.zip"))
+    with namespace_lock(STORE.lock_path(one, "scheduler_logs"), exclusive=True):
+        DIRECTORY.convert(two, kind="scheduler_logs", writers_stopped=True)
+    assert (one / "scheduler_output/result.tsv").is_file()
+    assert (two / "scheduler_output.zip").is_file()
+    code, report, _, _ = WORKSPACE.run(WORKSPACE.build_parser().parse_args(command + ["--writers-stopped"]))
+    assert code == 0, report
+    assert {row["name"] for row in report["targets"]} == {"scheduler_logs/batch_001", "scheduler_logs/batch_002"}
+    assert all((root / "scheduler_output.zip").is_file() for root in (one, two))
+
+
+def test_scheduler_cli_streams_large_binary_logs_before_and_after_pack(tmp_path):
+    root = tmp_path / "batch"
+    raw = root / "scheduler_output"
+    raw.mkdir(parents=True)
+    payload = bytes(range(256)) * (9 * 4096) + b"\x00last line\n"
+    (raw / "gene.123.o1").write_bytes(payload)
+    (raw / "gene.123.e1").write_bytes(b"")
+    (root / "not-a-log").write_bytes(b"protected")
+    cli = [sys.executable, str(REPO / "workflow/support/directory_output_store.py")]
+    common = ["--kind", "scheduler_logs", "--root", str(root)]
+    for packed in (False, True):
+        if packed:
+            refused = subprocess.run(cli + ["pack"] + common, capture_output=True)
+            assert refused.returncode != 0 and b"writers-stopped" in refused.stderr
+            subprocess.run(cli + ["pack"] + common + ["--writers-stopped"], check=True, capture_output=True)
+            subprocess.run(cli + ["pack"] + common + ["--writers-stopped"], check=True, capture_output=True)
+        read = subprocess.run(cli + ["read"] + common + ["--relative-path", "scheduler_output/gene.123.o1"],
+                              check=True, capture_output=True)
+        assert read.stdout == payload
+        for unsafe in ("not-a-log", "../outside", "/absolute", "scheduler_output/../../outside"):
+            failed = subprocess.run(cli + ["read"] + common + ["--relative-path", unsafe], capture_output=True)
+            assert failed.returncode != 0 and not failed.stdout
+    data = STORE.archive_records(root, "scheduler_output", deep=True)
+    assert len(data["files"]) == 2
+    assert not raw.exists() and (root / "not-a-log").read_bytes() == b"protected"
+    subprocess.run(cli + ["materialize"] + common + ["--writers-stopped"], check=True, capture_output=True)
+    assert (raw / "gene.123.o1").read_bytes() == payload
+    assert (raw / "gene.123.e1").read_bytes() == b""
 
 
 @pytest.mark.parametrize("mode", ["zip", "files", "raw"])
