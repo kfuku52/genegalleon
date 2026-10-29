@@ -230,8 +230,7 @@ def test_native_concat_stage_passes_constraint_and_invalidates_checkpoint(tmp_pa
     wrapper = bin_dir / 'iqtree'
     wrapper.write_text('#!/bin/bash\nargs=(); while (($#)); do\n'
                        'case "$1" in --ufboot) shift 2;; --bnni) shift;; *) args+=("$1"); shift;; esac; done\n'
-                       f'{iqtree} "${{args[@]}}"\n'
-                       'cp tmp.concat.pep.input.fasta.treefile tmp.concat.pep.input.fasta.contree\n')
+                       f'exec {iqtree} "${{args[@]}}"\n')
     wrapper.chmod(0o755)
     prelude = '''set -euo pipefail
 species_tree_iqtree_taxa=''

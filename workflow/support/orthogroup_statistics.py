@@ -1071,15 +1071,15 @@ def main():
                 row["age"] = age_by_label.get(nlabel, numpy.nan)
             if parent:
                 if node_is_root(node):
-                    row["parent"] = -1
+                    row["parent"] = -999
                 else:
                     row["parent"] = get_node_label(node.up)
             if sister:
                 if node_is_root(node):
-                    row["sister"] = -1
+                    row["sister"] = -999
                 else:
                     sisters = node.get_sisters()
-                    row["sister"] = get_node_label(sisters[0]) if len(sisters) > 0 else -1
+                    row["sister"] = get_node_label(sisters[0]) if len(sisters) == 1 else -999
             rows.append(row)
         df = pandas.DataFrame.from_records(rows)
         return df.sort_values(by="branch_id").reset_index(drop=True)
@@ -1247,7 +1247,8 @@ def main():
             if not node_is_root(node):
                 parent = get_node_label(node.up)
                 sisters = node.get_sisters()
-                sister = get_node_label(sisters[0]) if len(sisters) > 0 else -999
+                # A singular sister ID is meaningful only for binary parents.
+                sister = get_node_label(sisters[0]) if len(sisters) == 1 else -999
             else:
                 parent = -999
                 sister = -999

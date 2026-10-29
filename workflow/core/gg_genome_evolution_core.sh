@@ -3685,6 +3685,7 @@ concat_iqtree_pep_provenance_args+=(
   --output "tree=${file_concat_iqtree_pep}"
   --parameter "sequence_type=AA"
   --parameter "model=${protein_model}"
+  --parameter "tree_output=treefile"
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
@@ -3698,11 +3699,10 @@ if [[ -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_pep_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
 fi
 concat_iqtree_pep_legacy_policy="${artifact_legacy_policy:-adopt}"
+# Untracked trees may be historical bootstrap consensus outputs.
+if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep_legacy_policy=rebuild; fi
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_pep_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_pep}/topology_constraint.result.json")
-  concat_iqtree_pep_constraint_args+=(-redo)
-  # A tree without provenance cannot establish a constrained/selected search.
-  if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep_legacy_policy=rebuild; fi
 fi
 artifact_legacy_policy="${concat_iqtree_pep_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
@@ -3740,6 +3740,7 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    -redo \
     "${concat_iqtree_pep_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
@@ -3752,11 +3753,7 @@ if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -e
     exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
-    if [[ ${ntaxa} -lt 4 ]]; then
-      out_nwk="${concat_pep_local}.treefile"
-    else
-      out_nwk="${concat_pep_local}.contree"
-    fi
+    out_nwk="${concat_pep_local}.treefile"
     if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
       python "${gg_support_dir}/species_tree_constraint.py" \
         --alignment "${file_concat_pep}" --taxa-list "${species_tree_iqtree_taxa}" \
@@ -3812,6 +3809,7 @@ concat_iqtree_dna_provenance_args+=(
   --output "tree=${file_concat_iqtree_dna}"
   --parameter "sequence_type=DNA"
   --parameter "model=${nucleotide_model}"
+  --parameter "tree_output=treefile"
   --parameter "seed=12345"
   --parameter "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"
 )
@@ -3825,11 +3823,10 @@ if [[ -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_dna_provenance_args+=(--input "selected_taxa=${species_tree_iqtree_taxa}")
 fi
 concat_iqtree_dna_legacy_policy="${artifact_legacy_policy:-adopt}"
+# Untracked trees may be historical bootstrap consensus outputs.
+if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna_legacy_policy=rebuild; fi
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_dna_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_dna}/topology_constraint.result.json")
-  concat_iqtree_dna_constraint_args+=(-redo)
-  # A tree without provenance cannot establish a constrained/selected search.
-  if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna_legacy_policy=rebuild; fi
 fi
 artifact_legacy_policy="${concat_iqtree_dna_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
 if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
@@ -3867,6 +3864,7 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
     -nt "${GG_TASK_CPUS}" \
     "${iqtree_mem_args[@]}" \
     -seed 12345 \
+    -redo \
     "${concat_iqtree_dna_constraint_args[@]}" \
     "${bootstrap_params[@]}"; then
     iqtree_exit_status=0
@@ -3879,11 +3877,7 @@ if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 
     exit "${iqtree_exit_status}"
   else
     echo "IQ-TREE successfully exited with zero status: ${iqtree_exit_status}"
-    if [[ ${ntaxa} -lt 4 ]]; then
-      out_nwk="${concat_cds_local}.treefile"
-    else
-      out_nwk="${concat_cds_local}.contree"
-    fi
+    out_nwk="${concat_cds_local}.treefile"
     if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
       python "${gg_support_dir}/species_tree_constraint.py" \
         --alignment "${file_concat_cds}" --taxa-list "${species_tree_iqtree_taxa}" \

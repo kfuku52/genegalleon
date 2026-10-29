@@ -419,6 +419,21 @@ GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+Gene-tree inference and concatenated protein/DNA species-tree inference use
+IQ-TREE's maximum-likelihood `.treefile`, including its UFBoot branch supports
+when bootstrapping is enabled. The bootstrap consensus `.contree` is not used
+as the analysis topology. GeneRax, when enabled, still supplies its reconciled
+gene-tree topology for subsequent analysis.
+
+These tree stages and gene-family summaries require regeneration of untracked
+legacy outputs instead of adopting them. Existing manifests also become stale
+when their tree-output or sister-column contract differs. Use the normal
+workflow with `artifact_stale_policy=rebuild` to rebuild affected outputs and
+their dependent stages; a plot-only run cannot regenerate upstream trees or
+summary tables. Branch tables encode a sister ID only for binary parents;
+children of unary or multifurcating parents use `-999`, with the complete
+topology retained in `parent`.
+
 Gene-tree rooting keeps MAD as the default. The selectable
 `tree_rooting_method` values are `mad`, `reconciliation`, `midpoint`,
 and `md` (`md` maps to NWKIT's `mv` method). `reconciliation` uses NWKIT's

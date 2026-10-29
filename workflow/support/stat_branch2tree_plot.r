@@ -120,24 +120,13 @@ ensure_plot_topology_columns = function(b) {
   }
   if (!('sister' %in% colnames(b))) {
     b[['sister']] = -999
-    child_cols = intersect(c('child1', 'child2'), colnames(b))
-    if (length(child_cols) == 2 && ('parent' %in% colnames(b))) {
-      for (i in seq_len(nrow(b))) {
-        parent_id = b[['parent']][i]
-        if (is.na(parent_id) || identical(parent_id, '') || (as.character(parent_id) == '-999')) {
-          next
-        }
-        parent_idx = match(parent_id, b[['branch_id']])
-        if (is.na(parent_idx)) {
-          next
-        }
-        child1 = b[['child1']][parent_idx]
-        child2 = b[['child2']][parent_idx]
-        current_id = b[['branch_id']][i]
-        if (!is.na(child1) && as.character(child1) == as.character(current_id)) {
-          b[['sister']][i] = child2
-        } else if (!is.na(child2) && as.character(child2) == as.character(current_id)) {
-          b[['sister']][i] = child1
+    if ('parent' %in% colnames(b)) {
+      # parent carries the full topology; child1/child2 omit further children.
+      children_by_parent = split(seq_len(nrow(b)), as.character(b[['parent']]))
+      for (parent_id in intersect(names(children_by_parent), as.character(b[['branch_id']]))) {
+        children = children_by_parent[[parent_id]]
+        if (length(children) == 2L) {
+          b[['sister']][children] = b[['branch_id']][rev(children)]
         }
       }
     }

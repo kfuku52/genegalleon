@@ -8,6 +8,7 @@
   "runtime_python_files": [
     "test_genomescope_runtime.py",
     "test_orthogroup_statistics_relations.py",
+    "test_iqtree_ml_outputs.py",
     "test_clipkit_runtime_selection.py",
     "test_transcript_utr_reassessment.py",
     "test_cloned_cds_models.py",
