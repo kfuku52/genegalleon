@@ -125,6 +125,7 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path, 
     assert {
         path.name for path in result_dir.iterdir()
         if not path.name.endswith((".gg-bundle.lock.guard", ".gg-bundle.lock.guard.namespace-v1"))
+        and path.name != ".gg_publish_lock_stripes-v1"
     } == expected
     assert all((result_dir / filename).stat().st_size > 0 for filename in expected)
 
