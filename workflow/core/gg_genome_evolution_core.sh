@@ -201,8 +201,9 @@ grampa_locus_null_calibration="${grampa_locus_null_calibration:-plug-in}"
 target_branch_go="${target_branch_go:-}"
 go_enrichment_method="${go_enrichment_method:-event}"
 go_family_alpha="${go_family_alpha:-0.05}"
+go_fixed_universe_file="${go_fixed_universe_file:-}"
 case "${go_enrichment_method}" in
-  event|cafe_branch_flags|cafe_branch_flags_all_go) ;;
+  event|event_all_go|cafe_branch_flags|cafe_branch_flags_all_go) ;;
   *) echo "Invalid go_enrichment_method: ${go_enrichment_method}" >&2; exit 1 ;;
 esac
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
@@ -6977,6 +6978,14 @@ else
 fi
 
 task="GO enrichment analysis"
+go_enrichment_extra_args=()
+if [[ "${go_enrichment_method}" == event_all_go && ${run_go_enrichment} -eq 1 ]]; then
+  if [[ -z "${go_fixed_universe_file}" || "${go_fixed_universe_file}" != /* || ! -s "${go_fixed_universe_file}" ]]; then
+    echo "event_all_go requires an existing absolute go_fixed_universe_file created by --freeze-event-go-universe." >&2
+    exit 1
+  fi
+  go_enrichment_extra_args+=("${go_fixed_universe_file}")
+fi
 disable_if_no_input_file "run_go_enrichment" "${dir_cafe_output}/Gamma_change.tab" "${dir_cafe_output}/Gamma_branch_probabilities.tab" "${file_gene_id}" "${file_go_annotation}"
 go_enrichment_needs_update=0
 gg_artifact_contract_init go_enrichment_provenance_args "cafe_go_enrichment" "${target_branch_go:-unset}" "${genome_evolution_provenance_dir}/cafe.go_enrichment.json"
@@ -7009,6 +7018,18 @@ if [[ "${go_enrichment_method}" == cafe_branch_flags* ]]; then
     --output "all_enrichment=${file_go_enrichment_significant%_significant_go.tsv}_all_go.tsv"
   )
 fi
+if [[ "${go_enrichment_method}" == event_all_go ]]; then
+  go_enrichment_provenance_args+=(
+    --parameter "go_hypothesis_scope=all_annotated_cafe_eligible_background_go"
+    --parameter "event_GO_adjustment=BH_within_requested_branch_and_direction"
+    --parameter "tarone_alpha=0.05"
+    --parameter "tarone_variant=Tarone_1990_min_k_with_M(k)_le_k_strict_pmin_and_P"
+    --output "all_enrichment=${file_go_enrichment_significant%_significant_go.tsv}_all_go.tsv"
+    --output "tarone_significant=${file_go_enrichment_significant%_significant_go.tsv}_tarone_significant_go.tsv"
+    --output "event_all_go_metadata=${dir_go_enrichment}/event_all_go_metadata.tsv"
+  )
+  gg_artifact_add_input_if_present go_enrichment_provenance_args "fixed_event_go_universe" "${go_fixed_universe_file}"
+fi
 gg_artifact_add_input_if_present go_enrichment_provenance_args "go_annotation" "${file_go_annotation}"
 gg_artifact_prepare_stage go_enrichment_needs_update run_go_enrichment "${go_enrichment_provenance_args[@]}" || exit $?
 if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
@@ -7026,7 +7047,8 @@ if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
     "${go_category}" \
     "${go_enrichment_method}" \
     "${go_family_alpha}" \
-    "${annotation_species_resolved}"; then
+    "${annotation_species_resolved}" \
+    "${go_enrichment_extra_args[@]}"; then
     echo "Error in Rscript cafe_go_enrichment.r. Exiting."
     exit 1
   fi

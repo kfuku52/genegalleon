@@ -72,6 +72,73 @@ contract; use the normal stale-artifact review/rebuild procedure rather than
 renaming old results into the new directory. The sections below describe the
 original target-restricted `cafe_branch_flags` mode unless stated otherwise.
 
+## Fixed event GO universe and Tarone sensitivity
+
+Use `event_all_go` to compare multiplicity corrections while retaining the
+legacy **event** population and one-sided Fisher tests. This is separate from
+the target-exclusive family screen in `cafe_branch_flags_all_go`. Freeze the GO
+catalog once, before examining a target branch or direction:
+
+```bash
+Rscript workflow/support/cafe_go_enrichment.r --freeze-event-go-universe \
+  saved/Gamma_change.tab saved/Orthogroups.selected.tsv \
+  annotations/Arabidopsis_thaliana_annotation.tsv frozen_event_go.tsv \
+  BP,MF,CC Arabidopsis_thaliana
+```
+
+The catalog contains every GO annotated on a family present in the CAFE change
+table, restricted to the requested aspects and fixed reference annotation.
+Only family identities are used from the change table; branch changes,
+probabilities, target and direction do not determine the catalog. This is not
+the complete ontology, and no new GO ancestor propagation is added. Existing
+catalogs cannot be overwritten. Preserve the catalog, source-input hashes and
+its own hash as part of the analysis contract.
+
+```bash
+Rscript workflow/support/cafe_go_enrichment.r \
+  saved/Gamma_change.tab saved/Gamma_branch_probabilities.tab \
+  saved/Orthogroups.selected.tsv annotations/Arabidopsis_thaliana_annotation.tsv \
+  results/branch_37 '<37>' decrease BP,MF,CC event_all_go .05 \
+  Arabidopsis_thaliana /absolute/path/frozen_event_go.tsv
+```
+
+For the workflow entrypoint, select `go_enrichment_method="event_all_go"` and
+set `go_fixed_universe_file` to the absolute catalog path. Use the same catalog
+for all target branches. Each invocation verifies the complete catalog against
+its eligible families and annotation; mismatches fail rather than silently
+redefining the background. The method accepts one direction per invocation.
+
+All frozen GO rows remain in `_all_go.tsv`, including zero-target and zero-event
+terms with one-sided P=1. `p_value_adjusted` is BH across the **full** catalog.
+Existing event-only raw P values and event counts are preserved, but BH values
+can increase because the hypothesis family has changed. `_significant_go.tsv`
+contains full-catalog BH discoveries. `_tarone_significant_go.tsv` contains the
+separate Tarone discoveries at alpha=0.05, and `_all_go.tsv` additionally records
+minimum attainable P, its log, testability, Tarone decisions and full-catalog
+Bonferroni results.
+
+For each GO, the smallest attainable one-sided Fisher P is the hypergeometric
+mass at the maximum feasible overlap, conditional on its two-by-two margins.
+The implemented Tarone (1990) variant chooses the smallest integer K such that
+`M(K) = count(p_min < alpha/K) <= K`, then rejects only tests with
+`P < alpha/K`. Strict inequalities match the existing P<alpha convention.
+`event_all_go_metadata.tsv` records the total GO count, K, the distinct testable
+count M(K), threshold and `M(K)*alpha/K` union bound. K and M(K) are not
+interchangeable. No Tarone q value is fabricated: the decision is specific to
+the recorded alpha and variant.
+
+Tarone targets **FWER**, whereas BH targets **FDR**; a reduced testable count
+does not guarantee more discoveries than BH. Bounds require valid conditional
+tests. Freezing GO does not repair repeated-family dependence in the legacy
+event model or turn its screen into a branch-rate comparison. Treat these
+outputs as a sensitivity analysis, preserve the original BH results, and compare
+original BH, fixed-catalog BH and Tarone separately. No CAFE refit is needed.
+
+Reference: R. E. Tarone (1990), *A modified Bonferroni method for discrete data*,
+[Biometrics 46:515–522](https://pubmed.ncbi.nlm.nih.gov/2364136/).
+The integer-K formulation is also described in
+[Gilbert (2005), section 3.2](https://faculty.washington.edu/peterg/Vaccine2006/articles/GilbertPaperAppliedStatistics.2004.pdf).
+
 ## Exploratory target-restricted branch flags
 
 ```bash

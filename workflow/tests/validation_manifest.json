@@ -83,6 +83,7 @@
   ],
   "r_commands": [
     ["Rscript", "workflow/tests/test_cafe_go_enrichment.R"],
+    ["Rscript", "workflow/tests/test_cafe_go_tarone.R"],
     ["bash", "workflow/tests/check_treevis_package.sh"],
     ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
     ["Rscript", "workflow/tests/test_r_species_label_utils.R"],
