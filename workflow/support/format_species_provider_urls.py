@@ -7,6 +7,7 @@ from http.cookiejar import CookieJar
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
+from format_species_accessions import NCBI_ACCESSION_SEARCH
 from format_species_network import guarded_urlopen as urlopen
 
 NCBI_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GC[AF]_[0-9]+\.[0-9]+$", re.IGNORECASE)
@@ -120,10 +121,10 @@ def extract_ncbi_accession_from_source_id(source_id):
     text = str(source_id or "").strip()
     if NCBI_ASSEMBLY_ACCESSION_PATTERN.match(text):
         return text
-    match = re.search(r"(GC[AF]_[0-9]+\.[0-9]+)", text, flags=re.IGNORECASE)
-    if match is None:
+    matches = NCBI_ACCESSION_SEARCH.findall(text)
+    if len({value.upper() for value in matches}) != 1:
         return ""
-    return match.group(1)
+    return matches[0]
 
 
 def provider_env_prefix(provider):

@@ -63,6 +63,15 @@ Figshare automatic selection requires a unique full species-name match when a
 species key is supplied. For opaque filenames or ambiguous versions, provide the
 explicit `cds_filename`, `gff_filename` or `genome_filename` instead.
 
+Assembly accessions are matched as complete identifiers, including their version.
+NCBI directory discovery and manifest generation select one coherent assembly
+bundle. Conflicting inferred CoGe/GWH/DDBJ identifiers require an explicit
+source manifest. GWH/VEuPathDB lookup never substitutes a matching ID prefix for
+the requested assembly. RNA-seq metadata selection matches `scientific_name`
+as a whole field, excluding species names found only in descriptions.
+Organelle filtering requires an affirmative organelle label; nuclear insertions
+or negated labels such as `non-mitochondrial` are retained.
+
 Typical examples:
 
 - `Arabidopsis_thaliana_Araport11.fa.gz`

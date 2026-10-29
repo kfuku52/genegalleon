@@ -763,6 +763,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   local translated_tmp="${og_id}.translated.pep.tmp.fasta"
   local species_code=""
   local sp_ub=""
+  local species_pattern=""
   local num_cds=0
   local num_protein=0
   local -a species_names=()
@@ -790,7 +791,8 @@ translate_orthogroup_cds_to_protein_fasta() {
   for sp_ub in "${species_names[@]}"; do
     species_code=$(gg_lookup_species_genetic_code "${sp_ub}" "${table_path}" "${genetic_code}")
     echo "Translation started: ${sp_ub} (genetic_code=${species_code}) -> $(basename "${protein_out}")"
-    seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${sp_ub}([_.-])" "${cds_fasta}" |
+    species_pattern=$(printf '%s' "${sp_ub}" | sed -e 's/[][\\.^$*+?{}()|]/\\&/g')
+    seqkit grep --threads "${GG_TASK_CPUS}" --use-regexp --pattern "^${species_pattern}([_.-])" "${cds_fasta}" |
       seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" |
       gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --allow-unknown-codon --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |

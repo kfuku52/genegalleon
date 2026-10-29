@@ -28,6 +28,7 @@ if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
 import format_species_common as species_common
+from format_species_accessions import GWH_ACCESSION_SEARCH, select_ncbi_bundle
 from format_species_provider_config import (
     DEFAULT_INPUT_RELATIVE_DIRS,
     DOWNLOAD_MANIFEST_BUILDER_PROVIDERS,
@@ -647,34 +648,28 @@ def infer_coge_genome_id_from_files(species_key: str, files: List[Path], warning
         name = path.name
         for match in re.finditer(r"(?:^|[._-])gid([0-9]+)(?:[._-]|$)", name, flags=re.IGNORECASE):
             matches.add(match.group(1))
-        for match in re.finditer(r"dsgid[=_-]?([0-9]+)", name, flags=re.IGNORECASE):
+        for match in re.finditer(r"(?:^|[._-])dsgid[=_-]?([0-9]+)(?=[._-]|$)", name, flags=re.IGNORECASE):
             matches.add(match.group(1))
     if len(matches) == 0:
         return ""
     ordered = sorted(matches)
     if len(ordered) > 1:
-        warnings.append(
-            "[coge] {}: multiple genome_id candidates detected {}. Using '{}'".format(
-                species_key, ",".join(ordered), ordered[0]
-            )
-        )
+        raise ValueError("[coge] {}: multiple genome_id candidates {}; use an explicit source manifest".format(
+            species_key, ",".join(ordered)))
     return ordered[0]
 
 
 def infer_gwh_accession_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
     matches = set()
     for text in [species_key] + [path.name for path in files]:
-        for match in re.finditer(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", text, flags=re.IGNORECASE):
+        for match in GWH_ACCESSION_SEARCH.finditer(text):
             matches.add(match.group(1).upper())
     if len(matches) == 0:
         return ""
     ordered = sorted(matches)
     if len(ordered) > 1:
-        warnings.append(
-            "[gwh] {}: multiple GWH accession candidates detected {}. Using '{}'".format(
-                species_key, ",".join(ordered), ordered[0]
-            )
-        )
+        raise ValueError("[gwh] {}: multiple GWH accession candidates {}; use an explicit source manifest".format(
+            species_key, ",".join(ordered)))
     return ordered[0]
 
 
@@ -684,23 +679,21 @@ def infer_ddbj_wgs_id_from_files(species_key: str, files: List[Path], warnings: 
         return prefix + ("0" * zero_count)
 
     matches = set()
+    # A bare WGS prefix is meaningful only as the explicit directory ID.
+    # Ordinary species/filename words (GENOME, PINUS, ORYZA) are not accessions.
+    if re.fullmatch(r"[A-Za-z]{4,6}", species_key):
+        matches.add(build_master(species_key.upper()))
     for text in [species_key] + [path.name for path in files]:
-        for match in DDBJ_WGS_MASTER_ACCESSION_PATTERN.finditer(str(text or "").upper()):
-            prefix = str(match.group(1) or "").upper()
-            if prefix != "":
-                matches.add(build_master(prefix))
         for token in re.split(r"[^A-Za-z0-9]+", str(text or "").upper()):
-            if re.fullmatch(r"[A-Z]{4,6}", token):
-                matches.add(build_master(token))
+            match = re.fullmatch(r"([A-Z]{4,6})[0-9]{8,9}", token)
+            if match:
+                matches.add(build_master(match.group(1)))
     if len(matches) == 0:
         return ""
     ordered = sorted(matches)
     if len(ordered) > 1:
-        warnings.append(
-            "[ddbj] {}: multiple WGS master candidates detected {}. Using '{}'".format(
-                species_key, ",".join(ordered), ordered[0]
-            )
-        )
+        raise ValueError("[ddbj] {}: multiple WGS master candidates {}; use an explicit source manifest".format(
+            species_key, ",".join(ordered)))
     return ordered[0]
 
 
@@ -1005,6 +998,17 @@ def discover_species_dir_based(provider, input_dir):
             gbff_matches = [path for path in files if is_gbff_filename(path.name)]
             genome_matches = [path for path in files if is_probable_genome_filename(provider, path.name, species_key=species_key)]
 
+        if provider == "ncbi":
+            try:
+                accession, groups, accessions = select_ncbi_bundle(
+                    (cds_matches, gff_matches, gbff_matches, genome_matches))
+            except ValueError as exc:
+                errors.append("[{}] {}: {}".format(provider, species_key, exc))
+                continue
+            cds_matches, gff_matches, gbff_matches, genome_matches = groups
+            if len(accessions) > 1:
+                warnings.append("[ncbi] {}: using coherent bundle '{}'".format(species_key, accession))
+
         cds_path = pick_single_file(cds_matches, provider, species_key, "CDS", warnings)
         gff_path = pick_single_file(gff_matches, provider, species_key, "GFF", warnings)
         gbff_path = pick_single_file(gbff_matches, provider, species_key, "GBFF", warnings)
@@ -1018,32 +1022,36 @@ def discover_species_dir_based(provider, input_dir):
             )
             continue
         source_id = species_key
-        if provider == "coge":
-            source_id = infer_coge_genome_id_from_files(species_key, files, warnings)
-            if source_id == "":
-                errors.append(
-                    "[coge] {}: genome_id (gid) was not detected from file names. "
-                    "Include 'gid<NUM>' in at least one input filename.".format(species_key)
-                )
-                continue
-        if provider == "gwh":
-            source_id = infer_gwh_accession_from_files(species_key, files, warnings)
-            if source_id == "":
-                errors.append(
-                    "[gwh] {}: GWH accession was not detected from file names. "
-                    "Include 'GWH...' in at least one input filename.".format(species_key)
-                )
-                continue
-        if provider == "ddbj":
-            source_id = infer_ddbj_wgs_id_from_files(species_key, files, warnings)
-            if source_id == "":
-                errors.append(
-                    "[ddbj] {}: WGS master accession was not detected from file names. "
-                    "Include 'PRJDB...' in the manifest or a 'BAAHMP000000000'-style token in at least one input filename.".format(
-                        species_key
+        try:
+            if provider == "coge":
+                source_id = infer_coge_genome_id_from_files(species_key, files, warnings)
+                if source_id == "":
+                    errors.append(
+                        "[coge] {}: genome_id (gid) was not detected from file names. "
+                        "Include 'gid<NUM>' in at least one input filename.".format(species_key)
                     )
-                )
-                continue
+                    continue
+            if provider == "gwh":
+                source_id = infer_gwh_accession_from_files(species_key, files, warnings)
+                if source_id == "":
+                    errors.append(
+                        "[gwh] {}: GWH accession was not detected from file names. "
+                        "Include 'GWH...' in at least one input filename.".format(species_key)
+                    )
+                    continue
+            if provider == "ddbj":
+                source_id = infer_ddbj_wgs_id_from_files(species_key, files, warnings)
+                if source_id == "":
+                    errors.append(
+                        "[ddbj] {}: WGS master accession was not detected from file names. "
+                        "Include 'PRJDB...' in the manifest or a 'BAAHMP000000000'-style token in at least one input filename.".format(
+                            species_key
+                        )
+                    )
+                    continue
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
         rows.append(
             {
                 "provider": provider,

@@ -46,9 +46,7 @@ from .common import (
     extract_figshare_article_id_candidate,
     fetch_json_with_headers,
     is_probable_gff_url,
-    normalize_lookup_text,
     parse_species_key_candidate,
-    source_id_candidates,
 )
 
 
@@ -406,75 +404,43 @@ def fetch_veupathdb_records(timeout, headers):
 
 
 def resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers):
-    candidates = source_id_candidates("veupathdb", source_id, species_key)
-    if len(candidates) == 0:
-        candidates = [str(source_id or "").strip()]
-    candidate_keys = [normalize_lookup_text(value) for value in candidates if normalize_lookup_text(value) != ""]
-    if len(candidate_keys) == 0:
+    requested = strip_provider_prefix(str(source_id or species_key or "").strip(), "veupathdb")
+    candidate_keys = {requested.casefold()}
+    if is_url_like(requested):
+        candidate_keys.add(veupathdb_source_id_from_url(requested).casefold())
+    candidate_keys.discard("")
+    if not candidate_keys:
         raise ValueError("VEuPathDB id is empty")
 
-    best_record = None
-    best_rank = None
+    matches = {}
+    requested_species = " ".join(requested.replace("_", " ").split()).casefold()
     for record in fetch_veupathdb_records(timeout, headers):
         attributes = record.get("attributes", {})
         genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
         gff_url = str(attributes.get("URLgff", "") or "").strip()
         cds_url = infer_veupathdb_cds_url(attributes)
         derived_source_id = veupathdb_source_id_from_url(genome_url) or veupathdb_source_id_from_url(gff_url)
-        normalized_source_id = normalize_lookup_text(derived_source_id)
-        normalized_primary = normalize_lookup_text(attributes.get("primary_key", ""))
-        normalized_species = normalize_lookup_text(attributes.get("species", ""))
-        normalized_project = normalize_lookup_text(attributes.get("project_id", ""))
-        source_id_exact = any(
-            candidate == normalized_source_id for candidate in candidate_keys if normalized_source_id != ""
-        )
-        primary_exact = any(candidate == normalized_primary for candidate in candidate_keys if normalized_primary != "")
-        species_exact = any(candidate == normalized_species for candidate in candidate_keys if normalized_species != "")
-        project_exact = any(candidate == normalized_project for candidate in candidate_keys if normalized_project != "")
-        source_id_contains = any(
-            candidate in normalized_source_id or normalized_source_id in candidate
-            for candidate in candidate_keys
-            if normalized_source_id != ""
-        )
-        primary_contains = any(
-            candidate in normalized_primary or normalized_primary in candidate
-            for candidate in candidate_keys
-            if normalized_primary != ""
-        )
-        species_contains = any(
-            candidate in normalized_species or normalized_species in candidate
-            for candidate in candidate_keys
-            if normalized_species != ""
-        )
-        rank = (
-            1 if genome_url != "" else 0,
-            1 if gff_url != "" else 0,
-            1 if cds_url != "" else 0,
-            1 if source_id_exact else 0,
-            1 if primary_exact else 0,
-            1 if species_exact else 0,
-            1 if project_exact else 0,
-            1 if source_id_contains else 0,
-            1 if primary_contains else 0,
-            1 if species_contains else 0,
-            -len(normalized_source_id),
-            normalized_source_id,
-        )
-        if best_record is None or rank > best_rank:
-            best_record = {
-                "record": record,
-                "derived_source_id": derived_source_id,
-                "cds_url": cds_url,
-            }
-            best_rank = rank
-
-    if best_record is None or max(best_rank[3:10]) == 0:
+        identities = {str(value or "").strip().casefold() for value in (
+            derived_source_id, attributes.get("primary_key", ""),
+            attributes.get("project_id", ""))}
+        identities.discard("")
+        record_species = " ".join(str(attributes.get("species", "") or "").replace("_", " ").split()).casefold()
+        if candidate_keys & identities or requested_species == record_species:
+            key = (derived_source_id, genome_url, gff_url, cds_url)
+            matches.setdefault(key, {"record": record, "derived_source_id": derived_source_id, "cds_url": cds_url})
+    if not matches:
         raise ValueError("VEuPathDB id '{}' was not found in GenomeDataTypes".format(source_id))
+    if len(matches) != 1:
+        raise ValueError("VEuPathDB id '{}' matches multiple assemblies; specify an exact source ID".format(source_id))
+    best_record = next(iter(matches.values()))
 
     attributes = best_record["record"].get("attributes", {})
     genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
     gff_url = str(attributes.get("URLgff", "") or "").strip()
     cds_url = str(best_record.get("cds_url", "") or "").strip()
+    genome_id, gff_id = (veupathdb_source_id_from_url(url) for url in (genome_url, gff_url))
+    if genome_id and gff_id and genome_id != gff_id:
+        raise ValueError("VEuPathDB record mixes genome and GFF source IDs")
     if gff_url == "" or genome_url == "":
         raise ValueError("VEuPathDB id '{}' did not resolve to GFF/genome URLs".format(source_id))
 

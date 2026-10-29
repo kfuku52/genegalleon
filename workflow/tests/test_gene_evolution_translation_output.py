@@ -61,6 +61,22 @@ def test_declared_species_cannot_silently_drop_records(tmp_path):
     assert not protein.exists()
 
 
+@pytest.mark.parametrize("header,accepted", [("Standard_species.v1_gene1", True),
+                                           ("Standard_speciesXv1_gene1", False)])
+def test_declared_species_regex_metacharacters_are_literal(tmp_path, header, accepted):
+    cds, table, protein = tmp_path / "input.fa", tmp_path / "codes.tsv", tmp_path / "protein.fa.gz"
+    cds.write_text(">" + header + "\nATGAAATAA\n")
+    table.write_text("species\tgenetic_code\nStandard_species.v1\t1\n")
+    env = dict(os.environ, GG_CORE_SOURCE_ONLY="1", GG_TASK_CPUS="1", GG_TASK_MEM_GB="2",
+               gg_workspace_dir=str(tmp_path / "workspace"), gg_support_dir=str(CORE_PATH.parent.parent / "support"))
+    result = subprocess.run(["bash", "-c", 'source "$1"; og_id=literal; '
+                             'translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4" Standard_species.v1',
+                             "_", str(CORE_PATH), str(cds), str(protein), str(table)],
+                            env=env, cwd=tmp_path, text=True, capture_output=True)
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+    assert protein.exists() is accepted
+
+
 def _shell_function_source(name: str) -> str:
     text = CORE_PATH.read_text(encoding="utf-8")
     match = re.search(
