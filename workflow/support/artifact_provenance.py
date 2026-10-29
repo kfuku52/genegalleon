@@ -14,7 +14,6 @@ import contextlib
 import contextvars
 import csv
 import datetime as dt
-import fcntl
 import gzip
 import hashlib
 import io
@@ -33,6 +32,7 @@ from typing import BinaryIO, Iterable
 
 from metadata_store import archived_bytes, archived_exists, archived_info
 from metadata_store import writer as metadata_writer
+from shared_namespace_lock import NamespaceLockError, namespace_lock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -1191,14 +1191,15 @@ def artifact_manifest_lock(args: argparse.Namespace):
         yield
         return
     identity = os.fsencode(args.manifest.resolve())
-    lock_path = args.workspace_root / ".gg_cache" / "artifact_provenance_locks" / (hashlib.sha256(identity).hexdigest() + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
+    # Fixed 256 buckets bound persistent inode usage. Atomic shared-filesystem
+    # ownership also excludes other Lustre clients mounted with localflock.
+    bucket = hashlib.sha256(identity).hexdigest()[:2]
+    lock_path = args.workspace_root / ".gg_cache" / "artifact_provenance_lock_stripes-v1" / (bucket + ".lock")
+    try:
+        with namespace_lock(lock_path, exclusive=True):
             yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except NamespaceLockError as exc:
+        raise ProvenanceError(str(exc)) from exc
 
 
 def legacy_policy_result(args: argparse.Namespace) -> int:

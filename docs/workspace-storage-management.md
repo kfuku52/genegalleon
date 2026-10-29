@@ -472,3 +472,25 @@ bash /path/to/genegalleon/workflow/gg_workspace_storage.sh convert \
 Use an absolute GeneGalleon path or load the project runtime explicitly. The
 storage command itself uses Python standard-library functionality and does not
 require Apptainer for ZIP management.
+
+## Provenance locks and runtime snapshots
+
+Provenance writers share 256 fixed lock buckets under
+`workspace/.gg_cache/artifact_provenance_lock_stripes-v1`. They use the same
+atomic shared-filesystem ownership protocol as the family store. Upgrade all
+writers and stop older runtimes before retiring the old per-manifest lock
+directory; never unlink active coordination files. A crashed owner remains
+protected for explicit verified recovery.
+
+New task runtime snapshots retain their existing paths and bytes. Byte-identical
+files share a content-addressed, read-only inode under
+`workspace/output/runtime/.shared-code-v1`. Mutable workflow sources are copied
+into the pool before linking, and changed bytes at an existing snapshot path
+are rejected. There is no new host Python dependency. Existing snapshots remain
+untouched during ordinary execution. An explicit offline maintenance operation
+may share their files after archiving the originals and checking current
+references; rollback restores the original bytes and metadata from that archive.
+
+Empty output-inventory directories may be removed only after metadata has been
+collected successfully and compatible SQLite readers are active. Preserve the
+SQLite database, its permanent guard, and all namespace-owner directories.

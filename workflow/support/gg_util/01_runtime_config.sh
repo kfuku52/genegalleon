@@ -501,6 +501,68 @@ gg_entrypoint_runtime_snapshot_dir() {
 		"${output_root}/runtime/$(gg_sanitize_runtime_path_component "${entrypoint_stem}")/$(gg_sanitize_runtime_path_component "${job_id}")_$(gg_sanitize_runtime_path_component "${task_id}")"
 }
 
+gg_runtime_file_sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum -- "$1" | awk '{print $1}'
+	else
+		shasum -a 256 -- "$1" | awk '{print $1}'
+	fi
+}
+
+# The pool is immutable; old snapshots retain their public paths and bytes.
+# Replacing an existing copy is reserved for explicitly quiescent maintenance.
+gg_share_runtime_file() (
+	set -e
+	local source=$1 destination=$2 pool=$3 replace_existing=${4:-0}
+	local digest mode object pool_uid pool_mode object_mode object_uid temporary=""
+	[[ -f "${source}" ]] || return 1
+	[[ ! -L "${pool}" && ! -L "${destination}" ]] || return 1
+	mkdir -p -m 700 -- "${pool}"
+	pool_uid=$(stat -c '%u' -- "${pool}" 2>/dev/null || stat -f '%u' "${pool}")
+	pool_mode=$(stat -c '%a' -- "${pool}" 2>/dev/null || stat -f '%Lp' "${pool}")
+	[[ "${pool_uid}" == "${EUID}" && "$((8#${pool_mode} & 8#22))" == 0 ]] || return 1
+	mode=$(stat -c '%a' -- "${source}" 2>/dev/null || stat -f '%Lp' "${source}")
+	[[ "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+	mode=$(printf '%o' "$((8#${mode} & ~8#222))")
+	digest=$(gg_runtime_file_sha256 "${source}")
+	[[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
+	object="${pool}/${digest}.${mode}"
+	if [[ ! -e "${object}" && ! -L "${object}" ]]; then
+		temporary=$(mktemp -d "${pool}/.publish.XXXXXXXX")
+		trap '[[ -z "${temporary}" ]] || rm -rf -- "${temporary}"' EXIT
+		cp -- "${source}" "${temporary}/object"
+		chmod "${mode}" "${temporary}/object"
+		[[ "$(gg_runtime_file_sha256 "${temporary}/object")" == "${digest}" ]] || return 1
+		# A concurrent complete publisher can win; its bytes are checked below.
+		ln -- "${temporary}/object" "${object}" 2>/dev/null || [[ -f "${object}" ]]
+	fi
+	[[ -f "${object}" && ! -L "${object}" ]] || return 1
+	object_uid=$(stat -c '%u' -- "${object}" 2>/dev/null || stat -f '%u' "${object}")
+	object_mode=$(stat -c '%a' -- "${object}" 2>/dev/null || stat -f '%Lp' "${object}")
+	[[ "${object_uid}" == "${EUID}" && "$((8#${object_mode} & 8#222))" == 0 ]] || return 1
+	[[ "$(gg_runtime_file_sha256 "${object}")" == "${digest}" ]] || return 1
+	if [[ -e "${destination}" || -L "${destination}" ]]; then
+		[[ -f "${destination}" && ! -L "${destination}" ]] || return 1
+		cmp -s -- "${object}" "${destination}" || {
+			echo "Runtime snapshot content changed: ${destination}" >&2
+			return 1
+		}
+		if [[ "${replace_existing}" != 1 || "${object}" -ef "${destination}" ]]; then
+			return 0
+		fi
+		if [[ -z "${temporary}" ]]; then
+			temporary=$(mktemp -d "${pool}/.publish.XXXXXXXX")
+			trap '[[ -z "${temporary}" ]] || rm -rf -- "${temporary}"' EXIT
+		fi
+		ln -- "${object}" "${temporary}/replacement"
+		mv -- "${temporary}/replacement" "${destination}" </dev/null
+	else
+		ln -- "${object}" "${destination}" || {
+			[[ -f "${destination}" && ! -L "${destination}" ]] && cmp -s -- "${object}" "${destination}"
+		}
+	fi
+)
+
 gg_prepare_entrypoint_runtime_snapshot() {
 	local entrypoint_name=${1:-}
 	local script_path=${2:-}
@@ -508,6 +570,7 @@ gg_prepare_entrypoint_runtime_snapshot() {
 	local snapshot_script=""
 	local entrypoint_path=""
 	local metadata_path=""
+	local runtime_pool=""
 
 	if [[ -z "${entrypoint_name}" ]]; then
 		echo "gg_prepare_entrypoint_runtime_snapshot: entrypoint name is required." >&2
@@ -521,18 +584,18 @@ gg_prepare_entrypoint_runtime_snapshot() {
 	runtime_dir="$(gg_entrypoint_runtime_snapshot_dir "${entrypoint_name}")"
 	mkdir -p -- "${runtime_dir}"
 
+	runtime_pool="$(dirname "$(dirname "${runtime_dir}")")/.shared-code-v1"
 	snapshot_script="${runtime_dir}/$(basename "${script_path}")"
-	cp -- "${script_path}" "${snapshot_script}"
-	chmod --reference="${script_path}" "${snapshot_script}" 2>/dev/null || chmod a+r "${snapshot_script}" 2>/dev/null || true
+	gg_share_runtime_file "${script_path}" "${snapshot_script}" "${runtime_pool}" || return 1
 
 	if [[ -n "${gg_workflow_dir:-}" ]]; then
 		entrypoint_path="${gg_workflow_dir}/$(basename "${entrypoint_name}")"
 		if [[ -s "${entrypoint_path}" ]]; then
-			cp -- "${entrypoint_path}" "${runtime_dir}/$(basename "${entrypoint_path}")"
+			gg_share_runtime_file "${entrypoint_path}" "${runtime_dir}/$(basename "${entrypoint_path}")" "${runtime_pool}" || return 1
 		fi
 		for metadata_path in "${gg_workflow_dir}/gg_common_params.sh" "${gg_workflow_dir}/../VERSION"; do
 			if [[ -s "${metadata_path}" ]]; then
-				cp -- "${metadata_path}" "${runtime_dir}/$(basename "${metadata_path}")"
+				gg_share_runtime_file "${metadata_path}" "${runtime_dir}/$(basename "${metadata_path}")" "${runtime_pool}" || return 1
 			fi
 		done
 	fi
