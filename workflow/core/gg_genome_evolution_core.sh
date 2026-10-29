@@ -6689,6 +6689,7 @@ cafe_provenance_args+=(
 # Existing aggregate manifests are still checked before adopting a substage.
 # A manifest-free native fit must also match this input before it can be
 # adopted. Generic artifact adoption alone establishes no scientific identity.
+# gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
 if [[ ${run_cafe} -eq 1 && "${artifact_legacy_policy:-adopt}" != rebuild && ! -s "${genome_evolution_provenance_dir}/cafe.inference.json" && -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" && -s "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
   python "${gg_support_dir}/validate_cafe_outputs.py" \
     --copy-number "${file_orthogroup_copy_number}" \
@@ -6997,6 +6998,7 @@ fi
 task="GO enrichment analysis"
 go_enrichment_extra_args=()
 if [[ "${go_enrichment_method}" == event_all_go ]]; then
+  # gg-cache-guard: audited - required frozen input validation, not an output reuse decision.
   if [[ ${run_go_enrichment} -eq 1 && ( -z "${go_fixed_universe_file}" || "${go_fixed_universe_file}" != /* || ! -s "${go_fixed_universe_file}" ) ]]; then
     echo "event_all_go requires an existing absolute go_fixed_universe_file created by --freeze-event-go-universe." >&2
     exit 1

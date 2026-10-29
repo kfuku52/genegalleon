@@ -63,3 +63,12 @@ Rscript() { [[ $# -eq 13 && "${!#}" == "$go_fixed_universe_file" ]] || return 77
     result = subprocess.run(['bash', '-c', prelude+stage], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout+result.stderr
     assert 'FIXED_GO_ARGUMENT_PRESERVED' in result.stdout
+
+
+def test_missing_fixed_go_catalog_is_rejected_before_artifact_reuse(tmp_path):
+    text = CORE.read_text()
+    start = text.index('task="GO enrichment analysis"')
+    validation = text[start:text.index('disable_if_no_input_file', start)]
+    result = subprocess.run(['bash', '-c', 'set -euo pipefail\ngo_enrichment_method=event_all_go\nrun_go_enrichment=1\ngo_fixed_universe_file='+shlex.quote(str(tmp_path/'absent.tsv'))+'\n'+validation], text=True, capture_output=True)
+    assert result.returncode == 1
+    assert 'requires an existing absolute go_fixed_universe_file' in result.stderr
