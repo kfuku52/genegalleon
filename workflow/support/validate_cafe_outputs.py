@@ -23,7 +23,7 @@ def read_table(path, family_column="FamilyID"):
         header = next(reader, [])
         if not header or len(header) != len(set(header)) or any(not h.strip() for h in header):
             raise ValueError(f"Missing or duplicate CAFE table columns: {path}")
-        family_headers = [i for i, name in enumerate(header) if name in {"FamilyID", "#FamilyID"}]
+        family_headers = [i for i, name in enumerate(header) if name in {"FamilyID", "#FamilyID", "Orthogroup"}]
         if len(family_headers) != 1:
             raise ValueError(f"Missing or ambiguous {family_column} column: {path}")
         index = family_headers[0]
@@ -54,7 +54,7 @@ def clades(tree):
 
 def validate(copy_number, tree_path, output_dir):
     columns, inputs = read_table(copy_number)
-    input_species = set(columns) - {"Desc", "FamilyID"}
+    input_species = set(columns) - {"Desc", "besthit_0.95", "FamilyID"}
     tree = Phylo.read(tree_path, "newick")
     tips = [t.name for t in tree.get_terminals()]
     if any(not tip for tip in tips) or len(tips) != len(set(tips)) or set(tips) != input_species:

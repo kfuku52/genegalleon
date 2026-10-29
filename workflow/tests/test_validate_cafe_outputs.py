@@ -126,3 +126,18 @@ def test_real_native_gamma_fit_satisfies_semantic_guard(tmp_path):
     print("native Gamma fit:", result,
           "count header:", (output / "Gamma_count.tab").read_text().splitlines()[0],
           "probability header:", (output / "Gamma_branch_probabilities.tab").read_text().splitlines()[0])
+
+
+def test_native_validator_accepts_real_preparation_output_contract(tmp_path):
+    copies, tree, native = fixture(tmp_path)
+    raw = tmp_path / 'selected.tsv'
+    raw.write_text('besthit_0.95\tOrthogroup\tA\tB\tC\nname\tOG1\t2\t4\t1\nname\tOG2\t0\t0\t1\n')
+    prepared = tmp_path / 'prepared'
+    proc = subprocess.run([sys.executable, str(SUPPORT / 'prepare_orthogroup_copy_number.py'),
+        '--genecount', str(raw), '--dated_species_tree', str(tree), '--output_dir', str(prepared)],
+        text=True, capture_output=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    matrix = prepared / 'orthogroup_copy_number.tsv'
+    assert matrix.read_text().splitlines()[0].split('\t') == ['besthit_0.95', 'Orthogroup', 'A', 'B', 'C']
+    result = validator.validate(matrix, tree, native)
+    assert result['validated'] and result['species'] == 3 and result['reconstructed_families'] == 1
