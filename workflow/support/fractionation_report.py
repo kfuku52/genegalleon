@@ -58,11 +58,13 @@ def run(config_path, output_dir):
     config = json.loads(raw_config)
     allowed = {"manifest", "prefix", "window_size", "step_size", "denominator",
                "minimum_callable_fraction", "minimum_anchors", "trim", "raw", "target_seqids",
-               "plot_config", "statistics"}
+               "plot_config", "statistics", "comparison_scope"}
     if not isinstance(config, dict) or "manifest" not in config or set(config) - allowed:
         raise ValueError("Require a report configuration object with supported keys and manifest")
     manifest = (config_path.parent / config.pop("manifest")).resolve()
     statistics = config.pop("statistics", None)
+    if statistics is not None and config.get("comparison_scope", "shared") == "pairwise":
+        raise ValueError("Paired block inference requires comparison_scope=shared")
     if statistics is not None:
         if not isinstance(statistics, dict) or set(statistics) - {"block_size", "replicates", "permutations", "seed"}:
             raise ValueError("Unsupported block statistics configuration")
@@ -75,6 +77,8 @@ def run(config_path, output_dir):
         raise ValueError("Block inference requires masked local-copy profiles")
     prefix = config.get("prefix", "comparison")
     output_dir = Path(output_dir)
+    if config.get("comparison_scope", "shared") == "pairwise" and (output_dir / (prefix + ".contrasts.json")).exists():
+        raise ValueError("Use a new prefix for pairwise reports: previous shared contrasts exist")
     summary = comparison_report(manifest, output_dir, **config)
     if config_path.read_bytes() != raw_config:
         raise RuntimeError("Report configuration changed during calculation")

@@ -73,3 +73,44 @@ def test_report_core_calls_native_dependency_without_pair_table(tmp_path):
     assert summary['common_callable_loci'] == 12
     contrasts = json.loads((result / 'comparison.contrasts.json').read_text())
     assert contrasts['contrasts'][0]['effect'] == 0
+
+
+def test_pairwise_statistics_rejected_before_outputs(tmp_path):
+    config = tmp_path / 'report.json'
+    config.write_text(json.dumps(dict(manifest='missing.tsv', comparison_scope='pairwise', statistics={})))
+    with pytest.raises(ValueError, match='comparison_scope=shared'):
+        run(config, tmp_path / 'out')
+    assert not (tmp_path / 'out').exists()
+
+
+def test_pairwise_config_uses_native_independent_counts(tmp_path):
+    ref = tmp_path / 'ref.bed'
+    query = tmp_path / 'query.bed'
+    anchors = tmp_path / 'pairs.anchors'
+    ref.write_text(''.join(f'chr1\t{i*100}\t{i*100+90}\tt{i}\n' for i in range(5)))
+    query.write_text(''.join(f'cA\t{i*100}\t{i*100+90}\tq{i}\n' for i in range(5)))
+    anchors.write_text('###\n' + ''.join(f't{i}\tq{i}\t10\n' for i in range(4)))
+    manifest = tmp_path / 'manifest.tsv'
+    manifest.write_text('analysis_id\tspecies\texpected_copies\ttarget_bed\tquery_bed\tsynteny_file\n'
+                        f'a\ta_species\t2\t{ref}\t{query}\t{anchors}\n')
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps(dict(manifest='manifest.tsv', comparison_scope='pairwise', raw=True,
+                                     denominator='syntenic', window_size=3)))
+    result = run(config, tmp_path / 'out')
+    assert result['schema_version'] == 2
+    assert result['counts_per_analysis']['a'] == dict(callable_loci=5, selected_reference_loci=4,
+                                                     windows=2, estimable_windows=2)
+    assert not (tmp_path / 'out/comparison.contrasts.json').exists()
+
+
+def test_pairwise_report_refuses_stale_shared_statistics(tmp_path):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps(dict(manifest='missing.tsv', comparison_scope='pairwise')))
+    out = tmp_path / 'out'
+    out.mkdir()
+    prior = out / 'comparison.contrasts.json'
+    prior.write_text('{"prior": true}')
+    with pytest.raises(ValueError, match='previous shared contrasts'):
+        run(config, out)
+    assert prior.read_text() == '{"prior": true}'
+    assert not (out / 'comparison.report.json').exists()
