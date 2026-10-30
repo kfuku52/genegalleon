@@ -33,7 +33,7 @@ SCHEMA_VERSION = 1
 READONLY_SOURCE_LINK_CHURN_V1 = True
 MAX_BODY = 8 * 1024 * 1024
 INDEX_ROOTS = {"index", "index-by-subdir"}
-ROOTS = {"runtime", "observations", "resource_metrics", "artifact_provenance", "versions", "version_inventory", "output-inventory"}
+ROOTS = {"performance", "runtime", "observations", "resource_metrics", "artifact_provenance", "versions", "version_inventory", "output-inventory"}
 _LOCAL = threading.local()
 _SNAPSHOT = contextvars.ContextVar("gg_metadata_snapshot", default=None)
 
@@ -47,7 +47,8 @@ def signature(path):
 def scope(path):
     path = Path(os.path.abspath(path))
     for root in (path, *path.parents):
-        if root.name in ROOTS or (root.name in INDEX_ROOTS and root.parent.name == ".gg_store"):
+        if ((root.name in ROOTS and (root.name != "performance" or root.parent.name == "versions"))
+                or (root.name in INDEX_ROOTS and root.parent.name == ".gg_store")):
             if root.is_symlink():
                 raise ValueError(f"Metadata root must be a physical directory: {root}")
             if not root.exists():
@@ -163,7 +164,7 @@ def _query(root, sql, values=(), observe=None):
 
 
 def body_limit(root):
-    return 128 * 1024 * 1024 if root is not None and root.name in INDEX_ROOTS else MAX_BODY
+    return 128 * 1024 * 1024 if root is not None and root.name in (INDEX_ROOTS | {"performance"}) else MAX_BODY
 
 
 def archived_bytes(path, *, limit=None, observe=None):
@@ -301,6 +302,8 @@ def _eligible(root, key, closed):
         return closed[parts[0]]
     if root.name in INDEX_ROOTS:
         return "/" not in key and key.endswith(".json")
+    if root.name == "performance":
+        return re.fullmatch(r"(?:[1-9][0-9]*|trace-(?:initial|[a-f0-9]{32})-[0-3][a-f0-9])\.jsonl", key) is not None
     if root.name == "resource_metrics":
         return key.endswith((".json", ".jsonl"))
     if root.name == "artifact_provenance":
@@ -342,7 +345,7 @@ def _inventory(root, max_files):
         for name in dirs:
             if (Path(directory) / name).is_symlink():
                 raise ValueError("Symlinked metadata directory")
-        if root.name in {"versions", "version_inventory", "artifact_provenance", *INDEX_ROOTS}:
+        if root.name in {"performance", "versions", "version_inventory", "artifact_provenance", *INDEX_ROOTS}:
             dirs.clear()  # Flat record roots never consume nested coordination namespaces.
         for name in sorted(files):
             path = Path(directory) / name

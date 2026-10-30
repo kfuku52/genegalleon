@@ -729,3 +729,6 @@ A good local validation sequence after code changes is:
 2. run `bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_r_scripts_parse.R` if any R helper changed,
 3. run `GG_ENTRYPOINT_DRY_RUN=1 bash workflow/gg_all_entrypoints_debug.sh` for wrapper-level sanity,
 4. inspect `workspace/output/versions/` after a real stage run.
+
+For offline metadata inode collection, reader cutover, recovery and the repeated
+fixture benchmark, see [metadata inode maintenance](metadata-inode-maintenance.md).

@@ -102,9 +102,21 @@ def private_cache(root):
             os.close(descriptor)
 
 
+SQLITE_VERSION_CACHE_LOCK_V1 = True
+
+
+def cache_lock_path(cache_file):
+    """Preserve legacy locking; collected inventories use one bounded lock."""
+    cache_file = Path(cache_file)
+    database = cache_file.parent / DATABASE
+    if database.is_symlink():
+        raise ValueError("Symlinked version cache database")
+    return cache_file.parent / ".versions-cache.lock" if database.is_file() else Path(str(cache_file) + ".lock")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("image", "environment", "cache-ready", "publish-cache", "private-cache", "copy-cache"))
+    parser.add_argument("action", choices=("image", "environment", "cache-ready", "publish-cache", "private-cache", "copy-cache", "cache-lock"))
     parser.add_argument("--image", type=Path)
     parser.add_argument("--cache-file", type=Path)
     parser.add_argument("--source", type=Path)
@@ -120,6 +132,8 @@ def main():
         print(environment_identity())
     elif args.action == "private-cache":
         private_cache(args.cache_file)
+    elif args.action == "cache-lock":
+        print(cache_lock_path(args.cache_file))
     elif args.action == "cache-ready":
         raise SystemExit(0 if cache_ready(args.cache_file, args.key) else 1)
     elif args.action == "copy-cache":

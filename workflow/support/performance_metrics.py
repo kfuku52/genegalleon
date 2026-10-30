@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from shared_namespace_lock import NamespaceLockError
+
 _started = time.perf_counter()
 _counters = {}
 _lock = threading.Lock()
@@ -41,11 +43,9 @@ def write_row(record):
               "job_id": os.environ.get("GG_JOB_ID", os.environ.get("SLURM_JOB_ID", os.environ.get("JOB_ID", ""))),
               "array_task_id": os.environ.get("GG_ARRAY_TASK_ID", os.environ.get("SLURM_ARRAY_TASK_ID", ""))}
     try:
-        root = Path(directory)
-        root.mkdir(parents=True, exist_ok=True)
-        with (root / f"{os.getpid()}.jsonl").open("a") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
-    except OSError as exc:
+        from performance_log import append
+        append(Path(directory), os.getpid(), (json.dumps(record, sort_keys=True) + "\n").encode())
+    except (OSError, ValueError, NamespaceLockError) as exc:
         # Diagnostics cannot invalidate scientific outputs or certify success.
         print(f"Warning: performance telemetry unavailable: {exc}", file=sys.stderr)
 
@@ -74,12 +74,19 @@ atexit.register(_finish)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("start", "elapsed"))
+    parser.add_argument("action", choices=("start", "elapsed", "read"))
+    parser.add_argument("--directory", type=Path)
     parser.add_argument("--phase")
     parser.add_argument("--started", type=float)
     parser.add_argument("--status", choices=("ok", "failed"), default="ok")
     args = parser.parse_args()
-    if args.action == "start":
+    if args.action == "read":
+        if args.directory is None:
+            parser.error("--directory is required")
+        from performance_log import records
+        for record in records(args.directory):
+            print(json.dumps(record, sort_keys=True))
+    elif args.action == "start":
         print(time.perf_counter())
     else:
         if args.phase is None or args.started is None:
