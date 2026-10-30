@@ -261,6 +261,22 @@ def build_plan(args):
         panels = load_panels(panels_path, pairs)
         if "panels" in identifiers:
             raise ValueError("analysis_id 'panels' is reserved when karyotype panels are enabled")
+    dotplot_panels_path = getattr(args, "dotplot_panels", None)
+    dotplot_panels = []
+    if dotplot_panels_path:
+        if dotplot_color != "ds":
+            raise ValueError("Dotplot panels require dotplot-color ds")
+        try:
+            from pairwise_synteny_panels import load_panels as load_dotplot_panels
+        except ImportError:
+            from .pairwise_synteny_panels import load_panels as load_dotplot_panels
+        dotplot_panels_path = Path(dotplot_panels_path)
+        dotplot_panels_path = (dotplot_panels_path if dotplot_panels_path.is_absolute()
+                               else workspace / dotplot_panels_path).resolve()
+        boundary.read([dotplot_panels_path])
+        dotplot_panels = load_dotplot_panels(dotplot_panels_path, pairs)
+        if "dotplot_panels" in identifiers:
+            raise ValueError("analysis_id 'dotplot_panels' is reserved when dotplot panels are enabled")
     layout_source = Path(__file__).with_name("pairwise_synteny_layout.py").resolve()
     inputs = {str(Path(__file__).resolve()): None, str(layout_source): None,
               str(pairs_file.resolve()): pairs_digest}
@@ -277,6 +293,10 @@ def build_plan(args):
             inputs[str(Path(__file__).with_name(helper).resolve())] = None
     if panels_path:
         inputs[str(panels_path)] = None
+    if dotplot_panels_path:
+        inputs[str(dotplot_panels_path)] = None
+        for helper in ("pairwise_synteny_panels.py", "synteny_multitrack.py", "synteny_layout.py"):
+            inputs[str(Path(__file__).with_name(helper).resolve())] = None
     if representative_path or effective_inputs:
         if representative_path:
             inputs[str(representative_path)] = None
@@ -331,6 +351,8 @@ def build_plan(args):
         plan["representative_inputs"] = str(effective_manifest)
     if panels_path:
         plan.update(karyotype_panels_file=str(panels_path), karyotype_panels=panels)
+    if dotplot_panels_path:
+        plan.update(dotplot_panels_file=str(dotplot_panels_path), dotplot_panels=dotplot_panels)
     boundary.check()
     return plan
 
@@ -406,6 +428,11 @@ def contract_args(plan, phase):
         if plan.get("karyotype_panels"):
             result.extend(("--input", "karyotype_panels=" + plan["karyotype_panels_file"]))
             parameters["karyotype_panels"] = plan["karyotype_panels"]
+        if plan.get("dotplot_panels"):
+            result.extend(("--input", "dotplot_panels=" + plan["dotplot_panels_file"]))
+            for helper in ("pairwise_synteny_panels.py", "synteny_multitrack.py", "synteny_layout.py"):
+                result.extend(("--input", f"{helper}={Path(__file__).with_name(helper).resolve()}"))
+            parameters["dotplot_panels"] = plan["dotplot_panels"]
         if plan.get("dotplot_color") == "ds":
             result.extend(("--input", f"ds={phase_root(plan, 'ds')}"))
             result.extend(("--input", f"ds_renderer={Path(__file__).with_name('pairwise_synteny_ds.py').resolve()}"))
@@ -883,6 +910,12 @@ def render(plan, output):
         except ImportError:
             from .synteny_multitrack import render_workflow_panels
         render_workflow_panels(plan, phase_root(plan, "analysis"), output)
+    if plan.get("dotplot_panels"):
+        try:
+            from pairwise_synteny_panels import render_workflow_panels as render_dotplot_panels
+        except ImportError:
+            from .pairwise_synteny_panels import render_workflow_panels as render_dotplot_panels
+        render_dotplot_panels(plan, output, phase_root(plan, "ds"))
 
 
 def validate_dotplot_lengths(plan):
@@ -933,6 +966,7 @@ def main(argv=None):
     planning.add_argument("--karyotype-sort", choices=("none", "target", "query", "target_length", "query_length", "both_length", "order_orientation"), default="both_length",
                           help="Legacy length sorting (default both_length), dominant partners, or signed order_orientation layout")
     planning.add_argument("--karyotype-panels", type=Path, help="Optional JSON combining existing comparisons into multi-track plots")
+    planning.add_argument("--dotplot-panels", type=Path, help="Optional JSON combining dS comparisons with shared species layouts and one color scale")
     planning.add_argument("--karyotype-color", choices=("chromosome", "homoeolog"), default="chromosome",
                           help="Soft chromosome colors (default); homoeolog shares supported 2x2 group colors")
     planning.add_argument("--karyotype-track-order", choices=("target-query", "query-target"), default="target-query",
