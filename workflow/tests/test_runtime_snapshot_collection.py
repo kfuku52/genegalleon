@@ -188,3 +188,95 @@ def test_runtime_body_corruption_never_becomes_source_or_resume_success(tmp_path
         metadata.archived_bytes(root / next(iter(before)))
     with pytest.raises((ValueError, __import__("zlib").error)):
         metadata.pack(root, writers_stopped=True, operation_id="new")
+
+
+def _read_race(monkeypatch, metadata, source, mutation):
+    original = metadata.os.fdopen
+    fired = []
+    identity = source.stat().st_dev, source.stat().st_ino
+
+    class Reader:
+        def __init__(self, descriptor, mode):
+            self.stream = original(descriptor, mode)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.stream.close()
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+        def fileno(self):
+            return self.stream.fileno()
+        def read(self, size):
+            raw = self.stream.read(size)
+            current = os.fstat(self.stream.fileno())
+            if not fired and (current.st_dev, current.st_ino) == identity:
+                fired.append(True)
+                mutation()
+            return raw
+
+    monkeypatch.setattr(metadata.os, 'fdopen', Reader)
+    return fired
+
+
+@pytest.mark.parametrize('root_name,readonly', [('runtime', True), ('runtime', False), ('observations', True)])
+def test_runtime_readonly_source_link_churn_keeps_other_source_fences(tmp_path, modules, monkeypatch, root_name, readonly):
+    metadata, _ = modules
+    source = tmp_path / 'source.sh'
+    source.write_bytes(b'original code\n')
+    source.chmod(0o444 if readonly else 0o644)
+    fired = _read_race(monkeypatch, metadata, source, lambda: os.link(source, tmp_path / 'peer-link'))
+    if root_name == 'runtime' and readonly:
+        raw, current = metadata._read_source(source, root=tmp_path / root_name)
+        assert raw == b'original code\n' and current == metadata.signature(source)
+        assert current[7] == 2
+    else:
+        with pytest.raises(ValueError, match='source changed'):
+            metadata._read_source(source, root=tmp_path / root_name)
+    assert fired == [True]
+
+
+@pytest.mark.parametrize('change', ['body', 'mode', 'inode'])
+def test_runtime_source_read_rejects_mutation_even_when_a_peer_link_appears(tmp_path, modules, monkeypatch, change):
+    metadata, _ = modules
+    source = tmp_path / 'source.sh'
+    source.write_bytes(b'original code\n')
+    source.chmod(0o444)
+    before = source.stat()
+    def mutate():
+        os.link(source, tmp_path / 'peer-link')
+        if change == 'mode':
+            source.chmod(0o644)
+        else:
+            if change == 'inode':
+                source.unlink()
+            else:
+                source.chmod(0o644)
+            source.write_bytes(b'X' * before.st_size)
+            source.chmod(0o444)
+            os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    fired = _read_race(monkeypatch, metadata, source, mutate)
+    with pytest.raises(ValueError, match='source changed'):
+        metadata._read_source(source, root=tmp_path / 'runtime')
+    assert fired == [True]
+
+
+def test_archived_runtime_prepare_accepts_identical_immutable_source_with_concurrent_peer_link(tmp_path, modules, monkeypatch):
+    metadata, runtime = modules
+    root, expected = snapshots(tmp_path, runs=1)
+    metadata.pack(root, delete_originals=True, writers_stopped=True, operation_id='prepare-linked-source')
+    directory = root / 'gg_gene_evolution_entrypoint/123_1'
+    sources = tmp_path / 'sources'
+    sources.mkdir()
+    paths = []
+    for name, (raw, mode, _) in expected.items():
+        path = sources / Path(name).name
+        path.write_bytes(raw)
+        path.chmod(mode)
+        paths.append(path)
+    selected = sources / 'VERSION'
+    fired = _read_race(monkeypatch, metadata, selected, lambda: os.link(selected, tmp_path / 'peer-link'))
+    assert runtime.prepare(directory, paths) == 4
+    assert fired == [True]
+    for name, (raw, mode, _) in expected.items():
+        assert (root / name).read_bytes() == raw
+        assert stat.S_IMODE((root / name).stat().st_mode) == mode

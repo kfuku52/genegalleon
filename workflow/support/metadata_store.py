@@ -30,6 +30,7 @@ from shared_namespace_lock import namespace_lock
 DATABASE = ".gg-metadata.sqlite3"
 APPLICATION_ID = 0x47474D44
 SCHEMA_VERSION = 1
+READONLY_SOURCE_LINK_CHURN_V1 = True
 MAX_BODY = 8 * 1024 * 1024
 INDEX_ROOTS = {"index", "index-by-subdir"}
 ROOTS = {"runtime", "observations", "resource_metrics", "artifact_provenance", "versions", "version_inventory", "output-inventory"}
@@ -236,9 +237,25 @@ def _read_source(path, *, root=None):
         if (os.fstat(handle.fileno()).st_dev, os.fstat(handle.fileno()).st_ino) != before[:2]:
             raise ValueError("Metadata source replaced while opening")
         raw = handle.read(limit + 1)
-    if signature(path) != before or len(raw) != before[3]:
+    after = signature(path)
+    if after != before:
+        immutable = runtime and not before[2] & 0o222
+        protected = before[:5] + before[6:7] + before[8:]
+        if not immutable or after[:5] + after[6:7] + after[8:] != protected:
+            raise ValueError("Metadata source changed while reading")
+        # A different package can link this immutable code inode. Require a
+        # second identical body; ordinary sources keep their full signature.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as handle:
+            if (os.fstat(handle.fileno()).st_dev, os.fstat(handle.fileno()).st_ino) != before[:2]:
+                raise ValueError("Metadata source replaced while rereading")
+            repeated = handle.read(limit + 1)
+        after = signature(path)
+        if repeated != raw or after[:5] + after[6:7] + after[8:] != protected:
+            raise ValueError("Metadata source changed while rereading")
+    if len(raw) != before[3]:
         raise ValueError("Metadata source changed while reading")
-    return raw, before
+    return raw, after
 
 
 @contextlib.contextmanager

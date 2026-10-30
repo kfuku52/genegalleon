@@ -19,3 +19,11 @@ producers to require before enabling the format. GeneGalleon creates no shared
 cache, modifies no existing launch package and performs no object garbage
 collection. Producers retain their ownership, publication, recovery and saved
 request contracts. Execution settings and scientific outputs are unchanged.
+
+A producer that restores captured runtime sources from metadata storage also
+requires `READONLY_SOURCE_LINK_CHURN_V1 = True` in the owning metadata reader.
+The runtime-only reader permits link-count/ctime changes for owned read-only
+code only after a second identical body read, retaining inode/mode/owner/group/
+size/mtime checks and returning the current complete signature. Other metadata
+sources, database identity checks and retirement/publication fences keep their
+original full signatures. This also covers resuming an archived execution.
