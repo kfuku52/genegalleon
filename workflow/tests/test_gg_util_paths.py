@@ -283,6 +283,7 @@ def _write_runtime_release_contract(
     *,
     manifest_release_root: Optional[Path] = None,
     additional_files: Optional[dict] = None,
+    launch_storage: str = "",
 ) -> str:
     required_paths = {
         "VERSION",
@@ -307,6 +308,8 @@ def _write_runtime_release_contract(
         else:
             shutil.copyfile(source, target)
             os.chmod(target, stat.S_IMODE(source.stat().st_mode))
+        if launch_storage == "readonly-hardlinks-v1":
+            target.chmod(stat.S_IMODE(target.stat().st_mode) & ~0o222)
         installed_files.append(
             {
                 "path": relative,
@@ -329,6 +332,8 @@ def _write_runtime_release_contract(
         "target_ref": "a" * 40,
         "installed_files": installed_files,
     }
+    if launch_storage:
+        contract["launch_storage"] = launch_storage
     contract["contract_sha256"] = _canonical_sha256(contract)
     (release_root / ".kfauto-release.json").write_text(
         json.dumps(contract, indent=2, sort_keys=True) + "\n",
@@ -2894,3 +2899,86 @@ def test_bind_csv_normalization_keeps_first_destination_and_path_text(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == (
         "/first path:/target:ro,/other:/other,/literal$(no-command):/literal$(no-command):ro,/last:/last")
+
+
+@pytest.mark.parametrize("policy", ["", "readonly-hardlinks-v1"])
+@pytest.mark.parametrize("timing", ["during", "late"])
+def test_explicit_runtime_readonly_links_preserve_legacy_fences(tmp_path, policy, timing):
+    release = tmp_path / "release"
+    marker = b"late-link-fixture-body\n"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage=policy,
+                                               additional_files={"zz-last-read.txt": marker})
+    first_body = (release / "VERSION").read_bytes()
+    wrapper = tmp_path / "python-link-proof"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import hashlib,os,sys\nfrom pathlib import Path\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;fired=False\n"
+        f"root=Path({str(release)!r});trigger={marker if timing == 'late' else first_body!r}\n"
+        "def mutate(data):\n"
+        " global fired\n"
+        " if fired or data != trigger:return\n"
+        " fired=True;os.link(root/'VERSION',root.parent/'concurrent-link')\n"
+        "class Hasher:\n"
+        " def __init__(self,data=b''):mutate(data);self.inner=original(data)\n"
+        " def update(self,data):mutate(data);self.inner.update(data)\n"
+        " def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher;exec(compile(code,'<linked-bootstrap>','exec'))\n")
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = run_bash(command, tmp_path)
+    assert (result.returncode == 0) is bool(policy), result.stderr
+    assert (tmp_path / "concurrent-link").samefile(release / "VERSION")
+    if policy:
+        assert result.stdout.strip() == str(release / "workflow")
+    else:
+        assert "file changed: VERSION" in result.stderr
+
+
+@pytest.mark.parametrize("mutation", ["body", "mode", "replacement", "symlink"])
+def test_readonly_launch_rejects_late_tampering_even_with_a_new_hardlink(tmp_path, mutation):
+    release = tmp_path / "release"
+    marker = b"late-tamper-fixture-body\n"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage="readonly-hardlinks-v1",
+                                               additional_files={"zz-last-read.txt": marker})
+    wrapper = tmp_path / "python-tamper-proof"
+    effect = {
+        "body": "leaf.chmod(0o644);leaf.write_bytes(b'X'*before.st_size);leaf.chmod(0o444);os.utime(leaf,ns=(before.st_atime_ns,before.st_mtime_ns))",
+        "mode": "leaf.chmod(0o644)",
+        "replacement": "leaf.unlink();leaf.write_bytes(b'changed');leaf.chmod(0o444)",
+        "symlink": "leaf.unlink();leaf.symlink_to(root.parent/'concurrent-link')",
+    }[mutation]
+    wrapper.write_text(
+        f"#!{sys.executable}\nimport hashlib,os,sys\nfrom pathlib import Path\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;fired=False\n"
+        f"root=Path({str(release)!r});trigger={marker!r}\n"
+        "def mutate(data):\n global fired\n if fired or data != trigger:return\n fired=True\n"
+        " leaf=root/'VERSION';before=leaf.stat();os.link(leaf,root.parent/'concurrent-link')\n"
+        f" {effect}\n"
+        "class Hasher:\n def __init__(self,data=b''):mutate(data);self.inner=original(data)\n"
+        " def update(self,data):mutate(data);self.inner.update(data)\n def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher;exec(compile(code,'<tampered-bootstrap>','exec'))\n")
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    result = run_bash(f"source {shlex.quote(str(bootstrap))}; export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+                      f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+                      f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
+    assert result.returncode != 0
+    assert "file changed: VERSION" in result.stderr or "unsafe or unreadable" in result.stderr
+
+
+@pytest.mark.parametrize("policy", ["unknown", "readonly-hardlinks-v1"])
+def test_explicit_launch_storage_rejects_unknown_policy_and_writable_members(tmp_path, policy):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage=policy)
+    if policy == "readonly-hardlinks-v1":
+        (release / "VERSION").chmod(0o644)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    result = run_bash(f"source {shlex.quote(str(bootstrap))}; export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+                      f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
+    assert result.returncode != 0
+    assert "storage policy" in result.stderr or "file changed: VERSION" in result.stderr
