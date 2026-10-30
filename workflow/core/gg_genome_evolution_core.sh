@@ -60,6 +60,7 @@ synteny_karyotype_color="${synteny_karyotype_color:-chromosome}"
 synteny_karyotype_scale="${synteny_karyotype_scale:-shared}"
 synteny_karyotype_track_order="${synteny_karyotype_track_order:-target-query}"
 synteny_dotplot_color="${synteny_dotplot_color:-orientation}"
+synteny_dotplot_panels_file="${synteny_dotplot_panels_file:-}"
 synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
 synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
 synteny_ds_color_max="${synteny_ds_color_max:-2}"
@@ -286,6 +287,7 @@ run_pairwise_synteny_stage() (
   local -a representative_synteny_args=()
   [[ -z "${representative_inputs}" ]] || representative_synteny_args+=(--representative-inputs "${representative_inputs}")
   [[ -z "${synteny_karyotype_panels_file}" ]] || representative_synteny_args+=(--karyotype-panels "${synteny_karyotype_panels_file}")
+  [[ -z "${synteny_dotplot_panels_file}" ]] || representative_synteny_args+=(--dotplot-panels "${synteny_dotplot_panels_file}")
   python "${gg_support_dir}/pairwise_synteny.py" plan "${representative_synteny_args[@]}" \
     --workspace "${gg_workspace_dir}" --pairs "${synteny_pairs_file}" \
     --sequence-mode "${synteny_sequence_mode}" --genetic-code "${genetic_code}" \

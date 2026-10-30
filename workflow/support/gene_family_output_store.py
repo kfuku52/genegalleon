@@ -2391,9 +2391,8 @@ class GeneFamilyOutputStore:
 
             live_entries = by_zip.pop(None, [])
             for artifact, _ in live_entries:
-                if artifact.live_path is None:
-                    raise ArchiveStoreError(f"Logical artifact has no readable source: {artifact.logical_path}")
-                with artifact.live_path.open("rb") as source:
+                # Non-ZIP sources include DB-backed provenance as well as raw files.
+                with self.open_binary(artifact.subdir, artifact.name, _producer_locked=True) as source:
                     restored.append(write_artifact(artifact, source))
             for zip_path, entries in sorted(by_zip.items(), key=lambda item: str(item[0])):
                 assert zip_path is not None

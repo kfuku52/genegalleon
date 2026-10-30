@@ -571,6 +571,7 @@ gg_prepare_entrypoint_runtime_snapshot() {
 	local entrypoint_path=""
 	local metadata_path=""
 	local runtime_pool=""
+	local runtime_sources=()
 
 	if [[ -z "${entrypoint_name}" ]]; then
 		echo "gg_prepare_entrypoint_runtime_snapshot: entrypoint name is required." >&2
@@ -582,6 +583,16 @@ gg_prepare_entrypoint_runtime_snapshot() {
 	fi
 
 	runtime_dir="$(gg_entrypoint_runtime_snapshot_dir "${entrypoint_name}")"
+	# An explicitly collected historical run retains its original captured bytes.
+	# Restore only this run; other archived snapshots stay in SQLite.
+	if [[ -f "$(dirname "$(dirname "${runtime_dir}")")/.gg-metadata.sqlite3" ]]; then
+		runtime_sources=("${script_path}")
+		if [[ -n "${gg_workflow_dir:-}" ]]; then
+			runtime_sources+=("${gg_workflow_dir}/$(basename "${entrypoint_name}")" "${gg_workflow_dir}/gg_common_params.sh" "${gg_workflow_dir}/../VERSION")
+		fi
+		"${GG_BOOTSTRAP_PYTHON:-python}" "$(dirname "${BASH_SOURCE[0]}")/../runtime_snapshot_storage.py" \
+			"${runtime_dir}" "${runtime_sources[@]}" || return 1
+	fi
 	mkdir -p -- "${runtime_dir}"
 
 	runtime_pool="$(dirname "$(dirname "${runtime_dir}")")/.shared-code-v1"

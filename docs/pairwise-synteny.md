@@ -390,6 +390,78 @@ Missing chromosome lengths or no anchors passing the physical-length filter
 stop the run before alignment/dS estimation; completed synteny analysis is retained.
 These pairwise distances are not a codeml likelihood analysis or a WGD test.
 
+## Combined pairwise dS dotplots
+
+To compare all three species pairs in one figure, list the three comparisons in
+the ordinary pair table and set `synteny_dotplot_panels_file` to a JSON file.
+The workflow performs the same native analysis and CDSKIT dS stages for each
+pair, then combines their gene-pair coordinates with **one shared dS colour
+scale and missing-value key**. It does not rerun alignment to combine plots.
+The [three-species pair table](examples/synteny-three-species.tsv) and
+[panel configuration](examples/synteny-dotplot-panels.json) are complete examples.
+
+```json
+{
+  "panels": [{
+    "panel_id": "anc_dio_tri",
+    "comparisons": ["anc_dio", "anc_tri", "dio_tri"],
+    "tracks": [
+      {"species": "Ancistrocladus_abbreviatus"},
+      {"species": "Dioncophyllum_thollonii"},
+      {"species": "Triphyophyllum_peltatum"}
+    ],
+    "columns": 2
+  }]
+}
+```
+
+```bash
+GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
+GG_GENOME_EVOLUTION_SYNTENY_PAIRS_FILE=input/synteny_pairs.tsv \
+GG_GENOME_EVOLUTION_SYNTENY_DOTPLOT_COLOR=ds \
+GG_GENOME_EVOLUTION_SYNTENY_DOTPLOT_PANELS_FILE=input/synteny_dotplot_panels.json \
+  bash workflow/gg_genome_evolution_entrypoint.sh
+```
+
+The `comparisons` order sets the subpanel order. `tracks` lists each participating
+species once and fixes the visual axis roles: the earlier species is on x and
+the later species is on y. This can swap axes relative to the analysis roles;
+gene IDs, anchor pairs and dS estimates remain unchanged. Each species uses the
+same sequence order and direction throughout the figure. By default its first
+comparison supplies the eligible sequence order. Optional per-track `seqids`,
+`orientation` and `labels` have the same meanings as the multi-track layout:
+
+```json
+{"species": "Ancistrocladus_abbreviatus", "seqids": ["scaffold16", "scaffold3"],
+ "orientation": {"scaffold16": "-"},
+ "labels": {"scaffold16": "16", "scaffold3": "3"}}
+```
+
+Explicit sequences must pass the ordinary dotplot physical-length filter.
+Use the saved karyotype layout's `display_order`, `display_orientation` and
+`display_labels` to populate these settings when matching an existing figure.
+Reversals are marked `(rev)` and affect only this combined display. Native
+scaffold boundaries remain separate; no chromosome or homoeolog assignments
+are inferred. Repeated species must have identical full BED/CDS inputs and
+eligible sequence sets across comparisons; inconsistent releases are errors.
+
+`columns` defaults to two (one for a single comparison) and accepts 1–8.
+Each column is 3.6 inches wide, retaining 8 pt Helvetica text. The common key
+uses a spare grid cell when available; otherwise it sits below the panels.
+Long/crowded sequence labels that cannot fit at 8 pt require explicit sequence
+selection or shorter display labels. Counts report **unique** displayed anchor
+pairs, including missing distances and values above `synteny_ds_color_max`.
+All retained pairs are drawn without downsampling; the colour limit never
+filters anchors. The ordinary per-pair dotplots retain their existing layout.
+
+Outputs are `plots/dotplot_panels/<panel_id>/dotplot.{pdf,svg,png}` in the selected
+formats, copied plotting inputs, `manifest.json`, and `dotplot_panels.json`.
+The report records sequence layouts, axis swaps, pair/NA/clipped-colour counts,
+the common scale and source hashes. `analysis_id=dotplot_panels` is reserved
+only when this option is enabled. Changing panel layout or the colour limit
+invalidates plots only: use the existing `synteny_plot_only=1` and
+`artifact_stale_policy=rebuild` to reuse current analysis and dS results.
+
 ## Redraw and resume
 
 An unchanged rerun reuses both analysis and plots. A changed display order or

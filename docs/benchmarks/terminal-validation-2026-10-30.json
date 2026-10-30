@@ -1,0 +1,108 @@
+{
+  "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+  "platform": "linux",
+  "cpu_count": 12,
+  "rows": 100000,
+  "input_bytes": {
+    "tree_plot": 1048592,
+    "stat_branch": 11277806,
+    "stat_tree": 16
+  },
+  "warmups": 1,
+  "trials": 5,
+  "scope": "native terminal structural validation only; warm filesystem cache; imports excluded from wall timer and included in RSS",
+  "equivalent_proofs": true,
+  "samples": {
+    "baseline": [
+      {
+        "wall_seconds": 0.12556970899998987,
+        "peak_rss_bytes": 130367488,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "d1a4e7f0fa6f04a97e0569624b967b7c363ec06f0f51b59ce500535d8efff361"
+      },
+      {
+        "wall_seconds": 0.12536037500001385,
+        "peak_rss_bytes": 130273280,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "d1a4e7f0fa6f04a97e0569624b967b7c363ec06f0f51b59ce500535d8efff361"
+      },
+      {
+        "wall_seconds": 0.12864949999999453,
+        "peak_rss_bytes": 130203648,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "d1a4e7f0fa6f04a97e0569624b967b7c363ec06f0f51b59ce500535d8efff361"
+      },
+      {
+        "wall_seconds": 0.12581270799995536,
+        "peak_rss_bytes": 130256896,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "d1a4e7f0fa6f04a97e0569624b967b7c363ec06f0f51b59ce500535d8efff361"
+      },
+      {
+        "wall_seconds": 0.12693087500002775,
+        "peak_rss_bytes": 130252800,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "d1a4e7f0fa6f04a97e0569624b967b7c363ec06f0f51b59ce500535d8efff361"
+      }
+    ],
+    "candidate": [
+      {
+        "wall_seconds": 0.1172059169999784,
+        "peak_rss_bytes": 30347264,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "2d2fe9ffa287890a6fa179be4282c4826dd36bcd9d0e7073a8abdce0043833b9"
+      },
+      {
+        "wall_seconds": 0.1291558340000165,
+        "peak_rss_bytes": 30343168,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "2d2fe9ffa287890a6fa179be4282c4826dd36bcd9d0e7073a8abdce0043833b9"
+      },
+      {
+        "wall_seconds": 0.12401541699995278,
+        "peak_rss_bytes": 30281728,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "2d2fe9ffa287890a6fa179be4282c4826dd36bcd9d0e7073a8abdce0043833b9"
+      },
+      {
+        "wall_seconds": 0.11795808299996224,
+        "peak_rss_bytes": 30183424,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "2d2fe9ffa287890a6fa179be4282c4826dd36bcd9d0e7073a8abdce0043833b9"
+      },
+      {
+        "wall_seconds": 0.11769783400001188,
+        "peak_rss_bytes": 30220288,
+        "proof_sha256": "fb20c9525291673e252b778f526e7354fc00c03136b72a638f9c0862bb554dd1",
+        "state": "verified",
+        "source_sha256": "2d2fe9ffa287890a6fa179be4282c4826dd36bcd9d0e7073a8abdce0043833b9"
+      }
+    ]
+  },
+  "medians": {
+    "baseline": {
+      "wall_seconds": 0.12581270799995536,
+      "peak_rss_bytes": 130256896
+    },
+    "candidate": {
+      "wall_seconds": 0.11795808299996224,
+      "peak_rss_bytes": 30281728
+    }
+  },
+  "image": "sha256:875a6b5926b47eabed44cd8de5f6820b416a378da2945e26edaf379317be438a",
+  "container_limits": {
+    "cpus": 2,
+    "memory_gib": 4,
+    "network": "none"
+  },
+  "baseline_commit": "aa3b39dd59028e39fefe629119378f603d46224e"
+}

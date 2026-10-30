@@ -259,6 +259,7 @@ synteny_karyotype_color="chromosome" # chromosome|homoeolog; optional homoeolog 
 synteny_karyotype_scale="shared" # shared uses the same width per gene and one scale bar for both species; independent normalizes each track separately.
 synteny_karyotype_track_order="target-query" # Top-to-bottom display order: target-query or query-target. Analysis roles remain unchanged.
 synteny_dotplot_color="orientation" # orientation|ds; ds requires matching CDS and the CDSKIT dnds estimator.
+synteny_dotplot_panels_file="" # Optional JSON combining dS dotplots into a shared-scale figure; see docs/pairwise-synteny.md.
 synteny_dotplot_min_length=1000000 # Dotplot includes only scaffold/chromosome assembly lengths >= this many bp; 0 disables filtering.
 synteny_dotplot_sort="homoeolog" # homoeolog places supported 2x2 chromosome groups together; karyotype follows ribbon order; none preserves BED order.
 synteny_ds_color_max=2 # Upper dS color limit only; values are clipped for display, never filtered.

@@ -288,11 +288,20 @@ caller must still establish which scheduler job/project owns the attempt.
 For the gene-evolution terminal contract, additionally pass
 `--profile gene-evolution-terminal-v1` and require both `summary_statistics` and
 `tree_plot`. The API checks nonempty, consistently shaped branch/tree TSVs,
-unique branch IDs, one tree-statistics row and PDF header/end framing, reading
-up to 16 MiB per terminal artifact. `terminal_validation` reports this limited
+unique branch IDs, one tree-statistics row and PDF header/end framing. It hashes
+and parses tables incrementally, retaining the current row and branch IDs;
+PDF reads use 1 MiB chunks. Artifacts may be up to 4 GiB and a complete TSV
+record (including quoted multiline fields) up to 16 MiB. CSV field limits are
+restored after each query. `terminal_validation` reports this limited
 structural coverage separately; it is not a full PDF renderer or a scientific
 correctness proof. This profile is opt-in because disabled analyses may require
 a different set of terminal steps.
+
+The [terminal-reader benchmark](benchmarks/terminal-validation-2026-10-30.json)
+compares five paired fresh processes on a generated 100,000-row table in the
+same fixed Docker image. Proofs are identical; median peak RSS is 130,256,896
+versus 30,281,728 bytes. This measures the structural reader, not a complete
+scientific workflow. Reproduce with `workflow/benchmarks/benchmark_terminal_validation.py`.
 
 Missing manifests return `evidence_missing`/`unverified`. Adopted manifests remain
 `legacy_reusable`. A family published as running or failed, ambiguous manifests,
