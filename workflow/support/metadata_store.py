@@ -32,7 +32,7 @@ APPLICATION_ID = 0x47474D44
 SCHEMA_VERSION = 1
 MAX_BODY = 8 * 1024 * 1024
 INDEX_ROOTS = {"index", "index-by-subdir"}
-ROOTS = {"observations", "resource_metrics", "artifact_provenance", "versions", "version_inventory", "output-inventory"}
+ROOTS = {"runtime", "observations", "resource_metrics", "artifact_provenance", "versions", "version_inventory", "output-inventory"}
 _LOCAL = threading.local()
 _SNAPSHOT = contextvars.ContextVar("gg_metadata_snapshot", default=None)
 
@@ -170,8 +170,11 @@ def archived_bytes(path, *, limit=None, observe=None):
     if root is None:
         return None
     limit = body_limit(root) if limit is None else limit
-    rows = _query(root, "SELECT CASE WHEN length(body)<=? THEN body ELSE NULL END,sha256,bytes FROM files WHERE path=?",
-                  (limit * 2, _key(root, path)), observe)
+    query = "SELECT CASE WHEN length(body)<=? THEN body ELSE NULL END,sha256,bytes FROM files WHERE path=?"
+    if root.name == "runtime":
+        query = ("SELECT CASE WHEN length(b.body)<=? THEN b.body ELSE NULL END,f.sha256,f.bytes "
+                 "FROM files f LEFT JOIN runtime_bodies b ON b.sha256=f.sha256 WHERE f.path=?")
+    rows = _query(root, query, (limit * 2, _key(root, path)), observe)
     if not rows:
         return None
     body, expected, size = rows[0]
@@ -221,7 +224,9 @@ def writer(path):
 
 def _read_source(path, *, root=None):
     before = signature(path)
-    if not stat.S_ISREG(before[2]) or before[6] != os.getuid() or before[7] != 1:
+    runtime = root is not None and Path(root).name == "runtime"
+    if (not stat.S_ISREG(before[2]) or before[6] != os.getuid()
+            or (before[7] != 1 and not (runtime and not before[2] & 0o222))):
         raise ValueError(f"Metadata source must be an owned, unlinked regular file: {path}")
     limit = body_limit(scope(path) if root is None else root)
     if before[3] > limit:
@@ -263,6 +268,9 @@ def _source_reads(root, keys):
 def _eligible(root, key, closed):
     if any(part.startswith(".") for part in PurePosixPath(key).parts):
         return False
+    if root.name == "runtime":
+        from runtime_snapshot_storage import eligible
+        return eligible(key)
     if root.name == "observations":
         parts = PurePosixPath(key).parts
         if len(parts) != 2 or re.fullmatch(r"[0-9a-f]{32}", parts[0]) is None or not parts[1].endswith(".json"):
@@ -425,6 +433,9 @@ def index_members(root):
 
 
 def _retire(root, expected, operation_id):
+    if root.name == "runtime":
+        from runtime_snapshot_storage import retire
+        return retire(root, expected)
     # Replays may remove only the exact files bound before this operation's publication.
     removed = 0
     touched = set()
@@ -470,6 +481,9 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
         generation = 0
         original = _connection(root)
         before_db = None if original is None else original[2]
+        if original is not None and root.name == "runtime":
+            from runtime_snapshot_storage import verify_database
+            verify_database(original[0])
         if original is not None and operation_id:
             saved = original[0].execute("SELECT value FROM metadata WHERE key='operation_id'").fetchone()
             if saved == (operation_id,):
@@ -547,13 +561,26 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                     db.execute(f"PRAGMA application_id={APPLICATION_ID}")
                     db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     db.execute("INSERT INTO metadata VALUES('kind',?)", (root.name,))
+                    if root.name == "runtime":
+                        from runtime_snapshot_storage import initialize
+                        initialize(db)
+                runtime_bodies = ({r[0] for r in db.execute("SELECT sha256 FROM runtime_bodies")}
+                                  if root.name == "runtime" else set())
                 db.execute("DELETE FROM operation_files")
                 with _source_reads(root, keys) as sources:
                     for key, raw, before in sources:
                         snapshots[key] = (before, hashlib.sha256(raw).hexdigest())
                         db.execute("INSERT INTO operation_files VALUES(?,?,?)", (key, json.dumps(before), snapshots[key][1]))
+                        if root.name == "runtime":
+                            if snapshots[key][1] not in runtime_bodies:
+                                db.execute("INSERT INTO runtime_bodies VALUES(?,?,?)",
+                                           (snapshots[key][1], zlib.compress(raw, 1), len(raw)))
+                                runtime_bodies.add(snapshots[key][1])
+                            body = b""
+                        else:
+                            body = zlib.compress(raw, 1)
                         db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?,?)",
-                                   (key, zlib.compress(raw, 1), snapshots[key][1], len(raw),
+                                   (key, body, snapshots[key][1], len(raw),
                                     stat.S_IMODE(before[2]), before[4], json.dumps(_fields(raw), sort_keys=True), generation))
                         if root.name == "index":
                             entries = json.loads(raw)["artifacts"]
@@ -588,7 +615,12 @@ def pack(root, *, scratch=None, delete_originals=False, writers_stopped=False, m
                 if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise ValueError("Metadata database integrity check failed")
                 # Full readback, including prior retained generations' active records.
-                for body, sha, size in db.execute("SELECT body,sha256,bytes FROM files"):
+                if root.name == "runtime":
+                    from runtime_snapshot_storage import readback_rows
+                    bodies = readback_rows(db)
+                else:
+                    bodies = db.execute("SELECT body,sha256,bytes FROM files")
+                for body, sha, size in bodies:
                     decoder = zlib.decompressobj()
                     raw = decoder.decompress(body, body_limit(root) + 1)
                     if (len(raw) != size or not decoder.eof or decoder.unused_data

@@ -130,3 +130,42 @@ overhead when storage is already fast. Modified runs used 35.7–39.5 MiB peak
 RSS for these small bodies; the read-ahead byte bound is larger for maximum-size
 records. The latency is simulated, so these results do not predict cluster
 throughput or the duration of a whole migration.
+
+## Captured runtime sources
+
+Completed `workspace/output/runtime` snapshots can be collected explicitly after
+all workspace writers stop. This is off by default. The existing metadata store
+keeps each captured source body once by SHA-256 in `runtime_bodies`, with exact
+path, mode and mtime references in `files`. It fully verifies body references,
+source identities and unchanged bytes before unlinking the raw captures.
+
+```bash
+python workflow/support/runtime_snapshot_storage.py workspace/output/runtime \
+  --collect --writers-stopped --operation-id exact-maintenance-id
+```
+
+Only recognized `gg_*_entrypoint/RUN/` captured scripts and `VERSION` are eligible.
+Unknown files, coordination trees and the immutable shared source pool remain.
+Only empty run directories represented in the verified DB are pruned. Readonly
+hardlinks are verified with link counts adjusted for this operation's own
+unlinks; external link or content changes stop retirement.
+
+The current entrypoint restores only its archived run, after verifying that
+all current source names and bytes match the capture. Other archived runs stay
+in SQLite. The existing full metadata restore command restores all captures
+before use with an older runtime. An archived capture never selects a scientific
+runtime or grants execution authority.
+
+The comparable local benchmark uses 2,000 runs, 24 source versions and four
+files per run, with one warmup and three repetitions in Linux aarch64/Python
+3.12.15. It retained identical path, byte, mode and mtime digests while reducing
+8,096 file paths and 2,002 directories to 98 files and four directories. Median
+logical inventory time decreased from 0.195 to 0.0485 seconds. Original files
+already shared 96 source inodes, so path-count reduction is not an inode-quota
+claim; removing the 2,000 run directories is the main inode saving. The SQLite
+DB occupied 6.4 MB. These fixture results do not predict cluster throughput.
+
+```bash
+python workflow/benchmarks/benchmark_runtime_snapshot_storage.py \
+  --snapshots 2000 --versions 24
+```
