@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-import csv
 import hashlib
 import io
 import json
@@ -25,6 +24,7 @@ import artifact_provenance as provenance
 import producer_graph
 from artifact_audit_runtime import validate_observation
 from gene_family_output_store import GeneFamilyOutputStore, archive_queue_status, read_only_observation
+from terminal_artifact_validation import verify_terminal_profile
 from workflow_observation import contract_arguments, read_regular_json, strict_json_loads
 
 SCHEMA = "genegalleon-api-v1"
@@ -444,42 +444,6 @@ def producers(args):
     plan = read_json(args.plan)
     result = producer_graph.inspect(plan, producer_contract_args)
     return envelope("producers", **result, plan_sha256=digest(plan))
-
-
-def verify_terminal_profile(store, family):
-    members = []
-    try:
-        for subdir, suffix in (("stat_branch", "_stat.branch.tsv"), ("stat_tree", "_stat.tree.tsv"),
-                               ("tree_plot", "_tree_plot.pdf")):
-            name = family + suffix
-            artifact = store.source_artifact(subdir, name)
-            if artifact is None:
-                raise ValueError(f"missing terminal artifact: {subdir}/{name}")
-            with store.open_binary(subdir, name) as handle:
-                raw = handle.read(16 * 1024 * 1024 + 1)
-            if not 0 < len(raw) <= 16 * 1024 * 1024:
-                raise ValueError("terminal artifact exceeds verification bounds")
-            if subdir == "tree_plot":
-                if not raw.startswith(b"%PDF-") or b"%%EOF" not in raw[-1024:]:
-                    raise ValueError("invalid terminal PDF framing")
-            else:
-                reader = csv.DictReader(io.StringIO(raw.decode("utf-8")), delimiter="\t")
-                rows = list(reader)
-                fields = reader.fieldnames
-                if (not rows or not fields or len(set(fields)) != len(fields)
-                        or any(None in row or None in row.values() for row in rows)):
-                    raise ValueError("malformed terminal statistics")
-                if subdir == "stat_branch":
-                    ids = [row.get("branch_id", "") for row in rows]
-                    if not {"branch_id", "node_name"}.issubset(fields) or not all(ids) or len(set(ids)) != len(ids):
-                        raise ValueError("missing or duplicated terminal branch identities")
-                elif len(rows) != 1:
-                    raise ValueError("terminal tree statistics must have one row")
-            members.append({"path": artifact.logical_path, "sha256": hashlib.sha256(raw).hexdigest(),
-                            "size_bytes": len(raw), "mtime_ns": artifact.mtime_ns})
-        return {"profile": "gene-evolution-terminal-v1", "state": "verified", "members": members}
-    except (OSError, ValueError, csv.Error) as exc:
-        return {"profile": "gene-evolution-terminal-v1", "state": "unverified", "detail": str(exc)}
 
 
 def verify_many(requests):
