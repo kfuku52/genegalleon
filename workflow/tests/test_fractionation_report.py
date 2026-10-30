@@ -114,3 +114,39 @@ def test_pairwise_report_refuses_stale_shared_statistics(tmp_path):
         run(config, out)
     assert prior.read_text() == '{"prior": true}'
     assert not (out / 'comparison.report.json').exists()
+
+
+def test_publication_example_runs_through_core_without_changing_tables(tmp_path):
+    config = json.loads((ROOT / 'docs/examples/fractionation-report-publication.json').read_text())
+    ref, query, anchors = (tmp_path / n for n in ['ref.bed', 'query.bed', 'pairs.anchors'])
+    ref.write_text(''.join(f'chr1\t{i*100}\t{i*100+90}\tt{i}\n' for i in range(12)))
+    query.write_text(''.join(f'chr{c}\t{i*100}\t{i*100+90}\tq{c}_{i}\n'
+                             for c in [8, 17] for i in range(12)))
+    anchors.write_text(''.join('###\n' + ''.join(f't{i}\tq{c}_{i}\t10\n'
+                                                for i in range(12 if c == 8 else 6))
+                               for c in [8, 17]))
+    (tmp_path / 'comparisons.tsv').write_text(
+        'analysis_id\tspecies\texpected_copies\ttarget_bed\tquery_bed\tsynteny_file\n'
+        f'query_a\tExample_species\t2\t{ref}\t{query}\t{anchors}\n')
+    config.update(window_size=3, minimum_anchors=2, trim=0)
+    path = tmp_path / 'report.json'
+    path.write_text(json.dumps({k: v for k, v in config.items() if k != 'plot_config'}))
+    baseline = run(path, tmp_path / 'baseline')
+    path.write_text(json.dumps(config))
+    workspace = tmp_path / 'workspace'
+    env = dict(os.environ, GG_COMMON_TMP_ROOT='workspace', gg_workspace_dir=str(workspace),
+               GG_ARRAY_TASK_ID='1', GG_JOB_ID='test', GG_TASK_CPUS='1', GG_MEM_PER_CPU_GB='8',
+               kffractbias_report_config=str(path))
+    result = subprocess.run(['bash', str(ROOT / 'workflow/core/gg_fractionation_bias_core.sh')],
+                            env=env, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = workspace / 'output/kffractbias_reports'
+    summary = json.loads((out / 'publication.report.json').read_text())
+    assert summary['plot']['series_colours']['query_a'] == {'chr8': '#e6b979', 'chr17': '#8bb9dc'}
+    assert summary['plot']['all_profiles_scale'] == 'raw'
+    assert summary['plot']['legend'] == 'graphical'
+    assert summary['counts_per_analysis'] == baseline['counts_per_analysis']
+    assert summary['counts_per_analysis']['query_a']['selected_reference_loci'] == 12
+    for key in ['loci', 'windows']:
+        assert summary['output_sha256'][key] == baseline['output_sha256'][key]
+    assert (out / 'publication.profiles_all.pdf').is_file()

@@ -10,6 +10,8 @@ It provides scheduler-ready staged pipelines for:
 - optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md) and
   [existing-model refinement and conserved isoform selection](docs/gene-model-refinement.md),
 - local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,
+- [reference-based fractionation reports](docs/main-stages-and-what-they-do.md#reference-based-fractionation-reports)
+  with stable series colours and configurable publication plots,
 - orthogroup inference,
 - species-tree inference and dating,
 - gene-family phylogeny and trait/evolutionary annotation,

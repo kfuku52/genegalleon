@@ -1,0 +1,21 @@
+{
+  "manifest": "comparisons.tsv",
+  "prefix": "publication",
+  "comparison_scope": "pairwise",
+  "raw": true,
+  "denominator": "syntenic",
+  "window_size": 100,
+  "step_size": 1,
+  "plot_config": {
+    "width_pt": 518.4,
+    "height_pt": 518.4,
+    "palette": "pastel",
+    "series_colours": {
+      "query_a": {"chr8": "#e6b979", "chr17": "#8bb9dc"}
+    },
+    "total_colour": "#b53c31",
+    "series_alpha": 0.9,
+    "legend": "graphical",
+    "all_profiles_scale": "raw"
+  }
+}
