@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from metadata_store import archived_children, archived_exists
+from metadata_store import scope as metadata_scope
 
 # Disable bytecode and the optional persistent digest cache before importing
 # workflow libraries: even a query against a read-only workspace must work.
@@ -27,6 +28,7 @@ from gene_family_output_store import GeneFamilyOutputStore, archive_queue_status
 from terminal_artifact_validation import verify_terminal_profile
 from workflow_observation import contract_arguments, read_regular_json, strict_json_loads
 
+ARCHIVED_OBSERVATION_DIRECTORIES_V1 = True
 SCHEMA = "genegalleon-api-v1"
 MAX_JSON_BYTES = 8 * 1024 * 1024
 STATUS_PAGE_BYTES = 12 * 1024 * 1024
@@ -55,7 +57,16 @@ def legacy_baseline(payload):
 def inventory(directory, *, pattern=None, directories=False, limit=10000):
     """Bound allocation and propagate I/O errors that pathlib glob suppresses."""
     selected = []
-    with os.scandir(directory) as entries:
+    try:
+        physical = os.scandir(directory)
+    except FileNotFoundError:
+        root = metadata_scope(directory)
+        if (Path(directory).is_symlink() or root is None or root.name != "observations"
+                or Path(directory).parent != root or re.fullmatch('[a-f0-9]{32}', Path(directory).name) is None
+                or not archived_exists(Path(directory) / "run.json", observe=provenance.observe_path)):
+            raise
+        physical = contextlib.nullcontext(())
+    with physical as entries:
         for entry in entries:
             if entry.name.startswith("."):
                 continue

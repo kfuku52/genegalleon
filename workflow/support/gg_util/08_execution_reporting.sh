@@ -125,10 +125,7 @@ gg_trigger_versions_dump() {
   cache_dir="${GG_VERSIONS_CACHE_DIR:-$(workspace_downloads_root "${gg_workspace_dir}")/version_inventory}"
   "${identity_python}" "${identity_helper}" private-cache --cache-file "${cache_dir}" || return 1
   cache_file="${cache_dir}/${container_key_hash}.log"
-  lock_file="${cache_file}.lock"
-  if [[ -f "${cache_dir}/.gg-metadata.sqlite3" ]]; then
-    lock_file="${cache_dir}/.versions-cache.lock"
-  fi
+  lock_file=$("${identity_python}" "${identity_helper}" cache-lock --cache-file "${cache_file}") || return 1
   # Preserve per-invocation host/time provenance even on an inventory cache hit.
   {
     echo "$(date): ${trigger_name}; image_identity=${image_file_hash:-unavailable}; context=${container_key_hash}"
