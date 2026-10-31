@@ -12,7 +12,10 @@ import threading
 import time
 from pathlib import Path
 
-from shared_namespace_lock import NamespaceLockError
+if __package__:
+    from .shared_namespace_lock import NamespaceLockError
+else:
+    from shared_namespace_lock import NamespaceLockError
 
 _started = time.perf_counter()
 _counters = {}
@@ -43,7 +46,10 @@ def write_row(record):
               "job_id": os.environ.get("GG_JOB_ID", os.environ.get("SLURM_JOB_ID", os.environ.get("JOB_ID", ""))),
               "array_task_id": os.environ.get("GG_ARRAY_TASK_ID", os.environ.get("SLURM_ARRAY_TASK_ID", ""))}
     try:
-        from performance_log import append
+        if __package__:
+            from .performance_log import append
+        else:
+            from performance_log import append
         append(Path(directory), os.getpid(), (json.dumps(record, sort_keys=True) + "\n").encode())
     except (OSError, ValueError, NamespaceLockError) as exc:
         # Diagnostics cannot invalidate scientific outputs or certify success.
@@ -83,7 +89,10 @@ def main():
     if args.action == "read":
         if args.directory is None:
             parser.error("--directory is required")
-        from performance_log import records
+        if __package__:
+            from .performance_log import records
+        else:
+            from performance_log import records
         for record in records(args.directory):
             print(json.dumps(record, sort_keys=True))
     elif args.action == "start":

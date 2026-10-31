@@ -12,8 +12,12 @@ import re
 import stat
 from pathlib import Path
 
-import metadata_store as metadata
-from shared_namespace_lock import namespace_lock
+if __package__:
+    from . import metadata_store as metadata
+    from .shared_namespace_lock import namespace_lock
+else:
+    import metadata_store as metadata
+    from shared_namespace_lock import namespace_lock
 
 STRIPES = 64
 

@@ -109,3 +109,24 @@ def test_same_stripe_concurrent_writers_preserve_complete_json_records(tmp_path)
         list(pool.map(lambda i: emit(root, 64 * i + 1), range(1, 81)))
     assert len(list(root.glob("*.jsonl"))) == 1
     assert sorted(record["pid"] for record in log.records(root)) == [64 * i + 1 for i in range(1, 81)]
+
+
+def test_package_import_and_enabled_telemetry_preserve_the_public_import_boundary(tmp_path):
+    import os
+    import subprocess
+
+    root = tmp_path / "versions" / "performance"
+    code = (
+        "from workflow.support.performance_metrics import write_row;"
+        "from workflow.support.performance_log import records;"
+        "write_row({'phase':'package-import','elapsed':1});"
+        "import os,json;print(json.dumps(list(records(os.environ['GG_PERFORMANCE_DIR']))))"
+    )
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    environment["GG_PERFORMANCE_DIR"] = str(root)
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=SUPPORT.parents[1], env=environment, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    rows = json.loads(result.stdout)
+    assert len(rows) == 1 and rows[0]["phase"] == "package-import" and rows[0]["elapsed"] == 1

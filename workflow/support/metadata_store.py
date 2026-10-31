@@ -25,7 +25,10 @@ from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
-from shared_namespace_lock import namespace_lock
+if __package__:
+    from .shared_namespace_lock import namespace_lock
+else:
+    from shared_namespace_lock import namespace_lock
 
 DATABASE = ".gg-metadata.sqlite3"
 APPLICATION_ID = 0x47474D44
