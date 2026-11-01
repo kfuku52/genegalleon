@@ -2290,6 +2290,26 @@ def test_mv_out_bundle_rejects_hardlinked_destination_aliases(tmp_path):
     assert second_source.read_text() == "second\n"
 
 
+def test_mv_out_bundle_heartbeat_start_failure_restores_sources_and_outputs(tmp_path):
+    source = tmp_path / "source"
+    source.write_text("new\n")
+    destination = tmp_path / "out" / "result.tsv"
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    completed = run_bash(
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "gg_shared_lock_start_heartbeat() { return 1; }; "
+        f"mv_out_bundle {shlex.quote(str(source))} {shlex.quote(str(destination))}",
+        tmp_path,
+    )
+    assert completed.returncode != 0
+    assert source.read_text() == "new\n"
+    assert destination.read_text() == "old\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+    assert not list((destination.parent / ".gg_publish_lock_stripes-v1").glob("*.lock"))
+
+
 def test_mv_out_bundle_stripe_collision_acquires_once_and_publishes_both(tmp_path):
     buckets = {}
     for index in range(512):

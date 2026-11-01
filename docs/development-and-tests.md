@@ -338,6 +338,9 @@ working tree.
 
 ## Run focused test subsets
 
+For heartbeat lifecycle, dropped-stop-signal regressions and publication
+rollback, see [shared-lock heartbeat shutdown](shared-lock-heartbeats.md).
+
 Useful targeted commands:
 
 ```bash

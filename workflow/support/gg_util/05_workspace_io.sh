@@ -697,7 +697,7 @@ mv_out_bundle() (
 			return 1
 		fi
 		bundle_acquired_paths+=("${lock_path}")
-		gg_shared_lock_start_heartbeat "${lock_path}"
+		gg_shared_lock_start_heartbeat "${lock_path}" || return 1
 		bundle_lock_heartbeat_pids+=("${GG_SHARED_LOCK_HEARTBEAT_PID:-}")
 	done
 	for ((pair_index = 0; pair_index < pair_count; pair_index++)); do
