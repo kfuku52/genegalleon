@@ -18,34 +18,64 @@ if str(SUPPORT_DIR) not in sys.path:
 from shared_lock import FIELD_SEPARATOR, read_lock_metadata, try_create_lock  # noqa: E402
 
 
-def test_heartbeat_stop_during_child_pid_assignment_reaps_sleep(tmp_path):
-    bashpid_probe = subprocess.run(
-        ["bash", "-c", 'printf "%s" "${BASHPID:-}"'],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if bashpid_probe.stdout == "":
-        pytest.skip("BASHPID is required to target the heartbeat subshell")
+@pytest.mark.parametrize("drop_signal", [False, True])
+def test_heartbeat_stop_immediately_after_start_reaps_child(tmp_path, drop_signal):
     lock_path = tmp_path / "heartbeat.lock"
     script = f'''
+set -euo pipefail
 source "{SUPPORT_DIR / 'gg_shared_lock.sh'}"
 gg_shared_lock_try_create "{lock_path}"
-set -T
-trap 'case "$BASH_COMMAND" in heartbeat_sleep_pid=*) kill -TERM "$BASHPID";; esac' DEBUG
 gg_shared_lock_start_heartbeat "{lock_path}"
-wait "$GG_SHARED_LOCK_HEARTBEAT_PID"
+heartbeat_pid=$GG_SHARED_LOCK_HEARTBEAT_PID
+'''
+    if drop_signal:
+        # The publisher must also finish if its one-shot TERM is lost.
+        script += 'kill() { if [[ "${1:-}" == -0 ]]; then builtin kill "$@"; fi; }; '
+    script += f'''
+gg_shared_lock_stop_heartbeat "$heartbeat_pid"
+gg_shared_lock_release "{lock_path}"
+echo stopped
 '''
     process = subprocess.Popen(
-        ["bash", "-c", script],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
+        ["bash", "-c", script], text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True,
+        env={**os.environ, "TMPDIR": str(tmp_path)},
     )
     try:
         stdout, stderr = process.communicate(timeout=3)
         assert process.returncode == 0, (stdout, stderr)
+        assert stdout.strip() == "stopped"
+        assert not lock_path.exists()
+        assert not list(tmp_path.glob("gg-lock-heartbeat.*"))
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def test_heartbeat_stops_when_workflow_parent_dies(tmp_path):
+    lock_path = tmp_path / "heartbeat.lock"
+    script = f'''
+set -euo pipefail
+source "{SUPPORT_DIR / 'gg_shared_lock.sh'}"
+gg_shared_lock_try_create "{lock_path}"
+gg_shared_lock_start_heartbeat "{lock_path}"
+echo ready
+read -r response
+'''
+    process = subprocess.Popen(
+        ["bash", "-c", script], text=True, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        env={**os.environ, "TMPDIR": str(tmp_path)},
+    )
+    try:
+        assert process.stdout.readline().strip() == "ready"
+        os.kill(process.pid, signal.SIGKILL)
+        process.communicate(timeout=3)
+        assert lock_path.exists(), "Parent loss does not authorize deleting its publication lease"
+        assert not list(tmp_path.glob("gg-lock-heartbeat.*"))
     finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)

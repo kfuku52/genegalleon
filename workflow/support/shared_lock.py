@@ -3,9 +3,11 @@
 
 import argparse
 import json
+import math
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -372,6 +374,57 @@ def _cmd_heartbeat(args):
     return 0 if update_owned_lock(args.lock_file, args.token) else 1
 
 
+def run_lock_heartbeat(lock_file, token, interval, control_file, *, poll_seconds=0.1, parent_pid=None):
+    """Acknowledge startup, then stop on parent loss or control-file removal.
+
+    A stop signal can arrive before a background shell installs its handler.
+    Keeping the control inode open makes shutdown independent of that signal
+    and prevents a replacement pathname from extending this helper's lifetime.
+    """
+    if not math.isfinite(interval) or interval <= 0 or not math.isfinite(poll_seconds) or poll_seconds <= 0:
+        raise ValueError("Heartbeat interval must be positive")
+    parent = os.getppid()
+    if parent_pid is not None and parent_pid > 0 and parent != parent_pid:
+        return
+    control_file = Path(control_file)
+    descriptor = os.open(control_file, os.O_WRONLY | os.O_NOFOLLOW)
+    accepted = False
+    try:
+        identity = os.fstat(descriptor)
+        if (not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid()
+                or identity.st_nlink != 1 or identity.st_mode & 0o077):
+            raise ValueError("Heartbeat control is not an owned private file")
+        accepted = True
+        os.write(descriptor, b"ready\n")
+        deadline = time.monotonic() + interval
+        while os.getppid() == parent:
+            try:
+                current = control_file.lstat()
+            except FileNotFoundError:
+                return
+            if ((current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
+                    or os.fstat(descriptor).st_nlink != 1):
+                return
+            if time.monotonic() >= deadline:
+                if not update_owned_lock(lock_file, token):
+                    return
+                deadline = time.monotonic() + interval
+            time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+    finally:
+        try:
+            current = control_file.lstat()
+            if accepted and (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                control_file.unlink()
+        except FileNotFoundError:
+            pass
+        os.close(descriptor)
+
+
+def _cmd_heartbeat_loop(args):
+    run_lock_heartbeat(args.lock_file, args.token, args.interval, args.control_file, parent_pid=args.parent_pid)
+    return 0
+
+
 def _cmd_reclaim_if_stale(args):
     result = reclaim_if_stale(args.lock_file, args.stale_seconds)
     if result is None:
@@ -406,6 +459,14 @@ def build_arg_parser():
         owner_parser.add_argument("lock_file")
         owner_parser.add_argument("--token", required=True)
         owner_parser.set_defaults(func=callback)
+
+    loop_parser = subparsers.add_parser("heartbeat-loop")
+    loop_parser.add_argument("lock_file")
+    loop_parser.add_argument("--token", required=True)
+    loop_parser.add_argument("--interval", type=float, required=True)
+    loop_parser.add_argument("--control-file", required=True)
+    loop_parser.add_argument("--parent-pid", type=int, default=None)
+    loop_parser.set_defaults(func=_cmd_heartbeat_loop)
 
     token_parser = subparsers.add_parser("new-token")
     token_parser.set_defaults(func=lambda args: print(uuid.uuid4().hex) or 0)

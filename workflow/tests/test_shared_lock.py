@@ -25,6 +25,59 @@ def test_permission_denied_does_not_reclaim_live_owner(tmp_path, monkeypatch):
     assert shared_lock.read_lock_metadata(lock)["token"] == token
 
 
+@pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf")])
+def test_heartbeat_loop_rejects_invalid_interval_without_touching_control(tmp_path, interval):
+    control = tmp_path / "control"
+    control.write_text("preserve")
+    with pytest.raises(ValueError, match="positive"):
+        shared_lock.run_lock_heartbeat(tmp_path / "lock", "token", interval, control)
+    assert control.read_text() == "preserve"
+
+
+@pytest.mark.parametrize("unsafe", ["public", "hardlink", "symlink"])
+def test_heartbeat_loop_rejects_unsafe_control_without_removing_it(tmp_path, unsafe):
+    control = tmp_path / "control"
+    control.write_text("preserve")
+    control.chmod(0o600)
+    if unsafe == "public":
+        control.chmod(0o644)
+    elif unsafe == "hardlink":
+        os.link(control, tmp_path / "alias")
+    else:
+        control.rename(tmp_path / "target")
+        control.symlink_to(tmp_path / "target")
+    with pytest.raises((ValueError, OSError)):
+        shared_lock.run_lock_heartbeat(tmp_path / "lock", "token", 1, control)
+    assert control.read_text() == "preserve"
+
+
+def test_heartbeat_control_replacement_is_preserved(tmp_path):
+    control = tmp_path / "control"
+    control.touch(mode=0o600)
+    lock = tmp_path / "lease"
+    token = shared_lock.write_lock_file(lock)
+    process = subprocess.Popen([
+        sys.executable, str(SUPPORT / "shared_lock.py"), "heartbeat-loop", str(lock),
+        "--token", token, "--interval", "60", "--control-file", str(control),
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        import time
+        deadline = time.monotonic() + 3
+        while control.stat().st_size == 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        control.unlink()
+        control.write_text("replacement")
+        process.communicate(timeout=3)
+        assert process.returncode == 0
+        assert control.read_text() == "replacement"
+        assert shared_lock.read_lock_metadata(lock)["token"] == token
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
 def test_unexpected_pid_probe_error_preserves_lock(tmp_path, monkeypatch):
     lock = tmp_path / "shared.lock"
     token = shared_lock.write_lock_file(lock)

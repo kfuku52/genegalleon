@@ -425,39 +425,41 @@ gg_shared_lock_reclaim_if_stale() {
 
 gg_shared_lock_start_heartbeat() {
   local lock_file=$1
-  local interval_seconds owner_token py_exec helper_script
+  local interval_seconds owner_token py_exec helper_script control_file heartbeat_pid index deadline
+  local heartbeat_parent_pid=${BASHPID:-0}
+  GG_SHARED_LOCK_HEARTBEAT_PID=""
   gg_shared_lock_owner_index "${lock_file}"
   owner_token=${GG_SHARED_LOCK_OWNER_TOKENS[GG_SHARED_LOCK_OWNER_INDEX]}
   [[ -n "${owner_token}" ]] || return 1
   py_exec=$(gg_shared_lock_python) || return 1
   helper_script=$(gg_shared_lock_helper_script) || return 1
   interval_seconds=$(gg_lock_heartbeat_seconds)
-  (
-    local heartbeat_sleep_pid=""
-
-    stop_heartbeat_process() {
-      local child_pid
-      trap '' HUP INT TERM
-      # TERM may arrive after sleep was forked but before $! was assigned.
-      # The shell job table already owns that child; reap it there so it cannot
-      # retain the workflow's output pipes or inherited advisory-lock fd.
-      while IFS= read -r child_pid; do
-        kill "${child_pid}" 2>/dev/null || true
-        wait "${child_pid}" 2>/dev/null || true
-      done < <(jobs -pr)
-      exit 0
-    }
-
-    trap 'stop_heartbeat_process' HUP INT TERM
-    while [[ -e "${lock_file}" ]]; do
-      sleep "${interval_seconds}" &
-      heartbeat_sleep_pid=$!
-      wait "${heartbeat_sleep_pid}" || exit 0
-      heartbeat_sleep_pid=""
-      "${py_exec}" "${helper_script}" heartbeat "${lock_file}" --token "${owner_token}" || exit 0
-    done
-  ) &
-  GG_SHARED_LOCK_HEARTBEAT_PID=$!
+  # The private job-local inode is both a startup acknowledgement and an
+  # explicit lifetime. A lost early TERM must not strand a Bash sleep loop
+  # while its publisher waits forever and retains an unrelated output stripe.
+  control_file=$(mktemp "${TMPDIR:-/tmp}/gg-lock-heartbeat.XXXXXXXX") || return 1
+  "${py_exec}" "${helper_script}" heartbeat-loop "${lock_file}" \
+    --token "${owner_token}" --interval "${interval_seconds}" \
+    --control-file "${control_file}" --parent-pid "${heartbeat_parent_pid}" </dev/null >/dev/null &
+  heartbeat_pid=$!
+  if ! declare -p GG_SHARED_LOCK_HEARTBEAT_PIDS >/dev/null 2>&1; then
+    GG_SHARED_LOCK_HEARTBEAT_PIDS=("")
+    GG_SHARED_LOCK_HEARTBEAT_CONTROLS=("")
+  fi
+  index=${#GG_SHARED_LOCK_HEARTBEAT_PIDS[@]}
+  GG_SHARED_LOCK_HEARTBEAT_PIDS[index]=${heartbeat_pid}
+  GG_SHARED_LOCK_HEARTBEAT_CONTROLS[index]=${control_file}
+  GG_SHARED_LOCK_HEARTBEAT_PID=${heartbeat_pid}
+  deadline=$((SECONDS + 30))
+  while [[ ! -s "${control_file}" ]]; do
+    if ! kill -0 "${heartbeat_pid}" 2>/dev/null || (( SECONDS >= deadline )); then
+      gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
+      GG_SHARED_LOCK_HEARTBEAT_PID=""
+      echo "Shared lock heartbeat failed to acknowledge startup: ${lock_file}" >&2
+      return 1
+    fi
+    sleep 0.01
+  done
 }
 
 gg_shared_lock_stop_heartbeat() {
@@ -465,8 +467,20 @@ gg_shared_lock_stop_heartbeat() {
   if [[ ! "${heartbeat_pid}" =~ ^[0-9]+$ ]]; then
     return 0
   fi
-  kill "${heartbeat_pid}" 2>/dev/null || true
-  wait "${heartbeat_pid}" 2>/dev/null || true
+  local index
+  if ! declare -p GG_SHARED_LOCK_HEARTBEAT_PIDS >/dev/null 2>&1; then
+    return 0
+  fi
+  for index in "${!GG_SHARED_LOCK_HEARTBEAT_PIDS[@]}"; do
+    if [[ "${GG_SHARED_LOCK_HEARTBEAT_PIDS[index]}" == "${heartbeat_pid}" ]]; then
+      rm -f -- "${GG_SHARED_LOCK_HEARTBEAT_CONTROLS[index]}"
+      kill "${heartbeat_pid}" 2>/dev/null || true
+      wait "${heartbeat_pid}" 2>/dev/null || true
+      GG_SHARED_LOCK_HEARTBEAT_PIDS[index]=""
+      GG_SHARED_LOCK_HEARTBEAT_CONTROLS[index]=""
+      return 0
+    fi
+  done
 }
 
 gg_shared_lock_release() {
