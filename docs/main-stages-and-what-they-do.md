@@ -724,6 +724,10 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- `run_gene_annotation_database=1` with `gene_annotation_manifest` adds native
+  per-gene product, GO and localisation columns, GO tuples and source provenance
+  to `gg_orthogroup.annotated.db`. Existing tree/event tables are copied intact;
+  later summaries use that DB without repeating searches or reconciliation.
 - `gene_family_database_reconciliation=1` imports existing GeneRax XML events,
   species branches, exact gene membership and method provenance as separate
   tables. `run_reconciliation_summary=1` reads that DB without modifying it and

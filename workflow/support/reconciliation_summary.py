@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from contextlib import ExitStack
 from pathlib import Path
 
+from gene_annotation_database import SCHEMA as ANNOTATION_SCHEMA
 from reconciliation_database import SCHEMA, branch_id, canonical
 from shared_namespace_lock import namespace_lock
 
@@ -129,6 +130,22 @@ def collect_evidence(inputs, config, db, families):
         raise ValueError("Expression requires explicit one-sided trap-enrichment P-value semantics")
     members, proteins, shared, products = defaultdict(set), defaultdict(set), Counter(), defaultdict(set)
     audit = {"identified_proteome_genes_without_selected_family": 0}
+    database_products = {}
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='gene_annotation_meta'").fetchone():
+        annotation_meta = dict(db.execute("SELECT key,value FROM gene_annotation_meta"))
+        meta = dict(db.execute("SELECT key,value FROM reconciliation_meta"))
+        if (annotation_meta.get("schema") != ANNOTATION_SCHEMA
+                or annotation_meta.get("gene_model_contract_sha256") != meta["gene_model_contract_sha256"]
+                or annotation_meta.get("family_catalog_sha256") != meta["family_catalog_sha256"]):
+            raise ValueError("Embedded gene annotations disagree with the reconciliation contract")
+        for gene, family, product in db.execute(
+                "SELECT r.gene_id,r.orthogroup,a.product FROM reconciliation_gene r "
+                "JOIN gene_annotation_product a ON a.species=r.species AND a.gene_id=r.gene_id"):
+            database_products[gene] = product or ""
+            if product:
+                products[family].add(product)
+        audit["gene_annotation_database"] = annotation_meta
+        audit["reconciliation_genes_with_embedded_annotations"] = len(database_products)
     if "proteome_members" in inputs:
         species = config.get("proteome_species")
         if not species:
@@ -182,6 +199,8 @@ def collect_evidence(inputs, config, db, families):
             if gene not in gene_family or gene in seen:
                 raise ValueError("Annotation gene differs from the DB or is duplicated: " + gene)
             seen.add(gene)
+            if gene in database_products and row["product"] != database_products[gene]:
+                raise ValueError("External product conflicts with the embedded gene annotation: " + gene)
             if row["product"]:
                 products[gene_family[gene]].add(row["product"])
     return expression, members, proteins, shared, products, audit
@@ -227,7 +246,8 @@ def _build_results(database, config_path, output_dir, record=None):
             if meta.get("schema") != SCHEMA or config.get("family_catalog_sha256") != meta["family_catalog_sha256"]:
                 raise ValueError("Reconciliation schema or family catalogue contract mismatch")
             has_evidence = set(inputs) - {"branches", "cafe"}
-            if has_evidence and (not meta.get("gene_model_contract_sha256") or
+            has_annotations = db.execute("SELECT 1 FROM sqlite_master WHERE name='gene_annotation_meta'").fetchone()
+            if (has_evidence or has_annotations) and (not meta.get("gene_model_contract_sha256") or
                                  config.get("gene_model_contract_sha256") != meta["gene_model_contract_sha256"]):
                 raise ValueError("Functional evidence requires the identical gene-model contract")
             families = dict(db.execute("SELECT orthogroup,status FROM reconciliation_family"))

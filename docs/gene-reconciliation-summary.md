@@ -56,6 +56,83 @@ not identify a molecular deletion, an extant lost-gene ID or its exact timing.
 Extant descendants are reported as observations, not inferred ancestral copy
 numbers or proof of uninterrupted retention.
 
+## Per-gene product, GO and localisation database
+
+Set `run_gene_annotation_database=1` and `gene_annotation_manifest` to a
+SHA-bound manifest of existing `gg_genome_annotation` TSVs. This stage runs after
+the model-bound reconciliation DB is available and before its downstream summaries.
+Enable `gene_family_database_reconciliation=1` when building that base DB. It copies every
+existing table into `gg_orthogroup.annotated.db`, adds the gene annotations, and
+uses that annotated DB for subsequent stages in the same invocation. The base
+`gg_orthogroup.db` remains unchanged. GeneRax, annotation searches and predictors
+are not repeated. This also supports a completed base DB from an earlier run.
+
+```json
+{
+  "schema": "gene_annotation_database_v1",
+  "gene_model_contract_sha256": "<same model contract as the base DB>",
+  "family_catalog_sha256": "<same family catalogue as the base DB>",
+  "source_database_sha256": "<optional exact base DB SHA>",
+  "require_complete_genes": true,
+  "sources": [
+    {
+      "species": "Species_name",
+      "path": "annotations/Species_name_annotation.tsv",
+      "sha256": "<exact TSV SHA>",
+      "product_column": "sprot_recname"
+    }
+  ]
+}
+```
+
+Paths resolve against the manifest. By default the sources must cover the exact
+species set and all reconciled genes. Gene IDs are joined literally with species;
+no prefix stripping, guessed aliases or family-name substitution is performed.
+Duplicate genes or inconsistent family assignments fail before publication.
+Explicit `require_complete_genes=false` permits partial annotations and records
+the number of unannotated reconciliation genes. It does not fill missing values.
+
+- `gene_annotation` retains each native TSV column as queryable text, including
+  Swiss-Prot hits, GO strings, targeting signals, localisation scores, model SHA,
+  score kind, calibration and decision state. Columns absent from a species's
+  input are SQL NULL; a present but empty source cell stays empty. The key is
+  `(species,gene_id)`. The `annotation_source_id` joins its source metadata.
+- `orthogroup` contains only membership in the DB's selected catalogue;
+  `source_orthogroup` also preserves original assignments outside that catalogue.
+  Annotation-only genes remain available, without inventing a GeneRax leaf.
+- `gene_annotation_product` provides a consistent `product` view, using each
+  source's declared product column (default `sprot_recname`).
+- `gene_annotation_go` preserves ordered GO ID, aspect, name and evidence tuples.
+  Default columns are `go_ids`, `go_aspects`, `go_terms`, `go_evidence`, separated
+  by semicolons. An optional `go_columns` object maps `ids`, `aspects`, `terms`,
+  `evidence` to other source columns. Inconsistent tuple lengths fail rather than
+  silently pair unrelated names or evidence codes.
+- `gene_annotation_source` and `gene_annotation_meta` record exact source paths,
+  hashes, original column schemas, model/family contracts and coverage audit.
+
+Prediction scores retain their original semantics. For example, an uncalibrated
+CDSKIT `sigmoid_score` is not relabelled a calibrated probability. Product names
+describe extant genes, not identified extinct copies. The reconciliation summary
+uses embedded product annotations for its exact reconciled members; an external
+product TSV that contradicts them is rejected. GO/localisation queries can use
+the same annotated DB directly, without reopening the original TSVs.
+
+The public helper is also available for an admitted standalone workflow:
+
+```bash
+python workflow/support/gene_annotation_database.py \
+  --source-db workspace/output/orthogroup/gg_orthogroup.db \
+  --manifest gene_annotations.json \
+  --output-db workspace/output/orthogroup/gg_orthogroup.annotated.db \
+  --scratch /path/to/private/scratch
+```
+
+Import uses bounded batches and one database output, with no per-gene files.
+Private scratch avoids random database writes on shared storage. The published
+base DB is held under its normal shared build guard, and the derivative uses its
+own exclusive guard; unrelated databases remain available. Changed inputs,
+active journals or invalid annotations preserve an existing annotated output.
+
 ## Optional downstream stage
 
 The optional downstream stage remains disabled in debug mode unless its

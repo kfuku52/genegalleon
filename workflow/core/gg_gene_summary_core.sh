@@ -24,8 +24,10 @@ reconciliation_species_tree="${reconciliation_species_tree:-}"
 reconciliation_method_manifest="${reconciliation_method_manifest:-}"
 run_reconciliation_summary="${run_reconciliation_summary:-0}"
 reconciliation_summary_config="${reconciliation_summary_config:-}"
+run_gene_annotation_database="${run_gene_annotation_database:-0}"
+gene_annotation_manifest="${gene_annotation_manifest:-}"
 # Preserve caller-relative paths before summary stages change directories.
-for reconciliation_input in reconciliation_species_tree reconciliation_method_manifest reconciliation_summary_config; do
+for reconciliation_input in reconciliation_species_tree reconciliation_method_manifest reconciliation_summary_config gene_annotation_manifest; do
   case "${!reconciliation_input}" in ""|/*) ;; *) printf -v "${reconciliation_input}" '%s/%s' "${PWD}" "${!reconciliation_input}" ;; esac
 done
 unset reconciliation_input
@@ -125,6 +127,10 @@ if [[ "${gg_debug_mode:-0}" == "1" && -z "${reconciliation_summary_config}" ]]; 
   echo 'Skipping the optional reconciliation summary in debug mode: no evidence configuration supplied.'
   run_reconciliation_summary=0
 fi
+if [[ "${gg_debug_mode:-0}" == "1" && -z "${gene_annotation_manifest}" ]]; then
+  echo 'Skipping the optional gene annotation database in debug mode: no annotation manifest supplied.'
+  run_gene_annotation_database=0
+fi
 
 validate_binary_flag() {
   local name=$1
@@ -140,6 +146,11 @@ validate_binary_flag "run_presence_absence_summary" "${run_presence_absence_summ
 validate_binary_flag "run_gene_family_database_build" "${run_gene_family_database_build}"
 validate_binary_flag "gene_family_database_reconciliation" "${gene_family_database_reconciliation}"
 validate_binary_flag "run_reconciliation_summary" "${run_reconciliation_summary}"
+validate_binary_flag "run_gene_annotation_database" "${run_gene_annotation_database}"
+if [[ "${run_gene_annotation_database}" == "1" && ! -s "${gene_annotation_manifest}" ]]; then
+  echo 'run_gene_annotation_database=1 requires gene_annotation_manifest' >&2
+  exit 1
+fi
 if [[ "${gene_family_database_reconciliation}" == "1" && ! -s "${reconciliation_species_tree}" ]]; then
   echo 'gene_family_database_reconciliation=1 requires reconciliation_species_tree' >&2
   exit 1
@@ -881,6 +892,29 @@ run_gene_family_database_for_source() {
 
 }
 
+run_gene_annotation_database_for_source() {
+  if [[ "${run_gene_annotation_database}" != "1" ]]; then return 0; fi
+  local target="${dir_gene_family}/gg_orthogroup.annotated.db"
+  local needs_update=0 input_lines input argument
+  input_lines=$(python "${gg_support_dir}/gene_annotation_database.py" --manifest "${gene_annotation_manifest}" --list-inputs) || return $?
+  local args=(
+    --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.gene_annotation_database.json"
+    --step "gene_annotation_database" --family-id "${gene_family_source}"
+    --logical-root "${gg_workspace_output_dir}/.gg_global_artifacts" --workspace-root "${gg_workspace_dir}"
+    --input "source_database=${file_gene_family_db}" --input "annotation_manifest=${gene_annotation_manifest}"
+    --parameter "annotation_schema=gene_annotation_database_v1"
+    --output "database=${target}"
+  )
+  while IFS= read -r input; do args+=(--input "${input}"); done <<< "${input_lines}"
+  gg_artifact_prepare_stage needs_update run_gene_annotation_database "${args[@]}" || return $?
+  if [[ "${needs_update}" == "1" ]]; then
+    local annotation_args=(--source-db "${file_gene_family_db}" --manifest "${gene_annotation_manifest}" --output-db "${target}" --scratch "${gg_tmp_dir}")
+    for argument in "${args[@]}"; do annotation_args+=("--record=${argument}"); done
+    python "${gg_support_dir}/gene_annotation_database.py" "${annotation_args[@]}" || return $?
+  fi
+  file_gene_family_db="${target}"
+}
+
 run_reconciliation_summary_for_source() {
   if [[ "${run_reconciliation_summary}" != "1" ]]; then return 0; fi
   local out_dir="${summary_output_dir}/reconciliation"
@@ -1130,6 +1164,7 @@ fi
 run_family_completion_summary_for_source
 run_presence_absence_summary_for_source
 run_gene_family_database_for_source
+run_gene_annotation_database_for_source
 run_reconciliation_summary_for_source
 run_csubst_scan_aa_change_summary_for_source
 run_csubst_scan_candidate_sites_for_source
