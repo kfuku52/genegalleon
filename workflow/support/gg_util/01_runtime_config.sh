@@ -517,7 +517,13 @@ gg_share_runtime_file() (
 	local digest mode object pool_uid pool_mode object_mode object_uid temporary=""
 	[[ -f "${source}" ]] || return 1
 	[[ ! -L "${pool}" && ! -L "${destination}" ]] || return 1
-	(umask 077; mkdir -p -- "${pool}")
+	# Default NAS ACLs can override mkdir/umask. Restrict the owned protocol
+	# directory through a descriptor; retain all object identity/hash checks.
+	"${GG_BOOTSTRAP_PYTHON:-python}" "$(dirname "${BASH_SOURCE[0]}")/../runtime_snapshot_storage.py" \
+		"${pool}" --prepare-pool || {
+		echo "Runtime code pool preparation failed: ${pool}" >&2
+		return 1
+	}
 	pool_uid=$(stat -c '%u' -- "${pool}" 2>/dev/null || stat -f '%u' "${pool}")
 	pool_mode=$(stat -c '%a' -- "${pool}" 2>/dev/null || stat -f '%Lp' "${pool}")
 	[[ "${pool_uid}" == "${EUID}" && "$((8#${pool_mode} & 8#22))" == 0 ]] || return 1

@@ -23,6 +23,24 @@ FILE = re.compile(r"VERSION|gg_common_params\.sh|gg_[a-z0-9_]+_(?:core|entrypoin
 RUN = re.compile(r"[A-Za-z0-9_.-]{1,192}")
 
 
+def prepare_pool(path):
+    """Enforce privacy on our code pool even when NAS ACLs override mkdir."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        if before.st_uid != os.getuid():
+            raise ValueError(f"Runtime code pool is not owned by this user: {path}")
+        os.fchmod(fd, 0o700)
+        after = path.lstat()
+        if ((after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+                or not stat.S_ISDIR(after.st_mode) or stat.S_IMODE(after.st_mode) != 0o700):
+            raise ValueError(f"Runtime code pool privacy did not hold: {path}")
+    finally:
+        os.close(fd)
+
+
 def eligible(key):
     parts = Path(key).parts
     return (len(parts) == 3 and re.fullmatch(r"gg_[a-z0-9_]+_entrypoint", parts[0]) is not None
@@ -174,10 +192,15 @@ def main():
     parser.add_argument("directory", type=Path)
     parser.add_argument("sources", type=Path, nargs="*")
     parser.add_argument("--collect", action="store_true")
+    parser.add_argument("--prepare-pool", action="store_true")
     parser.add_argument("--writers-stopped", action="store_true")
     parser.add_argument("--operation-id", default="")
     args = parser.parse_args()
-    if args.collect:
+    if args.prepare_pool:
+        if args.sources or args.collect or args.writers_stopped or args.operation_id:
+            parser.error("Pool preparation takes only one directory")
+        prepare_pool(args.directory)
+    elif args.collect:
         if args.sources or not args.writers_stopped or not args.operation_id:
             parser.error("Collection requires stopped writers and one exact operation identity")
         value = metadata.pack(args.directory, delete_originals=True, writers_stopped=True,
