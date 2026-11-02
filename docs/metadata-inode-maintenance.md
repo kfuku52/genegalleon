@@ -71,3 +71,19 @@ This trades extra telemetry coordination for bounded live inodes. Median offline
 collection/retirement time for the fixture was 2.036 s. These are local Docker
 fixture measurements, not shared-filesystem throughput claims. Existing legacy
 controls are retired only once; fixed current controls are deliberately retained.
+
+## Read-only storage plans
+
+`python workflow/support/metadata_plan.py ROOT` reports bounded physical file
+and directory counts, format-eligible members, protected groups, DB generation
+and SHA-256, source identity digest, and explicit defer reasons. Use
+`--operation prune-observations` or `--operation retire-version-locks` to inspect
+the corresponding maintenance selection. `--minimum-files` and
+`--minimum-idle-seconds` filter automatic collection candidates.
+
+The schema-1 API is also available as `metadata_plan.plan`. It creates no locks,
+journals or SQLite files and rejects source/DB/owner drift during observation.
+Counts describe directory entries, not quota inodes. Scientific TSVs and unknown
+files are never collection candidates. A plan is historical evidence, not a
+writer lease: callers must independently establish stopped writers and recheck
+the source generation at the existing mutation boundary.
