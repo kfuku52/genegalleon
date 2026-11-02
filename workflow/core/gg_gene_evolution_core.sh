@@ -2668,6 +2668,9 @@ else
   fi
 fi
 primary_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=2")
+# Older producers could re-stamp an existing CDS FASTA after its inputs changed.
+# Invalidate those manifests once, then reuse only the corrected producer contract.
+primary_fasta_provenance_args+=(--parameter "primary_fasta_generation_schema=2")
 gg_artifact_prepare_stage primary_fasta_needs_update run_extract_primary_fasta "${primary_fasta_provenance_args[@]}" || exit $?
 if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -2730,45 +2733,43 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
       exit 1
     fi
   else
-    if [[ ! -s "${file_og_cds_fasta}" ]]; then
-      if [[ -e "${og_id}.cds.fasta" ]]; then
-        rm -f -- "${og_id}.cds.fasta"
-      fi
-      python "${gg_support_dir}/fasta_sequence_store.py" extract \
-        --database "${file_species_cds_store_db}" \
-        --pattern-file pattern.txt \
-        --output "${og_id}.cds.fasta" \
-        --require-all
+    if [[ -e "${og_id}.cds.fasta" ]]; then
+      rm -f -- "${og_id}.cds.fasta"
+    fi
+    python "${gg_support_dir}/fasta_sequence_store.py" extract \
+      --database "${file_species_cds_store_db}" \
+      --pattern-file pattern.txt \
+      --output "${og_id}.cds.fasta" \
+      --require-all
 
-      seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
-        seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
-        seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
-        cdskit pad --codon_table "${genetic_code}" |
-        sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-          > "${og_id}.cds.2.fasta"
+    seqkit replace --pattern "X" --replacement "N" --by-seq --ignore-case --threads "${GG_TASK_CPUS}" "${og_id}.cds.fasta" |
+      seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${GG_TASK_CPUS}" |
+      seqkit replace --pattern "\+" --replacement "_" --ignore-case --threads "${GG_TASK_CPUS}" |
+      cdskit pad --codon_table "${genetic_code}" |
+      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+        > "${og_id}.cds.2.fasta"
 
-      fasta_genes=()
-      mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${og_id}.cds.2.fasta")
-      num_seq=${#fasta_genes[@]}
-      echo "Number of genes in the orthogroup or BLAST hit: ${num_gene}"
-      echo "Number of sequences in the fasta: ${num_seq}"
-      if [[ ${num_gene} -eq ${num_seq} ]]; then
-        echo "Number of genes and sequences matched. Fasta generation completed!"
-        seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
-        mv_out "${og_id}.cds.out.fa.gz" "${file_og_cds_fasta}"
-      else
-        echo "Number of genes and sequences did not match."
-        echo "Genes in the orthogroup or BLAST hit:"
-        printf '%s\n' "${genes[@]}"
-        echo ""
-        echo "Genes in the generated FASTA:"
-        printf '%s\n' "${fasta_genes[@]}" | sort | tr '\n' ' '
-        echo ""
-        echo "There may be duplicated or missing sequences."
-        echo "If you have recently replaced species_cds files, please make sure to remove species_cds_blastdb before rerunning."
-        echo "Exiting."
-        exit 1
-      fi
+    fasta_genes=()
+    mapfile -t fasta_genes < <(awk '/^>/ {sub(/^>/, "", $0); print}' "${og_id}.cds.2.fasta")
+    num_seq=${#fasta_genes[@]}
+    echo "Number of genes in the orthogroup or BLAST hit: ${num_gene}"
+    echo "Number of sequences in the fasta: ${num_seq}"
+    if [[ ${num_gene} -eq ${num_seq} ]]; then
+      echo "Number of genes and sequences matched. Fasta generation completed!"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.2.fasta" --out-file "${og_id}.cds.out.fa.gz"
+      mv_out "${og_id}.cds.out.fa.gz" "${file_og_cds_fasta}"
+    else
+      echo "Number of genes and sequences did not match."
+      echo "Genes in the orthogroup or BLAST hit:"
+      printf '%s\n' "${genes[@]}"
+      echo ""
+      echo "Genes in the generated FASTA:"
+      printf '%s\n' "${fasta_genes[@]}" | sort | tr '\n' ' '
+      echo ""
+      echo "There may be duplicated or missing sequences."
+      echo "If you have recently replaced species_cds files, please make sure to remove species_cds_blastdb before rerunning."
+      echo "Exiting."
+      exit 1
     fi
     if [[ "${input_sequence_mode}" == "protein" ]]; then
       gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"

@@ -434,6 +434,11 @@ summary tables. Branch tables encode a sister ID only for binary parents;
 children of unary or multifurcating parents use `-999`, with the complete
 topology retained in `parent`.
 
+Primary CDS FASTA regeneration also replaces an existing FASTA when the selected
+family or its sequence inputs change. Older primary-FASTA manifests require one
+rebuild because they could record new inputs while retaining old CDS sequences;
+the corrected producer contract then permits normal unchanged-input reuse.
+
 The `orthogroups` and `orthogroup_selection` modes do not request new species
 trees. They retain a tracked historical concatenated tree's original output
 selection, including the old bootstrap-consensus choice, without relabeling it
