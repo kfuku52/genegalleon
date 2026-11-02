@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 import sqlite3
@@ -231,6 +232,73 @@ def test_missing_both_external_evidence_and_xml_remain_unanalysed(tmp_path):
     build_results(db, path, out)
     with sqlite3.connect(out / "reconciliation_summary.db") as conn:
         assert conn.execute("SELECT proteome_status,shared_family_psms,transcript_status,cafe_copy_change FROM branch_family LIMIT 1").fetchone() == ("not_analysed", None, "not_analysed", None)
+
+
+def explicit_cafe_status(tmp_path, path, config, excluded):
+    cafe = tmp_path / config["inputs"]["cafe"]["path"]
+    with cafe.open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    for row in rows:
+        row["status"] = "not_analysed" if row["orthogroup"] in excluded else "analysed"
+        if row["status"] == "not_analysed":
+            row.update(copy_change="", significant_decrease="")
+    with cafe.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    config["inputs"]["cafe"]["sha256"] = sha256(cafe)
+    path.write_text(json.dumps(config))
+    return cafe, rows
+
+
+def test_unanalysed_cafe_families_are_not_zero_or_generax_only_and_do_not_change_bh(tmp_path):
+    db, *_ = build_fixture(tmp_path)
+    path, config = config_fixture(tmp_path, db)
+    explicit_cafe_status(tmp_path, path, config, {"OG0001"})
+    out = tmp_path / "results"
+    build_results(db, path, out)
+    with sqlite3.connect(out / "reconciliation_summary.db") as conn:
+        assert conn.execute("SELECT cafe_status,cafe_copy_change,cafe_significant_decrease,cafe_generax_comparison,transcript_q_branch_loss FROM branch_family WHERE branch_id='loss_B' AND orthogroup='OG0001'").fetchone() == ("not_analysed", None, None, "not_analysed", .04)
+        assert conn.execute("SELECT cafe_analysed_families,cafe_unanalysed_families,cafe_generax_comparable_families,generax_extinction_only,families_with_lineage_extinction FROM branch_summary WHERE branch_id='loss_B'").fetchone() == (3, 1, 2, 1, 2)
+    audit = json.loads((out / "manifest.json").read_bytes())["evidence_audit"]
+    assert audit["cafe_analysed_branch_family_pairs"] == 6
+    assert audit["cafe_explicitly_unanalysed_branch_family_pairs"] == 2
+
+
+def test_all_cafe_results_unanalysed_remain_unknown(tmp_path):
+    db, *_ = build_fixture(tmp_path)
+    path, config = config_fixture(tmp_path, db)
+    explicit_cafe_status(tmp_path, path, config, {"OG0001", "OG0002", "OG0003", "OG0004"})
+    out = tmp_path / "results"
+    build_results(db, path, out)
+    with sqlite3.connect(out / "reconciliation_summary.db") as conn:
+        assert conn.execute("SELECT cafe_analysed_families,cafe_unanalysed_families,cafe_generax_comparable_families,cafe_significant_decreases FROM branch_summary WHERE branch_id='loss_B'").fetchone() == (0, 4, 0, None)
+
+
+@pytest.mark.parametrize("status,change,significant", [
+    ("not_analysed", "0", ""), ("not_analysed", "", "0"),
+    ("not_analysed", "-1", "1"), ("analysed", "", "0"),
+    ("analysed", "0", ""), ("excluded", "", ""), ("", "0", "0"),
+])
+def test_ambiguous_cafe_status_preserves_previous_results(tmp_path, status, change, significant):
+    db, *_ = build_fixture(tmp_path)
+    path, config = config_fixture(tmp_path, db)
+    cafe, rows = explicit_cafe_status(tmp_path, path, config, set())
+    rows[0].update(status=status, copy_change=change, significant_decrease=significant)
+    with cafe.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    config["inputs"]["cafe"]["sha256"] = sha256(cafe)
+    path.write_text(json.dumps(config))
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / "previous").write_text("preserve")
+    before = db.read_bytes()
+    with pytest.raises(ValueError):
+        build_results(db, path, out)
+    assert (out / "previous").read_text() == "preserve"
+    assert db.read_bytes() == before
 
 
 def test_assay_proteins_without_a_selected_family_are_counted_separately(tmp_path):

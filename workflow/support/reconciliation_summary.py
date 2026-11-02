@@ -254,16 +254,26 @@ def _build_results(database, config_path, output_dir, record=None):
             if "cafe" in inputs:
                 for row in read_tsv(inputs["cafe"], ("branch_id", "orthogroup", "copy_change", "significant_decrease")):
                     key = (row["branch_id"], row["orthogroup"])
-                    if key[0] not in labels or key[1] not in families or key in cafe or row["significant_decrease"] not in ("0", "1"):
+                    status = row.get("status", "analysed")
+                    if key[0] not in labels or key[1] not in families or key in cafe or status not in ("analysed", "not_analysed"):
                         raise ValueError("Invalid CAFE branch/family evidence")
+                    if status == "not_analysed":
+                        if row["copy_change"] != "" or row["significant_decrease"] != "":
+                            raise ValueError("Unanalysed CAFE evidence must have blank change/significance")
+                        cafe[key] = (None, None, status)
+                        continue
+                    if row["significant_decrease"] not in ("0", "1"):
+                        raise ValueError("Invalid CAFE significance")
                     change = int(row["copy_change"])
                     significant = int(row["significant_decrease"])
                     if significant and change >= 0:
                         raise ValueError("CAFE significant decrease must have a negative copy change")
-                    cafe[key] = (change, significant)
+                    cafe[key] = (change, significant, status)
                 if len(cafe) != len(labels) * len(families):
                     raise ValueError("CAFE comparison must include every target branch/family, not only significant hits")
             expression, members, proteins, shared, products, evidence_audit = collect_evidence(inputs, config, db, set(families))
+            evidence_audit["cafe_analysed_branch_family_pairs"] = sum(row[2] == "analysed" for row in cafe.values())
+            evidence_audit["cafe_explicitly_unanalysed_branch_family_pairs"] = sum(row[2] == "not_analysed" for row in cafe.values())
             fdr = finite(config.get("expression_fdr", 0.05), "FDR")
             logfc = finite(config.get("expression_min_logfc", 1.0), "logFC cutoff")
             if not 0 < fdr <= 1:
@@ -271,7 +281,7 @@ def _build_results(database, config_path, output_dir, record=None):
             columns = {"branch_id": "TEXT", "orthogroup": "TEXT", "reconciliation_status": "TEXT",
                        "lineage_extinction_events": "INTEGER", "duplication_events": "INTEGER",
                        "extant_genes_inside": "INTEGER", "extant_genes_outside": "INTEGER",
-                       "cafe_copy_change": "INTEGER", "cafe_significant_decrease": "INTEGER", "cafe_generax_comparison": "TEXT",
+                       "cafe_status": "TEXT", "cafe_copy_change": "INTEGER", "cafe_significant_decrease": "INTEGER", "cafe_generax_comparison": "TEXT",
                        "proteome_status": "TEXT", "unique_proteome_genes": "TEXT", "shared_family_psms": "INTEGER", "products": "TEXT"}
             for view in ("transcript", "cds"):
                 columns.update({view + "_" + field: dtype for field, dtype in
@@ -291,18 +301,19 @@ def _build_results(database, config_path, output_dir, record=None):
                         valid = status == "imported"
                         counts = gene_counts[family]
                         inside = sum(counts[taxon] for taxon in db_branches[key])
+                        cafe_change, cafe_significant, cafe_status = cafe.get((label, family), (None, None, "not_analysed"))
                         row = dict.fromkeys(columns)
                         row.update(branch_id=label, orthogroup=family, reconciliation_status=status,
                                    lineage_extinction_events=events[family]["loss"] if valid else None,
                                    duplication_events=events[family]["duplication"] if valid else None,
                                    extant_genes_inside=inside if valid else None,
                                    extant_genes_outside=sum(counts.values()) - inside if valid else None,
-                                   cafe_copy_change=cafe.get((label, family), (None, None))[0],
-                                   cafe_significant_decrease=cafe.get((label, family), (None, None))[1],
-                                   cafe_generax_comparison=("not_analysed" if not valid or not cafe else
-                                                           "both" if family in candidates and cafe[(label, family)][1] else
+                                   cafe_status=cafe_status, cafe_copy_change=cafe_change,
+                                   cafe_significant_decrease=cafe_significant,
+                                   cafe_generax_comparison=("not_analysed" if not valid or cafe_status != "analysed" else
+                                                           "both" if family in candidates and cafe_significant else
                                                            "generax_extinction_only" if family in candidates else
-                                                           "cafe_decrease_only" if cafe[(label, family)][1] else "neither"),
+                                                           "cafe_decrease_only" if cafe_significant else "neither"),
                                    proteome_status=("not_analysed" if "proteome" not in inputs else
                                                     "not_assessable_no_gene" if not members[family] else
                                                     "unique_gene_support" if proteins[family] else
@@ -318,7 +329,7 @@ def _build_results(database, config_path, output_dir, record=None):
                                         view + "_trap_enriched": int(qvalue < fdr and effect > logfc) if qvalue is not None else None})
                         writer.writerow(row)
                         result.execute("INSERT INTO branch_family VALUES (" + ",".join("?" for _ in columns) + ")", tuple(row.values()))
-            result.execute("CREATE TABLE branch_summary AS SELECT branch_id, COUNT(*) AS families, SUM(reconciliation_status='imported') AS imported_families, SUM(lineage_extinction_events>0) AS families_with_lineage_extinction, SUM(lineage_extinction_events) AS lineage_extinction_events, SUM(extant_genes_inside>0) AS families_with_extant_descendants, SUM(cafe_significant_decrease) AS cafe_significant_decreases, SUM(cafe_generax_comparison='both') AS generax_extinction_and_cafe_decrease, SUM(cafe_generax_comparison='generax_extinction_only') AS generax_extinction_only, SUM(cafe_generax_comparison='cafe_decrease_only') AS cafe_decrease_only, SUM(transcript_trap_enriched) AS transcript_trap_enriched_loss_families, SUM(cds_trap_enriched) AS cds_trap_enriched_loss_families FROM branch_family GROUP BY branch_id")
+            result.execute("CREATE TABLE branch_summary AS SELECT branch_id, COUNT(*) AS families, SUM(reconciliation_status='imported') AS imported_families, SUM(lineage_extinction_events>0) AS families_with_lineage_extinction, SUM(lineage_extinction_events) AS lineage_extinction_events, SUM(extant_genes_inside>0) AS families_with_extant_descendants, SUM(cafe_status='analysed') AS cafe_analysed_families, SUM(cafe_status='not_analysed') AS cafe_unanalysed_families, SUM(cafe_generax_comparison!='not_analysed') AS cafe_generax_comparable_families, SUM(cafe_significant_decrease) AS cafe_significant_decreases, SUM(cafe_generax_comparison='both') AS generax_extinction_and_cafe_decrease, SUM(cafe_generax_comparison='generax_extinction_only') AS generax_extinction_only, SUM(cafe_generax_comparison='cafe_decrease_only') AS cafe_decrease_only, SUM(transcript_trap_enriched) AS transcript_trap_enriched_loss_families, SUM(cds_trap_enriched) AS cds_trap_enriched_loss_families FROM branch_family GROUP BY branch_id")
             with (temporary / "branch_summary.tsv").open("w", newline="") as handle:
                 cursor = result.execute("SELECT * FROM branch_summary ORDER BY branch_id")
                 writer = csv.writer(handle, delimiter="\t")
@@ -332,6 +343,7 @@ def _build_results(database, config_path, output_dir, record=None):
                         "interpretation": ["Lineage extinction is not a localised molecular gene deletion.",
                                            "Extant descendant presence is not an ancestral copy-number estimate.",
                                            "Expression supports an orthogroup, not a particular extinct copy.",
+                                           "Unanalysed CAFE families are not nonsignificant or unchanged; comparisons use analysed families only.",
                                            "Shared peptides support a family only; nondetection is not biological absence."],
                         "outputs": {name: sha256(temporary / name) for name in ("branch_family.tsv", "branch_summary.tsv")}}
             result.execute("CREATE TABLE provenance (json TEXT NOT NULL)")

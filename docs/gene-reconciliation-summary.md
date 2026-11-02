@@ -98,7 +98,14 @@ selected family lacks XML. Its default is false, with missing values retained.
   Taxa, branch scope and labels belong in project configuration, not the code.
 - CAFE TSV columns: `branch_id`, `orthogroup`, integer `copy_change`, and
   `significant_decrease` (`0` or `1`). Include every target branch/family pair,
-  with significance derived from the original declared CAFE test/cutoff. A
+  with significance derived from the original declared CAFE test/cutoff. An
+  optional `status` column defaults to `analysed`. For families excluded from
+  the original CAFE analysis, explicitly use `not_analysed` and leave both
+  numeric fields blank. Every branch/family pair is still required; an omitted
+  row is an error. Unknown results remain SQL NULL, and the output reports
+  analysed, unanalysed and mutually comparable family counts for each branch.
+  Unanalysed families cannot become `generax_extinction_only`, and they remain
+  eligible for GeneRax-based expression analysis. A
   significant decrease requires negative copy change. Missing analysis is not
   silently converted to a nonsignificant result. Net CAFE copy change and
   GeneRax lineage extinction measure different quantities; overlap is reported
