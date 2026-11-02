@@ -9,6 +9,38 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "collect_common_BUSCO_genes.py"
 
 
+def test_collector_preserves_colon_numeric_gene_identifiers(tmp_path):
+    source = tmp_path / "full"
+    source.mkdir()
+    write_busco_full_table(source / "A.tsv", [
+        ("b1", "Complete", "gene:001", "100", "3", "-", "-"),
+        ("b2", "Complete", "gene:1.2", "100", "3", "-", "-"),
+        ("b3", "Complete", "gene:1-9", "100", "3", "-", "-"),
+        ("b4", "Complete", "gene:1..9", "100", "3", "-", "-"),
+        ("b5", "Complete", "gene:001:1-9", "100", "3", "-", "-"),
+        ("b6", "Complete", "gene:", "100", "3", "-", "-"),
+    ])
+    output = tmp_path / "summary.tsv"
+    subprocess.run([sys.executable, str(SCRIPT_PATH), "--busco_outdir", str(source), "--outfile", str(output)], check=True)
+    with output.open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["A"] for row in rows] == ["gene:001", "gene:1.2", "gene", "gene", "gene:001", "gene:"]
+
+
+def test_collector_rejects_ambiguous_species_tables_before_replacing_output(tmp_path):
+    source = tmp_path / "full"
+    source.mkdir()
+    for name in ("A.tsv", "A.busco.full.tsv"):
+        write_busco_full_table(source / name, [("b1", "Complete", "g1", "100", "3", "-", "-")])
+    output = tmp_path / "summary.tsv"
+    output.write_text("previous valid result\n")
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--busco_outdir", str(source), "--outfile", str(output)],
+                            text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "Ambiguous BUSCO full tables" in result.stderr
+    assert output.read_text() == "previous valid result\n"
+
+
 def write_busco_full_table(path, rows):
     with path.open("w", encoding="utf-8") as handle:
         handle.write("# BUSCO full table mock\n")

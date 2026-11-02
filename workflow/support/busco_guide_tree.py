@@ -84,23 +84,29 @@ def reject_cache_overlap(destinations, protected):
 
 
 def single_copy_rows(path):
-    groups = defaultdict(list)
+    groups = {}
     with open_text(Path(path)) as handle:
         for line in handle:
             if line.strip() and not line.startswith("#"):
                 cells = line.rstrip("\n").split("\t")
                 if len(cells) < 2 or cells[1] not in {"Complete", "Duplicated", "Fragmented", "Missing"}:
                     raise ValueError("Invalid BUSCO full-table row: " + str(path))
-                groups[cells[0]].append(cells)
+                # Only a sole Complete row can contribute an ID. Retain every
+                # marker for validation, but discard the bodies of repeat hits.
+                marker = cells[0]
+                if marker in groups or cells[1] != "Complete":
+                    groups[marker] = None
+                else:
+                    groups[marker] = cells[2] if len(cells) > 2 else ""
     if not groups:
         raise ValueError("Empty BUSCO table: " + str(path))
     result = {}
-    for marker, rows in groups.items():
+    for marker, sequence_id in groups.items():
         safe_token(marker, "BUSCO marker")
-        if len(rows) == 1 and rows[0][1] == "Complete":
-            if len(rows[0]) < 3 or not rows[0][2]:
+        if sequence_id is not None:
+            if not sequence_id:
                 raise ValueError("Single-copy BUSCO lacks sequence ID")
-            result[marker] = rows[0][2]
+            result[marker] = sequence_id
     return result, set(groups)
 
 
@@ -315,7 +321,8 @@ def build(args):
                              key=lambda g: (-counts[g], token(g)))[:args.markers]
             if len(markers) < args.minimum_shared:
                 raise ValueError("Too few high-occupancy single-copy BUSCO markers")
-            data = {n: {g: seq for g, seq in records.items() if g in markers} for n, records in data.items()}
+            marker_set = set(markers)
+            data = {n: {g: seq for g, seq in records.items() if g in marker_set} for n, records in data.items()}
             atomic_json(root / "markers.json", {"selected": markers, "occupancy": {g: counts[g] for g in markers}})
             args.cache.mkdir(parents=True, exist_ok=True)
             cache_boundary = FreshDigestBatch()

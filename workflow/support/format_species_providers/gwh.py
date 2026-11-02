@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
+from format_species_accessions import GWH_ACCESSION_SEARCH, gwh_accession_matches
 from format_species_annotations import (
     sanitize_identifier,
 )
@@ -32,6 +33,8 @@ from .common import (
 
 
 def extract_gwh_accession_candidate(source_id):
+    if len({v.upper() for v in GWH_ACCESSION_SEARCH.findall(str(source_id))}) > 1:
+        raise ValueError("GWH source contains multiple assembly accessions")
     candidates = source_id_candidates("gwh", source_id, species_key="")
     for candidate in candidates:
         stripped = strip_provider_prefix(candidate, "gwh")
@@ -111,8 +114,6 @@ def resolve_gwh_show_page_url_from_id(source_id, timeout, headers):
     if not isinstance(hits, list) or len(hits) == 0:
         raise ValueError("GWH accession '{}' returned no search hits from {}".format(accession, search_url))
 
-    normalized_accession = accession.lower()
-    accession_stem = gwh_accession_stem(accession).lower()
     candidates = []
     for hit in hits:
         url = str(hit.get("url", "") or "").strip()
@@ -147,7 +148,7 @@ def resolve_gwh_show_page_url_from_id(source_id, timeout, headers):
                 str(resolved.get("genome_url", "") or ""),
             ]
         ).lower()
-        if normalized_accession in bundle_urls or accession_stem in bundle_urls:
+        if gwh_accession_matches(bundle_urls, accession):
             return page_url, accession
     if last_error is not None:
         raise ValueError("GWH accession '{}' did not resolve via show-page fallback: {}".format(accession, last_error))
@@ -179,7 +180,6 @@ def resolve_gwh_folder_url_from_id(source_id, timeout, headers):
     if len(category_urls) == 0:
         raise ValueError("GWH root '{}' did not expose category directories".format(root_url))
 
-    accession_stem = gwh_accession_stem(accession)
     best_url = ""
     best_rank = None
     last_error = None
@@ -202,10 +202,9 @@ def resolve_gwh_folder_url_from_id(source_id, timeout, headers):
             if folder_name == "":
                 continue
             folder_lower = folder_name.lower()
-            has_full = accession.lower() in folder_lower
-            has_stem = accession_stem.lower() in folder_lower
-            if not has_full and not has_stem:
+            if not gwh_accession_matches(folder_name, accession):
                 continue
+            has_full = accession.upper() in {v.upper() for v in GWH_ACCESSION_SEARCH.findall(folder_name)}
             rank = (
                 1 if has_full else 0,
                 1 if folder_lower.endswith(accession.lower()) else 0,

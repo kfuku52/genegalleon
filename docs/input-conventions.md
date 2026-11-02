@@ -54,6 +54,40 @@ and genome URL/filename columns define each file's role. A genome named
 `Cmo.fasta`, for example, remains a genome even though its name has no assembly
 marker. Directory-only discovery still infers roles from filenames.
 
+Inferred roles use delimited filename markers, excluding parent directories and
+the known species prefix. CDS/transcript markers take precedence over assembly
+markers; protein, peptide, noncoding RNA and repeat FASTAs are not CDS fallbacks.
+Singular/plural roles and provider assembly names such as `ASM9206v1`, `Chr1`
+and `hap1` are recognized without matching substrings of species names.
+Figshare automatic selection requires a unique full species-name match when a
+species key is supplied. For opaque filenames or ambiguous versions, provide the
+explicit `cds_filename`, `gff_filename` or `genome_filename` instead.
+
+Assembly accessions are matched as complete identifiers, including their version.
+NCBI directory discovery and manifest generation select one coherent assembly
+bundle. Conflicting inferred CoGe/GWH/DDBJ identifiers require an explicit
+source manifest. GWH/VEuPathDB lookup never substitutes a matching ID prefix for
+the requested assembly. RNA-seq metadata selection matches `scientific_name`
+as a whole field, excluding species names found only in descriptions.
+Organelle filtering requires an affirmative organelle label; nuclear insertions
+or negated labels such as `non-mitochondrial` are retained.
+
+Downstream FASTA prefix removal treats species labels literally. GFF attribute
+identification treats `#` inside attributes as data and validates all annotation
+rows as nine columns, including rows after its first match. An embedded FASTA
+section is consumed through EOF so gzip/encoding failures remain visible.
+See the [GFF3 format specification](https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md).
+BUSCO transcript-coordinate removal requires a complete `:start-end` or
+`:start..end` range; literal numeric/version suffixes such as `gene:001` and
+`gene:1.2` are retained. Multiple full tables resolving to one species are an
+error rather than additional species columns.
+Trait and BUSCO annotation readers preserve literal hashes and quoted multiline
+values while skipping whole-line comments. Trait-index reuse also binds the
+shared comment reader's source identity.
+Assembly summaries distinguish `isoform`, `longestCDS` and
+`longestCDS_contamination_removal` using filename roles, independently of their
+parent directory names.
+
 Typical examples:
 
 - `Arabidopsis_thaliana_Araport11.fa.gz`
@@ -215,6 +249,19 @@ CDS trait validation keep their existing strict coding-structure contracts.
 Content-bound synteny caches distinguish the two coordinate modes.
 Protein locus caches additionally use a content-addressed namespace, so a
 concurrent older CDS-mode producer cannot replace their coordinates.
+
+`synteny_nonlocal_gene_policy="missing"` explicitly permits protein-mode
+synteny to retain an ordered, annotated trans-spliced gene without inventing a
+single locus. The default is `error`; ordinary coordinate/identity conflicts
+still fail. Such a gene retains its identifier, sequences and phylogenetic tip,
+with `coordinate_source=unavailable_trans_splicing` and empty coordinate fields.
+The optional `locus_parts` JSON column records validated physical parts. These
+parts occupy masked positions in neighborhood windows, so missing genes do not
+compress offsets or become homology links. An unavailable focal gene has no
+synteny links, which the existing tree panel represents as missing data, not zero.
+The standalone helpers expose `--nonlocal-gene-policy missing`; it requires
+protein/gene-coordinate mode without an explicit representative map. CDS trait
+validation is unchanged. The policy is included in cache and stage provenance.
 
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
@@ -1451,3 +1498,9 @@ disabled, and runs native assembly, longest CDS, statistics and
 `embryophyta_odb12` BUSCO. The native workflow retains its full cache validation
 and resume behavior. A changed transfer index or missing native result proof
 prevents an assembly completion receipt.
+
+In protein-mode synteny, a GTF gene feature uses its explicit gene_id as
+its structural identity when GFF3 ID is absent. Explicit transcript_id and
+gene_id links validate child contigs, strands and bounds, including GTF files
+without separate transcript rows. Conflicting identities still fail. The gene
+feature provides the physical anchor; transcript/CDS spans do not replace it.

@@ -1,0 +1,12 @@
+{
+  "panels": [{
+    "panel_id": "anc_dio_tri",
+    "comparisons": ["anc_dio", "anc_tri", "dio_tri"],
+    "tracks": [
+      {"species": "Ancistrocladus_abbreviatus"},
+      {"species": "Dioncophyllum_thollonii"},
+      {"species": "Triphyophyllum_peltatum"}
+    ],
+    "columns": 2
+  }]
+}

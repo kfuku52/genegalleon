@@ -73,6 +73,14 @@ download_archive() {
     return 1
   fi
   rm -f -- "${archive_path}"
+  if [[ -s "${dest}/.gitmodules" ]]; then
+    # GitHub/GitLab archives omit the contents of Git submodules. Fetch the
+    # exact parent revision recursively through git rather than build an
+    # incomplete source tree.
+    log "Archive declares submodules; recursive git checkout required"
+    rm -rf -- "${dest}"
+    return 1
+  fi
   return 0
 }
 

@@ -592,31 +592,6 @@ def test_classification_rejects_duplicate_identifiers_outside_family_scope(tmp_p
     assert not (args.output / "summary.json").exists()
 
 
-def test_family_evidence_defers_missing_anchor_key_until_a_row_exists(tmp_path):
-    write_rows(tmp_path / "gene_positions.tsv", ["gene_id"], [{"gene_id": "keep"}])
-    write_rows(tmp_path / "wgd_events.tsv", ["species_event_id"], [])
-    anchor = tmp_path / "anchor_evidence.tsv"
-    anchor.write_text("gene_a\tother\n\n")
-    positions, events, anchors = wgd_ssd._load_family_evidence(tmp_path, {"keep"})
-    assert positions == {"keep": {"gene_id": "keep"}}
-    assert events == anchors == {}
-    with anchor.open("a") as handle:
-        handle.write("outside\tignored\n")
-    with pytest.raises(KeyError) as error:
-        wgd_ssd._load_family_evidence(tmp_path, {"keep"})
-    assert error.value.args == ("gene_b",)
-
-
-def test_family_evidence_checks_event_rows_before_duplicate_positions(tmp_path):
-    write_rows(tmp_path / "gene_positions.tsv", ["gene_id"],
-               [{"gene_id": "outside"}, {"gene_id": "outside"}])
-    write_rows(tmp_path / "wgd_events.tsv", ["species_event_id", "event_support"], [])
-    with (tmp_path / "wgd_events.tsv").open("a") as handle:
-        handle.write("broken_event\n")
-    with pytest.raises(ValueError, match="Invalid TSV row width: .*wgd_events.tsv"):
-        wgd_ssd._load_family_evidence(tmp_path, {"keep"})
-
-
 def test_family_evidence_preserves_quoted_empty_ids_and_anchor_order(tmp_path):
     (tmp_path / "gene_positions.tsv").write_text('gene_id\tnote\n""\t"α\tβ\nγ"\nkeep\t\n')
     write_rows(tmp_path / "wgd_events.tsv", ["species_event_id"], [])

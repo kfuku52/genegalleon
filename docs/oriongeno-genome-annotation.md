@@ -1,5 +1,19 @@
 # OrionGeno prediction and representative UTR completion
 
+## Resume formatting after a successful prediction
+
+For a failed downstream formatter, set `oriongeno_prediction_mode="reuse"`
+and `oriongeno_prediction_support_root` to the original immutable runtime's
+`workflow/support` directory. This mode verifies the existing prediction's
+declared inputs, outputs and successful native receipt before formatting. It
+does not prepare models or run inference, and needs no GPU allocation. Missing
+or changed prediction evidence stops the run. The original prediction and its
+thread count remain recorded; CPU allocation for formatting may differ.
+
+The frozen cohort driver exposes this as `--phase format`, with both the new
+annotation runtime and the original `--prediction-runtime-root` plus its release
+manifest SHA. Ordinary `predict` behavior is unchanged.
+
 Genome annotation defaults to `genome_annotation_backend="oriongeno"`.
 Set it to `annevo` for the existing ANNEVO route, or `none` for CDS-based
 annotation, including annotation of an existing verified representative bundle.

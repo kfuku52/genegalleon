@@ -479,10 +479,8 @@ extract_sraid_metadata_rows_for_species() {
   local species_name=$2
   local output_file=$3
 
-  {
-    head -n 1 "${metadata_source}"
-    grep -F -- "${species_name}" "${metadata_source}" || true
-  } | sed -e "s/\t\t\tno\t/\tyes\tyes\tno\t/g" > "${output_file}"
+  python "${gg_support_dir}/amalgkit_metadata_accessions.py" \
+    extract-species "${metadata_source}" "${species_name}" "${output_file}" --qualify-unmarked
 }
 
 extract_requested_accessions_missing_from_metadata() {

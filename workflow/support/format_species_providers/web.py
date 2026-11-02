@@ -11,6 +11,7 @@ from format_species_annotations import (
     sanitize_identifier,
 )
 from format_species_common import (
+    GFF_EXCLUDE_PATTERN,
     is_fasta_filename,
     is_gff_filename,
     is_probable_cds_filename,
@@ -21,6 +22,13 @@ from format_species_constants import (
     INSECTBASE_IBG_ID_PATTERN,
     PLANTGARDEN_GENOME_ID_PATTERN,
     PLANTGARDEN_TAXID_PATTERN,
+)
+from format_species_file_roles import (
+    ASSEMBLY_MARKER,
+    CDS_MARKER,
+    filename_role_text,
+    has_filename_marker,
+    has_non_cds_role,
 )
 from format_species_manifest import manifest_has_usable_source_bundle
 from format_species_provider_urls import (
@@ -38,9 +46,7 @@ from .common import (
     extract_figshare_article_id_candidate,
     fetch_json_with_headers,
     is_probable_gff_url,
-    normalize_lookup_text,
     parse_species_key_candidate,
-    source_id_candidates,
 )
 
 
@@ -108,29 +114,10 @@ def filter_figshare_files_by_species_key(files, species_key):
     if text == "":
         return list(files)
     tokens = [token for token in re.split(r"[_\s]+", text) if token]
-    patterns = []
-    if len(tokens) >= 2:
-        patterns.extend(
-            (
-                "_".join(tokens),
-                "-".join(tokens),
-                "".join(tokens),
-                "{} {}".format(tokens[0], tokens[1]),
-                "{}_{}".format(tokens[0], tokens[-1]),
-                "{} {}".format(tokens[0], tokens[-1]),
-            )
-        )
-    patterns.extend(tokens)
-    unique_patterns = []
-    for pattern in patterns:
-        if pattern and pattern not in unique_patterns:
-            unique_patterns.append(pattern)
-    out = []
-    for file_record in files:
-        lowered = figshare_candidate_name(file_record).lower()
-        if any(pattern in lowered for pattern in unique_patterns):
-            out.append(file_record)
-    return out
+    if not tokens:
+        return []
+    pattern = re.compile(r"(?<![a-z0-9])" + r"[._\s-]*".join(map(re.escape, tokens)) + r"(?![a-z0-9])")
+    return [record for record in files if pattern.search(figshare_candidate_name(record).lower())]
 
 
 def select_figshare_file_record(files, provider_label, requested_name, species_key, article_id):
@@ -144,6 +131,9 @@ def select_figshare_file_record(files, provider_label, requested_name, species_k
                     requested_name,
                 )
             )
+        if len(requested_candidates) != 1:
+            raise ValueError("figshare article '{}' has duplicate filename '{}'; supply an explicit URL".format(
+                article_id, requested_name))
         ordered = sorted(
             requested_candidates,
             key=lambda record: provider_candidate_sort_key("figshare", provider_label, figshare_candidate_name(record)),
@@ -153,22 +143,22 @@ def select_figshare_file_record(files, provider_label, requested_name, species_k
     filtered = []
     for file_record in files:
         name = figshare_candidate_name(file_record)
-        if provider_label == "CDS" and is_probable_cds_filename("figshare", name):
+        if provider_label == "CDS" and is_probable_cds_filename("figshare", name, species_key=species_key):
             filtered.append(file_record)
         elif provider_label == "GFF" and is_probable_gff_url(name):
             filtered.append(file_record)
-        elif provider_label == "GENOME" and is_probable_genome_filename("figshare", name):
+        elif provider_label == "GENOME" and is_probable_genome_filename("figshare", name, species_key=species_key):
             filtered.append(file_record)
     if len(filtered) == 0:
         return None
     species_filtered = filter_figshare_files_by_species_key(filtered, species_key)
     if len(species_filtered) == 1:
         return species_filtered[0]
-    if len(filtered) == 1:
-        return filtered[0]
     raise ValueError(
-        "figshare article '{}' exposed multiple {} candidates; set {}_filename to disambiguate".format(
+        "figshare article '{}' did not uniquely match species '{}' to a {} candidate; "
+        "set {}_filename to disambiguate".format(
             article_id,
+            species_key,
             provider_label.lower(),
             provider_label.lower(),
         )
@@ -253,41 +243,35 @@ def infer_plantgarden_species_key(metadata, fallback):
     return str(fallback or "").strip()
 
 
-def select_best_plantgarden_candidate(links, label):
+def select_best_plantgarden_candidate(links, label, *, species_key=""):
     best_url = ""
     best_rank = None
     for link in links:
         parsed = urlparse(link)
-        filename = Path(parsed.path).name
+        filename = Path(unquote(parsed.path)).name
         lower = filename.lower()
         if lower in ("", ".", ".."):
             continue
         if label == "CDS":
-            if not is_fasta_filename(lower):
+            if not is_probable_cds_filename("plantgarden", filename, species_key=species_key):
                 continue
-            if any(marker in lower for marker in ("protein", "pep")):
-                continue
-            if "cds" in lower:
+            if has_filename_marker(filename, CDS_MARKER, species_key):
                 rank = (0, 0, lower)
-            elif any(marker in lower for marker in ("transcript", "mrna", "cdna")):
-                rank = (0, 1, lower)
             else:
-                continue
+                rank = (0, 1, lower)
         elif label == "GFF":
             if not is_gff_filename(lower):
                 continue
-            if any(marker in lower for marker in ("repeat", "repeatmask")):
+            if GFF_EXCLUDE_PATTERN.search(filename_role_text(filename, species_key)):
                 continue
-            rank = (0, lower)
+            rank = provider_candidate_sort_key("plantgarden", "GFF", filename, species_key=species_key)
         elif label == "GENOME":
             if not is_fasta_filename(lower):
                 continue
-            if any(marker in lower for marker in ("cds", "transcript", "mrna", "cdna", "protein", "pep", "repeat")):
+            if (is_probable_cds_filename("plantgarden", filename, species_key=species_key)
+                    or has_non_cds_role(filename, species_key)):
                 continue
-            preferred = any(
-                marker in lower
-                for marker in ("genome", "assembly", ".chr", "chr.", "chrom", "scaffold", "pmol", "pseudomol")
-            )
+            preferred = has_filename_marker(filename, ASSEMBLY_MARKER, species_key)
             rank = (0 if preferred else 1, lower)
         else:
             continue
@@ -344,12 +328,12 @@ def resolve_plantgarden_download_urls_from_id(source_id, species_key, timeout, h
     download_page_url = resolve_plantgarden_download_page_url(page_url, timeout, headers)
     download_text = fetch_text_with_headers(download_page_url, timeout, headers)
     links = parse_links_from_document(download_page_url, download_text)
-    cds_url = select_best_plantgarden_candidate(links, "CDS")
-    gff_url = select_best_plantgarden_candidate(links, "GFF")
-    genome_url = select_best_plantgarden_candidate(links, "GENOME")
+    inferred_species_key = str(species_key or "").strip() or infer_plantgarden_species_key(metadata, species_key)
+    cds_url = select_best_plantgarden_candidate(links, "CDS", species_key=inferred_species_key)
+    gff_url = select_best_plantgarden_candidate(links, "GFF", species_key=inferred_species_key)
+    genome_url = select_best_plantgarden_candidate(links, "GENOME", species_key=inferred_species_key)
     if not manifest_has_usable_source_bundle(cds_url, gff_url, "", genome_url):
         raise ValueError("PlantGARDEN id '{}' did not resolve to a usable CDS-or-(GFF+genome) bundle".format(source_id))
-    inferred_species_key = str(species_key or "").strip() or infer_plantgarden_species_key(metadata, species_key)
     return {
         "species_key": inferred_species_key,
         "cds_url": cds_url,
@@ -420,75 +404,43 @@ def fetch_veupathdb_records(timeout, headers):
 
 
 def resolve_veupathdb_download_urls_from_id(source_id, species_key, timeout, headers):
-    candidates = source_id_candidates("veupathdb", source_id, species_key)
-    if len(candidates) == 0:
-        candidates = [str(source_id or "").strip()]
-    candidate_keys = [normalize_lookup_text(value) for value in candidates if normalize_lookup_text(value) != ""]
-    if len(candidate_keys) == 0:
+    requested = strip_provider_prefix(str(source_id or species_key or "").strip(), "veupathdb")
+    candidate_keys = {requested.casefold()}
+    if is_url_like(requested):
+        candidate_keys.add(veupathdb_source_id_from_url(requested).casefold())
+    candidate_keys.discard("")
+    if not candidate_keys:
         raise ValueError("VEuPathDB id is empty")
 
-    best_record = None
-    best_rank = None
+    matches = {}
+    requested_species = " ".join(requested.replace("_", " ").split()).casefold()
     for record in fetch_veupathdb_records(timeout, headers):
         attributes = record.get("attributes", {})
         genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
         gff_url = str(attributes.get("URLgff", "") or "").strip()
         cds_url = infer_veupathdb_cds_url(attributes)
         derived_source_id = veupathdb_source_id_from_url(genome_url) or veupathdb_source_id_from_url(gff_url)
-        normalized_source_id = normalize_lookup_text(derived_source_id)
-        normalized_primary = normalize_lookup_text(attributes.get("primary_key", ""))
-        normalized_species = normalize_lookup_text(attributes.get("species", ""))
-        normalized_project = normalize_lookup_text(attributes.get("project_id", ""))
-        source_id_exact = any(
-            candidate == normalized_source_id for candidate in candidate_keys if normalized_source_id != ""
-        )
-        primary_exact = any(candidate == normalized_primary for candidate in candidate_keys if normalized_primary != "")
-        species_exact = any(candidate == normalized_species for candidate in candidate_keys if normalized_species != "")
-        project_exact = any(candidate == normalized_project for candidate in candidate_keys if normalized_project != "")
-        source_id_contains = any(
-            candidate in normalized_source_id or normalized_source_id in candidate
-            for candidate in candidate_keys
-            if normalized_source_id != ""
-        )
-        primary_contains = any(
-            candidate in normalized_primary or normalized_primary in candidate
-            for candidate in candidate_keys
-            if normalized_primary != ""
-        )
-        species_contains = any(
-            candidate in normalized_species or normalized_species in candidate
-            for candidate in candidate_keys
-            if normalized_species != ""
-        )
-        rank = (
-            1 if genome_url != "" else 0,
-            1 if gff_url != "" else 0,
-            1 if cds_url != "" else 0,
-            1 if source_id_exact else 0,
-            1 if primary_exact else 0,
-            1 if species_exact else 0,
-            1 if project_exact else 0,
-            1 if source_id_contains else 0,
-            1 if primary_contains else 0,
-            1 if species_contains else 0,
-            -len(normalized_source_id),
-            normalized_source_id,
-        )
-        if best_record is None or rank > best_rank:
-            best_record = {
-                "record": record,
-                "derived_source_id": derived_source_id,
-                "cds_url": cds_url,
-            }
-            best_rank = rank
-
-    if best_record is None or max(best_rank[3:10]) == 0:
+        identities = {str(value or "").strip().casefold() for value in (
+            derived_source_id, attributes.get("primary_key", ""),
+            attributes.get("project_id", ""))}
+        identities.discard("")
+        record_species = " ".join(str(attributes.get("species", "") or "").replace("_", " ").split()).casefold()
+        if candidate_keys & identities or requested_species == record_species:
+            key = (derived_source_id, genome_url, gff_url, cds_url)
+            matches.setdefault(key, {"record": record, "derived_source_id": derived_source_id, "cds_url": cds_url})
+    if not matches:
         raise ValueError("VEuPathDB id '{}' was not found in GenomeDataTypes".format(source_id))
+    if len(matches) != 1:
+        raise ValueError("VEuPathDB id '{}' matches multiple assemblies; specify an exact source ID".format(source_id))
+    best_record = next(iter(matches.values()))
 
     attributes = best_record["record"].get("attributes", {})
     genome_url = str(attributes.get("URLGenomeFasta", "") or "").strip()
     gff_url = str(attributes.get("URLgff", "") or "").strip()
     cds_url = str(best_record.get("cds_url", "") or "").strip()
+    genome_id, gff_id = (veupathdb_source_id_from_url(url) for url in (genome_url, gff_url))
+    if genome_id and gff_id and genome_id != gff_id:
+        raise ValueError("VEuPathDB record mixes genome and GFF source IDs")
     if gff_url == "" or genome_url == "":
         raise ValueError("VEuPathDB id '{}' did not resolve to GFF/genome URLs".format(source_id))
 

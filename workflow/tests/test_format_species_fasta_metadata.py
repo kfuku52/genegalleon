@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from format_species_annotation import common  # noqa: E402
 from format_species_annotation.tasks import discover_generic_species_dir_tasks  # noqa: E402
+from format_species_common import is_probable_genome_filename  # noqa: E402
 
 
 def write_fasta(tmp_path, raw, transport):
@@ -195,3 +196,25 @@ def test_actual_direct_provider_discovery_preserves_generic_genome_classificatio
     assert len(tasks) == 1
     assert tasks[0]["genome_path"] == path
     assert tasks[0]["cds_path"] is None
+
+
+@pytest.mark.parametrize("species", ["Cucurbita_pepo", "Euphorbia_peplus", "Peperomia_pellucida"])
+def test_species_pep_substring_does_not_turn_genome_into_cds(tmp_path, species):
+    directory = tmp_path / species
+    directory.mkdir()
+    genome = directory / (species + ".genome.fa.gz")
+    with gzip.open(genome, "wt") as handle:
+        handle.write(">chr1\nATGAAATAA\n")
+    (directory / (species + ".gff3")).write_text(
+        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=g1\n")
+    tasks, warnings, errors = discover_generic_species_dir_tasks("local", tmp_path)
+    assert not warnings and not errors
+    assert len(tasks) == 1
+    assert tasks[0]["genome_path"] == genome
+    assert tasks[0]["cds_path"] is None
+
+
+@pytest.mark.parametrize("name", ["Plant_one.pep.fa", "Plant_one.protein.fa",
+    "Plant_one.cds_from_genomic.fna.gz", "Plant_one.mrna.genome.fa", "Plant_one.rna_from_genomic.fna"])
+def test_actual_nongenome_role_tokens_still_exclude_genome(name):
+    assert not is_probable_genome_filename("local", name)

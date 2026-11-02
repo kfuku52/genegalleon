@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import random
@@ -121,11 +122,24 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path, 
         "synthetic.plot.png",
         "synthetic.synteny.zip",
     }
-    # Persistent publication guards are coordination state, not tool outputs.
-    assert {
-        path.name for path in result_dir.iterdir()
-        if not path.name.endswith((".gg-bundle.lock.guard", ".gg-bundle.lock.guard.namespace-v1"))
-    } == expected
+    # Publication stripes are the only non-output entry allowed here.
+    stripes = result_dir / ".gg_publish_lock_stripes-v1"
+    assert stripes.is_dir() and not stripes.is_symlink()
+    assert {path.name for path in result_dir.iterdir() if path != stripes} == expected
+    buckets = {hashlib.sha256(os.fsencode(name)).hexdigest()[:2] for name in expected}
+    assert 1 <= len(buckets) <= 256
+    guards = {f".{bucket}.lock.guard" for bucket in buckets}
+    assert {path.name for path in stripes.iterdir()} == guards | {
+        f"{name}.namespace-v1" for name in guards
+    }
+    for name in guards:
+        guard = stripes / name
+        assert guard.is_file() and not guard.is_symlink() and guard.stat().st_size == 0
+        namespace = stripes / f"{name}.namespace-v1"
+        assert namespace.is_dir() and not namespace.is_symlink()
+        assert {path.name for path in namespace.iterdir()} == {"readers"}
+        readers = namespace / "readers"
+        assert readers.is_dir() and not readers.is_symlink() and not list(readers.iterdir())
     assert all((result_dir / filename).stat().st_size > 0 for filename in expected)
 
     summary = json.loads((result_dir / "synthetic.summary.json").read_text(encoding="utf-8"))

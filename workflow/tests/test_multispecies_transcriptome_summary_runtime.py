@@ -8,7 +8,7 @@ SUPPORT = Path(__file__).resolve().parents[1] / "support"
 SPECIES = "Osmunda_regalis"
 
 
-def run_summary(tmp_path, busco_rows):
+def run_summary(tmp_path, busco_rows, *, file_prefix="", file_suffix=".fa.gz", with_filtered=False):
     inputs = {name: tmp_path / name for name in ("assembly", "metadata", "merge", "busco_isoform", "busco_cds")}
     for path in inputs.values():
         path.mkdir()
@@ -17,11 +17,15 @@ def run_summary(tmp_path, busco_rows):
     (inputs["merge"] / f"{SPECIES}_tpm.tsv").write_text(
         "target_id\tERR2040894\n" + f"{SPECIES}_g2\t7.5\n{SPECIES}_g1\t2.5\n"
     )
-    (inputs["assembly"] / f"{SPECIES}_assembly_stat.tsv").write_text(
+    assembly = inputs["assembly"] / f"{SPECIES}_assembly_stat.tsv"
+    assembly.write_text(
         "file\tformat\ttype\tnum_seqs\tsum_len\tN50\n"
-        f"{SPECIES}_isoform.fa.gz\tFASTA\tDNA\t3\t600\t224\n"
-        f"{SPECIES}_longestCDS.fa.gz\tFASTA\tDNA\t3\t300\t126\n"
+        f"{file_prefix}{SPECIES}_isoform{file_suffix}\tFASTA\tDNA\t3\t600\t224\n"
+        f"{file_prefix}{SPECIES}_longestCDS{file_suffix}\tFASTA\tDNA\t3\t300\t126\n"
     )
+    if with_filtered:
+        with assembly.open("a") as handle:
+            handle.write(f"{file_prefix}{SPECIES}_longestCDS_contamination_removal{file_suffix}\tFASTA\tDNA\t2\t250\t190\n")
     output = tmp_path / "summary"
     output.mkdir()
     # A previous expression table must not survive a new empty BUSCO result.
@@ -42,11 +46,28 @@ def run_summary(tmp_path, busco_rows):
     assert source.read_text().endswith(busco_rows)
     with (output / "assembly_stat_summary.tsv").open() as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert len(rows) == 2
-    assert {row["N50"] for row in rows} == {"224", "126"}
+    assert len(rows) == (3 if with_filtered else 2)
+    assert {row["N50"] for row in rows} == ({"224", "126", "190"} if with_filtered else {"224", "126"})
     assert (output / "assembly_stat_summary.pdf").stat().st_size > 0
     assert "Ending multispecies_transcriptome_summary.r" in result.stdout
     return output, result
+
+
+@pytest.mark.parametrize("file_suffix", [".fa.gz", ".ffn", ".fasta"])
+def test_assembly_type_ignores_role_words_in_parent_directories(tmp_path, file_suffix):
+    output, _result = run_summary(tmp_path, "", file_prefix="/data/longestCDS.backup/", file_suffix=file_suffix)
+    with (output / "assembly_stat_summary.tsv").open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [(row["assembly_type"], row["N50"]) for row in rows] == [("isoform", "224"), ("longestCDS", "126")]
+
+
+def test_filtered_longest_cds_remains_a_distinct_assembly_type(tmp_path):
+    output, _result = run_summary(tmp_path, "", with_filtered=True)
+    with (output / "assembly_stat_summary.tsv").open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert {row["assembly_type"]: row["N50"] for row in rows} == {
+        "isoform": "224", "longestCDS": "126", "longestCDS_contamination_removal": "190",
+    }
 
 
 @pytest.mark.parametrize("busco_rows", ["88at2759\tMissing\n844at2759\tMissing\n", ""])

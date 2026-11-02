@@ -192,12 +192,12 @@ def acquire(manifest, member, workspace):
                 dict(species=member['species'], source=source, path=str(target), sha256=file_sha(target)))
 
 
-def audit(path, workspace, step, species):
+def audit(path, workspace, step, species, *, support_root=None):
     payload = load_manifest(path)
     if payload.get('step') != step or payload.get('family_id') != species:
         raise ValueError('Native artifact identity differs from the cohort member')
     logical = workspace / 'output/.gg_global_artifacts'
-    with runtime_support_root(Path(__file__).parent):
+    with runtime_support_root(support_root or Path(__file__).parent):
         status, reason = audit_manifest(payload, GeneFamilyOutputStore(logical), logical, workspace)
     if status != 'current':
         raise ValueError(f'Native artifact is not current: {status}: {reason}')
@@ -233,11 +233,18 @@ def annotate(manifest, member, workspace, phase):
                GG_GENOME_ANNOTATION_REPRESENTATIVE_INPUTS='',
                GG_GENOME_ANNOTATION_ORIONGENO_MODEL_PROFILE='plants',
                GG_GENOME_ANNOTATION_ORIONGENO_BATCH_SIZE='1',
+               GG_GENOME_ANNOTATION_ORIONGENO_PREDICTION_MODE='predict',
+               GG_GENOME_ANNOTATION_ORIONGENO_PREDICTION_SUPPORT_ROOT='',
                GG_GENOME_ANNOTATION_RUN_BUSCO_CDS='1' if phase == 'busco' else '0',
                GG_GENOME_ANNOTATION_BUSCO_LINEAGE=manifest['busco_lineage'])
+    if phase == 'format':
+        env.update(GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND='oriongeno',
+                   GG_GENOME_ANNOTATION_ORIONGENO_PREDICTION_MODE='reuse',
+                   GG_GENOME_ANNOTATION_ORIONGENO_PREDICTION_SUPPORT_ROOT=manifest['prediction_support_root'])
     entrypoint(manifest, 'gg_genome_annotation', env)
-    if phase == 'predict':
-        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species)
+    if phase in ('predict', 'format'):
+        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species,
+              support_root=Path(manifest['prediction_support_root']) if phase == 'format' else None)
         audit(prediction / 'format.provenance.json', workspace, 'genome_annotation_oriongeno_format', species)
     else:
         proof = phase_workspace / 'output/artifact_provenance/genome_annotation' / (species + '.busco_cds.json')
@@ -250,7 +257,7 @@ def phase_runtime(manifest, phase, root, sha256, *, acquisition):
     """Bind a qualified owning release while retaining the frozen data contract."""
     if root is None and sha256 is None:
         return manifest
-    phases = ('acquire',) if acquisition else ('predict', 'busco')
+    phases = ('acquire',) if acquisition else ('predict', 'busco', 'format')
     if phase not in phases or root is None or not re.fullmatch(r'[0-9a-f]{64}', sha256 or ''):
         raise ValueError('Runtime override requires its exact release digest and owning phase')
     release = physical(root, directory=True)
@@ -287,16 +294,26 @@ def main():
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--task', type=int, required=True)
-    parser.add_argument('--phase', choices=('acquire', 'predict', 'busco'), required=True)
+    parser.add_argument('--phase', choices=('acquire', 'predict', 'busco', 'format'), required=True)
     parser.add_argument('--acquisition-runtime-root', type=Path)
     parser.add_argument('--acquisition-runtime-manifest-sha256')
     parser.add_argument('--annotation-runtime-root', type=Path)
     parser.add_argument('--annotation-runtime-manifest-sha256')
+    parser.add_argument('--prediction-runtime-root', type=Path)
+    parser.add_argument('--prediction-runtime-manifest-sha256')
     args = parser.parse_args()
     path = physical(args.manifest)
     if file_sha(path) != args.manifest_sha256:
         parser.error('Cohort manifest changed')
     manifest = json.loads(path.read_text())
+    if args.phase == 'format':
+        if args.prediction_runtime_root is None or args.prediction_runtime_manifest_sha256 is None:
+            parser.error('Format resumption requires its original prediction runtime')
+        previous = annotation_runtime(manifest, 'predict', args.prediction_runtime_root,
+                                      args.prediction_runtime_manifest_sha256)
+        manifest = {**manifest, 'prediction_support_root': str(Path(previous['runtime_root']) / 'workflow/support')}
+    elif args.prediction_runtime_root is not None or args.prediction_runtime_manifest_sha256 is not None:
+        parser.error('Original prediction runtime is only valid for format resumption')
     manifest = acquisition_runtime(manifest, args.phase, args.acquisition_runtime_root,
                                    args.acquisition_runtime_manifest_sha256)
     manifest = annotation_runtime(manifest, args.phase, args.annotation_runtime_root,

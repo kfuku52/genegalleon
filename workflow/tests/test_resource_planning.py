@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "support"))
 from resource_metrics import run  # noqa: E402 - support directory is added above
-from resource_profile import profile  # noqa: E402
+from resource_profile import profile, scan  # noqa: E402
 
 
 def test_profile_streams_compressed_input_and_binds_settings(tmp_path):
@@ -47,6 +48,67 @@ def test_bad_fastq_and_duplicate_inputs_are_rejected(tmp_path):
     fasta.write_text(">a\nAA\n")
     with pytest.raises(ValueError):
         profile("gg_genome_evolution", [fasta, fasta])
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+@pytest.mark.parametrize("final_newline", [False, True])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_fastq_profile_preserves_exact_decoded_hash_and_record_lengths(
+        tmp_path, newline, final_newline, compressed):
+    content = newline.join([b"@first", b"ACGT", b"+first", b"!!!!",
+                            b"@second", b"AC", b"+", b"II"])
+    if final_newline:
+        content += newline
+    path = tmp_path / ("reads.fastq.gz" if compressed else "reads.fastq")
+    path.write_bytes(gzip.compress(content) if compressed else content)
+    observed = scan(path, "fastq")
+    assert observed["sha256"] == hashlib.sha256(content).hexdigest()
+    assert observed["sequences"] == 2
+    assert observed["residues"] == 6
+    assert observed["max_length"] == 4
+    assert observed["bytes"] == path.stat().st_size
+
+
+@pytest.mark.parametrize("record", [
+    b"invalid\nAC\n+\nII\n", b"@a\nAC\ninvalid\nII\n",
+    b"@a\n\n+\n\n", b"@a\nAC\n+\n", b"@a\nAC\n",
+    b"@a\nAC\n+\nI\n", b"@a\nAC\n+\nIII\n",
+])
+def test_fastq_profile_rejects_late_invalid_or_truncated_records(tmp_path, record):
+    path = tmp_path / "reads.fastq"
+    path.write_bytes(b"@valid\nACGT\n+\nIIII\n" + record)
+    with pytest.raises(ValueError, match="invalid four-line FASTQ"):
+        scan(path, "fastq")
+
+
+def test_fastq_profile_consumes_compressed_tail(tmp_path):
+    path = tmp_path / "reads.fastq.gz"
+    path.write_bytes(gzip.compress(b"@a\nAC\n+\nII\n")[:-4])
+    with pytest.raises(EOFError):
+        scan(path, "fastq")
+
+
+def test_fastq_profile_rejects_mutation_during_scan(tmp_path, monkeypatch):
+    import os
+
+    import resource_profile
+
+    path = tmp_path / "reads.fastq"
+    path.write_bytes(b"@a\nAC\n+\nII\n")
+    original_mtime = path.stat().st_mtime_ns
+    checksum = hashlib.sha256()
+
+    class MutatingChecksum:
+        def update(self, value):
+            checksum.update(value)
+            os.utime(path, ns=(original_mtime, original_mtime + 1000000000))
+
+        def hexdigest(self):
+            return checksum.hexdigest()
+
+    monkeypatch.setattr(resource_profile.hashlib, "sha256", MutatingChecksum)
+    with pytest.raises(ValueError, match="input changed during profiling"):
+        scan(path, "fastq")
 
 
 def test_metrics_preserve_stdout_exit_and_measure_child_cpu(tmp_path, capfd):

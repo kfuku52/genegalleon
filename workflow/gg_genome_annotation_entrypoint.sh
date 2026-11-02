@@ -126,6 +126,8 @@ oriongeno_no_download=0 # Set 1 to require existing verified runtime/model asset
 oriongeno_batch_size=1 # Native GPU prediction batch size.
 oriongeno_output_utrs=1 # Emit explicit terminal exonic UTR rows without changing CDSs.
 oriongeno_output_repeat=1 # Publish the native repeat_region GFF3 beside the gene annotation.
+oriongeno_prediction_mode="predict" # predict|reuse; reuse verifies existing prediction and runs only CPU formatting.
+oriongeno_prediction_support_root="" # Original prediction's immutable workflow/support directory; required by reuse.
 annevo_model_profile="Magnoliopsida" # auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi.
 annevo_taxid_map="" # Explicit species/taxid TSV for auto model selection.
 annevo_genome_metadata="" # Trusted species/taxid/genome_sha256 TSV; optional scientific_name.
@@ -144,6 +146,15 @@ run_jcvi_dotplot=0 # Self-self synteny dotplot
 
 # DNA-seq workflow flags
 run_genomescope=0 # GenomeScope
+genomescope_kmer_length=21 # Canonical read k-mer length.
+genomescope_kmer_lower=1 # Minimum count retained by KMC.
+genomescope_kmer_upper=1000 # KMC counter/histogram ceiling; boundary counts are reported.
+genomescope_ploidy=2 # GenomeScope model ploidy (1 to 6).
+genomescope_initial_coverage=-1 # Positive manual lambda overrides the coverage source.
+genomescope_coverage_source="smudgeplot" # smudgeplot (native H) or auto (GenomeScope initialization).
+genomescope_max_kmercov=-1 # -1 uses the complete supplied histogram for modelling.
+genomescope_histogram="" # Optional existing two-column histogram; skips read counting.
+genomescope_program="/usr/local/bin/genomescope2.0/genomescope.R" # GenomeScope executable in the runtime.
 run_smudgeplot=0 # Reference-free k-mer pair structure with FastK and Smudgeplot
 smudgeplot_kmer_length=21 # Length of read k-mers counted by FastK.
 smudgeplot_lower_count="auto" # Set explicitly after inspecting the histogram for low-coverage reads.
@@ -165,6 +176,10 @@ contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # O
 
 ### End: Modify this block to tailor your analysis ###
 
+# Older retained project config blocks do not declare these resume controls.
+oriongeno_prediction_mode="${oriongeno_prediction_mode-predict}"
+oriongeno_prediction_support_root="${oriongeno_prediction_support_root-}"
+
 # Misc
 exit_if_running=0 # Exit without main analysis if the same GG_ARRAY_TASK_ID is already running.
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
@@ -176,7 +191,15 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1
 fi
-if [[ "${genome_annotation_backend}" == "annevo" || "${genome_annotation_backend}" == "oriongeno" ]]; then
+if [[ "${oriongeno_prediction_mode}" != predict && "${oriongeno_prediction_mode}" != reuse ]]; then
+  echo "Invalid oriongeno_prediction_mode; expected predict or reuse." >&2
+  exit 1
+fi
+if [[ "${oriongeno_prediction_mode}" == reuse && "${genome_annotation_backend}" != oriongeno ]]; then
+  echo "Prediction reuse is supported only for OrionGeno." >&2
+  exit 1
+fi
+if [[ "${genome_annotation_backend}" == "annevo" || ( "${genome_annotation_backend}" == "oriongeno" && "${oriongeno_prediction_mode}" != reuse ) ]]; then
   # Request only the scheduler-visible GPU; the Docker shim translates --nv.
   annotation_gpu_devices="${CUDA_VISIBLE_DEVICES:-${GG_CONTAINER_DOCKER_GPU_DEVICES:-}}"
   if [[ -z "${annotation_gpu_devices}" || "${annotation_gpu_devices}" == ,* || "${annotation_gpu_devices}" == *, || "${annotation_gpu_devices}" == *,,* ]]; then

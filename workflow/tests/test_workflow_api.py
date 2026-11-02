@@ -700,6 +700,109 @@ def test_terminal_profile_validates_even_manifest_matching_content(project, pdf)
     assert (result["terminal_validation"]["state"] == "verified") is pdf.startswith(b"%PDF-")
 
 
+@pytest.fixture
+def terminal_module():
+    spec = importlib.util.spec_from_file_location("terminal_under_test", SUPPORT / "terminal_artifact_validation.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_terminal_profile_streams_large_statistics_and_pdf(tmp_path, terminal_module):
+    from types import SimpleNamespace
+    family = "large"
+    branch = tmp_path / "branch.tsv"
+    with branch.open("w") as handle:
+        handle.write("branch_id\tnode_name\tvalue\n")
+        for index in range(19000):
+            handle.write(f"{index}\tnode\t{'x' * 1000}\n")
+    tree = tmp_path / "tree.tsv"
+    tree.write_text('tree\n"' + "x" * 300000 + '\tquoted\nnewline"\n')
+    pdf = tmp_path / "plot.pdf"
+    with pdf.open("wb") as handle:
+        handle.write(b"%PDF-1.7\n")
+        for _ in range(18):
+            handle.write(b"x" * 1024 * 1024)
+        handle.write(b"\n%%EOF\n")
+    paths = {"stat_branch": branch, "stat_tree": tree, "tree_plot": pdf}
+
+    class Store:
+        def source_artifact(self, subdir, name):
+            return SimpleNamespace(logical_path=f"{subdir}/{name}", mtime_ns=paths[subdir].stat().st_mtime_ns)
+
+        def open_binary(self, subdir, name):
+            return paths[subdir].open("rb")
+
+    result = terminal_module.verify_terminal_profile(Store(), family)
+    assert result["state"] == "verified"
+    for member, path in zip(result["members"], paths.values(), strict=True):
+        assert member["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert member["size_bytes"] == path.stat().st_size
+    with branch.open("a") as handle:
+        handle.write("0\tlate duplicate\tvalue\n")
+    assert terminal_module.verify_terminal_profile(Store(), family)["state"] == "unverified"
+
+
+@pytest.mark.parametrize(("branch", "table"), [
+    (True, b"branch_id\tnode_name\n1\tA\n1\tB\n"),
+    (True, b"branch_id\tnode_name\n\tA\n"),
+    (True, b"branch_id\tbranch_id\n1\tA\n"),
+    (True, b"branch_id\n1\n"),
+    (True, b"branch_id\tnode_name\n1\n"),
+    (True, b"branch_id\tnode_name\n1\tA\textra\n"),
+    (True, b"branch_id\tnode_name\n1\t\xff\n"),
+    (True, b'branch_id\tnode_name\n1\t"unfinished\n'),
+    (False, b"value\n1\n2\n"),
+    (False, b"value\n"),
+    (False, b""),
+])
+def test_terminal_statistics_rejects_bad_content_and_restores_csv_limit(terminal_module, branch, table):
+    import csv
+    import io
+    previous = csv.field_size_limit()
+    with pytest.raises((ValueError, csv.Error)):
+        terminal_module.verify_statistics(io.BytesIO(table), branch)
+    assert csv.field_size_limit() == previous
+
+
+def test_terminal_statistics_bounds_whole_quoted_record(terminal_module, monkeypatch):
+    import csv
+    import io
+    monkeypatch.setattr(terminal_module, "MAX_RECORD_BYTES", 128)
+    raw = b'value\n"' + b"a\n" * 100 + b'"\n'
+    previous = csv.field_size_limit()
+    with pytest.raises(ValueError, match="record or artifact bounds"):
+        terminal_module.verify_statistics(io.BytesIO(raw), False)
+    assert csv.field_size_limit() == previous
+
+
+def test_terminal_statistics_preserves_exact_bytes_and_restores_limit(terminal_module):
+    import csv
+    import io
+    raw = b'branch_id\tnode_name\n1\t"A\tB\nC"\n2\tD\r\n'
+    previous = csv.field_size_limit()
+    assert terminal_module.verify_statistics(io.BytesIO(raw), True) == (hashlib.sha256(raw).hexdigest(), len(raw))
+    assert csv.field_size_limit() == previous
+
+
+def test_terminal_stream_reads_are_bounded_including_zip_members(tmp_path, terminal_module):
+    import io
+    raw = b"branch_id\tnode_name\n1\tA\n2\tB\n"
+    archive = tmp_path / "table.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("branch.tsv", raw)
+    with zipfile.ZipFile(archive) as handle, handle.open("branch.tsv") as member:
+        assert terminal_module.verify_statistics(member, True) == (hashlib.sha256(raw).hexdigest(), len(raw))
+
+    class BoundedPDF(io.BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= terminal_module.CHUNK_BYTES
+            return super().read(size)
+
+    pdf = b"%PDF-1.7\nfixture\n%%EOF\n"
+    assert terminal_module.verify_pdf(BoundedPDF(pdf)) == (hashlib.sha256(pdf).hexdigest(), len(pdf))
+
+
 def test_observer_preserves_streams_status_and_records_only_selected_config(tmp_path):
     directory = tmp_path / "observations"
     script = "echo scientific-output; echo diagnostics >&2; exit 7\n"

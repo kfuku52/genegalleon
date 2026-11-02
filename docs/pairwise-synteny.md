@@ -73,7 +73,7 @@ harmonic-mean support, with ribbon order breaking ties. Weak cross-connections
 remain visible. This is a display heuristic, not a biological homoeology/WGD
 test or a globally optimal grouping. `karyotype` follows the ribbon order,
 appending unlisted eligible chromosomes in BED order; `none` preserves BED
-order. No mode reverses chromosomes or changes within-chromosome gene order.
+order. Dotplot modes do not reverse chromosomes or change within-chromosome gene order.
 `dotplot_order.json` records the groups, lengths, order and excluded anchor
 counts; `dotplot_display.tsv` records each chromosome's length and selection.
 
@@ -108,7 +108,7 @@ objective and solver status rather than interpreting the order as ancestry.
 `target` and `query` retain the earlier dominant-partner heuristic: unique lifted
 anchor-pair counts choose the strongest fixed partner, then mean partner gene
 rank and input order break ties; chromosomes with no displayed partner go last.
-`none` preserves the supplied lists or natural order. In every mode the lists
+`none` preserves the supplied lists or natural order. In these legacy modes the lists
 select the displayed chromosomes; all ribbons, chromosome orientations, gene
 order and analysis are unchanged. The dotplot can follow this ordering using
 `synteny_dotplot_sort=karyotype`. `karyotype_order.json`
@@ -162,7 +162,7 @@ Outputs are under `workspace/output/genome_evolution/synteny/`:
 Both plots use **gene rank**, rather than physical chromosome length. BED/block
 coordinates use 0-based, half-open intervals. Ribbons are colored by the target
 chromosome; dotplot colors distinguish block orientation by default. Chromosome labels and
-their original orientation are preserved; natural ordering puts Chr2 before
+their original orientation are preserved by default; natural ordering puts Chr2 before
 Chr10. Display exclusions are recorded, and the dotplot retains every anchor
 between its eligible chromosomes without downsampling. The 1 Mbp filter does
 not change ribbon selection; fragmented assemblies may still need an explicit
@@ -181,7 +181,7 @@ Helvetica text and restrained soft palettes. Karyotypes italicise only species n
 SVGs retain editable Helvetica text; raster previews use the available system
 font substitute if Helvetica is unavailable. Karyotype PDFs have a 7.2-inch page
 width and 0.06-inch outer padding. Original chromosome labels are vertical to
-avoid crowding; neither chromosome nor gene orientations change.
+avoid crowding. Only the opt-in signed layout mode below reverses chromosome display directions.
 Each track positions its species label 4 pt beyond the outer edge of its own
 longest rendered chromosome/scaffold label. The measurement uses the actual
 font metrics and rotated label bounds, so long labels on one track do not
@@ -241,6 +241,118 @@ Analysis, optional dS estimation and plots have separate standard artifact-prove
 recoverable bundle publication. A stage lock prevents concurrent runs from
 mixing analysis and plots. Completed analysis is retained if a plot fails.
 
+## Order and orientation, including three or more species
+
+Set `synteny_karyotype_sort=order_orientation` to optimize **both the order and
+display direction** of a pairwise karyotype. This is a different objective from
+`both_length`: it gives equal weight to three normalized terms, ribbon width
+times straight midpoint distance, weighted midpoint crossings, and the width
+of ribbons whose endpoint directions disagree. Width is the mean endpoint span
+in native JCVI gene-rank coordinates. Zero-width blocks remain present with zero
+weight. Crossings exclude tied midpoints and are not intersections of Bézier
+areas. All selected blocks contribute; no synteny or dS thresholds change.
+Pairwise optimization uses the same 20:8 design geometry as the legacy solver;
+multi-track optimization uses its actual rendered geometry.
+
+For a single diagram with multiple species, provide an optional JSON file
+through `synteny_karyotype_panels_file`. Every named comparison must already be
+listed in `synteny_pairs.tsv`, for example:
+
+```tsv
+analysis_id	target_species	query_species
+anc_dio	Ancistrocladus_abbreviatus	Dioncophyllum_thollonii
+dio_tri	Dioncophyllum_thollonii	Triphyophyllum_peltatum
+```
+
+```json
+{
+  "panels": [{
+    "panel_id": "anc_dio_tri",
+    "tracks": [
+      {"species": "Ancistrocladus_abbreviatus"},
+      {"species": "Dioncophyllum_thollonii"},
+      {"species": "Triphyophyllum_peltatum"}
+    ],
+    "comparisons": ["anc_dio", "dio_tri"],
+    "mode": "order_orientation",
+    "seed": 1,
+    "restarts": 4,
+    "max_rounds": 8
+  }]
+}
+```
+
+The `tracks` list fixes the top-to-bottom species order. A middle track has
+**one shared order and orientation**, scored against every incident comparison.
+Repeated species must have identical BEDs across the selected comparisons;
+different annotation releases or coordinate systems are rejected. Add `seqids`
+to each track to select readable chromosome/scaffold subsets; omission includes
+every annotated sequence. Selection affects the diagram only.
+
+Each track can also specify:
+
+| Option | Meaning |
+| --- | --- |
+| `groups` | Disjoint chromosome lists that must remain adjacent, for example `[["scaffold3", "scaffold16"], ["scaffold11", "scaffold1"]`. Groups must be contiguous in the supplied `seqids` order; group order and member order may change together. No groups or homoeology are inferred by the optimizer. |
+| `fixed_order` | Boolean, default `false`; retain this track's chromosome order. Directions may still change unless locked separately. |
+| `orientation` | Initial display directions, for example `{"scaffold3":"-"}`. Unspecified sequences start forward. |
+| `fixed_orientation` | Locked display directions, for example `{"scaffold3":"+"}`. Keys must be selected sequences; conflicting explicit initial directions are errors. |
+| `colors` | Optional seqid-to-matplotlib-color map; identities remain the original seqids. |
+| `labels` | Optional seqid-to-display-label map, for example `{"scaffold3":"3"}`. Labels must be unique within a track. BED IDs, saved seqids and optimization identities remain unchanged. |
+
+Panel `mode=order` optimizes order while retaining initial directions;
+`mode=none` retains the supplied layout. The `order_orientation` mode is the
+panel default. No mode changes the species order, BEDs, sequence data, gene IDs,
+alignments, or inferred block orientation. Reversed chromosome labels have
+`(rev)` and the reproducible JCVI `seqids` file uses its trailing `-` display
+control. Pairwise dotplots keep their original directions even when following
+the reordered chromosome list.
+
+At most 20,000 permitted joint order/direction states are explored exhaustively.
+Larger problems use a seeded, bounded multistart search with weighted-center
+order proposals, group-preserving swaps and direction changes. `restarts` is
+bounded to 1–16 and `max_rounds` to 1–100. Crossings are evaluated using linear
+storage rather than an all-block-pairs matrix. The returned objective cannot
+be worse than the constrained starting layout to floating-point tolerance;
+equal scores prefer fewer direction changes and the input order. The report
+states `globally_optimal=false` for bounded search and for `mode=none` rather
+than calling an unsearched layout optimal. This is a visualization criterion,
+not evidence of ancestral orientation or structural rearrangement.
+
+```bash
+GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
+GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_PANELS_FILE=input/synteny_panels.json \
+GG_GENOME_EVOLUTION_SYNTENY_PLOT_ONLY=1 \
+artifact_stale_policy=rebuild \
+  bash workflow/gg_genome_evolution_entrypoint.sh
+```
+
+Outputs are `plots/panels/<panel_id>/karyotype.{pdf,svg,png}` with 7.2-inch width,
+8 pt Helvetica and one shared gene-count scale by default. Plots use
+8 pt gaps between chromosomes so adjacent rotated labels remain separated.
+Select fewer chromosomes if their labels and gaps cannot fit the fixed width.
+The bundle includes
+unchanged source BEDs/blocks, relative-path `manifest.json`, native `layout` and
+`seqids`, colors, and `karyotype_layout.json`. The report records input/final
+orders and directions, constraints, geometry, seed, solver, before/after score
+components, optimality status, source hashes and displayed/excluded block
+counts. Pairwise signed layouts use the existing `karyotype_order.json`.
+Panel settings invalidate plots only, preserving completed analysis and dS.
+The pairwise `analysis_id=panels` is reserved only when panels are enabled.
+
+For saved inputs outside a workspace, the same backend accepts a single
+manifest containing `tracks` (each with `species`, `bed` and optional settings
+above), `edges` (`{"tracks":[0,1],"blocks":"anc_dio.simple"}`), and optimizer
+options. Paths resolve beside the manifest. A new destination is required:
+
+```bash
+python workflow/support/synteny_multitrack.py \
+  --manifest saved_layout.json --output new_layout --formats pdf,svg,png
+```
+
+The generated bundle's `manifest.json` can be supplied to this command to
+reproduce its layout without protein search, synteny detection or dS fitting.
+
 ## Dotplot colored by dS
 
 ```bash
@@ -277,6 +389,78 @@ contrast against the white background, keeping small points visible.
 Missing chromosome lengths or no anchors passing the physical-length filter
 stop the run before alignment/dS estimation; completed synteny analysis is retained.
 These pairwise distances are not a codeml likelihood analysis or a WGD test.
+
+## Combined pairwise dS dotplots
+
+To compare all three species pairs in one figure, list the three comparisons in
+the ordinary pair table and set `synteny_dotplot_panels_file` to a JSON file.
+The workflow performs the same native analysis and CDSKIT dS stages for each
+pair, then combines their gene-pair coordinates with **one shared dS colour
+scale and missing-value key**. It does not rerun alignment to combine plots.
+The [three-species pair table](examples/synteny-three-species.tsv) and
+[panel configuration](examples/synteny-dotplot-panels.json) are complete examples.
+
+```json
+{
+  "panels": [{
+    "panel_id": "anc_dio_tri",
+    "comparisons": ["anc_dio", "anc_tri", "dio_tri"],
+    "tracks": [
+      {"species": "Ancistrocladus_abbreviatus"},
+      {"species": "Dioncophyllum_thollonii"},
+      {"species": "Triphyophyllum_peltatum"}
+    ],
+    "columns": 2
+  }]
+}
+```
+
+```bash
+GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
+GG_GENOME_EVOLUTION_SYNTENY_PAIRS_FILE=input/synteny_pairs.tsv \
+GG_GENOME_EVOLUTION_SYNTENY_DOTPLOT_COLOR=ds \
+GG_GENOME_EVOLUTION_SYNTENY_DOTPLOT_PANELS_FILE=input/synteny_dotplot_panels.json \
+  bash workflow/gg_genome_evolution_entrypoint.sh
+```
+
+The `comparisons` order sets the subpanel order. `tracks` lists each participating
+species once and fixes the visual axis roles: the earlier species is on x and
+the later species is on y. This can swap axes relative to the analysis roles;
+gene IDs, anchor pairs and dS estimates remain unchanged. Each species uses the
+same sequence order and direction throughout the figure. By default its first
+comparison supplies the eligible sequence order. Optional per-track `seqids`,
+`orientation` and `labels` have the same meanings as the multi-track layout:
+
+```json
+{"species": "Ancistrocladus_abbreviatus", "seqids": ["scaffold16", "scaffold3"],
+ "orientation": {"scaffold16": "-"},
+ "labels": {"scaffold16": "16", "scaffold3": "3"}}
+```
+
+Explicit sequences must pass the ordinary dotplot physical-length filter.
+Use the saved karyotype layout's `display_order`, `display_orientation` and
+`display_labels` to populate these settings when matching an existing figure.
+Reversals are marked `(rev)` and affect only this combined display. Native
+scaffold boundaries remain separate; no chromosome or homoeolog assignments
+are inferred. Repeated species must have identical full BED/CDS inputs and
+eligible sequence sets across comparisons; inconsistent releases are errors.
+
+`columns` defaults to two (one for a single comparison) and accepts 1–8.
+Each column is 3.6 inches wide, retaining 8 pt Helvetica text. The common key
+uses a spare grid cell when available; otherwise it sits below the panels.
+Long/crowded sequence labels that cannot fit at 8 pt require explicit sequence
+selection or shorter display labels. Counts report **unique** displayed anchor
+pairs, including missing distances and values above `synteny_ds_color_max`.
+All retained pairs are drawn without downsampling; the colour limit never
+filters anchors. The ordinary per-pair dotplots retain their existing layout.
+
+Outputs are `plots/dotplot_panels/<panel_id>/dotplot.{pdf,svg,png}` in the selected
+formats, copied plotting inputs, `manifest.json`, and `dotplot_panels.json`.
+The report records sequence layouts, axis swaps, pair/NA/clipped-colour counts,
+the common scale and source hashes. `analysis_id=dotplot_panels` is reserved
+only when this option is enabled. Changing panel layout or the colour limit
+invalidates plots only: use the existing `synteny_plot_only=1` and
+`artifact_stale_policy=rebuild` to reuse current analysis and dS results.
 
 ## Redraw and resume
 

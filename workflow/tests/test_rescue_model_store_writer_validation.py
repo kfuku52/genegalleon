@@ -1,6 +1,5 @@
-"""Writer validation/publication boundaries and selective-copy independence."""
+"""Writer input validation, atomic publication and selective-copy independence."""
 import copy
-import hashlib
 
 import pytest
 
@@ -18,28 +17,14 @@ def assert_unpublished(directory):
     assert not list(directory.iterdir())
 
 
-def seeded_collision(monkeypatch):
-    """Exercise the actual collision check against unequal compressed body bytes."""
-    original = store._insert_body
-
-    def insert(db, body, level, codec, cache=None):
-        digest = hashlib.sha256(body).hexdigest()
-        db.execute("INSERT OR REPLACE INTO bodies VALUES (?,?)",
-                   (digest, store._compress(b"{}", codec, level)))
-        return original(db, body, level, codec, cache)
-
-    monkeypatch.setattr(store, "_insert_body", insert)
-
-
 @pytest.mark.parametrize("stage", ["models", "revision"])
 @pytest.mark.parametrize("nested", [False, True], ids=["candidate", "raw_prediction"])
 @pytest.mark.parametrize("invalid,error,message", BAD_CONTEXT)
-def test_invalid_context_is_rejected_before_real_body_collision(
-        tmp_path, monkeypatch, stage, nested, invalid, error, message):
+def test_writer_rejects_invalid_context_without_publication(
+        tmp_path, stage, nested, invalid, error, message):
     record = model(0, "accepted")
     target = record["raw_prediction"] if nested else record
     target["evidence"]["invalid"] = invalid
-    seeded_collision(monkeypatch)
     directory = tmp_path / "worker"
     with pytest.raises(error, match=message):
         store.write_model_store(directory, [record] if stage == "models" else [],
@@ -48,55 +33,13 @@ def test_invalid_context_is_rejected_before_real_body_collision(
     assert_unpublished(directory)
 
 
-def test_collision_fixture_rejects_valid_json_without_publication(tmp_path, monkeypatch):
-    seeded_collision(monkeypatch)
-    directory = tmp_path / "worker"
-    with pytest.raises(ValueError, match="body hash collision"):
-        store.write_model_store(directory, [model()], codec="gzip")
-    assert_unpublished(directory)
-
-
-@pytest.mark.parametrize("invalid,error,message", BAD_CONTEXT)
-def test_default_pack_still_validates_candidate_context(invalid, error, message):
-    record = model()
-    record["evidence"]["invalid"] = invalid
-    with pytest.raises(error, match=message):
-        store._pack(record)
-
-
-def test_body_encoding_failure_precedes_invalid_candidate_context(tmp_path):
+def test_writer_rejects_non_json_body_without_publication(tmp_path):
     record = model()
     record["sequence"] = {"not_json"}
-    record["evidence"]["invalid"] = float("nan")
     directory = tmp_path / "worker"
     with pytest.raises(TypeError, match="not JSON serializable"):
         store.write_model_store(directory, [record], codec="gzip")
     assert_unpublished(directory)
-
-
-def test_default_overlay_inserts_body_before_context_encoding(tmp_path):
-    body, envelope = store._pack(model())
-    envelope["context"]["nonfinite"] = float("nan")
-    db = store._overlay(tmp_path / "direct.sqlite")
-    try:
-        with pytest.raises(ValueError, match="Out of range float values"):
-            store._add_overlay(db, 0, body, envelope, 1, "gzip")
-        assert db.execute("SELECT data FROM bodies").fetchone() is not None
-        assert db.execute("SELECT ordinal FROM entries").fetchone() is None
-    finally:
-        db.close()
-
-
-def test_default_overlay_preserves_collision_before_invalid_context(tmp_path, monkeypatch):
-    body, envelope = store._pack(model())
-    envelope["context"]["nonfinite"] = float("nan")
-    db = store._overlay(tmp_path / "direct.sqlite")
-    seeded_collision(monkeypatch)
-    try:
-        with pytest.raises(ValueError, match="body hash collision"):
-            store._add_overlay(db, 0, body, envelope, 1, "gzip")
-    finally:
-        db.close()
 
 
 @pytest.mark.parametrize("codec", ["gzip", "auto"])

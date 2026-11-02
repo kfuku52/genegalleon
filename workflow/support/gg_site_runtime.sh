@@ -296,7 +296,11 @@ gg_site_container_shell_command() {
       ;;
     shirokane)
       echo "${echo_header}site profile = shirokane"
-      gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
+      if [[ -n "${GG_CONTAINER_PROJECT_ROOT_BIND:-}" ]]; then
+        gg_bind_requested_project_root || return 1
+        gg_bind_native_array_sources source_bind_args || return 1
+      fi
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec "${source_bind_args[@]}" || return 1
       ;;
     nig)
       echo "${echo_header}site profile = nig"

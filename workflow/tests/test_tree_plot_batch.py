@@ -3,11 +3,59 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
+
+
+@pytest.mark.parametrize('newick', [
+    '((a:1,b:2,c:3)x:4,d:5)root;',
+    '(a:1,(b:2,c:3)x:4,d:5)root;',
+    '((a:1)x:2,b:3)root;',
+])
+@pytest.mark.parametrize('sister_column', [True, False], ids=['generated-sister', 'missing-sister'])
+def test_statistics_to_plot_preserves_all_parent_edges(tmp_path, newick, sister_column):
+    import ete4
+    import pandas as pd
+    from pypdf import PdfReader
+
+    original = tmp_path / 'rooted.nwk'
+    original.write_text(newick)
+    generated = subprocess.run([sys.executable, str(SUPPORT / 'orthogroup_statistics.py'),
+                                '--rooted_tree', str(original)], cwd=tmp_path, capture_output=True, text=True)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    stat = tmp_path / 'orthogroup.branch.tsv'
+    if not sister_column:
+        table = pd.read_csv(stat, sep='\t', keep_default_na=False)
+        table.drop(columns=['sister']).to_csv(stat, sep='\t', index=False)
+    before = stat.read_bytes()
+    # Source the actual driver, then inspect its reconstructed tree, including
+    # the sister-column completion used by the rendering path.
+    check = tmp_path / 'render.R'
+    check.write_text('.gg_test_args <- commandArgs(TRUE)\n'
+                     '.gg_tree_plot_args <- .gg_test_args[-c(1,2)]\n'
+                     'source(.gg_test_args[[1]])\n'
+                     'ape::write.tree(tree, file=.gg_test_args[[2]], digits=15)\n')
+    restored = tmp_path / 'restored.nwk'
+    rendered = subprocess.run(['Rscript', str(check), str(SUPPORT / 'stat_branch2tree_plot.r'), str(restored),
+        '--stat_branch=' + str(stat), '--max_delta_intron_present=-0.5',
+        '--panel_widths_mm=tree:60', '--panel1=tree,bl_rooted,no,no,L',
+        '--show_branch_id=no', '--event_method=species_overlap',
+        '--species_color_table=PLACEHOLDER', '--pie_chart_value_transformation=identity',
+        '--long_branch_display=no'], cwd=tmp_path, capture_output=True, text=True)
+    assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+
+    def edges(text):
+        tree = ete4.Tree(text, parser=1)
+        return {(node.up.name, node.name): node.dist for node in tree.traverse() if node.up is not None}
+
+    assert edges(restored.read_text()) == pytest.approx(edges(newick))
+    assert len(PdfReader(tmp_path / 'stat_branch2tree_plot.pdf').pages) == 1
+    assert original.read_text() == newick
+    assert stat.read_bytes() == before
 
 
 @pytest.mark.parametrize('metadata', ['package.rds', 'nsInfo.rds'])
@@ -43,6 +91,7 @@ def normalized(path):
 
 
 def test_focused_batch_uses_complete_bundled_package_over_incompatible_installed_copy(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT))
     import focus_hgt_gene_trees as exporter
     from pypdf import PdfReader
 

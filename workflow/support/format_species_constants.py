@@ -4,6 +4,7 @@ import re
 import threading
 from collections import deque
 
+from format_species_accessions import GWH_ACCESSION_SEARCH
 from format_species_provider_config import ORYZA_MINUTA_PROVIDER
 
 FERNBASE_CONFIDENCE_MODE_FIELD = "fernbase_confidence_mode"
@@ -237,7 +238,7 @@ DDBJ_WGS_PROJECT_PREFIX_PATTERN = re.compile(r"^[A-Z]{4,6}$", re.IGNORECASE)
 
 GWH_ASSEMBLY_ACCESSION_PATTERN = re.compile(r"^GWH[A-Z0-9]+(?:\.[0-9]+)?$", re.IGNORECASE)
 
-GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN = re.compile(r"(GWH[A-Z0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+GWH_ASSEMBLY_ACCESSION_SEARCH_PATTERN = GWH_ACCESSION_SEARCH
 
 CITRUSGENOMEDB_BINOMIAL_PATTERN = re.compile(r"\b([A-Z][a-z]+)\s+((?:x\s+)?[a-z][a-z-]+)\b")
 

@@ -101,6 +101,7 @@ representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUT
 
 run_kffractbias="${run_kffractbias:-1}" # Run the pair selected by GG_ARRAY_TASK_ID.
 kffractbias_pairs_file="${kffractbias_pairs_file:-}" # Empty uses workspace/input/fractionation_bias_pairs.tsv.
+kffractbias_report_config="${kffractbias_report_config:-}" # Optional JSON for a shared-reference multi-species report (task 1 only).
 delete_tmp_dir="${delete_tmp_dir:-1}" # Delete this task's temporary directory after successful publication.
 
 ### End: Modify this block to tailor your analysis ###

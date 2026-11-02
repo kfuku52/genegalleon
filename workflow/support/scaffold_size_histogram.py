@@ -55,8 +55,9 @@ def run(args):
     label_small = "<{:.1E} bp".format(args.min_scaffold_size)
 
     df = pandas.read_csv(args.fx2tab, sep="\t", header=0, low_memory=False)
-    df["size"] = label_large
-    df.loc[(df["length"] < args.min_scaffold_size), "size"] = label_small
+    df["size"] = pandas.Categorical.from_codes(
+        (df["length"] < args.min_scaffold_size).to_numpy(dtype=numpy.int8),
+        categories=[label_large, label_small])
     df["color"] = "black"
     df["log10_length"] = numpy.log10(df["length"])
 

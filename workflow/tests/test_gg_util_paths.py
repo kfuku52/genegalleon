@@ -182,7 +182,8 @@ printf '%s\\n' "${{APPTAINERENV_transcriptome_metadata_input_subdir}}" "${{SINGU
     ]
 
 
-def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path):
+@pytest.mark.parametrize("sqlite_cache", [False, True])
+def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path, sqlite_cache):
     image = tmp_path / "fixture.sif"
     image.write_text("fixture runtime identity")
     workspace = tmp_path / "workspace"
@@ -211,6 +212,11 @@ gg_require_versions_dump fixture
                                 env={**os.environ, "GG_TEST_VERSION_RC": str(code), "GG_TEST_CALLS": str(tmp_path / "calls")}, capture_output=True, text=True)
         assert result.returncode == expected, result.stdout + result.stderr
         assert not list(workspace.rglob("gate/owner.json"))
+        if sqlite_cache and code == 0:
+            sys.path.insert(0, str(GG_UTIL_PATH.parent))
+            import metadata_store
+            metadata_store.pack(workspace / "downloads/version_inventory", writers_stopped=True, delete_originals=True)
+
     assert len(list(workspace.rglob("*.versions.log"))) == 1
     assert len(list(workspace.rglob("*.versions.failed.*.log"))) == 1
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called"]
@@ -277,6 +283,7 @@ def _write_runtime_release_contract(
     *,
     manifest_release_root: Optional[Path] = None,
     additional_files: Optional[dict] = None,
+    launch_storage: str = "",
 ) -> str:
     required_paths = {
         "VERSION",
@@ -301,6 +308,8 @@ def _write_runtime_release_contract(
         else:
             shutil.copyfile(source, target)
             os.chmod(target, stat.S_IMODE(source.stat().st_mode))
+        if launch_storage == "readonly-hardlinks-v1":
+            target.chmod(stat.S_IMODE(target.stat().st_mode) & ~0o222)
         installed_files.append(
             {
                 "path": relative,
@@ -323,6 +332,8 @@ def _write_runtime_release_contract(
         "target_ref": "a" * 40,
         "installed_files": installed_files,
     }
+    if launch_storage:
+        contract["launch_storage"] = launch_storage
     contract["contract_sha256"] = _canonical_sha256(contract)
     (release_root / ".kfauto-release.json").write_text(
         json.dumps(contract, indent=2, sort_keys=True) + "\n",
@@ -2279,6 +2290,84 @@ def test_mv_out_bundle_rejects_hardlinked_destination_aliases(tmp_path):
     assert second_source.read_text() == "second\n"
 
 
+def test_mv_out_bundle_heartbeat_start_failure_restores_sources_and_outputs(tmp_path):
+    source = tmp_path / "source"
+    source.write_text("new\n")
+    destination = tmp_path / "out" / "result.tsv"
+    destination.parent.mkdir()
+    destination.write_text("old\n")
+    completed = run_bash(
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "gg_shared_lock_start_heartbeat() { return 1; }; "
+        f"mv_out_bundle {shlex.quote(str(source))} {shlex.quote(str(destination))}",
+        tmp_path,
+    )
+    assert completed.returncode != 0
+    assert source.read_text() == "new\n"
+    assert destination.read_text() == "old\n"
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+    assert not list((destination.parent / ".gg_publish_lock_stripes-v1").glob("*.lock"))
+
+
+def test_mv_out_bundle_stripe_collision_acquires_once_and_publishes_both(tmp_path):
+    buckets = {}
+    for index in range(512):
+        name = f"result-{index}.txt"
+        bucket = hashlib.sha256(os.fsencode(name)).hexdigest()[:2]
+        if bucket in buckets:
+            names = [buckets[bucket], name]
+            break
+        buckets[bucket] = name
+    else:
+        pytest.fail("expected a collision among 512 names and 256 buckets")
+    output = tmp_path / "out"
+    output.mkdir()
+    arguments = []
+    expected = {}
+    for index, name in enumerate(names):
+        source = tmp_path / f"source-{index}"
+        source.write_text(f"new-{index}\n")
+        destination = output / name
+        destination.write_text(f"old-{index}\n")
+        arguments.extend([str(source), str(destination)])
+        expected[destination] = source.read_bytes()
+    completed = subprocess.run(
+        ["bash", "-lc", f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+         "GG_LOCK_POLL_SECONDS=1; GG_LOCK_ACQUIRE_TIMEOUT_SECONDS=2; "
+         "mv_out_bundle " + shlex.join(arguments)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert {path: path.read_bytes() for path in expected} == expected
+    stripes = output / ".gg_publish_lock_stripes-v1"
+    assert len(list(stripes.glob("*.lock.guard"))) == 1
+    assert not list(output.glob(".*.gg-bundle.lock*"))
+    assert not list(tmp_path.rglob("*.gg-stage.*"))
+    assert not list(tmp_path.rglob("*.gg-backup.*"))
+
+
+def test_mv_out_bundle_lock_paths_are_bounded_and_match_physical_aliases(tmp_path):
+    output = tmp_path / "out"
+    output.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(output, target_is_directory=True)
+    completed = subprocess.run(
+        ["bash", "-lc", f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+         'for ((i=0; i<768; i++)); do '
+         '_gg_bundle_lock_path "$(gg_resolve_physical_path "out/result-$i.txt")" || exit; done; '
+         '_gg_bundle_lock_path "$(gg_resolve_physical_path "alias/result-0.txt")"'],
+        cwd=tmp_path, capture_output=True, text=True, timeout=40,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    paths = completed.stdout.splitlines()
+    assert len(paths) == 769
+    assert paths[-1] == paths[0]
+    assert 200 <= len(set(paths)) <= 256
+    assert all(Path(path).parent == output / ".gg_publish_lock_stripes-v1" for path in paths)
+    assert not list(output.iterdir())
+
+
 def test_mv_out_bundle_serializes_concurrent_publishers(tmp_path):
     destination = tmp_path / "out" / "result.txt"
     destination.parent.mkdir()
@@ -2830,3 +2919,86 @@ def test_bind_csv_normalization_keeps_first_destination_and_path_text(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == (
         "/first path:/target:ro,/other:/other,/literal$(no-command):/literal$(no-command):ro,/last:/last")
+
+
+@pytest.mark.parametrize("policy", ["", "readonly-hardlinks-v1"])
+@pytest.mark.parametrize("timing", ["during", "late"])
+def test_explicit_runtime_readonly_links_preserve_legacy_fences(tmp_path, policy, timing):
+    release = tmp_path / "release"
+    marker = b"late-link-fixture-body\n"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage=policy,
+                                               additional_files={"zz-last-read.txt": marker})
+    first_body = (release / "VERSION").read_bytes()
+    wrapper = tmp_path / "python-link-proof"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import hashlib,os,sys\nfrom pathlib import Path\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;fired=False\n"
+        f"root=Path({str(release)!r});trigger={marker if timing == 'late' else first_body!r}\n"
+        "def mutate(data):\n"
+        " global fired\n"
+        " if fired or data != trigger:return\n"
+        " fired=True;os.link(root/'VERSION',root.parent/'concurrent-link')\n"
+        "class Hasher:\n"
+        " def __init__(self,data=b''):mutate(data);self.inner=original(data)\n"
+        " def update(self,data):mutate(data);self.inner.update(data)\n"
+        " def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher;exec(compile(code,'<linked-bootstrap>','exec'))\n")
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    result = run_bash(command, tmp_path)
+    assert (result.returncode == 0) is bool(policy), result.stderr
+    assert (tmp_path / "concurrent-link").samefile(release / "VERSION")
+    if policy:
+        assert result.stdout.strip() == str(release / "workflow")
+    else:
+        assert "file changed: VERSION" in result.stderr
+
+
+@pytest.mark.parametrize("mutation", ["body", "mode", "replacement", "symlink"])
+def test_readonly_launch_rejects_late_tampering_even_with_a_new_hardlink(tmp_path, mutation):
+    release = tmp_path / "release"
+    marker = b"late-tamper-fixture-body\n"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage="readonly-hardlinks-v1",
+                                               additional_files={"zz-last-read.txt": marker})
+    wrapper = tmp_path / "python-tamper-proof"
+    effect = {
+        "body": "leaf.chmod(0o644);leaf.write_bytes(b'X'*before.st_size);leaf.chmod(0o444);os.utime(leaf,ns=(before.st_atime_ns,before.st_mtime_ns))",
+        "mode": "leaf.chmod(0o644)",
+        "replacement": "leaf.unlink();leaf.write_bytes(b'changed');leaf.chmod(0o444)",
+        "symlink": "leaf.unlink();leaf.symlink_to(root.parent/'concurrent-link')",
+    }[mutation]
+    wrapper.write_text(
+        f"#!{sys.executable}\nimport hashlib,os,sys\nfrom pathlib import Path\n"
+        "code=sys.stdin.read();sys.argv=sys.argv[1:];original=hashlib.sha256;fired=False\n"
+        f"root=Path({str(release)!r});trigger={marker!r}\n"
+        "def mutate(data):\n global fired\n if fired or data != trigger:return\n fired=True\n"
+        " leaf=root/'VERSION';before=leaf.stat();os.link(leaf,root.parent/'concurrent-link')\n"
+        f" {effect}\n"
+        "class Hasher:\n def __init__(self,data=b''):mutate(data);self.inner=original(data)\n"
+        " def update(self,data):mutate(data);self.inner.update(data)\n def hexdigest(self):return self.inner.hexdigest()\n"
+        "hashlib.sha256=Hasher;exec(compile(code,'<tampered-bootstrap>','exec'))\n")
+    wrapper.chmod(0o755)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    result = run_bash(f"source {shlex.quote(str(bootstrap))}; export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; "
+                      f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+                      f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
+    assert result.returncode != 0
+    assert "file changed: VERSION" in result.stderr or "unsafe or unreadable" in result.stderr
+
+
+@pytest.mark.parametrize("policy", ["unknown", "readonly-hardlinks-v1"])
+def test_explicit_launch_storage_rejects_unknown_policy_and_writable_members(tmp_path, policy):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation", launch_storage=policy)
+    if policy == "readonly-hardlinks-v1":
+        (release / "VERSION").chmod(0o644)
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    result = run_bash(f"source {shlex.quote(str(bootstrap))}; export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+                      f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
+    assert result.returncode != 0
+    assert "storage policy" in result.stderr or "file changed: VERSION" in result.stderr

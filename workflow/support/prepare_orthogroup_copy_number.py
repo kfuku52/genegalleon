@@ -6,6 +6,7 @@ import datetime
 import os
 import sys
 import time
+import warnings
 from collections import Counter
 
 import ete4
@@ -43,7 +44,21 @@ def orthogroup_identifier(value):
 def load_gene_count_table(path):
     require_input_file(path, "Orthogroup gene-count table")
     try:
-        genecount_df = pandas.read_csv(path, sep="\t", converters={"Orthogroup": orthogroup_identifier})
+        # Read the first row as values: pandas otherwise silently renames a
+        # repeated species header (A, A -> A, A.1), discarding its ambiguity.
+        header = pandas.read_csv(path, sep="\t", header=None, nrows=1,
+                                 dtype=str, keep_default_na=False).iloc[0].tolist()
+        if any(not name.strip() for name in header):
+            fail("Orthogroup gene-count table contains empty column names.")
+        duplicates = sorted(name for name, count in Counter(header).items() if count > 1)
+        if duplicates:
+            fail("Orthogroup gene-count table contains duplicate column names: " + ", ".join(duplicates[:20]))
+        # Never infer an unnamed row index from extra fields: it shifts both
+        # family identities and species counts. Do not truncate those fields.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pandas.errors.ParserWarning)
+            genecount_df = pandas.read_csv(path, sep="\t", index_col=False,
+                converters={"Orthogroup": orthogroup_identifier})
     except Exception as exc:
         fail(f"Could not read orthogroup gene-count table {path}: {exc}")
     if genecount_df.empty:
@@ -83,7 +98,10 @@ def get_species_count_table(genecount_df, leaf_names):
             "Orthogroup gene-count table is missing species column(s) from the dated species tree: "
             + ", ".join(missing_species[:20])
         )
+    if not genecount_df.columns.is_unique:
+        fail("Orthogroup gene-count table contains duplicate column names.")
     numeric = False
+    boolean_columns = []
     if (type(genecount_df) is pandas.DataFrame and type(genecount_df.columns) is pandas.Index
             and type(leaf_names) is list and leaf_names
             and all(type(name) is str for name in leaf_names)
@@ -100,15 +118,30 @@ def get_species_count_table(genecount_df, leaf_names):
             invalid = species_counts.isna().any(axis=0)
             invalid_cols = invalid.index[invalid].tolist()
     else:
-        species_counts = genecount_df.loc[:, leaf_names].apply(pandas.to_numeric, errors="coerce")
+        raw_counts = genecount_df.loc[:, leaf_names]
+        boolean_columns = [col for col in leaf_names if
+                           pandas.api.types.is_bool_dtype(raw_counts[col].dtype) or
+                           (raw_counts[col].dtype == object and
+                            any(isinstance(value, (bool, numpy.bool_)) for value in raw_counts[col]))]
+        species_counts = raw_counts.apply(pandas.to_numeric, errors="coerce")
         invalid_cols = [col for col in leaf_names if species_counts[col].isna().any()]
     if invalid_cols:
         fail(
             "Orthogroup gene-count table contains non-numeric copy numbers in species column(s): "
             + ", ".join(invalid_cols[:20])
         )
+    if boolean_columns:
+        fail("Orthogroup gene-count table contains boolean copy numbers in species column(s): "
+             + ", ".join(boolean_columns[:20]))
+    nonfinite_columns = [col for col in leaf_names
+                         if not numpy.isfinite(species_counts[col].to_numpy(dtype=numpy.float64)).all()]
+    if nonfinite_columns:
+        fail("Orthogroup gene-count table contains non-finite copy numbers in species column(s): "
+             + ", ".join(nonfinite_columns[:20]))
     if (species_counts < 0).any().any():
         fail("Orthogroup gene-count table contains negative copy numbers.")
+    if (species_counts % 1 != 0).any().any():
+        fail("Orthogroup gene-count table contains fractional copy numbers; nonnegative integers are required.")
     return species_counts
 
 
@@ -136,7 +169,12 @@ def build_arg_parser():
         required=True,
     )
     parser.add_argument(
-        "--output_dir", metavar="PATH", default="", type=str, help="Path used by --output_dir.", required=True
+        "--output_dir", metavar="PATH", default="", type=str,
+        help="Output directory, required unless --validate-only is selected."
+    )
+    parser.add_argument(
+        "--validate-only", action="store_true",
+        help="Validate copy numbers and dated-tree species without creating files or plots."
     )
     parser.add_argument(
         "--max_size_differential",
@@ -151,12 +189,17 @@ def build_arg_parser():
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
+    if not args.validate_only and not args.output_dir:
+        parser.error("--output_dir is required unless --validate-only is selected.")
     start = time.time()
     print("Starting {} at {}".format(sys.argv[0], datetime.datetime.now()))
 
     genecount_df = load_gene_count_table(args.genecount)
     _tree, leaf_names = load_species_tree(args.dated_species_tree)
     species_counts = get_species_count_table(genecount_df, leaf_names)
+    if args.validate_only:
+        print("Validated orthogroup copy numbers and dated-tree species; no outputs written.")
+        return
     genecount_df["size_differentials"] = species_counts.max(axis=1) - species_counts.min(axis=1)
 
     # Plot size differentials for all orthogroups

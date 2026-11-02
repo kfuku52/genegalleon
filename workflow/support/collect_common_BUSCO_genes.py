@@ -8,7 +8,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
-from busco_table_utils import normalize_species_label
+from busco_table_utils import SOURCE_COORDINATE_PATTERN, normalize_species_label
 
 BUSCO_TABLE_COLUMNS = ["busco_id", "sequence", "orthodb_url", "description"]
 
@@ -38,7 +38,7 @@ def read_busco_table(path_to_table):
     if len(rows) == 0:
         return empty_busco_table()
     table = pd.DataFrame(rows, columns=BUSCO_TABLE_COLUMNS, dtype="string")
-    table.loc[:, "sequence"] = table.loc[:, "sequence"].str.replace(":[-\\.0-9]*$", "", regex=True)
+    table.loc[:, "sequence"] = table.loc[:, "sequence"].str.replace(SOURCE_COORDINATE_PATTERN, "", regex=True)
     for col in ["sequence", "orthodb_url", "description"]:
         table[col] = table[col].fillna("-").astype("string")
     return table
@@ -108,7 +108,7 @@ def main():
             continue
         species_label = normalize_species_label(species_infile)
         if species_label in seen_species_labels:
-            species_label = species_infile
+            raise ValueError(f"Ambiguous BUSCO full tables for species: {species_label}")
         seen_species_labels.add(species_label)
         tasks.append((species_infile, species_label, path_to_table))
 

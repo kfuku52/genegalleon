@@ -10,6 +10,10 @@ It provides scheduler-ready staged pipelines for:
 - optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md) and
   [existing-model refinement and conserved isoform selection](docs/gene-model-refinement.md),
 - local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,
+- [pairwise genome synteny](docs/pairwise-synteny.md), including multi-species ribbon diagrams
+  and combined pairwise dS dotplots with one colour scale,
+- [reference-based fractionation reports](docs/main-stages-and-what-they-do.md#reference-based-fractionation-reports)
+  with stable series colours and configurable publication plots,
 - orthogroup inference,
 - species-tree inference and dating,
 - gene-family phylogeny and trait/evolutionary annotation,
@@ -116,8 +120,11 @@ Detailed guides are split by topic:
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Pairwise Genome Synteny](docs/pairwise-synteny.md)
 - [Native WGD Candidates and Duplication Origins (experimental)](docs/wgd-ssd.md)
+- [Copy-number and CAFE Validation](docs/copy-number-cafe-validation.md)
+- [GO Enrichment and Fixed-background Sensitivity](docs/go-enrichment.md)
 - [GRAMPA Replacement with NWKIT MUL-Tree Reconciliation](docs/grampa-replacement.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
+- [Closed Scheduler-Log ZIP Storage](docs/scheduler-log-storage.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)
 - [Site Runtime Profiles](docs/site-runtime-profiles.md)
 - [SHIROKANE AGE Guide](docs/shirokane-age.md)

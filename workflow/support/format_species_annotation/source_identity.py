@@ -20,6 +20,7 @@ from format_species_writers import open_text
 from .common import parse_gff_attributes
 
 SOURCE_IDENTITY_VERSION = 1
+IDENTITY_SCAN_KEYS = frozenset({"ID", "Parent", "Note", "pseudo"})
 AUTHOR_ID = re.compile(r"(?:^|[;~\s])ID:(Btu[A-Za-z0-9.]*[.]g\d+)(t\d+)(?:[.]CDS)?(?:$|[;~\s])")
 LAVAN_MODEL = re.compile(r"^(Lavan[.](?:\d+G\d+|S\d+))[.]\d+$")
 _scratch = tempfile.TemporaryDirectory(prefix="gg-source-identity-")
@@ -112,7 +113,7 @@ def _annotation_view(source, _size, _mtime, _ctime):
             feature_counts[kind] += 1
             if kind not in ("mrna", "cds", "exon"):
                 continue
-            attrs = parse_gff_attributes(parts[8])
+            attrs = parse_gff_attributes(parts[8], keys=IDENTITY_SCAN_KEYS)
             if kind == "mrna":
                 identifier = next(iter(attrs.get("ID", ())), "")
                 match = LAVAN_MODEL.fullmatch(identifier)

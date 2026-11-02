@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $# -lt 5 || $# -gt 6 ]]; then
-  echo "Usage: $0 python|r|paml|aster|fastk|smudgeplot|rapidnj|source SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
+  echo "Usage: $0 python|r|paml|aster|fastk|kmc|genomescope|smudgeplot|rapidnj|source SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
   exit 2
 fi
 kind="$1"
@@ -18,7 +18,7 @@ if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ || ! "${source_name}" =~ ^[A-Za-z][A-Za-z0-9]
   exit 2
 fi
 case "${kind}" in
-  python|r|paml|aster|fastk|smudgeplot|rapidnj|source) ;;
+  python|r|paml|aster|fastk|kmc|genomescope|smudgeplot|rapidnj|source) ;;
   *) echo "Unknown source artifact kind: ${kind}" >&2; exit 2 ;;
 esac
 if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -48,6 +48,18 @@ case "${kind}" in
     mkdir -p "${library}"
     MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
       micromamba run -n base R CMD INSTALL --library="${library}" "${work_dir}/source"
+    ;;
+  kmc)
+    make -C "${work_dir}/source" -j"${jobs}" kmc kmc_tools
+    install -D -m 0755 "${work_dir}/source/bin/kmc" "${output_dir}/rootfs/usr/local/bin/kmc"
+    install -D -m 0755 "${work_dir}/source/bin/kmc_tools" "${output_dir}/rootfs/usr/local/bin/kmc_tools"
+    ;;
+  genomescope)
+    library="${output_dir}/rootfs/opt/conda/lib/R/library"
+    mkdir -p "${library}" "${output_dir}/rootfs/usr/local/bin/genomescope2.0"
+    micromamba run -n base R CMD INSTALL --library="${library}" "${work_dir}/source"
+    install -m 0755 "${work_dir}/source/genomescope.R" "${output_dir}/rootfs/usr/local/bin/genomescope2.0/genomescope.R"
+    ln -s genomescope2.0/genomescope.R "${output_dir}/rootfs/usr/local/bin/genomescope.R"
     ;;
   fastk)
     make -C "${work_dir}/source/LIBDEFLATE" -j"${jobs}"

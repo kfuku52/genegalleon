@@ -68,7 +68,7 @@ def test_build_uniprot_metadata_from_dat_extracts_extended_fields(tmp_path):
     assert row["go_ids"] == "GO:0005524;GO:0004672"
     assert row["go_aspects"] == "F;P"
     assert row["go_terms"] == "ATP binding; protein kinase activity"
-    assert row["go_evidence"] == "IEA"
+    assert row["go_evidence"] == "IEA;IEA"
     assert row["gene_name_primary"] == "AKT1"
     assert row["gene_name_synonyms"] == "PKB"
     assert row["ec_numbers"] == "2.7.11.1"
@@ -79,3 +79,18 @@ def test_build_uniprot_metadata_from_dat_extracts_extended_fields(tmp_path):
     assert row["reactome_ids"] == "R-HSA-123456"
     assert row["organism"] == "Homo sapiens (Human)"
     assert row["taxid"] == 9606
+
+
+def test_repeated_go_aspects_and_evidence_keep_per_term_alignment(tmp_path):
+    source = tmp_path / 'source.dat'
+    source.write_text('ID   TEST Reviewed; 10 AA.\nAC   P12345;\n'
+                      'DR   GO; GO:0000001; C:first component; IEA:source.\n'
+                      'DR   GO; GO:0000002; C:second component; IEA:source.\n'
+                      'DR   GO; GO:0000003; F:function; IDA:source.\n'
+                      'DR   GO; GO:0000003; F:function; IDA:source.\n//\n')
+    output = tmp_path / 'metadata.tsv'
+    subprocess.run([sys.executable, str(SCRIPT_PATH), '--uniprot_dat', str(source), '--outfile', str(output)], check=True)
+    row = pandas.read_csv(output, sep='\t', keep_default_na=False).iloc[0]
+    assert row.go_ids == 'GO:0000001;GO:0000002;GO:0000003'
+    assert row.go_aspects == 'C;C;F' and row.go_evidence == 'IEA;IEA;IDA'
+    assert row.go_terms == 'first component; second component; function'

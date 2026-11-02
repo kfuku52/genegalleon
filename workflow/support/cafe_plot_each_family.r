@@ -47,33 +47,7 @@ read_tsv_base <- function(path, na = character()) {
   )
 }
 
-# Normalize labels:
-# - drop "_{copynumber}"
-# - strip "*"
-norm_key <- function(lbl) {
-  x <- gsub("\\*", "", lbl)
-  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
-    species_label <- extract_species_label(x)
-    if (nzchar(species_label)) {
-      return(species_label)
-    }
-  }
-  sub("_[^_]+$", "", x)
-}
-
-# Extract species name for tip labels: remove "*" and "_{copynumber}", then drop "<...>"
-get_species <- function(lbl) {
-  x <- gsub("\\*", "", lbl)
-  x <- sub("<.*$", "", x)
-  if (grepl("^[A-Za-z][A-Za-z0-9]*_", x)) {
-    species_label <- extract_species_label(x)
-    if (nzchar(species_label)) {
-      return(scientific_name_from_label(species_label))
-    }
-  }
-  x <- sub("_[^_]+$", "", x)
-  gsub("_", " ", x)
-}
+source(file.path(script_dir, "cafe_plot_labels.R"))
 
 # Per-OG annotation
 create_annotation_df <- function(og, tree, counts_tbl, changes_tbl) {
@@ -202,6 +176,11 @@ ogs <- intersect(counts_tbl$FamilyID, names(trees))
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 cl <- parallel::makeCluster(core, type = "PSOCK")
+parallel::clusterCall(cl, function(support_dir) {
+  source(file.path(support_dir, "tree_label_formatting.R"), local = globalenv())
+  source(file.path(support_dir, "cafe_plot_labels.R"), local = globalenv())
+  NULL
+}, script_dir)
 parallel::clusterExport(
   cl,
   varlist = c("plot_cafe5_each_family", "create_annotation_df", "norm_key", "get_species", "font_size",

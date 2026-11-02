@@ -65,6 +65,19 @@ def test_batched_formats_preserve_complete_single_format_outputs(saved_karyotype
     assert report.read_bytes() == expected_report
 
 
+def test_karyotype_counts_only_selected_exact_chromosome_ids(saved_karyotype):
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    for side, prefix in (("target", "t"), ("query", "q")):
+        with (directory / f"{side}.bed").open("a") as stream:
+            stream.write(f"chr10\t200\t205\t{prefix}extra\n")
+            stream.write(f"unselected\t300\t305\t{prefix}other\n")
+    report = render_karyotype(directory, pair, "svg", colors)
+    assert report["track_gene_counts"] == [6, 6]
+    assert report["track_ratios"] == pytest.approx([0.8 / 6, 0.8 / 6])
+
+
 def test_batch_failed_format_preserves_previous_plot_and_later_formats(saved_karyotype, monkeypatch):
     from matplotlib.figure import Figure
 

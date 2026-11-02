@@ -820,6 +820,28 @@ def test_status_and_stat_tree_count_associations_without_minimum_p(tmp_path: Pat
     assert not any("best_" in key or "min_p_value" in key for key in summary)
 
 
+@pytest.mark.parametrize("p_values, expected", [
+    ([0.0, 1.0, 0.2, float("nan"), float("inf"), -float("inf"), -0.1, 1.1], 3),
+    (["0", "1", "0.2", "invalid", "inf", "-inf", "NaN", "-0.1"], 3),
+    ([True, False, True, False], 4),
+    ([0, 1, -1, 2], 2),
+])
+def test_association_probability_boundaries_preserve_input_and_duplicate_index(tmp_path, p_values, expected):
+    mod = load_module()
+    results = pandas.DataFrame({"p_value": p_values, "term": "size", "inference_status": "ok"})
+    results.index = pandas.Index([index // 2 - 3 for index in range(len(results))], name="duplicate")
+    original = results.copy(deep=True)
+    status = mod._status_from_results("OG1", results, 1)
+    pandas.testing.assert_frame_equal(results, original, check_exact=True)
+    assert status.loc[0, "n_tested_associations"] == expected
+    assert status.loc[0, "n_usable_result_rows"] == len(results)
+
+    results.to_csv(tmp_path / "regression.tsv", sep="\t", index=False)
+    status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
+    summary = mod.summarize_for_stat_tree(tmp_path / "regression.tsv", tmp_path / "status.tsv")
+    assert summary["rsc_num_tested_associations"] == expected
+
+
 def test_audit_value_error_is_classified_as_analysis_not_estimable(tmp_path: Path):
     mod = load_module()
     audit = tmp_path / "audit.jsonl"

@@ -60,6 +60,24 @@ def run_extraction(tmp_path, records, rows, *, policy="best_score", mode="protei
     return result, audit
 
 
+@pytest.mark.parametrize("policy", [None, "best_score"])
+def test_collector_and_extractor_preserve_colon_numeric_identifiers(tmp_path, policy):
+    def use_actual_collector(root):
+        collector = SCRIPT.parent / "collect_common_BUSCO_genes.py"
+        subprocess.run([sys.executable, str(collector), "--busco_outdir", str(root / "full"),
+                        "--outfile", str(root / "summary.tsv")], check=True, capture_output=True)
+
+    result, _audit = run_extraction(
+        tmp_path, {"A": [("gene:001", "MAAA"), ("gene:002", "MCCC")]},
+        {"A": [("b1", "Complete", "gene:001", "100", "4"),
+               ("b2", "Complete", "gene:002", "90", "4")]},
+        policy=policy, mutate=use_actual_collector,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "output" / "b1.fa").read_text() == ">gene:001 description\nMAAA\n"
+    assert (tmp_path / "output" / "b2.fa").read_text() == ">gene:002 description\nMCCC\n"
+
+
 @pytest.mark.parametrize("policy", [None, "exclude"])
 def test_default_excludes_duplicates_and_retains_existing_single_copy_behavior(tmp_path, policy):
     result, audit = run_extraction(tmp_path, {"A": [("single", "MAAA"), ("d1", "MCCC"), ("d2", "MDDD")]},

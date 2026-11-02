@@ -23,6 +23,8 @@ EXPECTED_SOURCES = {
     "rapidnj",
     "rapidnjArm",
     "smudgeplot",
+    "kmc",
+    "genomescope",
 }
 
 

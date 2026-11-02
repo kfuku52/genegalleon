@@ -114,6 +114,11 @@ def build_record_for_accession(
     signal_ends = [str(end) for _, end in signal_regions]
     tm_segments = [f"{start}-{end}" for start, end in tm_regions]
     tm_total_len = sum((end - start + 1) for start, end in tm_regions)
+    if len({len(go_ids), len(go_aspects), len(go_terms), len(go_evidence)}) != 1:
+        raise ValueError("GO IDs, aspects, terms and evidence must remain aligned per DAT cross-reference")
+    # Repeated aspects/evidence belong to different GO IDs. Deduplicate whole
+    # cross-references, never the columns independently.
+    go_records = list(dict.fromkeys(zip(go_ids, go_aspects, go_terms, go_evidence, strict=True)))
 
     return {
         "accession": accession,
@@ -124,10 +129,10 @@ def build_record_for_accession(
         "transmem_regions": ";".join(tm_segments),
         "kegg_gene": ";".join(dedup_keep_order(kegg_gene_ids)),
         "kegg_orthology": ";".join(dedup_keep_order(kegg_orthology_ids)),
-        "go_ids": ";".join(dedup_keep_order(go_ids)),
-        "go_aspects": ";".join(dedup_keep_order(go_aspects)),
-        "go_terms": "; ".join(dedup_keep_order(go_terms)),
-        "go_evidence": ";".join(dedup_keep_order(go_evidence)),
+        "go_ids": ";".join(row[0] for row in go_records),
+        "go_aspects": ";".join(row[1] for row in go_records),
+        "go_terms": "; ".join(row[2] for row in go_records),
+        "go_evidence": ";".join(row[3] for row in go_records),
         "gene_name_primary": gene_name_primary,
         "gene_name_synonyms": ";".join(dedup_keep_order(gene_name_synonyms)),
         "ec_numbers": ";".join(dedup_keep_order(ec_numbers)),
@@ -334,20 +339,16 @@ def parse_uniprot_dat(dat_path, out_path):
 
             if line.startswith("DR   GO;"):
                 parts = [p.strip() for p in line[5:].split(";")]
-                if len(parts) >= 2 and parts[1] != "":
-                    go_ids.append(parts[1])
-                if len(parts) >= 3 and parts[2] != "":
-                    aspect_term = parts[2]
-                    if ":" in aspect_term:
-                        aspect, term = aspect_term.split(":", 1)
-                        if aspect != "":
-                            go_aspects.append(aspect)
-                        if term != "":
-                            go_terms.append(term)
-                if len(parts) >= 4 and parts[3] != "":
-                    evidence = parts[3].split(":", 1)[0].strip().rstrip(".")
-                    if evidence != "":
-                        go_evidence.append(evidence)
+                if len(parts) < 3 or not re.fullmatch(r"GO:\d{7}", parts[1]) or ":" not in parts[2]:
+                    raise ValueError("Malformed UniProt GO cross-reference: " + line.rstrip())
+                aspect, term = parts[2].split(":", 1)
+                if aspect not in {"C", "F", "P"} or not term:
+                    raise ValueError("Malformed UniProt GO aspect/term: " + line.rstrip())
+                evidence = parts[3].split(":", 1)[0].strip().rstrip(".") if len(parts) >= 4 else ""
+                go_ids.append(parts[1])
+                go_aspects.append(aspect)
+                go_terms.append(term)
+                go_evidence.append(evidence)
                 continue
 
             if line.startswith("DR   KEGG;"):

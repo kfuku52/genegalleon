@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-import csv
 import hashlib
 import io
 import json
@@ -15,6 +14,9 @@ import sys
 import time
 from pathlib import Path
 
+from metadata_store import archived_children, archived_exists
+from metadata_store import scope as metadata_scope
+
 # Disable bytecode and the optional persistent digest cache before importing
 # workflow libraries: even a query against a read-only workspace must work.
 sys.dont_write_bytecode = True
@@ -23,8 +25,10 @@ import artifact_provenance as provenance
 import producer_graph
 from artifact_audit_runtime import validate_observation
 from gene_family_output_store import GeneFamilyOutputStore, archive_queue_status, read_only_observation
+from terminal_artifact_validation import verify_terminal_profile
 from workflow_observation import contract_arguments, read_regular_json, strict_json_loads
 
+ARCHIVED_OBSERVATION_DIRECTORIES_V1 = True
 SCHEMA = "genegalleon-api-v1"
 MAX_JSON_BYTES = 8 * 1024 * 1024
 STATUS_PAGE_BYTES = 12 * 1024 * 1024
@@ -53,7 +57,16 @@ def legacy_baseline(payload):
 def inventory(directory, *, pattern=None, directories=False, limit=10000):
     """Bound allocation and propagate I/O errors that pathlib glob suppresses."""
     selected = []
-    with os.scandir(directory) as entries:
+    try:
+        physical = os.scandir(directory)
+    except FileNotFoundError:
+        root = metadata_scope(directory)
+        if (Path(directory).is_symlink() or root is None or root.name != "observations"
+                or Path(directory).parent != root or re.fullmatch('[a-f0-9]{32}', Path(directory).name) is None
+                or not archived_exists(Path(directory) / "run.json", observe=provenance.observe_path)):
+            raise
+        physical = contextlib.nullcontext(())
+    with physical as entries:
         for entry in entries:
             if entry.name.startswith("."):
                 continue
@@ -64,6 +77,15 @@ def inventory(directory, *, pattern=None, directories=False, limit=10000):
             selected.append(Path(entry.path))
             if len(selected) > limit:
                 raise ValueError("observation inventory exceeds configured bound")
+    selected = set(selected)
+    for path in archived_children(directory, directories=directories, observe=provenance.observe_path):
+        if path.name.startswith("."):
+            continue
+        if pattern is not None and not (path.name.startswith(pattern) and path.name.endswith(".json")):
+            continue
+        selected.add(path)
+        if len(selected) > limit:
+            raise ValueError("observation inventory exceeds configured bound")
     return sorted(selected)
 
 
@@ -128,6 +150,7 @@ def capabilities(_args):
         "errors": "owned-boundary-codes-v1",
         "progress": "step-progress-v1",
         "input_inventory": "input-generation-receipt-inventory-v1",
+        "metadata_storage": "sqlite-lossless-v1",
     }, provenance_schema_versions=[provenance.SCHEMA_VERSION],
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
@@ -434,42 +457,6 @@ def producers(args):
     return envelope("producers", **result, plan_sha256=digest(plan))
 
 
-def verify_terminal_profile(store, family):
-    members = []
-    try:
-        for subdir, suffix in (("stat_branch", "_stat.branch.tsv"), ("stat_tree", "_stat.tree.tsv"),
-                               ("tree_plot", "_tree_plot.pdf")):
-            name = family + suffix
-            artifact = store.source_artifact(subdir, name)
-            if artifact is None:
-                raise ValueError(f"missing terminal artifact: {subdir}/{name}")
-            with store.open_binary(subdir, name) as handle:
-                raw = handle.read(16 * 1024 * 1024 + 1)
-            if not 0 < len(raw) <= 16 * 1024 * 1024:
-                raise ValueError("terminal artifact exceeds verification bounds")
-            if subdir == "tree_plot":
-                if not raw.startswith(b"%PDF-") or b"%%EOF" not in raw[-1024:]:
-                    raise ValueError("invalid terminal PDF framing")
-            else:
-                reader = csv.DictReader(io.StringIO(raw.decode("utf-8")), delimiter="\t")
-                rows = list(reader)
-                fields = reader.fieldnames
-                if (not rows or not fields or len(set(fields)) != len(fields)
-                        or any(None in row or None in row.values() for row in rows)):
-                    raise ValueError("malformed terminal statistics")
-                if subdir == "stat_branch":
-                    ids = [row.get("branch_id", "") for row in rows]
-                    if not {"branch_id", "node_name"}.issubset(fields) or not all(ids) or len(set(ids)) != len(ids):
-                        raise ValueError("missing or duplicated terminal branch identities")
-                elif len(rows) != 1:
-                    raise ValueError("terminal tree statistics must have one row")
-            members.append({"path": artifact.logical_path, "sha256": hashlib.sha256(raw).hexdigest(),
-                            "size_bytes": len(raw), "mtime_ns": artifact.mtime_ns})
-        return {"profile": "gene-evolution-terminal-v1", "state": "verified", "members": members}
-    except (OSError, ValueError, csv.Error) as exc:
-        return {"profile": "gene-evolution-terminal-v1", "state": "unverified", "detail": str(exc)}
-
-
 def verify_many(requests):
     """Fence one bounded batch; no digest survives this call."""
     if not 1 <= len(requests) <= 32:
@@ -584,7 +571,7 @@ def _verify(args, store, memo):
             completion = "unverified"
         for row in rows:
             path = args.attempt / ("contract-" + digest([args.family_id, row["step"]]) + ".json")
-            receipt = read_contract(path, attempt_id) if path.exists() else {}
+            receipt = read_contract(path, attempt_id) if (path.exists() or archived_exists(path, observe=provenance.observe_path)) else {}
             if receipt:
                 memo.guard((str(path), "receipt"), (provenance.audit_signature(path), digest(receipt)),
                            lambda path=path: (provenance.audit_signature(path), digest(read_contract(path, attempt_id))))

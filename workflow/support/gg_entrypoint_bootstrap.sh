@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Contract capability for producers; older sealed releases remain unchanged.
+GG_LAUNCH_STORAGE_CAPABILITY=readonly-hardlinks-v1
+
 gg_search_workflow_dir_from_base() {
   local base_dir=${1:-}
   local search_dir=""
@@ -123,6 +126,11 @@ contract = {key: value for key, value in manifest.items() if key != "contract_sh
 if canonical_sha256(contract) != contract_sha256:
     fail("Explicit runtime release manifest contract hash changed.")
 
+launch_storage = manifest.get("launch_storage", "")
+if launch_storage not in {"", "readonly-hardlinks-v1"}:
+    fail("Explicit runtime release storage policy is invalid.")
+readonly_launch = launch_storage == "readonly-hardlinks-v1"
+
 installed = manifest.get("installed_files")
 if not isinstance(installed, list):
     fail("Explicit runtime release file inventory is unavailable.")
@@ -151,6 +159,8 @@ for item in installed:
         or relative in inventory
     ):
         fail("Explicit runtime release file inventory contains an invalid entry.")
+    if readonly_launch and mode not in {0o400, 0o444, 0o555}:
+        fail("Explicit readonly launch file has a writable or unsupported mode: {}".format(relative))
     inventory[relative] = {
         "mode": mode,
         "sha256": digest,
@@ -204,6 +214,14 @@ def fingerprint(info):
             info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def content_identity(identity):
+    # New readonly packages permit concurrent links. Mode/owner/inode/bytes and
+    # mtime remain protected; legacy files retain their complete fingerprint.
+    if readonly_launch and stat.S_ISREG(identity[2]) and not identity[2] & 0o222:
+        return identity[:5] + identity[6:8]
+    return identity
+
+
 def directory_identity(info):
     return info.st_dev, info.st_ino, info.st_mode
 
@@ -237,17 +255,30 @@ def verify_file(relative, parent_fd):
     descriptor = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
     with os.fdopen(descriptor, "rb") as stream:
         before = os.fstat(stream.fileno())
-        if not stat.S_ISREG(before.st_mode) or fingerprint(before) != fingerprint(leaf_info):
+        if (not stat.S_ISREG(before.st_mode)
+                or (readonly_launch and before.st_uid != os.getuid())
+                or content_identity(fingerprint(before)) != content_identity(fingerprint(leaf_info))):
             fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
         hasher = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
-        if fingerprint(os.fstat(stream.fileno())) != fingerprint(before):
+        after = os.fstat(stream.fileno())
+        if content_identity(fingerprint(after)) != content_identity(fingerprint(before)):
             fail("Explicit runtime release file changed: {}".format(relative))
+        if fingerprint(after) != fingerprint(before):
+            # A link may have appeared during the read. Hash the current body
+            # again rather than treating metadata churn as a content proof.
+            stream.seek(0)
+            hasher = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(chunk)
+            after = os.fstat(stream.fileno())
+            if content_identity(fingerprint(after)) != content_identity(fingerprint(before)):
+                fail("Explicit runtime release file changed: {}".format(relative))
     observed = hasher.hexdigest()
     if observed != item["sha256"] or stat.S_IMODE(before.st_mode) != item["mode"]:
         fail("Explicit runtime release file changed: {}".format(relative))
-    return relative, observed, fingerprint(before)
+    return relative, observed, fingerprint(after)
 
 
 def remember(result):
@@ -297,8 +328,23 @@ try:
         if directory_identity(release_root.joinpath(*parts).lstat()) != identity:
             fail("Explicit runtime release directory changed: {}".format("/".join(parts)))
     for parts, identity in file_fences.items():
-        if fingerprint(release_root.joinpath(*parts).lstat()) != identity:
-            fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+        current = fingerprint(release_root.joinpath(*parts).lstat())
+        if current != identity:
+            if content_identity(current) != content_identity(identity):
+                fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+            # Revalidate the whole body after late link/ctime changes, through
+            # pinned no-follow directory descriptors. No legacy fence is waived.
+            descriptor = os.dup(root_fd)
+            try:
+                for part in parts[:-1]:
+                    child = os.open(part, directory_flags, dir_fd=descriptor)
+                    os.close(descriptor)
+                    descriptor = child
+                _, _, checked = verify_file("/".join(parts), descriptor)
+                if content_identity(checked) != content_identity(identity):
+                    fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+            finally:
+                os.close(descriptor)
     if fingerprint(manifest_path.lstat()) != fingerprint(manifest_info):
         fail("Explicit runtime release manifest changed during verification.")
 except OSError as exc:

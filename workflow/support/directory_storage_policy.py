@@ -10,6 +10,9 @@ ORTHOFINDER_DIRECTORIES = tuple(
     )
 )
 DIRECTORY_SCOPES = {
+    # One immutable submission batch per root; scheduler writers do not take
+    # GeneGalleon locks, so conversion additionally requires explicit quiescence.
+    "scheduler_logs": ("scheduler_output",),
     "genome_evolution": (
         "busco_cds_fasta", "busco_mafft", "busco_trimal", "busco_iqtree_dna", "busco_iqtree_pep",
         "busco_reconciliation_dna", "busco_reconciliation_pep", "busco_rooted_txt_dna",

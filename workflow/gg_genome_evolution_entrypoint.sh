@@ -253,11 +253,13 @@ synteny_min_anchors=4 # Minimum anchor count in a JCVI syntenic block.
 synteny_search_distance=20 # JCVI gene-rank distance used to join anchors.
 synteny_minimum_mapping_fraction=1 # Required FASTA identifier mapping fraction before isoform selection.
 synteny_plot_formats="pdf,svg,png" # Comma-separated output formats.
-synteny_karyotype_sort="both_length" # both_length moves both tracks; target_length|query_length fix the opposite track; target|query use dominant partners; none preserves input order.
+synteny_karyotype_sort="both_length" # both_length moves both tracks; order_orientation also permits display reversal; target_length|query_length fix the opposite track; target|query use dominant partners; none preserves input order.
+synteny_karyotype_panels_file="" # Optional JSON combining completed comparisons into constrained multi-track diagrams; see docs/pairwise-synteny.md.
 synteny_karyotype_color="chromosome" # chromosome|homoeolog; optional homoeolog gives supported 2x2 groups the same soft color.
 synteny_karyotype_scale="shared" # shared uses the same width per gene and one scale bar for both species; independent normalizes each track separately.
 synteny_karyotype_track_order="target-query" # Top-to-bottom display order: target-query or query-target. Analysis roles remain unchanged.
 synteny_dotplot_color="orientation" # orientation|ds; ds requires matching CDS and the CDSKIT dnds estimator.
+synteny_dotplot_panels_file="" # Optional JSON combining dS dotplots into a shared-scale figure; see docs/pairwise-synteny.md.
 synteny_dotplot_min_length=1000000 # Dotplot includes only scaffold/chromosome assembly lengths >= this many bp; 0 disables filtering.
 synteny_dotplot_sort="homoeolog" # homoeolog places supported 2x2 chromosome groups together; karyotype follows ribbon order; none preserves BED order.
 synteny_ds_color_max=2 # Upper dS color limit only; values are clipped for display, never filtered.
@@ -293,8 +295,10 @@ file_trait="auto" # Species trait table path for orthogroup copy-number trait PG
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # increase|decrease (also both with cafe_branch_flags); reconstructed change direction for GO enrichment.
 go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.
-go_enrichment_method="event" # event (legacy default) | cafe_branch_flags | cafe_branch_flags_all_go (fixed background GO set, recommended); see docs/go-enrichment.md.
+go_enrichment_method="event" # event (legacy default) | event_all_go (fixed GO event/BH/Tarone sensitivity) | cafe_branch_flags | cafe_branch_flags_all_go; see docs/go-enrichment.md.
 go_family_alpha=0.05 # BH-adjusted native family-wide P-value cutoff; used only by cafe_branch_flags.
+go_annotation_file="" # Optional absolute path to a completed annotation table outside this workspace; annotation_species selects its exact species column.
+go_fixed_universe_file="" # Required absolute frozen event GO universe for event_all_go; create with cafe_go_enrichment.r --freeze-event-go-universe.
 
 ### End: Modify this block to tailor your analysis ###
 

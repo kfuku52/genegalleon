@@ -10,6 +10,7 @@ gg_print_entrypoint_config_vars() {
 representative_inputs
 delete_tmp_dir
 kffractbias_pairs_file
+kffractbias_report_config
 run_kffractbias
 EOF
       ;;
@@ -320,6 +321,7 @@ treevis_cis_similarity_width_mm
 treevis_synteny_similarity
 treevis_synteny_similarity_width_mm
 synteny_search_window
+synteny_nonlocal_gene_policy
 uniprot_annotation_method
 orthogroup_catalog_name
 EOF
@@ -333,6 +335,8 @@ oriongeno_taxid_map
 oriongeno_genome_metadata
 oriongeno_taxonomy_db
 oriongeno_source_ref
+oriongeno_prediction_mode
+oriongeno_prediction_support_root
 oriongeno_python
 oriongeno_checkpoint
 oriongeno_source_commit
@@ -367,6 +371,15 @@ run_genome_contamination_removal
 run_genome_fx2tab
 run_genome_mmseqs2taxonomy
 run_genomescope
+genomescope_kmer_length
+genomescope_kmer_lower
+genomescope_kmer_upper
+genomescope_ploidy
+genomescope_initial_coverage
+genomescope_coverage_source
+genomescope_max_kmercov
+genomescope_histogram
+genomescope_program
 run_smudgeplot
 smudgeplot_kmer_length
 smudgeplot_lower_count
@@ -419,10 +432,12 @@ synteny_search_distance
 synteny_minimum_mapping_fraction
 synteny_plot_formats
 synteny_karyotype_sort
+synteny_karyotype_panels_file
 synteny_karyotype_color
 synteny_karyotype_scale
 synteny_karyotype_track_order
 synteny_dotplot_color
+synteny_dotplot_panels_file
 synteny_dotplot_min_length
 synteny_dotplot_sort
 synteny_ds_color_max
@@ -446,6 +461,8 @@ grampa_locus_null_calibration
 go_category
 go_enrichment_method
 go_family_alpha
+go_annotation_file
+go_fixed_universe_file
 input_sequence_mode
 representative_inputs
 max_gene_orthogroup_grampa

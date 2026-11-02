@@ -117,6 +117,30 @@ def test_resolver_prefers_an_exact_tree_tip_over_a_shortened_species_label():
     assert [row[1] for row in rows] == ["1", "0"]
 
 
+def test_many_traits_keep_independent_foregrounds_and_missing_values():
+    mod = load_module()
+    rows = [["A", "1", "0", "NA"], ["B", "1", "0", "0"],
+            ["C", "0", "1", "1"], ["D", "1", "1", "1"]]
+    assert mod.resolve_binary_foregrounds(
+        ["species", "first", "second", "third"], rows, parse_tree("((A,B),(C,D));")
+    ) == [("first", 2), ("second", 1), ("third", 1)]
+    assert rows == [["A", "1", "0", "NA"], ["B", "1", "0", "0"],
+                    ["C", "0", "1", "1"], ["D", "2", "1", "1"]]
+
+
+def test_tree_changes_between_calls_do_not_reuse_a_previous_plan():
+    mod = load_module()
+    tree = parse_tree("((A,B),(C,D));")
+    header = ["species", "trait"]
+    rows = [["A", "1"], ["B", "1"], ["C", "0"], ["D", "1"]]
+    assert mod.resolve_binary_foregrounds(header, rows, tree) == [("trait", 2)]
+    assert [row[1] for row in rows] == ["1", "1", "0", "2"]
+    tree.root.clades = tree.get_terminals()
+    rows = [["A", "1"], ["B", "1"], ["C", "0"], ["D", "1"]]
+    assert mod.resolve_binary_foregrounds(header, rows, tree) == [("trait", 3)]
+    assert [row[1] for row in rows] == ["1", "2", "0", "3"]
+
+
 def test_cli_writes_resolved_trait_table(tmp_path):
     trait_path = tmp_path / "species_trait.tsv"
     tree_path = tmp_path / "species_tree.nwk"

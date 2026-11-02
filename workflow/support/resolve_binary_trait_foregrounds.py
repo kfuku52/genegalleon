@@ -57,25 +57,35 @@ def validate_tree(tree):
     return set(terminal_names)
 
 
-def foreground_components(tree, foreground_species):
+def _foreground_tree_plan(tree):
+    preorder = tuple(tree.find_clades(order="preorder"))
     parent_by_clade = {
         child: parent
-        for parent in tree.find_clades(order="level")
+        for parent in preorder
         for child in parent.clades
     }
+    return parent_by_clade, tuple(tree.find_clades(order="postorder")), preorder
+
+
+def _foreground_components(foreground_species, plan):
+    parent_by_clade, postorder, preorder = plan
     all_foreground = {}
-    for clade in tree.find_clades(order="postorder"):
+    for clade in postorder:
         if clade.is_terminal():
             all_foreground[clade] = clade.name in foreground_species
         else:
             all_foreground[clade] = bool(clade.clades) and all(all_foreground[child] for child in clade.clades)
 
     component_leaves = []
-    for clade in tree.find_clades(order="preorder"):
+    for clade in preorder:
         parent = parent_by_clade.get(clade)
         if all_foreground[clade] and (parent is None or not all_foreground[parent]):
             component_leaves.append(tuple(sorted(terminal.name for terminal in clade.get_terminals())))
     return sorted(component_leaves)
+
+
+def foreground_components(tree, foreground_species):
+    return _foreground_components(foreground_species, _foreground_tree_plan(tree))
 
 
 def resolve_binary_foregrounds(header, rows, tree):
@@ -91,6 +101,7 @@ def resolve_binary_foregrounds(header, rows, tree):
         raise ValueError("Trait table contains duplicate species after normalization: " + ", ".join(duplicate_species))
 
     resolved_traits = []
+    plan = None
     for column_index, trait_name in enumerate(header[1:], start=1):
         parsed = binary_trait_values(rows, column_index)
         if parsed is None:
@@ -108,7 +119,10 @@ def resolve_binary_foregrounds(header, rows, tree):
                 + ", ".join(missing_foreground)
             )
 
-        components = foreground_components(tree, foreground_species)
+        # The tree is fixed throughout this call; only the foreground changes.
+        if plan is None:
+            plan = _foreground_tree_plan(tree)
+        components = _foreground_components(foreground_species, plan)
         lineage_by_species = {
             species: lineage_id
             for lineage_id, component in enumerate(components, start=1)

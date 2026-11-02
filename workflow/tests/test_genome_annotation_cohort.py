@@ -46,6 +46,42 @@ def record(path, workspace, step, inputs, outputs, parameters=None):
     cohort.atomic_json(path, payload)
 
 
+@pytest.mark.parametrize('damage', ['none', 'genome', 'gff', 'receipt', 'runner', 'species', 'path', 'failed'])
+def test_cpu_format_reuse_audits_original_prediction_without_gpu(tmp_path, monkeypatch, damage):
+    from oriongeno_prediction_reuse import verify
+
+    manifest, member, workspace = fixture(tmp_path)
+    cohort.acquire(manifest, member, workspace)
+    genome = workspace / 'input/species_genome/Plant_one.genome.fa'
+    root = workspace / 'output/genome_prediction/oriongeno/Plant_one'
+    root.mkdir(parents=True)
+    gff, receipt, runner = root / 'Plant_one.gff3', root / 'native_prediction.json', tmp_path / 'runner.py'
+    gff.write_text('saved GPU prediction')
+    receipt.write_text(json.dumps(dict(kind='genegalleon-oriongeno-native-prediction',
+        native_returncode=1 if damage == 'failed' else 0)))
+    runner.write_text('original runtime')
+    proof = root / 'prediction.provenance.json'
+    record(proof, workspace, 'genome_annotation_oriongeno_prediction',
+        [('genome', str(genome)), ('runner', str(runner))],
+        [('gff', str(gff)), ('native_receipt', str(receipt))], {'threads': '8'})
+    before = proof.read_bytes()
+    if damage in ('genome', 'gff', 'receipt', 'runner'):
+        {'genome': genome, 'gff': gff, 'receipt': receipt, 'runner': runner}[damage].write_text('changed')
+    if damage == 'species':
+        value = json.loads(before)
+        value['family_id'] = 'Other_species'
+        proof.write_text(json.dumps(value))
+    monkeypatch.delenv('CUDA_VISIBLE_DEVICES', raising=False)
+    arguments = (workspace, 'Plant_one', genome, gff if damage != 'path' else runner, receipt, SUPPORT)
+    if damage == 'none':
+        assert verify(*arguments) == dict(verified=True, species='Plant_one', prediction_reused=True, original_threads='8')
+        assert proof.read_bytes() == before
+        assert gff.read_text() == 'saved GPU prediction'
+    else:
+        with pytest.raises(ValueError):
+            verify(*arguments)
+
+
 def prediction(workspace):
     root = workspace / 'output/genome_prediction/oriongeno/Plant_one'
     formatted = root / 'formatted/generation'
@@ -102,7 +138,7 @@ def test_acquisition_override_preserves_frozen_manifest_and_prediction_runtime(t
                 None if damage == 'missing' else '0' * 64 if damage == 'digest' else digest)
 
 
-@pytest.mark.parametrize('phase', ['predict', 'busco'])
+@pytest.mark.parametrize('phase', ['predict', 'busco', 'format'])
 @pytest.mark.parametrize('damage', ['none', 'digest', 'phase', 'workflow', 'missing', 'contract'])
 def test_annotation_override_keeps_frozen_inputs_workspace_and_acquisition(tmp_path, phase, damage):
     manifest, _, _ = fixture(tmp_path)

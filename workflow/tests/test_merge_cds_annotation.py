@@ -17,7 +17,8 @@ def load_module():
 
 
 @pytest.mark.parametrize('reader', ['uniprot', 'cdskit_localize', 'gff_info', 'fx2tab', 'expression', 'mmseqs', 'busco'])
-@pytest.mark.parametrize('identifiers', [['001', '010'], ['NA', 'nan', 'None']])
+@pytest.mark.parametrize('identifiers', [['001', '010'], ['NA', 'nan', 'None'],
+                                      ['gene#1', 'gene:001', 'gene:1.2', 'gene:cds1']])
 def test_annotation_loaders_preserve_lexical_identifiers(tmp_path, reader, identifiers):
     mod = load_module()
     path = tmp_path / 'annotation.tsv'
@@ -43,6 +44,15 @@ def test_missing_busco_sequence_does_not_become_a_nan_gene(tmp_path):
     assert result.loc['nan', 'busco_id'] == 'real'
     path.write_text('missing\tMissing\t\t\t\t\t\n')
     assert mod.load_busco(str(path)) is None
+
+
+def test_busco_annotation_reader_strips_only_terminal_coordinate_ranges(tmp_path):
+    mod = load_module()
+    path = tmp_path / "busco.tsv"
+    path.write_text("# comment\nb1\tComplete\tgene:001:1-9\t100\t3\tu\tcontains#literal\n")
+    result = mod.load_busco(str(path))
+    assert result.index.tolist() == ["gene:001"]
+    assert result.loc["gene:001", "busco_description"] == "contains#literal"
 
 
 def test_busco_missing_metadata_keeps_legacy_nan_text(tmp_path):
@@ -137,8 +147,8 @@ def test_load_busco_aggregates_by_gene_id_and_indexes(tmp_path):
     infile = tmp_path / "busco.tsv"
     infile.write_text(
         "# BUSCO v5\n"
-        "BUSCO1\tComplete\tgeneA:cds1\t100\t200\turl1\tdesc1\n"
-        "BUSCO2\tDuplicated\tgeneA:cds2\t150\t210\turl2\tdesc2\n"
+        "BUSCO1\tComplete\tgeneA:1-600\t100\t200\turl1\tdesc1\n"
+        "BUSCO2\tDuplicated\tgeneA:4-633\t150\t210\turl2\tdesc2\n"
         "BUSCO3\tFragmented\tgeneB\t90\t190\turl3\tdesc3\n",
         encoding="utf-8",
     )
@@ -161,7 +171,7 @@ def test_busco_annotation_preserves_singletons_duplicates_order_and_dtypes(tmp_p
     """Single records and interleaved duplicate groups share the same schema."""
     mod = load_module()
     path = tmp_path / 'busco.tsv'
-    rows = [[f'B{i}', 'Complete', f'{gene}:cds{i}', '100', '200', f'url{i}', f'desc{i}']
+    rows = [[f'B{i}', 'Complete', f'{gene}:{i * 3 + 1}-{i * 3 + 600}', '100', '200', f'url{i}', f'desc{i}']
             for i, gene in enumerate(genes)]
     path.write_text(''.join('\t'.join(row) + '\n' for row in rows), encoding='utf-8')
     grouped = {}
@@ -180,9 +190,9 @@ def test_busco_annotation_preserves_singletons_duplicates_order_and_dtypes(tmp_p
 def test_busco_annotation_preserves_quoted_metadata_and_missing_numeric_spelling(tmp_path):
     mod = load_module()
     path = tmp_path / 'busco.tsv'
-    path.write_text('B1\tComplete\tgeneC:one\t100\t200\tu\t"説明 α\tfield\ncontinued"\n'
-                    'B2\tFragmented\tgeneA:two\t\t\t\t\n'
-                    'B3\tDuplicated\tgeneC:three\t101\t201\tNA\tnan\n', encoding='utf-8')
+    path.write_text('B1\tComplete\tgeneC:1-600\t100\t200\tu\t"説明 α\tfield\ncontinued"\n'
+                    'B2\tFragmented\tgeneA:4-300\t\t\t\t\n'
+                    'B3\tDuplicated\tgeneC:7-609\t101\t201\tNA\tnan\n', encoding='utf-8')
     result = mod.load_busco(str(path))
     assert result.index.tolist() == ['geneC', 'geneA']
     assert result.loc['geneC', 'busco_description'] == '説明 α\tfield\ncontinued; nan'

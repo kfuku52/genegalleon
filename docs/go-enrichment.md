@@ -1,5 +1,53 @@
 # CAFE GO enrichment
 
+The native workflow accepts `go_annotation_file` as an absolute path to an
+existing annotation table when annotations were produced in another workspace.
+Set the ordinary `annotation_species` to the exact orthogroup species column;
+the workflow forwards it explicitly. Direct R calls accept an optional eleventh
+`annotation_species` argument. Without that argument, both native
+`Species_annotation.tsv` and legacy `Species.annotation.tsv` names are accepted.
+An unmatched reference species stops instead of silently losing annotations.
+For a table outside the workflow workspace, set
+`GG_CONTAINER_PROJECT_ROOT_BIND=/path/to/project:/path/to/project` to the
+project directory containing both the workspace and the annotation table.
+SHIROKANE, NIG and audrey1 honor this explicit same-path project mount;
+unrelated host directories are not added automatically.
+
+Native UniProt GO cross-references retain one aspect, term and evidence entry
+per GO ID. The GO reader accepts aligned C/F/P or CC/MF/BP aspects and native or
+legacy semicolon spacing. Older metadata that independently deduplicated aspects
+has lost those associations; rebuild it from the matching cached DAT, rather than
+guessing the missing associations. Completed best hits can be reused:
+
+```bash
+python workflow/support/build_uniprot_metadata_from_dat.py \
+  --uniprot_dat frozen/uniprot_sprot.dat.gz --outfile fixed.meta.tsv.gz
+python workflow/support/reformat_uniprot_diamond.py \
+  --existing_annotation_tsv completed/Arabidopsis_thaliana_annotation.tsv \
+  --uniprot_meta_tsv fixed.meta.tsv.gz --outdir refreshed --audit_json refresh.json
+```
+
+Repeat `--existing_annotation_tsv` for a batch. Only the four GO columns are
+refreshed; gene order, accepted accessions, search statistics, orthogroups and
+all other annotations are preserved. No homology search is repeated.
+
+When species sampling changes, map a previous CAFE target by descendant taxa:
+
+```bash
+python workflow/support/cafe_branch_map.py \
+  --old-tree old/Gamma_asr.tre --new-tree new/Gamma_asr.tre \
+  --old-target '<9>' --new-branch-table new/Gamma_change.tab \
+  --output branch_mapping.json
+```
+
+This reads the first native tree, preserves full species keys, and reports added
+or missing taxa and all matching non-root clades. A unique match may include
+explicitly reported added species. A split edge, missing target species, or
+non-monophyletic target gives exit 2 and no selected branch. Resolve biological
+intent before analysis in those cases; old numeric branch IDs alone are not
+stable identifiers between runs. The mapping does not infer orthology or
+ancestral gene content.
+
 `go_enrichment_method="event"` remains the default. Its event counts, numerical
 results for the same inputs, GO candidate set and output paths are unchanged.
 The optional `cafe_branch_flags` method consumes standard, unmodified CAFE
@@ -23,6 +71,73 @@ Switching methods selects a separate output directory and changes the artifact
 contract; use the normal stale-artifact review/rebuild procedure rather than
 renaming old results into the new directory. The sections below describe the
 original target-restricted `cafe_branch_flags` mode unless stated otherwise.
+
+## Fixed event GO universe and Tarone sensitivity
+
+Use `event_all_go` to compare multiplicity corrections while retaining the
+legacy **event** population and one-sided Fisher tests. This is separate from
+the target-exclusive family screen in `cafe_branch_flags_all_go`. Freeze the GO
+catalog once, before examining a target branch or direction:
+
+```bash
+Rscript workflow/support/cafe_go_enrichment.r --freeze-event-go-universe \
+  saved/Gamma_change.tab saved/Orthogroups.selected.tsv \
+  annotations/Arabidopsis_thaliana_annotation.tsv frozen_event_go.tsv \
+  BP,MF,CC Arabidopsis_thaliana
+```
+
+The catalog contains every GO annotated on a family present in the CAFE change
+table, restricted to the requested aspects and fixed reference annotation.
+Only family identities are used from the change table; branch changes,
+probabilities, target and direction do not determine the catalog. This is not
+the complete ontology, and no new GO ancestor propagation is added. Existing
+catalogs cannot be overwritten. Preserve the catalog, source-input hashes and
+its own hash as part of the analysis contract.
+
+```bash
+Rscript workflow/support/cafe_go_enrichment.r \
+  saved/Gamma_change.tab saved/Gamma_branch_probabilities.tab \
+  saved/Orthogroups.selected.tsv annotations/Arabidopsis_thaliana_annotation.tsv \
+  results/branch_37 '<37>' decrease BP,MF,CC event_all_go .05 \
+  Arabidopsis_thaliana /absolute/path/frozen_event_go.tsv
+```
+
+For the workflow entrypoint, select `go_enrichment_method="event_all_go"` and
+set `go_fixed_universe_file` to the absolute catalog path. Use the same catalog
+for all target branches. Each invocation verifies the complete catalog against
+its eligible families and annotation; mismatches fail rather than silently
+redefining the background. The method accepts one direction per invocation.
+
+All frozen GO rows remain in `_all_go.tsv`, including zero-target and zero-event
+terms with one-sided P=1. `p_value_adjusted` is BH across the **full** catalog.
+Existing event-only raw P values and event counts are preserved, but BH values
+can increase because the hypothesis family has changed. `_significant_go.tsv`
+contains full-catalog BH discoveries. `_tarone_significant_go.tsv` contains the
+separate Tarone discoveries at alpha=0.05, and `_all_go.tsv` additionally records
+minimum attainable P, its log, testability, Tarone decisions and full-catalog
+Bonferroni results.
+
+For each GO, the smallest attainable one-sided Fisher P is the hypergeometric
+mass at the maximum feasible overlap, conditional on its two-by-two margins.
+The implemented Tarone (1990) variant chooses the smallest integer K such that
+`M(K) = count(p_min < alpha/K) <= K`, then rejects only tests with
+`P < alpha/K`. Strict inequalities match the existing P<alpha convention.
+`event_all_go_metadata.tsv` records the total GO count, K, the distinct testable
+count M(K), threshold and `M(K)*alpha/K` union bound. K and M(K) are not
+interchangeable. No Tarone q value is fabricated: the decision is specific to
+the recorded alpha and variant.
+
+Tarone targets **FWER**, whereas BH targets **FDR**; a reduced testable count
+does not guarantee more discoveries than BH. Bounds require valid conditional
+tests. Freezing GO does not repair repeated-family dependence in the legacy
+event model or turn its screen into a branch-rate comparison. Treat these
+outputs as a sensitivity analysis, preserve the original BH results, and compare
+original BH, fixed-catalog BH and Tarone separately. No CAFE refit is needed.
+
+Reference: R. E. Tarone (1990), *A modified Bonferroni method for discrete data*,
+[Biometrics 46:515–522](https://pubmed.ncbi.nlm.nih.gov/2364136/).
+The integer-K formulation is also described in
+[Gilbert (2005), section 3.2](https://faculty.washington.edu/peterg/Vaccine2006/articles/GilbertPaperAppliedStatistics.2004.pdf).
 
 ## Exploratory target-restricted branch flags
 

@@ -238,7 +238,12 @@ def append_gff_attribute(attributes, key, value, *, safe=""):
     return text + ";" + key + "=" + quote(str(value), safe=safe)
 
 
-def parse_gff_attributes(attr_text):
+def parse_gff_attributes(attr_text, *, keys=None):
+    """Decode all attributes, or selected keys with identical syntax checks.
+
+    GTF still lexes every field, including unused ones, so a projection never
+    hides malformed quoted input. GFF3 skips decoding unused values.
+    """
     attrs = defaultdict(list)
     text = str(attr_text or "")
     if re.match(r"^\s*[^\s=;]+\s+", text):
@@ -258,7 +263,7 @@ def parse_gff_attributes(attr_text):
             separator = next(tokens, None)
             if separator not in (None, ";"):
                 raise ValueError("Expected ';' after GTF attribute: " + key)
-            if value:
+            if value and (keys is None or key in keys):
                 attrs[key].append(value)
         return {key: tuple(values) for key, values in attrs.items()}
     fields = [raw_field.strip() for raw_field in text.split(";") if raw_field.strip() != ""]
@@ -268,7 +273,8 @@ def parse_gff_attributes(attr_text):
         # authoritative gene identity instead of invoking coordinate rescue.
         value = normalize_gff_attribute_value(fields[0])
         if value != "":
-            return {"ID": (value,), "gene_id": (value,)}
+            return {key: (value,) for key in ("ID", "gene_id")
+                    if keys is None or key in keys}
     for field in fields:
         equal_pos = field.find("=")
         space_pos = field.find(" ")
@@ -280,7 +286,7 @@ def parse_gff_attributes(attr_text):
             raw_value = field[space_pos + 1 :]
         else:
             continue
-        if key == "":
+        if key == "" or (keys is not None and key not in keys):
             continue
         for raw_item in str(raw_value or "").split(","):
             value = normalize_gff_attribute_value(raw_item)

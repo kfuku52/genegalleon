@@ -176,3 +176,5 @@ On successful completion, wrappers also trigger a versions dump under:
 - `workspace/output/versions/`
 
 Those logs are often the fastest way to understand what runtime state a job actually saw.
+
+Read-only immutable launch code may use an explicit [shared launch storage contract](launch-runtime-storage.md), with content revalidation during concurrent link creation.

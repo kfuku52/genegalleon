@@ -156,6 +156,8 @@ jobs:
       rapidnj_repo_sha: ${{ steps.vars.outputs.rapidnj_repo_sha }}
       rapidnj_arm_repo_sha: ${{ steps.vars.outputs.rapidnj_arm_repo_sha }}
       smudgeplot_repo_sha: ${{ steps.vars.outputs.smudgeplot_repo_sha }}
+      kmc_repo_sha: ${{ steps.vars.outputs.kmc_repo_sha }}
+      genomescope_repo_sha: ${{ steps.vars.outputs.genomescope_repo_sha }}
 
     steps:
       - name: Checkout
@@ -205,6 +207,8 @@ jobs:
           rapidnj_repo_sha="${RAPIDNJ_REPO_SHA}"
           rapidnj_arm_repo_sha="${RAPIDNJ_ARM_REPO_SHA}"
           smudgeplot_repo_sha="${SMUDGEPLOT_REPO_SHA}"
+          kmc_repo_sha="${KMC_REPO_SHA}"
+          genomescope_repo_sha="${GENOMESCOPE_REPO_SHA}"
           source_revision_hash="$(
             printf '%s\n' \
               "${amalgkit_repo_sha}" \
@@ -222,6 +226,8 @@ jobs:
               "${rapidnj_repo_sha}" \
               "${rapidnj_arm_repo_sha}" \
               "${smudgeplot_repo_sha}" \
+              "${kmc_repo_sha}" \
+              "${genomescope_repo_sha}" \
               | sha256sum | cut -c1-12
           )"
           immutable_tag="${date_tag}-${short_sha}-${source_revision_hash}"
@@ -248,6 +254,8 @@ jobs:
             echo "rapidnj_repo_sha=${rapidnj_repo_sha}"
             echo "rapidnj_arm_repo_sha=${rapidnj_arm_repo_sha}"
             echo "smudgeplot_repo_sha=${smudgeplot_repo_sha}"
+            echo "kmc_repo_sha=${kmc_repo_sha}"
+            echo "genomescope_repo_sha=${genomescope_repo_sha}"
           } >> "${GITHUB_OUTPUT}"
 
   build-and-push:
@@ -307,6 +315,8 @@ jobs:
           RAPIDNJ_REPO_SHA: ${{ needs.prepare-build.outputs.rapidnj_repo_sha }}
           RAPIDNJ_ARM_REPO_SHA: ${{ needs.prepare-build.outputs.rapidnj_arm_repo_sha }}
           SMUDGEPLOT_REPO_SHA: ${{ needs.prepare-build.outputs.smudgeplot_repo_sha }}
+          KMC_REPO_SHA: ${{ needs.prepare-build.outputs.kmc_repo_sha }}
+          GENOMESCOPE_REPO_SHA: ${{ needs.prepare-build.outputs.genomescope_repo_sha }}
         run: |
           set -euo pipefail
           build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
@@ -370,6 +380,8 @@ jobs:
             RAPIDNJ_REPO_SHA=${{ needs.prepare-build.outputs.rapidnj_repo_sha }}
             RAPIDNJ_ARM_REPO_SHA=${{ needs.prepare-build.outputs.rapidnj_arm_repo_sha }}
             SMUDGEPLOT_REPO_SHA=${{ needs.prepare-build.outputs.smudgeplot_repo_sha }}
+            KMC_REPO_SHA=${{ needs.prepare-build.outputs.kmc_repo_sha }}
+            GENOMESCOPE_REPO_SHA=${{ needs.prepare-build.outputs.genomescope_repo_sha }}
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
           # Keep intermediate environments out of the shared Actions quota.
           cache-to: type=gha,mode=min,scope=container-${{ steps.platform.outputs.pair }}

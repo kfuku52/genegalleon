@@ -48,6 +48,7 @@ from format_species_constants import (
     TAXONOMIC_INFRASPECIFIC_RANK_ALIASES,
     VEUPATHDB_ID_HINT_PATTERN,
 )
+from format_species_file_roles import has_filename_marker, has_non_cds_role
 from format_species_network import guarded_urlopen as urlopen
 from format_species_provider_config import (
     ENSEMBL_LIKE_PROVIDERS,
@@ -164,30 +165,28 @@ def expand_ensemblgenomes_id_candidates(provider, id_candidates, timeout, header
 
 
 def is_probable_cds_url(provider, url):
-    lower = url.lower()
-    return is_probable_cds_filename(provider, lower)
+    return is_probable_cds_filename(provider, Path(unquote(urlparse(url).path)).name)
 
 
 def is_probable_gff_url(url):
-    return is_gff_filename(url.lower())
+    return is_gff_filename(Path(unquote(urlparse(url).path)).name)
 
 
 def is_probable_genome_url(provider, url):
     path_lower = urlparse(url).path.lower()
+    filename = Path(unquote(path_lower)).name
     if provider == "citrusgenomedb":
-        filename_lower = Path(path_lower).name
-        if "/assembly/" in path_lower and is_fasta_filename(path_lower):
+        if is_probable_cds_filename(provider, filename) or has_non_cds_role(filename):
+            return False
+        if "/assembly/" in path_lower and is_fasta_filename(filename):
             return True
         if (
             any(marker in path_lower for marker in ("/genes/", "/annotation/"))
-            and is_fasta_filename(path_lower)
-            and any(
-                marker in filename_lower
-                for marker in ("gene", "genes", "mrna", "rna", "cdna", "cds", "protein", "pep", "transcript")
-            )
+            and is_fasta_filename(filename)
+            and has_filename_marker(filename, r"genes?|rna")
         ):
             return False
-    return is_probable_genome_filename(provider, path_lower)
+    return is_probable_genome_filename(provider, filename)
 
 
 def select_best_url_for_label(provider, label, candidates):
@@ -212,7 +211,7 @@ def select_best_url_for_label(provider, label, candidates):
         return ""
     preferred = sorted(
         filtered,
-        key=lambda x: provider_candidate_sort_key(provider, label, urlparse(x).path.split("/")[-1]),
+        key=lambda x: provider_candidate_sort_key(provider, label, Path(unquote(urlparse(x).path)).name),
     )
     return preferred[0]
 

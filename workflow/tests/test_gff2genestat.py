@@ -20,6 +20,89 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+def trans_spliced_gene_frame():
+    rows = [
+        ["chr1", "s", "gene", 20, 28, ".", "+", ".", "ID=gene:split;Name=split;exception=trans-splicing;part=1"],
+        ["chr1", "s", "gene", 100, 108, ".", "-", ".", "ID=gene:split;Name=split;exception=trans-splicing;part=2"],
+        ["chr1", "s", "mRNA", 20, 108, ".", "?", ".", "ID=t;Parent=gene:split;exception=trans-splicing"],
+        ["chr1", "s", "exon", 20, 28, ".", "+", ".", "Parent=t;exception=trans-splicing;part=1"],
+        ["chr1", "s", "exon", 100, 108, ".", "-", ".", "Parent=t;exception=trans-splicing;part=2"],
+        ["chr1", "s", "CDS", 20, 28, ".", "+", "0", "ID=c;Parent=t;exception=trans-splicing;part=1"],
+        ["chr1", "s", "CDS", 100, 108, ".", "-", "0", "ID=c;Parent=t;exception=trans-splicing;part=2"],
+    ]
+    return pandas.DataFrame(
+        rows, columns=["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
+    )
+
+
+def test_trans_spliced_gene_missingness_is_explicit_and_retains_identity():
+    import json
+
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = trans_spliced_gene_frame()
+    with pytest.raises(ValueError, match="Ambiguous GFF gene interval"):
+        gene_locus_coordinates(frame, ["Species_a_split"], "longest")
+    table = gene_locus_coordinates(frame, ["Species_a_split"], "longest", nonlocal_gene_policy="missing")
+    assert table.gene_id.tolist() == ["Species_a_split"]
+    row = table.iloc[0]
+    assert row.coordinate_source == "unavailable_trans_splicing"
+    assert row[["chromosome", "strand", "start", "end"]].isna().all()
+    assert json.loads(row.locus_parts) == [
+        dict(chromosome="chr1", strand="+", start=20, end=28),
+        dict(chromosome="chr1", strand="-", start=100, end=108),
+    ]
+
+
+@pytest.mark.parametrize(
+    "defect", ["exception", "order", "identity", "exon_bounds", "exon_strand", "rna_exception", "rna_bounds", "cycle"]
+)
+def test_nonlocal_missingness_does_not_hide_invalid_source(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = trans_spliced_gene_frame()
+    if defect == "exception":
+        frame.at[1, "attributes"] = frame.at[1, "attributes"].replace("exception=trans-splicing;", "")
+    if defect == "order":
+        frame.at[1, "attributes"] = frame.at[1, "attributes"].replace("part=2", "part=3")
+    if defect == "identity":
+        frame.at[1, "attributes"] = frame.at[1, "attributes"].replace("Name=split", "Name=other")
+    if defect == "exon_bounds":
+        frame.at[3, "end"] = 29
+    if defect == "exon_strand":
+        frame.at[3, "strand"] = "-"
+    if defect == "rna_exception":
+        frame.at[2, "attributes"] = "ID=t;Parent=gene:split"
+    if defect == "rna_bounds":
+        frame.at[2, "start"] = 21
+    if defect == "cycle":
+        frame.at[2, "attributes"] = "ID=t;Parent=t;exception=trans-splicing"
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_split"], "longest", nonlocal_gene_policy="missing")
+
+
+def test_cds_only_trans_splicing_cannot_invent_a_gene_envelope():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = trans_spliced_gene_frame().iloc[2:].copy()
+    frame.loc[frame.feature == "CDS", "attributes"] += ";gene=split"
+    with pytest.raises(ValueError, match="no single gene locus"):
+        gene_locus_coordinates(frame, ["Species_a_split"], "longest")
+    table = gene_locus_coordinates(frame, ["Species_a_split"], "longest", nonlocal_gene_policy="missing")
+    assert table.iloc[0].coordinate_source == "unavailable_trans_splicing"
+    assert table.iloc[0][["chromosome", "start", "end", "strand"]].isna().all()
+
+
+def test_nonlocal_policy_does_not_change_single_locus_table():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+    frame = trans_spliced_gene_frame().iloc[:1].copy()
+    frame["attributes"] = "ID=gene:split"
+    default = gene_locus_coordinates(frame, ["Species_a_split"], "longest")
+    explicit = gene_locus_coordinates(frame, ["Species_a_split"], "longest", nonlocal_gene_policy="missing")
+    assert explicit.to_csv(sep="\t", index=False) == default.to_csv(sep="\t", index=False)
+    assert "locus_parts" not in explicit
+
+
 @pytest.mark.parametrize("annotation", ["rna_only", "overlapping_cds"])
 def test_physical_gene_coordinates_do_not_certify_coding_structure(tmp_path, annotation):
     gff = tmp_path / "Species_a.gff"
@@ -229,6 +312,19 @@ def test_gff_identifier_conversion_keeps_other_missing_values_and_numeric_column
     assert table[5].isna().tolist() == [True, True, False]
     assert table.at[2, 5] == 2.5
     assert table[7].tolist() == ['0', '.', '2']
+
+
+@pytest.mark.parametrize("coding_only", [False, True])
+def test_gff_hash_attributes_survive_both_table_readers(tmp_path, coding_only):
+    from workflow.support.gff2genestat import read_gff_table
+
+    path = tmp_path / "Plant_species.gff"
+    attrs = ["ID=g#1;Note=literal#description", "ID=t#1;Parent=g#1", "Parent=t#1"]
+    path.write_text("# comment\n" + "".join(
+        f"chr1\ts\t{feature}\t1\t9\t.\t+\t{phase}\t{attributes}\n"
+        for feature, phase, attributes in zip(["gene", "mRNA", "CDS"], [".", ".", "0"], attrs, strict=True)))
+    table = read_gff_table(str(path), coding_only=coding_only)
+    assert table[8].tolist() == attrs
 
 
 def test_longest_selects_one_transcript_before_summarizing():
@@ -1347,3 +1443,78 @@ def test_bidirectional_gene_requires_explicit_coherent_rna(defect):
                                            "score", "strand", "phase", "attributes"])
     with pytest.raises(ValueError):
         gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+
+
+def gtf_gene_coordinate_frame(with_transcript=True):
+    rows = [["chr1", "gene", 100, 500, "-", 'gene_id "g1"; gene_biotype "protein_coding";'],
+            ["chr1", "transcript", 100, 500, "-", 'gene_id "g1"; transcript_id "t1";'],
+            ["chr1", "CDS", 100, 200, "-", 'gene_id "g1"; transcript_id "t1"; protein_id "p1";'],
+            ["chr1", "exon", 300, 400, "-", 'gene_id "g1"; transcript_id "t1";']]
+    if not with_transcript:
+        del rows[1]
+    return pandas.DataFrame(rows, columns=["sequence", "feature", "start", "end", "strand", "attributes"])
+
+
+@pytest.mark.parametrize("with_transcript", [True, False])
+@pytest.mark.parametrize("policy", ["error", "missing"])
+def test_gtf_gene_coordinates_keep_explicit_gene_id_and_physical_anchor(with_transcript, policy):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame(with_transcript)
+    table = gene_locus_coordinates(frame, ["Species_a_g1"], "longest", nonlocal_gene_policy=policy)
+    assert table.to_dict("records") == [dict(gene_id="Species_a_g1", chromosome="chr1",
+                                             start=100, end=500, strand="-", coordinate_source="gene")]
+
+
+@pytest.mark.parametrize("defect", ["child_contig", "child_strand", "child_bounds", "rna_bounds",
+                                    "rna_strand", "gene_identity", "transcript_ownership"])
+def test_gtf_gene_coordinates_validate_explicit_child_relationships(defect):
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame()
+    if defect == "child_contig":
+        frame.loc[2, "sequence"] = "other"
+    elif defect == "child_strand":
+        frame.loc[2, "strand"] = "+"
+    elif defect == "child_bounds":
+        frame.loc[2, "start"] = 90
+    elif defect == "rna_bounds":
+        frame.loc[1, "start"] = 150
+    elif defect == "rna_strand":
+        frame.loc[1, "strand"] = "+"
+    elif defect == "gene_identity":
+        frame.loc[0, "attributes"] += ' gene_id "foreign";'
+    else:
+        frame.loc[3, "attributes"] = 'gene_id "foreign"; transcript_id "t1";'
+    with pytest.raises(ValueError):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest", nonlocal_gene_policy="missing")
+
+
+def test_idless_gff3_gene_still_cannot_use_a_display_alias_as_its_identity():
+    from workflow.support.gff2genestat import gene_locus_coordinates
+
+    frame = gtf_gene_coordinate_frame().iloc[:1].copy()
+    frame.loc[0, "attributes"] = "Name=g1;gene_id=g1"
+    with pytest.raises(ValueError, match="Ambiguous GFF gene interval"):
+        gene_locus_coordinates(frame, ["Species_a_g1"], "longest")
+
+
+def test_gtf_gene_coordinates_cli_retains_gene_instead_of_cds_span(tmp_path):
+    directory = tmp_path / "gff"
+    directory.mkdir()
+    frame = gtf_gene_coordinate_frame()
+    annotation = directory / "Species_a.gff"
+    annotation.write_text("".join(
+        f"{row.sequence}\tsource\t{row.feature}\t{row.start}\t{row.end}\t.\t{row.strand}\t.\t{row.attributes}\n"
+        for row in frame.itertuples(index=False)))
+    fasta = tmp_path / "protein.fa"
+    fasta.write_text(">Species_a_g1\nMPEPTIDE\n")
+    output = tmp_path / "loci.tsv"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--mode", "gene_coordinates",
+                             "--dir_gff", str(directory), "--seqfile", str(fasta), "--outfile", str(output),
+                             "--require-matches", "--nonlocal-gene-policy", "missing"],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert pandas.read_csv(output, sep="\t").to_dict("records") == [
+        dict(gene_id="Species_a_g1", chromosome="chr1", start=100, end=500,
+             strand="-", coordinate_source="gene")]

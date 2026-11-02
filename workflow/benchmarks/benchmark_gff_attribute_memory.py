@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import platform
+import re
 import resource
 import shutil
 import statistics
@@ -24,6 +25,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
+
+
+def outcome_identity(outcome):
+    if outcome.get('exception') == 'pandas.errors.ParserError':
+        # A direct GFF reader need not reproduce pandas' C-engine prefix, but
+        # must reject the same row with the same expected/observed field counts.
+        match = re.search(r'Expected (\d+) fields in line (\d+), saw (\d+)', outcome['message'])
+        if match is None:
+            raise AssertionError(('ParserError lacks a location/column diagnostic', outcome))
+        return {'exception': outcome['exception'], 'fields_line_observed': match.groups()}
+    return outcome
 
 
 def sha256(path):
@@ -130,9 +142,10 @@ def main(args):
                     if any(key not in result['outcome'] or result['outcome'][key] != value
                            for key, value in expected.items()):
                         raise AssertionError((name, variant, trial, case['expected'], result['outcome']))
+                    identity = outcome_identity(result['outcome'])
                     if reference is None:
-                        reference = result['outcome']
-                    elif result['outcome'] != reference:
+                        reference = identity
+                    elif identity != reference:
                         raise AssertionError((name, variant, trial, reference, result['outcome']))
                     result.update(case=name, variant=variant, trial=trial, warmup=trial < 0)
                     samples.append(result)
@@ -152,7 +165,8 @@ def main(args):
                               'pandas': samples[0]['pandas']},
               'measurement': {'timers': 'implementation import and identify_attribute_key',
                               'rss': 'whole fresh worker process', 'cache': 'warm filesystem cache',
-                              'warmups_per_variant': 1},
+                              'warmups_per_variant': 1,
+                              'error_equivalence': 'ParserError class, row and column counts; exact other outcomes'},
               'configuration': {'rows': args.rows, 'small_rows': args.small_rows,
                                 'fasta_records': args.fasta_records, 'positions': args.positions,
                                 'codecs': args.codecs, 'repeats': args.repeats,

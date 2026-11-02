@@ -17,6 +17,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("stage", ["jcvi", "genome_translation"])
+def test_downstream_fasta_prefix_processors_match_literal_species(tmp_path, stage):
+    species = "Plant_cf._alpha"
+    near_match = "Plant_cfX_alpha_g2"
+    payload = f">{species}_g1\nATG\n>{near_match}\nAAA\n>other_gene3\nCCC\n"
+    if stage == "jcvi":
+        source = (CORE_PATH.parent / "gg_genome_annotation_core.sh").read_text()
+        processor = source.split('seqkit seq "${file_sp_cds}" |', 1)[1].split('> tmp.jcvi_input.cds.fasta', 1)[0]
+        expected = ["g1", near_match, "other_gene3"]
+    else:
+        source = (CORE_PATH.parent / "gg_genome_evolution_core.sh").read_text()
+        processor = source.split('seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |', 1)[1]
+        processor = processor.split("sed -e '/^1 1$/d'", 1)[0].rstrip().removesuffix("|")
+        expected = [f"{species}_g1", f"{species}_{near_match}", f"{species}_other_gene3"]
+    result = subprocess.run(["bash", "-c", processor], input=payload, text=True, capture_output=True,
+                            cwd=tmp_path, env=dict(os.environ, sp_ub=species), check=True)
+    assert [line[1:] for line in result.stdout.splitlines() if line.startswith(">")] == expected
+    assert [line for line in result.stdout.splitlines() if not line.startswith(">")] == ["ATG", "AAA", "CCC"]
+
+
 @pytest.mark.parametrize("known_species", ["", "Standard_species", "Ciliate_species"])
 def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(tmp_path, known_species):
     cds = tmp_path / "mixed.fa"
@@ -59,6 +79,22 @@ def test_declared_species_cannot_silently_drop_records(tmp_path):
     assert result.returncode != 0
     assert "different number of sequences" in result.stdout
     assert not protein.exists()
+
+
+@pytest.mark.parametrize("header,accepted", [("Standard_species.v1_gene1", True),
+                                           ("Standard_speciesXv1_gene1", False)])
+def test_declared_species_regex_metacharacters_are_literal(tmp_path, header, accepted):
+    cds, table, protein = tmp_path / "input.fa", tmp_path / "codes.tsv", tmp_path / "protein.fa.gz"
+    cds.write_text(">" + header + "\nATGAAATAA\n")
+    table.write_text("species\tgenetic_code\nStandard_species.v1\t1\n")
+    env = dict(os.environ, GG_CORE_SOURCE_ONLY="1", GG_TASK_CPUS="1", GG_TASK_MEM_GB="2",
+               gg_workspace_dir=str(tmp_path / "workspace"), gg_support_dir=str(CORE_PATH.parent.parent / "support"))
+    result = subprocess.run(["bash", "-c", 'source "$1"; og_id=literal; '
+                             'translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4" Standard_species.v1',
+                             "_", str(CORE_PATH), str(cds), str(protein), str(table)],
+                            env=env, cwd=tmp_path, text=True, capture_output=True)
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+    assert protein.exists() is accepted
 
 
 def _shell_function_source(name: str) -> str:

@@ -77,6 +77,11 @@ def test_busco_candidate_stage_preserves_all_ties_and_previous_results_on_failur
     from nwkit.util import read_tree_strings
 
     core = (ROOT / "workflow/core/gg_genome_evolution_core.sh").read_text()
+    storage_functions = "\n".join(
+        name + "() {" + core.split(name + "() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        for name in ("genome_evolution_storage_require_native_paths", "genome_evolution_storage_prepare",
+                     "genome_evolution_storage_finish")
+    )
     start = core.index("busco_reconciliation() {")
     function = core[start:core.index("\nbusco_species_tree_assisted_gene_tree_rooting()", start)]
     inputs = tmp_path / "input"
@@ -88,9 +93,16 @@ def test_busco_candidate_stage_preserves_all_ties_and_previous_results_on_failur
     title = "DNA" if mode == "dna" else "protein"
     script = tmp_path / "candidates.sh"
     script.write_text(f'''set -euo pipefail
+gg_support_dir={shlex.quote(str(SUPPORT))}
 source {shlex.quote(str(SUPPORT / "gg_util.sh"))}
 gg_workspace_dir={shlex.quote(str(tmp_path))}
 gg_workspace_output_dir="${{gg_workspace_dir}}/output"
+dir_genome_evolution="${{gg_workspace_output_dir}}/genome_evolution"
+genome_evolution_storage_mode=raw
+mkdir -p "${{dir_genome_evolution}}"
+{storage_functions}
+genome_evolution_storage_prepare
+trap 'saved_status=$?; genome_evolution_storage_finish || exit $?; exit "${{saved_status}}"' EXIT
 genome_evolution_provenance_dir="${{gg_workspace_output_dir}}/provenance"
 dir_busco_iqtree_{mode}={shlex.quote(str(inputs))}
 dir_busco_reconciliation_{mode}="${{gg_workspace_output_dir}}/candidates"

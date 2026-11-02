@@ -253,6 +253,30 @@ RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.en
       "${SMUDGEPLOT_REPO_SHA:-${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}}" \
       /opt/pg/artifact
 
+FROM source-builder AS kmc-build
+
+ARG KMC_REPO_URL="https://github.com/refresh-bio/KMC.git"
+ARG KMC_REPO_REF=""
+ARG KMC_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh kmc kmc \
+      "${KMC_REPO_URL}" \
+      "${KMC_REPO_SHA:-${KMC_REPO_REF:-${GG_SOURCE_KMC_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS genomescope-build
+
+ARG GENOMESCOPE_REPO_URL="https://github.com/tbenavi1/genomescope2.0.git"
+ARG GENOMESCOPE_REPO_REF=""
+ARG GENOMESCOPE_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh genomescope genomescope \
+      "${GENOMESCOPE_REPO_URL}" \
+      "${GENOMESCOPE_REPO_SHA:-${GENOMESCOPE_REPO_REF:-${GG_SOURCE_GENOMESCOPE_REPO_REF}}}" \
+      /opt/pg/artifact
+
 FROM source-builder AS rapidnj-build
 ARG RAPIDNJ_REPO_URL="https://github.com/somme89/rapidNJ.git"
 ARG RAPIDNJ_REPO_REF=""
@@ -319,6 +343,8 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=rapidnj-build,source=/opt/pg/artifact,target=/tmp/artifacts/rapidnj \
  --mount=from=rapidnj-arm-build,source=/opt/pg/artifact,target=/tmp/artifacts/rapidnjArm \
  --mount=from=smudgeplot-build,source=/opt/pg/artifact,target=/tmp/artifacts/smudgeplot \
+ --mount=from=kmc-build,source=/opt/pg/artifact,target=/tmp/artifacts/kmc \
+ --mount=from=genomescope-build,source=/opt/pg/artifact,target=/tmp/artifacts/genomescope \
  bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts \
  && bash /opt/pg/scripts/install_helvetica_compat_font.sh base
 

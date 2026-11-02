@@ -338,6 +338,9 @@ working tree.
 
 ## Run focused test subsets
 
+For heartbeat lifecycle, dropped-stop-signal regressions and publication
+rollback, see [shared-lock heartbeat shutdown](shared-lock-heartbeats.md).
+
 Useful targeted commands:
 
 ```bash
@@ -526,6 +529,11 @@ shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 "${scripts[@]}"
 ```
 
 ## Database memory and timing comparisons
+
+The [2026-10-26 twelve-candidate review](performance-review-2026-10-26.md)
+covers RSC status aggregation, BUSCO marker selection, binary foregrounds,
+karyotype preparation, scaffold plots and FASTQ resource profiling, including
+rejected proposals, complete-output checks and repeated measurements.
 
 The [twelve-candidate speed review](performance-review-2026-10-25.md) records
 accepted workflow-helper changes, rejected proposals, complete-output comparisons
@@ -724,3 +732,6 @@ A good local validation sequence after code changes is:
 2. run `bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_r_scripts_parse.R` if any R helper changed,
 3. run `GG_ENTRYPOINT_DRY_RUN=1 bash workflow/gg_all_entrypoints_debug.sh` for wrapper-level sanity,
 4. inspect `workspace/output/versions/` after a real stage run.
+
+For offline metadata inode collection, reader cutover, recovery and the repeated
+fixture benchmark, see [metadata inode maintenance](metadata-inode-maintenance.md).

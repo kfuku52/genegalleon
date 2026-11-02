@@ -25,6 +25,7 @@ from pathlib import Path
 
 
 def load(path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
     spec = importlib.util.spec_from_file_location('busco_candidate', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -77,7 +78,7 @@ def main(args, root):
                 for gene in range(genes):
                     if copies == 0 and (copy > 0 and (gene % 20 != 0 or copy > 1)):
                         continue
-                    handle.write(f'B{gene}_{copy}\tComplete\tg{gene}:cds{copy}\t{100 + copy}\t200\tu{gene}\td{gene}_{copy}\n')
+                    handle.write(f'B{gene}_{copy}\tComplete\tg{gene}:{copy * 3 + 1}-{copy * 3 + 600}\t{100 + copy}\t200\tu{gene}\td{gene}_{copy}\n')
         profiles.append((name, fixture, False))
     fasta = root / 'cds.fa'
     if not args.profiles or 'cli' in args.profiles:
@@ -88,10 +89,12 @@ def main(args, root):
     edges = {
         'empty': b'', 'comments': b'# annotation\n',
         'missing': b'B1\tMissing\t\t\t\t\t\n',
-        'all_filtered': b'B1\tComplete\t:one\t1\t2\tu\td\n',
-        'lexical': b'B1\tComplete\t001:one\t100\t200\tu\td\nB2\tNA\tNA:two\t\t\tNA\tnan\nB3\tDuplicated\t001:three\t1.0\t2.0\tu\td\nB4\tComplete\tnan:four\t0\t0\t\t\n',
-        'quoted': 'B1\tComplete\tgeneA:one\t100\t200\tu\t"説明 α\tfield\ncontinued"\nB2\tComplete\tgeneB:two\t\t\t\t\nB3\tDuplicated\tgeneA:three\t101\t201\tNA\tnan\n'.encode(),
-        'duplicates_all': b'B1\tComplete\tg2:a\t1\t2\tu\td\nB2\tComplete\tg1:b\t2\t3\tu\td\nB3\tComplete\tg2:c\t3\t4\tu\td\nB4\tComplete\tg1:d\t4\t5\tu\td\n',
+        # Equivalence workloads use actual coordinate ranges. Literal colon
+        # namespaces intentionally fixed by the reader have separate tests.
+        'all_filtered': b'B1\tComplete\t:1-9\t1\t2\tu\td\n',
+        'lexical': b'B1\tComplete\t001:1-9\t100\t200\tu\td\nB2\tNA\tNA:1-9\t\t\tNA\tnan\nB3\tDuplicated\t001:4-12\t1.0\t2.0\tu\td\nB4\tComplete\tnan:1-9\t0\t0\t\t\n',
+        'quoted': 'B1\tComplete\tgeneA:1-9\t100\t200\tu\t"説明 α\tfield\ncontinued"\nB2\tComplete\tgeneB:1-9\t\t\t\t\nB3\tDuplicated\tgeneA:4-12\t101\t201\tNA\tnan\n'.encode(),
+        'duplicates_all': b'B1\tComplete\tg2:1-9\t1\t2\tu\td\nB2\tComplete\tg1:1-9\t2\t3\tu\td\nB3\tComplete\tg2:4-12\t3\t4\tu\td\nB4\tComplete\tg1:4-12\t4\t5\tu\td\n',
         'invalid_utf8': b'B1\tComplete\tg1\t1\t2\tu\td\nB2\tComplete\tg2\t1\t2\tu\t\xff\n',
         'extra_field': b'B1\tComplete\tg1\t1\t2\tu\td\nB2\tComplete\tg2\t1\t2\tu\td\textra\n',
         'bad_quote': b'B1\tComplete\tg1\t1\t2\tu\td\nB2\tComplete\tg2\t1\t2\tu\t"bad\n',

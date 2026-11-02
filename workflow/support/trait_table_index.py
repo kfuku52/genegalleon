@@ -66,6 +66,7 @@ def read_subset(path, identifiers, loader, cache_dir=None, *, source_proof=None)
            'pandas': pd.__version__,
            'infer_string': pd.options.future.infer_string, 'string_storage': pd.options.mode.string_storage,
            'reader': hashlib.sha256(inspect.getsource(loader).encode()).hexdigest(),
+           'line_comment_reader': hashlib.sha256(Path(__file__).with_name('line_comment_stream.py').read_bytes()).hexdigest(),
            'indexer': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     token = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
     root.mkdir(parents=True, exist_ok=True)

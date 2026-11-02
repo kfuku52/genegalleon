@@ -128,6 +128,43 @@ def test_numeric_gene_identifiers_keep_zero_padding_and_trait_types(tmp_path, in
     assert result['missing'].isna().all()
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_trait_hash_identifiers_and_quoted_comment_lines_are_literal(tmp_path, cached):
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    path = tmp_path / "traits.tsv"
+    path.write_text('# comment\ngene_id\tvalue\tlabel\n'
+                    'gene#1\t7\t"first\n# literal continuation"\n'
+                    '# comment between records\ngene:001\t9\tplain#text\n')
+    mapping = {"gene#1": "Plant_species_gene#1", "gene:001": "Plant_species_gene:001"}
+    result = process_trait_file(path, set(mapping), mapping, tmp_path / "cache" if cached else None)
+    assert result.gene_id.tolist() == list(mapping.values())
+    assert result.value.tolist() == [7, 9]
+    assert result.label.tolist() == ["first\n# literal continuation", "plain#text"]
+
+
+def test_trait_index_rebuilds_when_shared_comment_reader_changes(tmp_path, monkeypatch):
+    import pandas
+
+    from workflow.support import trait_table_index as indexer
+    from workflow.support.get_trait_matrix import load_trait_table
+
+    original = Path(indexer.__file__)
+    copied = tmp_path / "indexer.py"
+    copied.write_bytes(original.read_bytes())
+    parser = tmp_path / "line_comment_stream.py"
+    parser.write_bytes(original.with_name(parser.name).read_bytes())
+    monkeypatch.setattr(indexer, "__file__", str(copied))
+    source = tmp_path / "traits.tsv"
+    source.write_text("gene_id\tvalue\ngene#1\t7\n")
+    cache = tmp_path / "cache"
+    first = indexer.read_subset(source, {"gene#1"}, load_trait_table, cache)
+    parser.write_bytes(parser.read_bytes() + b"\n# harmless parser revision\n")
+    second = indexer.read_subset(source, {"gene#1"}, load_trait_table, cache)
+    pandas.testing.assert_frame_equal(first, second)
+    assert len(list(cache.glob("*.sqlite3"))) == 2
+
+
 @pytest.mark.parametrize('header', ['gene_id\tvalue\tmissing\tlabel\n', 'value\tmissing\tlabel\n'])
 def test_shared_index_preserves_types_duplicate_order_and_literal_ids(tmp_path, header):
     import pandas as pd

@@ -344,6 +344,7 @@ treevis_cis_similarity_width_mm=15 # Physical width of the promoter cis-element 
 treevis_synteny_similarity=1 # Display pairwise synteny similarity when neighborhood input is available.
 treevis_synteny_similarity_width_mm=15 # Physical width of the triangular similarity column.
 synteny_search_window=20 # Number of neighboring genes on each side included in the similarity search.
+synteny_nonlocal_gene_policy="error" # error|missing: protein-mode coordinates for explicitly trans-spliced nonlocal genes.
 treevis_synteny_window=5 # Number of neighboring genes on each side displayed in the treevis synteny panel.
 treevis_query_marker=1 # In query2family mode, display query best-hit markers as a treevis categorical panel.
 treevis_long_branch_display="auto" # "auto" or "no"; auto detects unusually long branches and compresses their displayed length using the long-branch thresholds below.

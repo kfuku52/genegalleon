@@ -19,3 +19,6 @@ r-svglite
 bioconductor-treeio
 r-viridis
 r-xml2
+r-argparse
+r-jsonlite
+r-minpack.lm

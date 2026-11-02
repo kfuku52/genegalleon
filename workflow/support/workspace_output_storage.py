@@ -29,7 +29,7 @@ except ImportError:
 
 REPORT_SCHEMA_VERSION = 1
 TARGET_NAMES = ("query2family", "orthogroup", "species_tree", "orthofinder",
-                "genome_evolution", "hgt", "query2family_hgt", "analyses")
+                "genome_evolution", "hgt", "query2family_hgt", "analyses", "scheduler_logs")
 
 
 def _environment_int(name: str, default: int) -> int:
@@ -163,11 +163,11 @@ def _target_specs(output_root: Path, selected: set[str]) -> list[dict]:
         root = output_root / name
         scope = "hgt" if name == "query2family_hgt" else name
         if scope in DIRECTORY_SCOPES:
-            roots = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink()) if name == "analyses" and root.is_dir() else [root]
+            roots = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink()) if name in {"analyses", "scheduler_logs"} and root.is_dir() else [root]
             for candidate in roots:
                 names = DIRECTORY_SCOPES[scope]
                 if candidate.is_dir() and any((candidate / item).exists() or (candidate / (item + ".zip")).exists() for item in names):
-                    specs.append(dict(name=(name + "/" + candidate.name) if name == "analyses" else name,
+                    specs.append(dict(name=(name + "/" + candidate.name) if name in {"analyses", "scheduler_logs"} else name,
                                       kind="directory", mode=None, root=candidate.absolute(), scope=scope, directories=names))
             continue
         if name == "orthofinder" and not any(
@@ -715,6 +715,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_common(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument("--writers-stopped", action="store_true",
+                               help="Required to convert scheduler-log batches after all their writers/output delivery stop.")
         subparser.add_argument(
             "--workspace",
             required=True,
@@ -937,6 +939,9 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
         }
         report["targets"].append(target)
         try:
+            if (spec.get("scope") == "scheduler_logs" and args.command == "convert"
+                    and not args.writers_stopped):
+                raise WorkspaceStorageError("Scheduler log conversion requires --writers-stopped")
             if spec["kind"] == "gene-family":
                 context = _gene_context(
                     spec,
@@ -1009,6 +1014,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict, Path, Path]:
                         namespace=spec.get("scope", "orthofinder"),
                         workers=args.workers, compression=args.compression, compression_level=args.compression_level,
                         available_bytes=args.available_bytes, progress_callback=SPECIES.ProgressReporter(args.progress_interval).update,
+                        writers_stopped=args.writers_stopped,
                     )
                 else:
                     target["conversion"] = _convert_species(spec, args)

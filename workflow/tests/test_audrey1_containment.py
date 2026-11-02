@@ -40,7 +40,7 @@ def test_audrey1_isolates_shm_and_keeps_project_paths_visible(tmp_path):
     assert f"bind={root}:{root}" in result.stdout
 
 
-@pytest.mark.parametrize("site", ["audrey1", "nig"])
+@pytest.mark.parametrize("site", ["audrey1", "nig", "shirokane"])
 def test_sites_reject_unreviewed_bind(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()
@@ -49,14 +49,14 @@ def test_sites_reject_unreviewed_bind(tmp_path, site):
     assert "invalid GG_CONTAINER_PROJECT_ROOT_BIND" in result.stderr
 
 
-@pytest.mark.parametrize("site", ["audrey1", "nig"])
+@pytest.mark.parametrize("site", ["audrey1", "nig", "shirokane"])
 def test_sites_existing_unbound_runs_keep_previous_runtime(tmp_path, site):
     result = run_site_command(tmp_path, "", site=site)
     assert result.returncode == 0, result.stderr
     assert "command=singularity exec\n" in result.stdout
 
 
-@pytest.mark.parametrize("site", ["audrey1", "nig"])
+@pytest.mark.parametrize("site", ["audrey1", "nig", "shirokane"])
 def test_native_array_mounts_only_declared_sources_read_only(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()
@@ -118,7 +118,7 @@ def test_local_binds_reject_directory_and_remote_file_authority(tmp_path):
         source_files(manifest, tmp_path)
 
 
-@pytest.mark.parametrize("site", ["audrey1", "nig"])
+@pytest.mark.parametrize("site", ["audrey1", "nig", "shirokane"])
 def test_native_source_bind_overrides_existing_write_access(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()

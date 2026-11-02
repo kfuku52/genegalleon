@@ -501,3 +501,41 @@ def test_unsafe_inventory_entry_is_not_acknowledged(tmp_path, entry):
     with pytest.raises(store.ArchiveStoreError, match="inventory"):
         drain(tmp_path)
     assert path.exists() and request.exists()
+
+
+@pytest.mark.parametrize("new_journal", [False, True])
+def test_collector_reads_packed_inventory_after_empty_directory_retirement(tmp_path, new_journal):
+    path, request = queued(tmp_path, content=b"original alignment\n")
+    inventory = store.family_inventory_path(tmp_path, "OG0000001")
+    inventory_root = inventory.parent.parent
+    result = store.pack_metadata(inventory_root, writers_stopped=True, delete_originals=True)
+    assert result["removed_files"] == 1
+    database = inventory_root / store.METADATA_DATABASE
+    before_database = database.read_bytes()
+    inventory.rmdir()
+    inventory.parent.rmdir()
+    expected = {path: b"original alignment\n"}
+    if new_journal:
+        inventory.mkdir(parents=True)
+        second = path.with_name("OG0000001_second.fa")
+        second.write_bytes(b"new output\n")
+        (inventory / "new-worker.paths").write_bytes(os.fsencode(second.relative_to(tmp_path)) + b"\0")
+        expected[second] = b"new output\n"
+
+    result = drain(tmp_path)
+
+    assert result["status"] == "committed"
+    assert result["archived_files"] == len(expected)
+    assert not request.exists()
+    logical = store.GeneFamilyOutputStore(tmp_path)
+    for output, content in expected.items():
+        assert not output.exists()
+        assert read_bytes(logical, "mafft", output.name) == content
+    if not new_journal:
+        assert not inventory.exists()
+        assert database.read_bytes() == before_database
+    assert logical.verify(deep=True)
+    restored_root = tmp_path / "resumed-workspace"
+    logical.materialize_family("OG0000001", store.orthogroup_id_from_name, destination_root=restored_root)
+    for output, content in expected.items():
+        assert (restored_root / output.relative_to(tmp_path)).read_bytes() == content
