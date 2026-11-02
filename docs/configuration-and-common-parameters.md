@@ -434,6 +434,13 @@ summary tables. Branch tables encode a sister ID only for binary parents;
 children of unary or multifurcating parents use `-999`, with the complete
 topology retained in `parent`.
 
+The `orthogroups` and `orthogroup_selection` modes do not request new species
+trees. They retain a tracked historical concatenated tree's original output
+selection, including the old bootstrap-consensus choice, without relabeling it
+as today's maximum-likelihood result or rewriting its provenance. All input and
+output hashes and every other parameter must still match; changed or untracked
+trees stop these modes. Normal species-tree inference keeps the rules above.
+
 Gene-tree rooting keeps MAD as the default. The selectable
 `tree_rooting_method` values are `mad`, `reconciliation`, `midpoint`,
 and `md` (`md` maps to NWKIT's `mv` method). `reconciliation` uses NWKIT's

@@ -247,6 +247,7 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
 orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
 frozen_species_tree_plot_args=()
+frozen_species_tree_iqtree_args=()
 if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   case "${orthogroup_requested_stale_policy}" in
     stop|rebuild) ;;
@@ -268,6 +269,7 @@ if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" 
   # Audit their biological inputs and complete output hashes without rewriting
   # their original implementation/presentation provenance.
   frozen_species_tree_plot_args=(--frozen-plot)
+  frozen_species_tree_iqtree_args=(--frozen-tree-output)
 fi
 
 # Synteny-only execution calls this independent stage before species-tree setup
@@ -3714,7 +3716,7 @@ if [[ "${concat_iqtree_pep_legacy_policy}" == "adopt" ]]; then concat_iqtree_pep
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_pep_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_pep}/topology_constraint.result.json")
 fi
-artifact_legacy_policy="${concat_iqtree_pep_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" || exit $?
+artifact_legacy_policy="${concat_iqtree_pep_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_pep_needs_update run_concat_iqtree_protein "${concat_iqtree_pep_provenance_args[@]}" "${frozen_species_tree_iqtree_args[@]}" || exit $?
 if [[ ${concat_iqtree_pep_needs_update} -eq 1 && ${run_concat_iqtree_protein} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_pep}"
@@ -3838,7 +3840,7 @@ if [[ "${concat_iqtree_dna_legacy_policy}" == "adopt" ]]; then concat_iqtree_dna
 if [[ -n "${species_tree_topology_constraint}" || -n "${species_tree_iqtree_taxa}" ]]; then
   concat_iqtree_dna_provenance_args+=(--output "constraint_report=${dir_concat_iqtree_dna}/topology_constraint.result.json")
 fi
-artifact_legacy_policy="${concat_iqtree_dna_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" || exit $?
+artifact_legacy_policy="${concat_iqtree_dna_legacy_policy}" gg_artifact_prepare_stage concat_iqtree_dna_needs_update run_concat_iqtree_dna "${concat_iqtree_dna_provenance_args[@]}" "${frozen_species_tree_iqtree_args[@]}" || exit $?
 if [[ ${concat_iqtree_dna_needs_update} -eq 1 && ${run_concat_iqtree_dna} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_concat_iqtree_dna}"

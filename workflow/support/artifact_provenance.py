@@ -1273,7 +1273,47 @@ def frozen_plot_current(args: argparse.Namespace) -> int:
     return CURRENT
 
 
+def frozen_tree_output_current(args: argparse.Namespace) -> int:
+    """Consume an unchanged historical tree, never adopt today's producer recipe.
+
+    Older concatenation stages selected .contree for bootstrapped analyses and
+    did not declare tree_output. That is not equivalent to today's .treefile.
+    An orthogroup-only consumer retains this original choice and manifest while
+    checking every input/output byte and every other scientific parameter.
+    """
+    try:
+        recorded = contract_comparison_payload(load_manifest(args.manifest))
+        current = contract_comparison_payload(build_contract(args, include_diagnostics=False))
+    except FileNotFoundError as exc:
+        return stale_policy_result(args, f"frozen tree artifact is missing: {exc.filename or exc}",
+                                   reusable=False)
+    old_parameters, parameters = recorded["parameters"], current["parameters"]
+    required = "concat_peptide" if args.step.endswith("_pep") else "concat_cds"
+    if (not isinstance(old_parameters, dict) or not isinstance(parameters, dict)
+            or parameters.get("tree_output") != "treefile"
+            or "tree_output" in old_parameters and old_parameters["tree_output"] != "treefile"
+            or required not in entries_by_label(recorded, "inputs")
+            or "tree" not in entries_by_label(recorded, "outputs")):
+        raise ProvenanceError("Frozen tree output requires a recorded concatenation input and known output policy")
+    if "tree_output" not in old_parameters:
+        current["parameters"] = {key: value for key, value in parameters.items() if key != "tree_output"}
+    if recorded != current:
+        return stale_policy_result(args, describe_contract_difference(recorded, current), reusable=False,
+                                   error_code=contract_difference_code(recorded, current))
+    print(f"Frozen tree inputs and outputs verified; historical producer selection retained: {args.manifest}")
+    return CURRENT
+
+
 def needs_run(args: argparse.Namespace) -> int:
+    if getattr(args, "frozen_tree_output", False):
+        if (args.step not in {"species_tree_concat_iqtree_pep", "species_tree_concat_iqtree_dna"}
+                or args.family_id != "all_buscos" or args.stale_policy != "stop" or args.legacy_policy != "stop"
+                or args.recover_output or args.output_fasta_type or getattr(args, "frozen_plot", False)):
+            raise ProvenanceError("Frozen tree output requires a concatenated species tree, stop policies and no recovery")
+        if declared_path_exists(args.manifest):
+            return frozen_tree_output_current(args)
+        # Unrequested, unpublished stages still follow the normal missing-output
+        # path. An existing tree without its manifest remains a strict stop.
     if getattr(args, "frozen_plot", False):
         return frozen_plot_current(args)
     try:
@@ -2004,6 +2044,8 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Inspect without writing outputs, manifests, or the digest cache")
     needs_parser.add_argument("--frozen-plot", action="store_true",
                               help="Verify an unrequested species-tree plot while retaining its recorded rendering recipe")
+    needs_parser.add_argument("--frozen-tree-output", action="store_true",
+                              help="Verify a preserved concatenated species tree without changing its historical output selection")
     needs_parser.add_argument(
         "--stale-policy",
         choices=("stop", "reuse", "rebuild"),

@@ -1554,3 +1554,140 @@ def test_frozen_plot_cannot_disable_scientific_or_strict_contracts(tmp_path, opt
     result = run_cli("needs-run", *args, "--frozen-plot", "--dry-run")
     assert result.returncode == 2
     assert "Frozen plots require" in result.stderr
+
+
+@pytest.mark.parametrize("kind", ["pep", "dna"])
+@pytest.mark.parametrize("change", [None, "input", "output", "input_path", "output_path",
+                                    "model", "seed", "bootstrap", "constraint", "identity", "schema",
+                                    "missing_manifest", "missing_output", "recorded_policy", "current_policy",
+                                    "explicit_treefile"])
+def test_frozen_concat_tree_keeps_historical_selection_without_weakening_other_checks(tmp_path, kind, change):
+    alignment, output, manifest = (tmp_path / name for name in ("alignment.fa", "tree.nwk", "tree.json"))
+    alignment.write_text(">A\nAAAA\n>B\nAAAT\n>C\nAATT\n>D\nATTT\n")
+    output.write_text("(A:1,B:1,C:1,D:1);\n")  # Historical consensus; not today's ML result.
+    label = "concat_peptide" if kind == "pep" else "concat_cds"
+    args = ["--manifest", manifest, "--workspace-root", tmp_path, "--logical-root", tmp_path / "output",
+            "--step", "species_tree_concat_iqtree_" + kind, "--family-id", "all_buscos",
+            "--input", f"{label}={alignment}", "--output", f"tree={output}",
+            "--parameter", "sequence_type=" + ("AA" if kind == "pep" else "DNA"),
+            "--parameter", "model=LG+R4" if kind == "pep" else "model=GTR+R4",
+            "--parameter", "seed=12345", "--parameter", "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"]
+    assert run_cli("record", *args).returncode == 0
+    original_manifest = manifest.read_bytes(), manifest.stat().st_mtime_ns
+    current = [*args, "--parameter", "tree_output=treefile"]
+    # Missing tree_output is not reinterpreted as the current ML producer.
+    assert run_cli("needs-run", *current, "--legacy-policy", "stop").returncode == 3
+    if change in {"input", "output"}:
+        (alignment if change == "input" else output).write_text("changed data\n")
+    elif change in {"input_path", "output_path"}:
+        old = alignment if change == "input_path" else output
+        other = tmp_path / ("another-" + old.name)
+        other.write_bytes(old.read_bytes())
+        key = f"{label}={old}" if change == "input_path" else f"tree={old}"
+        current[current.index(key)] = key.split("=")[0] + "=" + str(other)
+    elif change in {"model", "seed", "bootstrap"}:
+        key = next(str(value) for value in current if str(value).startswith(change + "="))
+        current[current.index(key)] = change + "=changed"
+    elif change == "constraint":
+        constraint = tmp_path / "constraint.nwk"
+        constraint.write_text("((A,B),C,D);\n")
+        current += ["--input", f"topology_constraint={constraint}"]
+    elif change in {"identity", "schema"}:
+        payload = json.loads(manifest.read_text())
+        payload["family_id" if change == "identity" else "schema_version"] = "other" if change == "identity" else 2
+        manifest.write_text(json.dumps(payload))
+    elif change in {"missing_manifest", "missing_output"}:
+        (manifest if change == "missing_manifest" else output).unlink()
+    elif change in {"recorded_policy", "explicit_treefile"}:
+        payload = json.loads(manifest.read_text())
+        payload["parameters"]["tree_output"] = "unknown" if change == "recorded_policy" else "treefile"
+        manifest.write_text(json.dumps(payload))
+    elif change == "current_policy":
+        current[-1] = "tree_output=unknown"
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.rglob("*") if p.is_file()}
+    result = run_cli("needs-run", *current, "--legacy-policy", "stop", "--frozen-tree-output", "--dry-run")
+    expected = 2 if change in {"recorded_policy", "current_policy"} else 1 if change in {None, "explicit_treefile"} else 3
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    if not change:
+        assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == original_manifest
+        assert "historical producer selection retained" in result.stdout
+        assert run_cli("needs-run", *current, "--legacy-policy", "stop").returncode == 3
+
+
+@pytest.mark.parametrize("option", ["other_stage", "other_family", "rebuild", "reuse", "adopt",
+                                     "recovery", "fasta_type", "frozen_plot"])
+def test_frozen_concat_tree_requires_its_closed_strict_consumer_scope(tmp_path, option):
+    args = contract_args(tmp_path, tmp_path / "missing.json", tmp_path / "in", tmp_path / "out")
+    args[args.index("summary_statistics")] = "species_tree_concat_iqtree_pep"
+    args[args.index("OG0001")] = "all_buscos"
+    if option in {"other_stage", "other_family"}:
+        args[args.index("species_tree_concat_iqtree_pep" if option == "other_stage" else "all_buscos")] = "other"
+    args += ["--legacy-policy", "adopt" if option == "adopt" else "stop"]
+    if option in {"rebuild", "reuse"}:
+        args += ["--stale-policy", option]
+    if option == "recovery":
+        args += ["--recover-output", f"stat_branch={tmp_path / 'candidate'}"]
+    if option == "fasta_type":
+        args += ["--output-fasta-type", "stat_branch=protein"]
+    if option == "frozen_plot":
+        args += ["--frozen-plot"]
+    result = run_cli("needs-run", *args, "--frozen-tree-output", "--dry-run")
+    assert result.returncode == 2
+    assert "Frozen tree output requires" in result.stderr
+
+
+@pytest.mark.skipif(bash_major_version() < 4, reason="gg_util.sh requires Bash 4+")
+@pytest.mark.parametrize("mode", ["all", "orthogroups", "orthogroup_selection"])
+@pytest.mark.parametrize("kind", ["pep", "dna"])
+def test_ordered_concat_stage_preserves_legacy_tree_only_in_orthogroup_modes(tmp_path, mode, kind):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output_root = workspace / "output"
+    provenance = output_root / "artifact_provenance"
+    provenance.mkdir(parents=True)
+    alignment, tree = workspace / "alignment.fa", workspace / "tree.nwk"
+    alignment.write_text(">A\nAAAA\n>B\nAAAT\n>C\nAATT\n>D\nATTT\n")
+    tree.write_text("(A:1,B:1,C:1,D:1);\n")
+    manifest = provenance / ("species_tree.concat_iqtree_" + kind + ".json")
+    label = "concat_peptide" if kind == "pep" else "concat_cds"
+    args = ["--manifest", manifest, "--workspace-root", workspace,
+            "--logical-root", output_root / ".gg_global_artifacts",
+            "--step", "species_tree_concat_iqtree_" + kind, "--family-id", "all_buscos",
+            "--input", f"{label}={alignment}", "--output", f"tree={tree}",
+            "--parameter", "sequence_type=" + ("AA" if kind == "pep" else "DNA"),
+            "--parameter", "model=LG+R4" if kind == "pep" else "model=GTR+R4",
+            "--parameter", "seed=12345", "--parameter", "bootstrap=ufboot1000,bnni_if_ntaxa_ge4"]
+    assert run_cli("record", *args).returncode == 0
+    core = (SCRIPT.parents[1] / "core/gg_genome_evolution_core.sh").read_text()
+    policy = core.split('orthogroup_requested_stale_policy=', 1)[1].split('# Synteny-only execution', 1)[0]
+    policy = 'orthogroup_requested_stale_policy=' + policy
+    name = "Protein" if kind == "pep" else "DNA"
+    start = core.index('task="IQ-TREE of the concatenated alignment with a ' + name)
+    end = core.index('task="Rooting of IQ-TREE', start)
+    body = core[start:end]
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in (alignment, tree, manifest)}
+    prelude = f'''set -euo pipefail
+gg_support_dir={str(SCRIPT.parent)!r}
+gg_workspace_dir={str(workspace)!r}
+gg_workspace_output_dir={str(output_root)!r}
+genome_evolution_provenance_dir={str(provenance)!r}
+source {str(GG_UTIL)!r}
+genome_evolution_mode={mode}
+artifact_stale_policy={'stop' if mode == 'all' else 'rebuild'}
+artifact_legacy_policy=stop
+run_concat_iqtree_protein=0; run_concat_iqtree_dna=0
+frozen_species_tree_plot_args=(); frozen_species_tree_iqtree_args=()
+gg_print_entrypoint_config_vars() {{ printf '%s\\n' run_concat_iqtree_protein run_concat_iqtree_dna; }}
+gg_step_skip() {{ :; }}
+species_tree_topology_constraint=''; species_tree_iqtree_taxa=''
+protein_model=LG+R4; nucleotide_model=GTR+R4
+file_concat_pep={str(alignment)!r}; file_concat_cds={str(alignment)!r}
+file_concat_iqtree_{kind}={str(tree)!r}
+'''
+    result = subprocess.run([shutil.which("bash"), "-c", prelude + policy + body],
+                            capture_output=True, text=True)
+    assert result.returncode == (3 if mode == "all" else 0), result.stdout + result.stderr
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    if mode != "all":
+        assert "historical producer selection retained" in result.stdout + result.stderr
