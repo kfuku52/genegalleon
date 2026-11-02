@@ -85,6 +85,12 @@ def run(audit_argv, database_argv, record_argv):
             store, catalog_guard = catalog_store(root, record, audit.mode)
             with store.read_snapshot(), observe_files(), provenance.digest_observation(
                     workers=audit.workers, progress=progress, spill_guards=True) as memo:
+                bound_inputs = {str(Path(path).resolve()) for _, path in provenance.parse_path_pairs(record.input, '--input')}
+                for name, identity in database.reconciliation_input_identities(args).items():
+                    if identity[0] not in bound_inputs:
+                        raise ValueError('Reconciliation input missing from provenance record: ' + name)
+                    memo.guard((identity[0], name), identity,
+                               lambda name=name: database.reconciliation_input_identities(args)[name])
                 if catalog_guard is not None:
                     memo.guard(*catalog_guard)
                 provenance._collect_audit_rows(audit, memo, progress, audit.workers, store, rows, inventory, revalidate=False)

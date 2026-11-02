@@ -724,6 +724,13 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- `gene_family_database_reconciliation=1` imports existing GeneRax XML events,
+  species branches, exact gene membership and method provenance as separate
+  tables. `run_reconciliation_summary=1` reads that DB without modifying it and
+  compares configured branches with optional CAFE, expression and proteome
+  evidence. Both options default to 0; see
+  [Reconciliation Database and Downstream Evidence](gene-reconciliation-summary.md)
+  for the input contracts, interpretation limits and fixed-size output layout,
 - direct `generate_orthogroup_database.py` calls default to creating a new DB
   and refuse an existing destination. Use `--overwrite 1` (or `--mode replace`)
   for a full rebuild. Intentional incremental imports require `--mode append`

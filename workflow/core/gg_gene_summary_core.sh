@@ -19,6 +19,16 @@ gene_family_source=$(echo "${gene_family_source:-query2family}" | tr '[:upper:]'
 run_family_completion_summary="${run_family_completion_summary:-1}"
 run_presence_absence_summary="${run_presence_absence_summary:-1}"
 run_gene_family_database_build="${run_gene_family_database_build:-0}"
+gene_family_database_reconciliation="${gene_family_database_reconciliation:-0}"
+reconciliation_species_tree="${reconciliation_species_tree:-}"
+reconciliation_method_manifest="${reconciliation_method_manifest:-}"
+run_reconciliation_summary="${run_reconciliation_summary:-0}"
+reconciliation_summary_config="${reconciliation_summary_config:-}"
+# Preserve caller-relative paths before summary stages change directories.
+for reconciliation_input in reconciliation_species_tree reconciliation_method_manifest reconciliation_summary_config; do
+  case "${!reconciliation_input}" in ""|/*) ;; *) printf -v "${reconciliation_input}" '%s/%s' "${PWD}" "${!reconciliation_input}" ;; esac
+done
+unset reconciliation_input
 run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
 run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
@@ -111,6 +121,10 @@ case "${run_species_taxonomy}" in
 esac
 
 enable_all_run_flags_for_debug_mode
+if [[ "${gg_debug_mode:-0}" == "1" && -z "${reconciliation_summary_config}" ]]; then
+  echo 'Skipping the optional reconciliation summary in debug mode: no evidence configuration supplied.'
+  run_reconciliation_summary=0
+fi
 
 validate_binary_flag() {
   local name=$1
@@ -124,6 +138,16 @@ validate_binary_flag() {
 validate_binary_flag "run_family_completion_summary" "${run_family_completion_summary}"
 validate_binary_flag "run_presence_absence_summary" "${run_presence_absence_summary}"
 validate_binary_flag "run_gene_family_database_build" "${run_gene_family_database_build}"
+validate_binary_flag "gene_family_database_reconciliation" "${gene_family_database_reconciliation}"
+validate_binary_flag "run_reconciliation_summary" "${run_reconciliation_summary}"
+if [[ "${gene_family_database_reconciliation}" == "1" && ! -s "${reconciliation_species_tree}" ]]; then
+  echo 'gene_family_database_reconciliation=1 requires reconciliation_species_tree' >&2
+  exit 1
+fi
+if [[ "${run_reconciliation_summary}" == "1" && ! -s "${reconciliation_summary_config}" ]]; then
+  echo 'run_reconciliation_summary=1 requires reconciliation_summary_config' >&2
+  exit 1
+fi
 validate_binary_flag "run_csubst_scan_aa_change_summary" "${run_csubst_scan_aa_change_summary}"
 validate_binary_flag "run_csubst_scan_candidate_sites" "${run_csubst_scan_candidate_sites}"
 validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
@@ -791,7 +815,15 @@ run_gene_family_database_for_source() {
     --parameter "scan_inference_contract=analytical_bh_global_v1"
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
+    --parameter "reconciliation_import=${gene_family_database_reconciliation}"
   )
+  if [[ "${gene_family_database_reconciliation}" == "1" ]]; then
+    database_provenance_args+=(--input "reconciliation_species_tree=${reconciliation_species_tree}"
+      --parameter "reconciliation_schema=generax_recphyloxml_v1")
+    if [[ -n "${reconciliation_method_manifest}" ]]; then
+      database_provenance_args+=(--input "reconciliation_method_manifest=${reconciliation_method_manifest}")
+    fi
+  fi
   if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_selected}" ]]; then
     database_provenance_args+=(
       --input "family_catalog=${file_orthogroup_genecount_selected}"
@@ -834,6 +866,12 @@ run_gene_family_database_for_source() {
     --ncpu "${GG_TASK_CPUS:-1}"
   )
   local pipeline_args=()
+  if [[ "${gene_family_database_reconciliation}" == "1" ]]; then
+    database_args+=(--reconciliation_species_tree "${reconciliation_species_tree}")
+    if [[ -n "${reconciliation_method_manifest}" ]]; then
+      database_args+=(--reconciliation_method_manifest "${reconciliation_method_manifest}")
+    fi
+  fi
   local argument
   for argument in "${provenance_audit_args[@]}"; do pipeline_args+=("--audit=${argument}"); done
   for argument in "${database_args[@]}"; do pipeline_args+=("--database=${argument}"); done
@@ -841,6 +879,33 @@ run_gene_family_database_for_source() {
   echo "Auditing and generating gene-family database: ${file_gene_family_db}"
   python "${gg_support_dir}/gene_family_database_pipeline.py" "${pipeline_args[@]}"
 
+}
+
+run_reconciliation_summary_for_source() {
+  if [[ "${run_reconciliation_summary}" != "1" ]]; then return 0; fi
+  local out_dir="${summary_output_dir}/reconciliation"
+  local needs_update=0
+  local input_lines input
+  input_lines=$(python "${gg_support_dir}/reconciliation_summary.py" --config "${reconciliation_summary_config}" --list-inputs) || return $?
+  local args=(
+    --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.reconciliation_summary.json"
+    --step "reconciliation_summary" --family-id "${gene_family_source}"
+    --logical-root "${gg_workspace_output_dir}/.gg_global_artifacts" --workspace-root "${gg_workspace_dir}"
+    --input "database=${file_gene_family_db}" --input "config=${reconciliation_summary_config}"
+    --parameter "reconciliation_schema=generax_recphyloxml_v1"
+    --parameter "expression_bh=within_branch_lineage_extinction_candidates_v1"
+    --output "database=${out_dir}/reconciliation_summary.db"
+    --output "branch_family=${out_dir}/branch_family.tsv"
+    --output "branch_summary=${out_dir}/branch_summary.tsv"
+    --output "manifest=${out_dir}/manifest.json"
+  )
+  while IFS= read -r input; do args+=(--input "${input}"); done <<< "${input_lines}"
+  gg_artifact_prepare_stage needs_update run_reconciliation_summary "${args[@]}" || return $?
+  if [[ "${needs_update}" != "1" ]]; then return 0; fi
+  local summary_args=(--dbpath "${file_gene_family_db}" --config "${reconciliation_summary_config}" --output-dir "${out_dir}")
+  local argument
+  for argument in "${args[@]}"; do summary_args+=("--record=${argument}"); done
+  python "${gg_support_dir}/reconciliation_summary.py" "${summary_args[@]}"
 }
 
 run_csubst_scan_aa_change_summary_for_source() {
@@ -1065,6 +1130,7 @@ fi
 run_family_completion_summary_for_source
 run_presence_absence_summary_for_source
 run_gene_family_database_for_source
+run_reconciliation_summary_for_source
 run_csubst_scan_aa_change_summary_for_source
 run_csubst_scan_candidate_sites_for_source
 run_hgt_summary_for_source
