@@ -3020,7 +3020,8 @@ def test_runtime_open_race_retains_policy_and_reports_identity_changes(tmp_path,
         ' if str(path)=="VERSION" and kwargs.get("dir_fd") is not None and not _race_fired:\n'
         '  _race_fired=True;p=_race_root/"VERSION";info=p.stat();body=p.read_bytes()\n'
         + ('  os.link(p,_race_root.parent/"peer-link")\n' if mutation == 'link' else
-           ('  p.unlink();p.write_bytes(body)\n' if mutation == 'inode' else
+           ('  p.rename(_race_root.parent/"retained-VERSION");p.write_bytes(body)\n'
+            '  assert p.stat().st_ino != info.st_ino\n' if mutation == 'inode' else
             '  p.chmod(0o600);p.write_bytes(b"X"*len(body))\n')
            + '  p.chmod(info.st_mode & 0o777);os.utime(p,ns=(info.st_atime_ns,info.st_mtime_ns))\n')
         + ' return _race_open(path,*args,**kwargs)\n'
