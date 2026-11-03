@@ -908,7 +908,9 @@ run_gene_annotation_database_for_source() {
   while IFS= read -r input; do args+=(--input "${input}"); done <<< "${input_lines}"
   gg_artifact_prepare_stage needs_update run_gene_annotation_database "${args[@]}" || return $?
   if [[ "${needs_update}" == "1" ]]; then
-    local annotation_args=(--source-db "${file_gene_family_db}" --manifest "${gene_annotation_manifest}" --output-db "${target}" --scratch "${gg_tmp_dir}")
+    # Python tempfile uses the configured runtime TMPDIR; there is no shared
+    # gg_tmp_dir variable in the core bootstrap.
+    local annotation_args=(--source-db "${file_gene_family_db}" --manifest "${gene_annotation_manifest}" --output-db "${target}")
     for argument in "${args[@]}"; do annotation_args+=("--record=${argument}"); done
     python "${gg_support_dir}/gene_annotation_database.py" "${annotation_args[@]}" || return $?
   fi

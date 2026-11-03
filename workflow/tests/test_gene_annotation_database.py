@@ -1,11 +1,16 @@
 import csv
 import json
+import os
+import shlex
 import sqlite3
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from workflow.support import gene_annotation_database as annotation
 from workflow.support.reconciliation_summary import build_results
+from workflow.tests.shell_static_helpers import function_body
 from workflow.tests.test_reconciliation_database import build_fixture, config_fixture
 
 
@@ -263,6 +268,35 @@ def test_go_tuple_result_is_mutable_without_affecting_later_calls():
     first = annotation.go_tuples(row, dict(reversed(list(annotation.GO_COLUMNS.items()))))
     first.clear()
     assert annotation.go_tuples(row, annotation.GO_COLUMNS) == [(0, 'GO:0000001', 'P', 'literal', 'IDA')]
+
+
+def test_native_annotation_launch_under_nounset_uses_runtime_scratch(cohort, tmp_path):
+    workflow = Path(__file__).resolve().parents[1]
+    function = function_body((workflow / 'core/gg_gene_summary_core.sh').read_text(),
+                             'run_gene_annotation_database_for_source')
+    family, summary, scratch = (tmp_path / name for name in ('native-family', 'summary', 'runtime-scratch'))
+    family.mkdir()
+    (summary / 'artifact_provenance').mkdir(parents=True)
+    scratch.mkdir(mode=0o700)
+    values = dict(run_gene_annotation_database='1', dir_gene_family=str(family),
+                  summary_output_dir=str(summary), gene_annotation_manifest=str(cohort['manifest']),
+                  file_gene_family_db=str(cohort['db']), gg_support_dir=str(workflow / 'support'),
+                  gene_family_source='orthogroup', gg_workspace_output_dir=str(tmp_path / 'output'),
+                  gg_workspace_dir=str(tmp_path))
+    script = 'set -euo pipefail\nunset gg_tmp_dir\n'
+    script += '\n'.join(key + '=' + shlex.quote(value) for key, value in values.items()) + '\n'
+    script += 'gg_artifact_prepare_stage() { printf -v "$1" "%s" 1; }\n'
+    script += function + '\nrun_gene_annotation_database_for_source\n'
+    original_sha = annotation.sha256(cohort['db'])
+    result = subprocess.run(['bash', '-c', script], env={**os.environ, 'TMPDIR': str(scratch)},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    target = family / 'gg_orthogroup.annotated.db'
+    assert target.exists() and annotation.sha256(cohort['db']) == original_sha
+    with sqlite3.connect(target) as db:
+        meta = dict(db.execute('SELECT key,value FROM gene_annotation_meta'))
+        assert json.loads(meta['audit'])['reconciliation_genes_without_annotation'] == 0
+    assert (summary / 'artifact_provenance/orthogroup.gene_annotation_database.json').is_file()
 
 
 def test_native_provenance_requires_exact_sources_and_records_derivative(cohort, tmp_path):

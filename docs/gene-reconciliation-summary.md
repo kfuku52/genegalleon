@@ -234,3 +234,9 @@ python workflow/support/reconciliation_summary.py \
 For command-local GO reuse, multi-branch output batching, exact output
 equivalence and reproducible measurements, see
 [annotation and summary performance](annotation-summary-performance.md).
+
+Annotation scratch uses Python's standard `TMPDIR`, which the workflow runtime
+sets to the admitted node/workspace scratch location. Version 0.8.480 fixes the
+native annotation launch's reference to an undefined shell temporary-directory
+variable. A regression invokes the actual core launch function under `set -u`,
+with the real annotation helper and provenance writer, preserving the source DB.
