@@ -6585,6 +6585,7 @@ summary_input_files=(
   "${file_og_rooted_tree_analysis}"
   "${file_og_rooted_log}"
   "${file_og_reconciliation}"
+  "${dir_output_active}/artifact_provenance/${og_id}.reconciliation.json"
   "${file_og_generax_xml}"
   "${dir_output_active}/artifact_provenance/${og_id}.generax.json"
   "${file_og_root_candidates}"
@@ -6810,6 +6811,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     python "${gg_support_dir}/species_branch_statistics.py" \
       --family-id "${og_id}" --species-tree "${species_tree_pruned}" \
       --gene-tree "${file_og_rooted_tree_analysis}" --lca "${file_og_reconciliation}" \
+      --lca-manifest "${dir_output_active}/artifact_provenance/${og_id}.reconciliation.json" \
       --generax-tree "${file_og_generax_nhx}" \
       --generax-xml "${file_og_generax_xml}" --generax-model "${generax_rec_model}" \
       --generax-manifest "${dir_output_active}/artifact_provenance/${og_id}.generax.json" \

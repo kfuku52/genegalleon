@@ -123,6 +123,28 @@ def test_missing_method_is_null_not_zero(tmp_path):
     )
 
 
+def test_lca_producer_binds_original_parameters_versions_and_exact_trees(tmp_path):
+    family, _, species, gene, lca, _, _ = fixture(tmp_path)
+    producer = tmp_path / "lca-producer.json"
+    record = dict(
+        family_id=family,
+        step="reconciliation",
+        parameters=dict(nwkit_identity="qualified-revision"),
+        inputs=[
+            dict(label=k, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+            for k, p in [("rooted_tree", gene), ("species_tree", species)]
+        ],
+        outputs=[dict(label="reconciliation", sha256=hashlib.sha256(lca.read_bytes()).hexdigest())],
+    )
+    producer.write_text(json.dumps(record))
+    bundle = stats.build_bundle(family, species, gene, lca, lca_manifest=producer)
+    method = next(s for s in bundle["sources"] if s["method"] == "lca")
+    assert method["metadata"]["producer"] == record
+    gene.write_text(gene.read_text().replace(":1", ":2"))
+    with pytest.raises(ValueError, match="LCA input differs"):
+        stats.build_bundle(family, species, gene, lca, lca_manifest=producer)
+
+
 def test_lca_scope_does_not_invent_losses_above_gene_root(tmp_path):
     family, _, species, gene, lca, _, _ = fixture(tmp_path)
     gene.write_text("(OG0001_A1:1,OG0001_A2:1);")

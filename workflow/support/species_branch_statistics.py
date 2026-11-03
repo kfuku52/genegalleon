@@ -7,8 +7,13 @@ import csv
 import hashlib
 import io
 import json
+import sys
 from collections import Counter
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from reconciliation_database import branch_id, canonical, digest, parse_family, reference_branches
 
@@ -195,7 +200,15 @@ def branch_rows(source, reference):
 
 
 def build_bundle(
-    family, species_tree, gene_tree="", lca="", generax_xml="", generax_manifest="", generax_model="", generax_tree=""
+    family,
+    species_tree,
+    gene_tree="",
+    lca="",
+    generax_xml="",
+    generax_manifest="",
+    generax_model="",
+    generax_tree="",
+    lca_manifest="",
 ):
     species_data = Path(species_tree).read_bytes()
     reference, topology = reference_branches(species_data)
@@ -227,6 +240,26 @@ def build_bundle(
                     trees = [e for e in record.get("outputs", []) if e.get("label") == "generax_nhx"]
                     if len(trees) != 1 or trees[0]["sha256"] != hashlib.sha256(generax_gene_data).hexdigest():
                         raise ValueError("Reused GeneRax rooted tree differs from its producer")
+        else:
+            producer = input_bytes(lca_manifest)
+            if producer is not None:
+                record = json.loads(producer)
+                if record.get("family_id") != family or record.get("step") != "reconciliation":
+                    raise ValueError("LCA producer identity mismatch")
+                declared = [e for e in record.get("outputs", []) if e.get("label") == "reconciliation"]
+                if data is not None and (
+                    len(declared) != 1 or declared[0]["sha256"] != hashlib.sha256(data).hexdigest()
+                ):
+                    raise ValueError("LCA table differs from its producer")
+                for label, content in (("rooted_tree", gene_data), ("species_tree", species_data)):
+                    original = [e for e in record.get("inputs", []) if e.get("label") == label]
+                    if (
+                        content is None
+                        or len(original) != 1
+                        or original[0].get("sha256") != hashlib.sha256(content).hexdigest()
+                    ):
+                        raise ValueError("LCA input differs from its producer: " + label)
+                metadata["producer"] = record
         inputs = dict(
             species_tree=species_data,
             rooted_gene_tree=generax_gene_data if method == "generax" else gene_data,
@@ -347,7 +380,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--family-id", required=True)
     p.add_argument("--species-tree", required=True)
-    for name in ("gene-tree", "lca", "generax-xml", "generax-manifest", "generax-model", "generax-tree"):
+    for name in (
+        "gene-tree",
+        "lca",
+        "lca-manifest",
+        "generax-xml",
+        "generax-manifest",
+        "generax-model",
+        "generax-tree",
+    ):
         p.add_argument("--" + name, default="")
     p.add_argument("--bundle-out", required=True)
     p.add_argument("--stats-out", required=True)
@@ -360,7 +401,15 @@ def main(argv=None):
     validate_outputs_do_not_replace_inputs(
         [
             (n, getattr(args, n[2:].replace("-", "_")))
-            for n in ("--species-tree", "--gene-tree", "--lca", "--generax-xml", "--generax-manifest", "--generax-tree")
+            for n in (
+                "--species-tree",
+                "--gene-tree",
+                "--lca",
+                "--lca-manifest",
+                "--generax-xml",
+                "--generax-manifest",
+                "--generax-tree",
+            )
         ],
         outputs,
     )
@@ -373,6 +422,7 @@ def main(argv=None):
         args.generax_manifest,
         args.generax_model,
         args.generax_tree,
+        args.lca_manifest,
     )
     validate_bundle(bundle, args.family_id)
     with output_transaction([args.bundle_out, args.stats_out], follow_symlinks=False) as stage:
