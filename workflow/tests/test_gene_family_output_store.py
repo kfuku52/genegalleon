@@ -3995,3 +3995,90 @@ def test_delete_many_failed_atomic_log_publish_leaves_prior_history_and_payloads
     assert log.read_bytes() == before
     assert all((root / name).is_file() for name in paths)
     assert not list(log.parent.glob('.tombstones.jsonl.partial.*'))
+
+
+def test_nonblocking_tmp_cleanup_coalesces_before_scanning(tmp_path, monkeypatch):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    candidate = root / 'tmp/1_OG0000001'
+    candidate.mkdir(parents=True)
+    with store._bucket_lock(root / '.gg_store/tmp-cleanup.lock', exclusive=True) as cleaning:
+        assert cleaning
+        original = Path.iterdir
+        def guarded(path):
+            assert path != root / 'tmp', 'busy cleanup must not traverse the shared workspace'
+            return original(path)
+        monkeypatch.setattr(Path, 'iterdir', guarded)
+        assert store.cleanup_stale_tmp(root, older_than_days=7, nonblocking=True) == []
+    assert candidate.is_dir()
+
+
+def test_tmp_cleanup_releases_unrelated_families_during_measurement(tmp_path, monkeypatch):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    first = root / 'tmp/1_OG0000001'
+    second = root / 'tmp/2_OG0000002'
+    first.mkdir(parents=True)
+    second.mkdir()
+    original = store._tmp_directory_usage
+    checked = []
+    def inspect(path):
+        if path == second:
+            with store.family_bucket_lock(root / '.gg_store', 'OG0000001',
+                                          exclusive=True, nonblocking=True) as available:
+                assert available, 'unrelated family remained locked during another tree scan'
+                checked.append(True)
+        return original(path)
+    monkeypatch.setattr(store, '_tmp_directory_usage', inspect)
+    assert store.cleanup_stale_tmp(root, older_than_days=7) == []
+    assert checked == [True]
+
+
+@pytest.mark.parametrize('change', ['file', 'replacement', 'symlink'])
+def test_tmp_cleanup_defers_candidate_changed_after_measurement(tmp_path, monkeypatch, change):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    first = root / 'tmp/1_OG0000001'
+    second = root / 'tmp/2_OG0000002'
+    first.mkdir(parents=True)
+    second.mkdir()
+    original_file = first / 'work.txt'
+    original_file.write_bytes(b'old')
+    old_ns = time.time_ns() - 10 * 86400 * 1_000_000_000
+    for path in [first, second, original_file]:
+        os.utime(path, ns=(old_ns, old_ns))
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'keep').write_bytes(b'protected')
+    original = store._tmp_directory_usage
+    calls = 0
+    def mutate(path):
+        nonlocal calls
+        if path == first:
+            calls += 1
+            if calls == 2:
+                if change == 'symlink':
+                    shutil.rmtree(first)
+                    first.symlink_to(outside, target_is_directory=True)
+                else:
+                    if change == 'replacement':
+                        original_file.unlink()
+                    original_file.write_bytes(b'new')
+                    os.utime(original_file, ns=(old_ns, old_ns))
+                    os.utime(first, ns=(old_ns, old_ns))
+        return original(path)
+    monkeypatch.setattr(store, '_tmp_directory_usage', mutate)
+    removed = store.cleanup_stale_tmp(root, older_than_days=7, nonblocking=True)
+    assert first not in removed and first.exists()
+    assert (outside / 'keep').read_bytes() == b'protected'
+
+
+def test_tmp_cleanup_respects_recent_descendant_inside_old_directory(tmp_path):
+    root = tmp_path / 'orthogroup'
+    candidate = root / 'tmp/1_OG0000001'
+    candidate.mkdir(parents=True)
+    (candidate / 'recent').write_bytes(b'keep')
+    old_ns = time.time_ns() - 10 * 86400 * 1_000_000_000
+    os.utime(candidate, ns=(old_ns, old_ns))
+    assert cleanup_stale_tmp(root, older_than_days=7) == []
+    assert (candidate / 'recent').read_bytes() == b'keep'

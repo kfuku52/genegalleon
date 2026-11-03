@@ -3002,3 +3002,40 @@ def test_explicit_launch_storage_rejects_unknown_policy_and_writable_members(tmp
                       f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
     assert result.returncode != 0
     assert "storage policy" in result.stderr or "file changed: VERSION" in result.stderr
+
+
+@pytest.mark.parametrize('policy', ['', 'readonly-hardlinks-v1'])
+@pytest.mark.parametrize('mutation', ['link', 'inode', 'body'])
+def test_runtime_open_race_retains_policy_and_reports_identity_changes(tmp_path, policy, mutation):
+    release = tmp_path / 'release'
+    snapshot = _write_runtime_release_contract(release, 'gg_input_generation', launch_storage=policy)
+    wrapper = tmp_path / 'python-open-race'
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os,sys\nfrom pathlib import Path\n'
+        'code=sys.stdin.read();sys.argv=sys.argv[1:];_race_open=os.open;_race_fired=False\n'
+        f'_race_root=Path({str(release)!r})\n'
+        'def racing_open(path,*args,**kwargs):\n'
+        ' global _race_fired\n'
+        ' if str(path)=="VERSION" and kwargs.get("dir_fd") is not None and not _race_fired:\n'
+        '  _race_fired=True;p=_race_root/"VERSION";info=p.stat();body=p.read_bytes()\n'
+        + ('  os.link(p,_race_root.parent/"peer-link")\n' if mutation == 'link' else
+           ('  p.unlink();p.write_bytes(body)\n' if mutation == 'inode' else
+            '  p.chmod(0o600);p.write_bytes(b"X"*len(body))\n')
+           + '  p.chmod(info.st_mode & 0o777);os.utime(p,ns=(info.st_atime_ns,info.st_mtime_ns))\n')
+        + ' return _race_open(path,*args,**kwargs)\n'
+        'os.open=racing_open;exec(compile(code,"<runtime-open-race>","exec"))\n'
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / 'workflow/support/gg_entrypoint_bootstrap.sh'
+    command = (f'source {shlex.quote(str(bootstrap))}; '
+               f'export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; '
+               f'export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; '
+               f'gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation')
+    result = run_bash(command, tmp_path)
+    assert (result.returncode == 0) is (mutation == 'link' and bool(policy)), result.stderr
+    if mutation == 'link' and not policy:
+        assert 'identity changed between stat and open: VERSION' in result.stderr
+        assert 'links' in result.stderr
+    elif mutation != 'link':
+        assert 'Explicit runtime release file' in result.stderr

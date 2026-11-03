@@ -6883,6 +6883,44 @@ def cleanup_materialization_receipt(
     return removed
 
 
+def _tmp_directory_usage(candidate: Path) -> Optional[Tuple[int, int, int, bytes]]:
+    """Read each non-symlink entry once; retain a fence for a later idle recheck."""
+    try:
+        root_info = candidate.lstat()
+        if not stat.S_ISDIR(root_info.st_mode):
+            return None
+        newest_mtime_ns = root_info.st_mtime_ns
+        total_bytes = 0
+        total_files = 0
+        signature = hashlib.sha256()
+        pending = [(candidate, "", root_info)]
+        while pending:
+            directory, relative, info = pending.pop()
+            signature.update(repr((relative, info.st_dev, info.st_ino, info.st_mode,
+                                   info.st_uid, info.st_size, info.st_mtime_ns,
+                                   info.st_ctime_ns)).encode("utf-8"))
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                name = relative + "/" + entry.name
+                newest_mtime_ns = max(newest_mtime_ns, info.st_mtime_ns)
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append((Path(entry.path), name, info))
+                else:
+                    signature.update(repr((name, info.st_dev, info.st_ino, info.st_mode,
+                                           info.st_uid, info.st_size, info.st_mtime_ns,
+                                           info.st_ctime_ns)).encode("utf-8"))
+                    if stat.S_ISREG(info.st_mode):
+                        total_files += 1
+                        total_bytes += int(info.st_size)
+        return newest_mtime_ns, total_bytes, total_files, signature.digest()
+    except FileNotFoundError:
+        return None
+
+
 def cleanup_stale_tmp(
     root: Path,
     older_than_days: float,
@@ -6906,43 +6944,31 @@ def cleanup_stale_tmp(
     cutoff_ns = time.time_ns() - int(older_than_days * 86400 * 1_000_000_000) if older_than_days > 0 else None
     removed: List[Path] = []
     archive_root = _archive_state_root(root)
-    task_dirs = [
-        candidate
-        for candidate in sorted(tmp_root.iterdir())
-        if candidate.is_dir() and not candidate.is_symlink() and re.fullmatch(r"[0-9]+_.+", candidate.name) is not None
-    ]
-    family_id_by_candidate = {candidate: candidate.name.split("_", 1)[1] for candidate in task_dirs}
-    with lock_available_family_ids(
-        archive_root,
-        family_id_by_candidate.values(),
-        nonblocking=nonblocking,
-    ) as inactive_family_ids:
-        candidates: List[Tuple[Path, int, int, int]] = []
+    # Each array task used to traverse and lock the whole temporary workspace.
+    # A nonblocking caller now leaves that work to the cleaner already running.
+    with _bucket_lock(archive_root / "tmp-cleanup.lock", exclusive=True,
+                      nonblocking=nonblocking) as cleaning:
+        if not cleaning:
+            return []
+        task_dirs = [
+            candidate
+            for candidate in sorted(tmp_root.iterdir())
+            if candidate.is_dir() and not candidate.is_symlink()
+            and re.fullmatch(r"[0-9]+_.+", candidate.name) is not None
+        ]
+        candidates = []
         for candidate in task_dirs:
-            if family_id_by_candidate[candidate] not in inactive_family_ids:
-                continue
-            try:
-                newest_mtime_ns = candidate.stat().st_mtime_ns
-                total_bytes = 0
-                total_files = 0
-                for descendant in candidate.rglob("*"):
-                    if descendant.is_symlink():
-                        continue
-                    descendant_stat = descendant.stat()
-                    newest_mtime_ns = max(newest_mtime_ns, descendant_stat.st_mtime_ns)
-                    if descendant.is_file():
-                        total_files += 1
-                        total_bytes += int(descendant_stat.st_size)
-            except FileNotFoundError:
-                continue
-            candidates.append((candidate, newest_mtime_ns, total_bytes, total_files))
+            family_id = candidate.name.split("_", 1)[1]
+            # Do not hold every idle family while measuring unrelated trees.
+            with family_bucket_lock(archive_root, family_id, exclusive=True,
+                                    nonblocking=nonblocking) as idle:
+                if idle and (usage := _tmp_directory_usage(candidate)) is not None:
+                    candidates.append((candidate, family_id, usage))
         keep_within_limits: Set[Path] = set()
         kept_bytes = 0
         kept_files = 0
-        for candidate, _, candidate_bytes, candidate_files in sorted(
-            candidates,
-            key=lambda item: (-item[1], item[0].name),
-        ):
+        for candidate, _, usage in sorted(candidates, key=lambda item: (-item[2][0], item[0].name)):
+            _, candidate_bytes, candidate_files, _ = usage
             if max_directories > 0 and len(keep_within_limits) >= max_directories:
                 continue
             if max_bytes > 0 and kept_bytes + candidate_bytes > max_bytes:
@@ -6952,28 +6978,29 @@ def cleanup_stale_tmp(
             keep_within_limits.add(candidate)
             kept_bytes += candidate_bytes
             kept_files += candidate_files
-        for candidate, newest_mtime_ns, _, _ in candidates:
-            expired = cutoff_ns is not None and newest_mtime_ns < cutoff_ns
+        for candidate, family_id, usage in candidates:
+            expired = cutoff_ns is not None and usage[0] < cutoff_ns
             limited = max_directories > 0 or max_bytes > 0 or max_files > 0
             excess = limited and candidate not in keep_within_limits
             if not expired and not excess:
                 continue
-            receipt_path = candidate / MATERIALIZATION_RECEIPT_NAME
-            if receipt_path.is_file():
-                cleanup_materialization_receipt(
-                    receipt_path,
-                    nonblocking=False,
-                    _family_locked=True,
-                )
-            shutil.rmtree(candidate)
-            removed.append(candidate)
+            with family_bucket_lock(archive_root, family_id, exclusive=True,
+                                    nonblocking=nonblocking) as idle:
+                # A new writer may have used the family after measurement.
+                # Defer that directory, including same-size/timestamp replacements.
+                if not idle or _tmp_directory_usage(candidate) != usage:
+                    continue
+                receipt_path = candidate / MATERIALIZATION_RECEIPT_NAME
+                if receipt_path.is_file():
+                    cleanup_materialization_receipt(receipt_path, nonblocking=False, _family_locked=True)
+                shutil.rmtree(candidate)
+                removed.append(candidate)
         try:
             if tmp_root.is_dir() and not any(tmp_root.iterdir()):
                 tmp_root.rmdir()
         except OSError:
             pass
     return removed
-
 
 def _parse_subdirs(value: Optional[str]) -> Optional[Set[str]]:
     if value is None or not value.strip():

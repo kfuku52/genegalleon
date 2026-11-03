@@ -255,10 +255,16 @@ def verify_file(relative, parent_fd):
     descriptor = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
     with os.fdopen(descriptor, "rb") as stream:
         before = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(before.st_mode)
-                or (readonly_launch and before.st_uid != os.getuid())
-                or content_identity(fingerprint(before)) != content_identity(fingerprint(leaf_info))):
-            fail("Explicit runtime release file is unavailable or symlinked: {}".format(relative))
+        if not stat.S_ISREG(before.st_mode):
+            fail("Explicit runtime release opened file is not regular: {}".format(relative))
+        if readonly_launch and before.st_uid != os.getuid():
+            fail("Explicit runtime release file owner changed: {}".format(relative))
+        if content_identity(fingerprint(before)) != content_identity(fingerprint(leaf_info)):
+            names = ("device", "inode", "mode", "uid", "gid", "links", "size", "mtime", "ctime")
+            changed = [name for name, left, right in zip(names, fingerprint(leaf_info), fingerprint(before))
+                       if left != right]
+            fail("Explicit runtime release file identity changed between stat and open: {} ({}).".format(
+                relative, ",".join(changed)))
         hasher = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
