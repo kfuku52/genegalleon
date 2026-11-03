@@ -617,6 +617,7 @@ if [[ "${artifact_stale_policy:-stop}" == "rebuild" ]]; then
   python "${gg_support_dir}/cds_resolution.py" --backup-family "${sp_ub}" --workspace "${gg_workspace_dir}"
 fi
 # Publish a separate, provenance-bound analysis input; retain original inputs.
+file_sp_cds_catalogue="${file_sp_cds}"
 cds_resolution_dir="${gg_workspace_output_dir}/species_cds_resolved"
 [[ -z "${representative_annotation_cache}" ]] || \
   cds_resolution_dir="${representative_annotation_cache}/species_cds_resolved"
@@ -1106,12 +1107,15 @@ else
 fi
 
 task="Merge annotations"
-disable_if_no_input_file "run_annotation" "${file_sp_cds}"
+disable_if_no_input_file "run_annotation" "${file_sp_cds_catalogue}"
 annotation_needs_update=0
 gg_artifact_contract_init annotation_provenance_args "genome_annotation_merge" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.annotation.json"
 annotation_provenance_args+=(
   --input "cds=${file_sp_cds}"
+  --input "cds_catalogue=${file_sp_cds_catalogue}"
+  --input "cds_resolution=${file_sp_cds_resolution_report}"
   --output "annotation=${file_sp_annotation}"
+  --output "annotation_scope=${file_sp_annotation}.scope.json"
   --parameter "scientific_name=${sp_ub}"
 )
 gg_artifact_add_input_if_present annotation_provenance_args "uniprot" "${file_sp_uniprot_annotation}"
@@ -1136,7 +1140,10 @@ if [[ ${annotation_needs_update} -eq 1 && ${run_annotation} -eq 1 ]]; then
   ensure_parent_dir "${file_sp_annotation}"
   python "${gg_support_dir}/merge_cds_annotation.py" \
     --scientific_name "${sp_ub}" \
-    --cds_fasta "${file_sp_cds}" \
+    --cds_fasta "${file_sp_cds_catalogue}" \
+    --resolved_cds_fasta "${file_sp_cds}" \
+    --cds_resolution_json "${file_sp_cds_resolution_report}" \
+    --scope_json "tmp.annotation.scope.json" \
     --uniprot_tsv "${file_sp_uniprot_annotation}" \
     --busco_tsv "${file_sp_cds_busco_full}" \
     --cdskit_localize_tsv "${file_sp_cdskit_localize}" \
@@ -1149,6 +1156,7 @@ if [[ ${annotation_needs_update} -eq 1 && ${run_annotation} -eq 1 ]]; then
     --out_tsv "tmp.annotation.tsv"
   if [[ -s "tmp.annotation.tsv" ]]; then
     mv_out "tmp.annotation.tsv" "${file_sp_annotation}"
+    mv_out "tmp.annotation.scope.json" "${file_sp_annotation}.scope.json"
   fi
   gg_artifact_record "${annotation_provenance_args[@]}"
 else

@@ -6,14 +6,17 @@ import datetime
 import gzip
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import pandas
 
 try:
     from busco_table_utils import SOURCE_COORDINATE_PATTERN
+    from cds_annotation_scope import QC_COLUMNS, canonical, load_scope
     from line_comment_stream import LineCommentStream
 except ImportError:  # package import used by tests and library callers
     from workflow.support.busco_table_utils import SOURCE_COORDINATE_PATTERN
+    from workflow.support.cds_annotation_scope import QC_COLUMNS, canonical, load_scope
     from workflow.support.line_comment_stream import LineCommentStream
 
 
@@ -222,6 +225,10 @@ def main():
         "--scientific_name", metavar="PATH", default="", type=str, help="Path used by --scientific_name."
     )
     parser.add_argument("--cds_fasta", metavar="PATH", default="", type=str, help="Path used by --cds_fasta.")
+    parser.add_argument("--resolved_cds_fasta", default="", help="QC-accepted CDS FASTA, separate from the original catalogue.")
+    parser.add_argument("--cds_resolution_json", default="", help="Existing CDS-resolution decisions; does not rerun QC.")
+    parser.add_argument("--scope_json", default="", help="Write the separate catalogue/eligible-sequence contract.")
+    parser.add_argument("--existing_annotation_tsv", default="", help="Reuse exact accepted annotation fields without rerunning predictors.")
     parser.add_argument("--orthogroup_tsv", metavar="PATH", default="", type=str, help="Path used by --orthogroup_tsv.")
     parser.add_argument("--uniprot_tsv", metavar="PATH", default="", type=str, help="Path used by --uniprot_tsv.")
     parser.add_argument(
@@ -241,7 +248,17 @@ def main():
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
 
+    scoped = bool(args.resolved_cds_fasta or args.cds_resolution_json or args.scope_json)
+    if scoped and not all((args.resolved_cds_fasta, args.cds_resolution_json, args.scope_json)):
+        parser.error("--resolved_cds_fasta, --cds_resolution_json and --scope_json are required together")
+    if args.existing_annotation_tsv and not scoped:
+        parser.error("Saved annotation reuse requires a validated CDS-resolution scope")
     seqnames = read_fasta_ids(args.cds_fasta)
+    if len(seqnames) != len(set(seqnames)):
+        raise ValueError("Original CDS catalogue contains duplicate IDs")
+    accepted, qc_rows, scope = set(seqnames), {}, None
+    if scoped:
+        seqnames, accepted, qc_rows, scope = load_scope(args.cds_fasta, args.resolved_cds_fasta, args.cds_resolution_json)
     df = pandas.DataFrame(index=pandas.Index(seqnames, name="gene_id"))
 
     orthogroup_map = load_orthogroup_map(args.orthogroup_tsv, args.scientific_name)
@@ -258,8 +275,24 @@ def main():
         "mmseqs": (load_mmseqs, args.mmseqs2taxonomy_tsv),
     }
 
+    if args.existing_annotation_tsv:
+        if any(path for _, path in tasks.values()):
+            parser.error("Saved annotation reuse cannot be mixed with prediction provider tables")
+        saved = pandas.read_csv(args.existing_annotation_tsv, sep="\t", dtype=str, na_filter=False)
+        if ("gene_id" not in saved or saved.gene_id.duplicated().any()
+                or set(saved.gene_id) != accepted or set(QC_COLUMNS) & set(saved.columns)):
+            raise ValueError("Saved annotation must represent exactly the accepted CDS IDs, without prior QC columns")
+        saved = saved.set_index("gene_id")
+        if "orthogroup" in df and "orthogroup" in saved:
+            if not df.loc[saved.index, "orthogroup"].equals(saved["orthogroup"]):
+                raise ValueError("Saved annotation orthogroups disagree with the admitted catalogue")
+            saved = saved.drop(columns="orthogroup")
+        df = df.join(saved, how="left").fillna("")
+
     loaded = {k: None for k in tasks}
-    if args.ncpu == 1:
+    if args.existing_annotation_tsv:
+        pass
+    elif args.ncpu == 1:
         for key, (func, path) in tasks.items():
             loaded[key] = func(path)
     else:
@@ -273,8 +306,18 @@ def main():
     for key in ["uniprot", "cdskit_localize", "busco", "fx2tab", "gff_info", "expression", "mmseqs"]:
         df = join_if_available(df, loaded[key])
 
+    if scoped:
+        # Predictions remain restricted to resolved CDS; excluded catalogue rows
+        # retain their identity and evidence, without borrowing functional hits.
+        excluded = ~df.index.isin(accepted)
+        df.loc[excluded, df.columns.difference(["orthogroup"])] = ""
+        for column in QC_COLUMNS:
+            df[column] = [qc_rows[gene][column] for gene in df.index]
+
     df = df.reset_index()
     df.to_csv(args.out_tsv, sep="\t", index=False)
+    if scope is not None:
+        Path(args.scope_json).write_text(canonical(scope) + "\n")
     print("merge_cds_annotation.py completed!", flush=True)
 
 

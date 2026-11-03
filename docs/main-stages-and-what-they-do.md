@@ -217,6 +217,21 @@ Main outputs:
 - `workspace/output/species_genome_busco_full`, `species_genome_busco_short`
 - `workspace/output/species_dnaseq_smudgeplot/<species>_smudgeplot.zip` (optional)
 
+Annotation tables retain every original CDS ID. `cds_qc_*` columns preserve the
+existing resolution decision, rejected-candidate reasons and selected source;
+`functional_annotation_status=not_assessed_cds_qc_excluded` means no functional
+prediction was assessed for that CDS, not gene absence or a demonstrated pseudogene.
+Predictors continue to use only QC-accepted resolved CDS. The adjacent
+`<species>_annotation.tsv.scope.json` binds the original catalogue and resolved
+sequence hashes, policy, ID digests and accepted/excluded counts separately.
+The native `merge_cds_annotation.py --existing_annotation_tsv` mode can reuse
+accepted annotations exactly, with `--cds_fasta` (original),
+`--resolved_cds_fasta`, `--cds_resolution_json` and `--scope_json`; the saved
+table must contain exactly the accepted IDs. An optional `cds_scope` object per
+annotation-DB manifest source records this contract in `gene_annotation_source`.
+DB import checks exact reconciliation membership before staging the source DB
+and independently checks complete coverage again during import.
+
 Notable defaults:
 
 - most heavy tasks default to `0`,

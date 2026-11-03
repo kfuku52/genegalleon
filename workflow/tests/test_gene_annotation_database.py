@@ -68,6 +68,112 @@ def build(cohort, **kwargs):
     return annotation.build_database(cohort['db'], cohort['manifest'], cohort['target'], **kwargs)
 
 
+def test_raw_catalogue_resolution_merge_GO_and_database_keep_excluded_genes(cohort, tmp_path):
+    import sys
+
+    from workflow.support import cds_resolution
+    from workflow.support.cds_annotation_scope import QC_COLUMNS
+    from workflow.support.reformat_uniprot_diamond import refresh_go_annotations
+    helper = Path(__file__).resolve().parents[1] / 'support/merge_cds_annotation.py'
+    metadata = tmp_path / 'uniprot-meta.tsv'
+    metadata.write_text('accession\tgo_ids\tgo_aspects\tgo_terms\tgo_evidence\nP12345\tGO:0000001\tP\tprocess\tIDA\n')
+    totals = {'accepted': 0, 'excluded': 0}
+    for species in ('A', 'B', 'C'):
+        work = tmp_path / species
+        work.mkdir()
+        rows = cohort['rows'][species]
+        raw = work / 'catalogue.fa'
+        sequences = {row['gene_id']: 'ATGAAATAA' for row in rows}
+        if species == 'A':
+            # Keep a selected reconciliation gene even though its supplied CDS fails QC.
+            sequences[rows[0]['gene_id']] = 'ATGNNNTAA'
+            sequences.update(stop='TAATAAATAAATAAATGAAA', frame='ATGTAATAA')
+        raw.write_text(''.join(f'>{gene}\n{seq}\n' for gene, seq in sequences.items()))
+        resolved, _, report = cds_resolution.resolve(raw, None, None, work / 'resolved')
+        decisions = json.loads(report.read_text())['decisions']
+        accepted = {v['gene_id'] for v in decisions if v['selected_source'] is not None}
+        saved = work / 'saved.tsv'
+        fields = ['gene_id', 'orthogroup', 'sprot_recname', 'sprot_best', 'exact_score', *annotation.GO_COLUMNS.values()]
+        saved_rows = []
+        for row in rows:
+            if row['gene_id'] in accepted:
+                saved_rows.append(dict.fromkeys(fields, '') | dict(gene_id=row['gene_id'], orthogroup=row['orthogroup'],
+                    sprot_recname='literal product' if row['orthogroup'] else '',
+                    sprot_best='P12345' if row['orthogroup'] else '', exact_score='001.2300'))
+        write_tsv(saved, fields, saved_rows)
+        og = work / 'orthogroups.tsv'
+        og.write_text('Orthogroup\t' + species + '\n' + ''.join(f'{row["orthogroup"]}\t{row["gene_id"]}\n' for row in rows if row['orthogroup']))
+        merged, scope = work / 'merged.tsv', work / 'scope.json'
+        subprocess.run([sys.executable, str(helper), '--scientific_name', species, '--cds_fasta', str(raw),
+            '--resolved_cds_fasta', str(resolved), '--cds_resolution_json', str(report), '--scope_json', str(scope),
+            '--existing_annotation_tsv', str(saved), '--orthogroup_tsv', str(og), '--out_tsv', str(merged)], check=True)
+        refresh_go_annotations([str(merged)], str(metadata), str(work / 'GO'))
+        result = work / 'GO/merged.tsv'
+        with result.open() as handle:
+            actual = list(csv.DictReader(handle, delimiter='\t'))
+        assert {r['gene_id'] for r in actual} == set(sequences)
+        for row in actual:
+            assert set(QC_COLUMNS) <= row.keys()
+            totals[row['cds_qc_status']] += 1
+            if row['cds_qc_status'] == 'excluded':
+                assert row['sprot_recname'] == row['go_ids'] == row['exact_score'] == ''
+                assert row['functional_annotation_status'] == 'not_assessed_cds_qc_excluded'
+                assert json.loads(row['cds_qc_exclusion_reasons'])
+            else:
+                assert row['exact_score'] == '001.2300'
+                assert row['sprot_recname'] == ('literal product' if row['orthogroup'] else '')
+        source = next(v for v in cohort['config']['sources'] if v['species'] == species)
+        source.update(path=str(result), sha256=annotation.sha256(result), cds_scope=json.loads(scope.read_text()))
+    cohort['manifest'].write_text(json.dumps(cohort['config']))
+    audit = build(cohort)
+    assert audit['genes'] == 10 and audit['reconciliation_genes_without_annotation'] == 0
+    assert audit['cds_qc_status_counts'] == totals
+    with sqlite3.connect(cohort['target']) as db:
+        excluded = db.execute("SELECT gene_id,cds_qc_exclusion_reasons FROM gene_annotation WHERE cds_qc_status='excluded'").fetchall()
+        assert len(excluded) == 3
+        assert any('internal_ambiguous_bases' in reason for _, reason in excluded)
+        assert any('premature_stop' in reason for _, reason in excluded)
+        assert any('ambiguous_frame' in reason for _, reason in excluded)
+        assert db.execute('SELECT count(*) FROM gene_annotation_source WHERE cds_scope_json!=\'null\'').fetchone() == (3,)
+
+
+def test_missing_scope_fails_before_large_database_copy(cohort, monkeypatch):
+    cohort['rows']['A'].pop(0)
+    update_source(cohort, 'A')
+    def unexpected_copy(*args, **kwargs):
+        raise AssertionError('Large DB staging must not start for missing annotation coverage')
+    monkeypatch.setattr(annotation.tempfile, 'TemporaryDirectory', unexpected_copy)
+    with pytest.raises(ValueError, match='Annotations omit 1.*by species'):
+        build(cohort)
+
+
+@pytest.mark.parametrize('fault', ['functional_hit', 'no_reason', 'accepted_candidate', 'wrong_scope'])
+def test_excluded_qc_evidence_is_strictly_validated(cohort, fault):
+    from workflow.support.cds_annotation_scope import QC_COLUMNS
+    fields = [*cohort['fields'], *QC_COLUMNS]
+    rows = []
+    for original in cohort['rows']['A']:
+        row = dict(original)
+        row.update(dict(zip(QC_COLUMNS, ('excluded', 'no_valid_cds', '{"supplied":"premature_stop"}',
+            '{"supplied":{"accepted":false,"reason":"premature_stop"}}', '', 'not_assessed_cds_qc_excluded'), strict=True)))
+        for key in fields:
+            if key not in {'gene_id', 'orthogroup', *QC_COLUMNS}:
+                row[key] = ''
+        rows.append(row)
+    if fault == 'functional_hit':
+        rows[0]['sprot_recname'] = 'invented product'
+    elif fault == 'no_reason':
+        rows[0]['cds_qc_exclusion_reasons'] = '{}'
+    elif fault == 'accepted_candidate':
+        rows[0]['cds_qc_candidates_json'] = '{"supplied":{"accepted":true,"reason":"accepted"}}'
+    else:
+        cohort['config']['sources'][0]['cds_scope'] = {'schema': 'annotation_cds_scope_v1', 'input_count': 0}
+    update_source(cohort, 'A', rows, fields)
+    with pytest.raises(ValueError):
+        build(cohort)
+    assert not cohort['target'].exists()
+
+
 def test_copies_all_tables_and_keeps_per_gene_GO_localization_and_source(cohort):
     before = annotation.sha256(cohort['db'])
     audit = build(cohort)

@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from collections import Counter
 from contextlib import ExitStack
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +25,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from cds_annotation_scope import SCHEMA as CDS_SCOPE_SCHEMA
+from cds_annotation_scope import ids_digest, validate_qc_row
 from reconciliation_database import SCHEMA as RECONCILIATION_SCHEMA
 from shared_namespace_lock import namespace_lock
 
@@ -74,7 +77,7 @@ def load_manifest(path):
     if not isinstance(config.get("sources"), list) or not config["sources"]:
         raise ValueError("A nonempty annotation source list is required")
     for entry in config["sources"]:
-        if not isinstance(entry, dict) or set(entry) - {"species", "path", "sha256", "product_column", "go_columns"}:
+        if not isinstance(entry, dict) or set(entry) - {"species", "path", "sha256", "product_column", "go_columns", "cds_scope"}:
             raise ValueError("Unsupported annotation source keys")
         name = entry.get("species")
         if not isinstance(name, str) or not name.strip() or name != name.strip() or name in species:
@@ -88,6 +91,64 @@ def load_manifest(path):
         item = {**entry, "path": target}
         sources.append(item)
     return config, sources, {path: before}
+
+
+def check_cds_scope(source, ids, accepted, statuses):
+    scope = source.get("cds_scope")
+    if scope is None:
+        return
+    if (not isinstance(scope, dict) or scope.get("schema") != CDS_SCOPE_SCHEMA
+            or any(not re.fullmatch(r"[0-9a-f]{64}", scope.get(key, "")) for key in
+                   ("catalogue_sha256", "resolved_cds_sha256", "resolution_sha256"))
+            or scope.get("catalogue_gene_ids_sha256") != ids_digest(ids)
+            or scope.get("accepted_gene_ids_sha256") != ids_digest(accepted)
+            or scope.get("input_count") != len(ids) or scope.get("accepted_count") != len(accepted)
+            or scope.get("excluded_count") != statuses["excluded"]
+            or len(ids) != statuses["accepted"] + statuses["excluded"]):
+        raise ValueError("Annotation catalogue/CDS eligibility scope mismatch: " + source["species"])
+
+
+def preflight_annotations(source_db, config, sources, guards):
+    """Fail scope/coverage errors before copying a potentially large family DB."""
+    with sqlite3.connect(source_db.as_uri() + "?mode=ro", uri=True) as database:
+        if database.execute("SELECT 1 FROM sqlite_master WHERE name='gene_annotation'").fetchone():
+            raise ValueError("Use the original family DB, not an already annotated derivative")
+        if not database.execute("SELECT 1 FROM sqlite_master WHERE name='reconciliation_meta'").fetchone():
+            raise ValueError("Annotation import requires a model-bound reconciliation DB; enable gene_family_database_reconciliation")
+        meta = dict(database.execute("SELECT key,value FROM reconciliation_meta"))
+        if (meta.get("schema") != RECONCILIATION_SCHEMA
+                or meta.get("gene_model_contract_sha256") != config["gene_model_contract_sha256"]
+                or meta.get("family_catalog_sha256") != config["family_catalog_sha256"]):
+            raise ValueError("Annotation/reconciliation model or family contract mismatch")
+        expected = {(species, gene): family for gene, species, family in database.execute(
+            "SELECT gene_id,species,orthogroup FROM reconciliation_gene")}
+        expected_species = {json.loads(row[0])[0] for row in database.execute(
+            "SELECT descendant_taxa FROM reconciliation_species_branch WHERE terminal=1")}
+    if config.get("require_complete_genes", True) and {v["species"] for v in sources} != expected_species:
+        raise ValueError("Complete annotation requires the exact DB species set")
+    covered = set()
+    for source in sources:
+        guards[source["path"]] = identity(source["path"])
+        header, product, go = source_header(source)
+        ids, accepted, statuses = set(), set(), Counter()
+        for row in source_rows(source, header):
+            gene = row["gene_id"]
+            if not gene or gene != gene.strip() or gene in ids or ("species" in row and row["species"] != source["species"]):
+                raise ValueError("Empty/ambiguous/duplicate gene ID or conflicting annotation species")
+            ids.add(gene)
+            key = source["species"], gene
+            if key in expected:
+                if row["orthogroup"] != expected[key]:
+                    raise ValueError("Annotation family disagrees with exact reconciliation membership: " + gene)
+                covered.add(key)
+            status = validate_qc_row(row, product, go)
+            statuses[status] += 1
+            if status == "accepted":
+                accepted.add(gene)
+        check_cds_scope(source, ids, accepted, statuses)
+    missing = Counter(species for species, _ in expected.keys() - covered)
+    if config.get("require_complete_genes", True) and missing:
+        raise ValueError(f"Annotations omit {sum(missing.values())} exact reconciliation genes; by species: {canonical(dict(missing))}")
 
 
 def source_header(source):
@@ -170,7 +231,9 @@ def import_annotations(database, config, sources, guards):
         raise ValueError("Complete annotation requires the exact DB species set")
     fields, headers = {}, []
     for source in sources:
-        guards[source["path"]] = identity(source["path"])
+        before = identity(source["path"])
+        if guards.setdefault(source["path"], before) != before:
+            raise ValueError("Annotation source changed after preflight")
         header, product, go = source_header(source)
         headers.append((header, product, go))
         for name in header:
@@ -180,7 +243,7 @@ def import_annotations(database, config, sources, guards):
     columns = sorted(name for name in fields.values() if name not in {"species", "gene_id", "orthogroup"})
     if len(columns) > 1000:
         raise ValueError("Annotation column count exceeds the bounded wide-table schema")
-    database.execute("CREATE TABLE gene_annotation_source (annotation_source_id INTEGER PRIMARY KEY, species TEXT UNIQUE NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, columns_json TEXT NOT NULL, product_column TEXT NOT NULL, go_columns_json TEXT NOT NULL)")
+    database.execute("CREATE TABLE gene_annotation_source (annotation_source_id INTEGER PRIMARY KEY, species TEXT UNIQUE NOT NULL, path TEXT NOT NULL, sha256 TEXT NOT NULL, columns_json TEXT NOT NULL, product_column TEXT NOT NULL, go_columns_json TEXT NOT NULL, cds_scope_json TEXT NOT NULL)")
     database.execute("CREATE TABLE gene_annotation (species TEXT NOT NULL, gene_id TEXT NOT NULL, orthogroup TEXT, source_orthogroup TEXT NOT NULL, annotation_source_id INTEGER NOT NULL, " +
                      ",".join(quoted(name) + " TEXT" for name in columns) + ", PRIMARY KEY(species,gene_id)) WITHOUT ROWID")
     database.execute("CREATE TABLE gene_annotation_go (species TEXT NOT NULL, gene_id TEXT NOT NULL, ordinal INTEGER NOT NULL, go_id TEXT NOT NULL, aspect TEXT NOT NULL, term TEXT NOT NULL, evidence TEXT NOT NULL, annotation_source_id INTEGER NOT NULL, PRIMARY KEY(species,gene_id,ordinal)) WITHOUT ROWID")
@@ -188,17 +251,25 @@ def import_annotations(database, config, sources, guards):
     # Only immutable parsed tuples are cached, within this import. Large fields
     # bypass the cache; both entry count and admitted key size remain bounded.
     parse_go = lru_cache(maxsize=256)(_parse_go_values)
-    covered, total, terms, source_counts = set(), 0, 0, {}
+    covered, total, terms, source_counts, qc_counts = set(), 0, 0, {}, Counter()
     for source_id, (source, (header, product, go)) in enumerate(zip(sources, headers, strict=True), 1):
         species = source["species"]
-        database.execute("INSERT INTO gene_annotation_source VALUES (?,?,?,?,?,?,?)",
-                         (source_id, species, str(source["path"]), source["sha256"], canonical(header), product, canonical(go)))
+        database.execute("INSERT INTO gene_annotation_source VALUES (?,?,?,?,?,?,?,?)",
+                         (source_id, species, str(source["path"]), source["sha256"], canonical(header), product, canonical(go),
+                          canonical(source.get("cds_scope"))))
         batch, go_batch, count, batch_bytes = [], [], 0, 0
+        source_ids, accepted_ids, source_statuses = set(), set(), Counter()
         for row in source_rows(source, header):
             gene, family = row["gene_id"], row["orthogroup"]
             if not gene or gene != gene.strip() or ("species" in row and row["species"] != species):
                 raise ValueError("Empty/ambiguous gene ID or conflicting annotation species")
             key = species, gene
+            source_ids.add(gene)
+            status = validate_qc_row(row, product, go)
+            source_statuses[status] += 1
+            qc_counts[status] += 1
+            if status == "accepted":
+                accepted_ids.add(gene)
             if key in expected:
                 if expected[key] != family:
                     raise ValueError("Annotation family disagrees with exact reconciliation membership: " + gene)
@@ -221,6 +292,7 @@ def import_annotations(database, config, sources, guards):
             database.executemany("INSERT INTO gene_annotation VALUES (" + slots + ")", batch)
             database.executemany("INSERT INTO gene_annotation_go VALUES (?,?,?,?,?,?,?,?)", go_batch)
         source_counts[species] = count
+        check_cds_scope(source, source_ids, accepted_ids, source_statuses)
         total += count
     missing = len(expected.keys() - covered)
     if config.get("require_complete_genes", True) and missing:
@@ -231,7 +303,8 @@ def import_annotations(database, config, sources, guards):
                      for index, (_, product, _) in enumerate(headers, 1))
     database.execute("CREATE VIEW gene_annotation_product AS SELECT species,gene_id,orthogroup,CASE annotation_source_id " + cases + " END AS product,annotation_source_id FROM gene_annotation")
     audit = {"genes": total, "GO_tuples": terms, "genes_by_species": source_counts,
-             "reconciliation_genes": len(expected), "reconciliation_genes_without_annotation": missing}
+             "reconciliation_genes": len(expected), "reconciliation_genes_without_annotation": missing,
+             "cds_qc_status_counts": dict(qc_counts)}
     database.execute("CREATE TABLE gene_annotation_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
     database.executemany("INSERT INTO gene_annotation_meta VALUES (?,?)", [
         ("schema", SCHEMA), ("gene_model_contract_sha256", config["gene_model_contract_sha256"]),
@@ -265,6 +338,7 @@ def build_database(source_db, manifest, output_db, scratch=None, record_argv=Non
         if any(Path(str(source) + suffix).exists() for suffix in ("-wal", "-journal")):
             raise ValueError("Source database must be a closed published snapshot")
         guards[source] = identity(source)
+        preflight_annotations(source, config, sources, guards)
         temp_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="gg-gene-annotations-", dir=scratch)))
         private = temp_root / "database.db"
         checksum = hashlib.sha256()
