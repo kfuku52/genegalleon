@@ -30,7 +30,7 @@ import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -2661,25 +2661,49 @@ class GeneFamilyOutputStore:
                 self._reset_cache()
 
     def _append_tombstone(self, logical_path: str, operation: str) -> None:
-        subdir, name = logical_path.split("/", 1)
-        _safe_logical_path(subdir, name)
-        if operation not in {"delete", "undelete"}:
-            raise ValueError(operation)
+        self._append_tombstones([(logical_path, operation)])
+
+    def _append_tombstones(self, changes: Sequence[Tuple[str, str]]) -> None:
+        if not changes:
+            return
+        for logical_path, operation in changes:
+            subdir, name = logical_path.split("/", 1)
+            _safe_logical_path(subdir, name)
+            if operation not in {"delete", "undelete"}:
+                raise ValueError(operation)
         self.archive_root.mkdir(parents=True, exist_ok=True)
         generation = self._next_generation()
-        record = {
-            "schema_version": ARCHIVE_SCHEMA_VERSION,
-            "generation": generation,
-            "operation": operation,
-            "logical_path": logical_path,
-        }
         tombstone_path = self.archive_root / TOMBSTONE_FILE
         if tombstone_path.is_symlink():
             raise ArchiveStoreError(f"Symlinked tombstone logs are not supported: {tombstone_path}")
-        with tombstone_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        def append_records(handle):
+            for logical_path, operation in changes:
+                record = {"schema_version": ARCHIVE_SCHEMA_VERSION, "generation": generation,
+                          "operation": operation, "logical_path": logical_path}
+                handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+        if len(changes) == 1:
+            with tombstone_path.open("a", encoding="utf-8") as handle:
+                append_records(handle)
+        else:
+            # A large append can be interrupted between JSON records. Publish
+            # the complete batch atomically, preserving the previous history.
+            temporary = tombstone_path.with_name(f".{tombstone_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}")
+            try:
+                with temporary.open("x", encoding="utf-8") as handle:
+                    if tombstone_path.exists():
+                        with tombstone_path.open("r", encoding="utf-8") as previous:
+                            shutil.copyfileobj(previous, handle)
+                        os.fchmod(handle.fileno(), stat.S_IMODE(tombstone_path.stat().st_mode))
+                    else:
+                        os.fchmod(handle.fileno(), 0o600)
+                    append_records(handle)
+                os.replace(temporary, tombstone_path)
+                _fsync_directory(self.archive_root)
+            finally:
+                temporary.unlink(missing_ok=True)
         if tombstone_path.stat().st_size > TOMBSTONE_LOG_COMPACT_BYTES:
             self._reset_cache()
             self._load_tombstones()
@@ -2750,7 +2774,7 @@ class GeneFamilyOutputStore:
     def _family_id_for_logical_path(self, logical_path: str) -> Optional[str]:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             self._refresh_if_index_changed()
             artifact = self._load_subdir_artifacts(subdir).get(logical_path)
             if artifact is not None and artifact.family_id is not None:
@@ -2822,6 +2846,59 @@ class GeneFamilyOutputStore:
                         for equivalent_live_path in equivalent_live_paths:
                             if equivalent_live_path.is_file():
                                 equivalent_live_path.unlink()
+
+    def delete_many(
+        self,
+        logical_paths: Sequence[str],
+        *,
+        family_ids: Optional[Mapping[str, str]] = None,
+        remove_live: bool = True,
+    ) -> None:
+        """Retire one explicit batch with one generation and durable append.
+
+        The family gate excludes all producers in this store, while unrelated
+        stores remain independent. Metadata and family ownership are validated
+        before any tombstone or payload is changed. Repeating a partially
+        completed deletion is supported without restoring deleted members.
+        """
+        if isinstance(logical_paths, (str, bytes)):
+            raise ValueError("A deletion batch requires a sequence of logical paths")
+        paths = list(logical_paths)
+        if any(not isinstance(path, str) for path in paths):
+            raise ValueError("Deletion paths must be strings")
+        if family_ids is not None and not isinstance(family_ids, Mapping):
+            raise ValueError("Deletion family IDs must be a mapping")
+        if len(paths) != len(set(paths)):
+            raise ValueError("A deletion batch contains duplicate logical paths")
+        if family_ids is not None and set(family_ids) - set(paths):
+            raise ValueError("Deletion family IDs contain paths outside the batch")
+        for path in paths:
+            subdir, name = path.split("/", 1)
+            _safe_logical_path(subdir, name)
+        if not paths:
+            return
+        # Finish any legacy index migration before taking the exclusive gate.
+        self._ensure_state_index()
+        with all_family_bucket_locks(self.archive_root):
+            live_paths: Set[Path] = set()
+            with self.read_snapshot():
+                for path in paths:
+                    family = None if family_ids is None else family_ids.get(path)
+                    self._managed_family_id(path, family, "batch deletion")
+                    for equivalent in _equivalent_output_logical_paths(*path.split("/", 1)):
+                        live = self.root / equivalent
+                        if live.is_symlink() or live.parent.is_symlink():
+                            raise ArchiveStoreError(f"Symlinked deletion source is not supported: {live}")
+                        live_paths.add(live)
+            with producer_quiescence_lock(self.archive_root) as readers_idle:
+                if not readers_idle:
+                    raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
+                with archive_lock(self.archive_root):
+                    self._append_tombstones([(path, "delete") for path in paths])
+                    if remove_live:
+                        for live in sorted(live_paths):
+                            if live.is_file():
+                                live.unlink()
 
     def undelete(
         self,
@@ -7467,6 +7544,15 @@ def run_cli(args: argparse.Namespace) -> int:
             remove_live=not args.keep_live,
             family_id=getattr(args, "family_id", None),
         )
+        return 0
+    if args.command == "delete-batch":
+        records = json.loads(args.manifest.read_text(encoding="utf-8"))
+        if (not isinstance(records, list) or any(not isinstance(v, dict)
+                or set(v) != {"path", "family_id"} for v in records)):
+            raise ValueError("A deletion manifest requires path/family_id objects")
+        store.delete_many([v["path"] for v in records],
+                          family_ids={v["path"]: v["family_id"] for v in records},
+                          remove_live=not args.keep_live)
         return 0
     if args.command == "undelete":
         store.undelete(

@@ -3858,3 +3858,140 @@ def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path
         assert (third.fp is None) == all_busy
         assert (second_archive.fp is None) != all_busy
     assert first.fp is None and not store._snapshot_zip_readers
+
+
+def test_delete_many_keeps_payloads_and_family_states_outside_the_batch(tmp_path):
+    root = tmp_path / 'orthogroup'
+    families = ['OG0000001', 'OG0000002']
+    for family in families:
+        _write_family_outputs(root, family, complete=True)
+    convert_storage_to_zip(root, 'orthogroup', families, orthogroup_id_from_name)
+    store = GeneFamilyOutputStore(root)
+    for family in families:
+        store.mark_family_state(family, "complete")
+    paths = [f'{subdir}/{family}_stat.{suffix}.tsv'
+             for family in families for subdir, suffix in [('stat_tree', 'tree'), ('stat_branch', 'branch')]]
+    identities = {name: orthogroup_id_from_name(Path(name).name) for name in paths}
+    protected = {p: p.read_bytes() for p in root.rglob('*.zip') if p.name not in ['stat_tree.zip', 'stat_branch.zip']
+                 and p.parent.name not in ['stat_tree', 'stat_branch']}
+    # A stopped predecessor may already have deleted part of the sealed plan.
+    store.delete(paths[0], family_id=families[0])
+    store.delete_many(paths, family_ids=identities)
+    purge_archives(root, 'orthogroup', subdirs={'stat_tree', 'stat_branch'})
+    refreshed = GeneFamilyOutputStore(root)
+    assert all(not refreshed.logical_exists(name) for name in paths)
+    assert all(refreshed.family_state(family) == 'complete' for family in families)
+    assert all(p.read_bytes() == value for p, value in protected.items())
+    records = [json.loads(line) for line in (root / '.gg_store/tombstones.jsonl').read_text().splitlines()]
+    latest = {name: max(v['generation'] for v in records if v['logical_path'] == name) for name in paths}
+    assert len(set(latest.values())) == 1
+    assert all(refreshed.logical_exists(f'mafft/{family}_cds.aln.fa.gz') for family in families)
+
+
+@pytest.mark.parametrize('failure', ['family', 'duplicate', 'traversal', 'symlink'])
+def test_delete_many_validates_complete_plan_before_deleting_payloads(tmp_path, failure):
+    root = tmp_path / 'orthogroup'
+    family = 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    path = f'stat_tree/{family}_stat.tree.tsv'
+    paths = [path]
+    ids = {path: family}
+    if failure == 'family':
+        other = f'stat_branch/{family}_stat.branch.tsv'
+        paths.append(other)
+        ids[other] = 'OG0000002'
+    elif failure == 'duplicate':
+        paths.append(path)
+    elif failure == 'traversal':
+        paths.append('../escape')
+    else:
+        link = root / 'stat_branch' / f'{family}_link.tsv'
+        link.symlink_to(root / path)
+        paths.append('stat_branch/' + link.name)
+        ids[paths[-1]] = family
+    previous = (root / path).read_bytes()
+    with pytest.raises((ValueError, ArchiveStoreError)):
+        GeneFamilyOutputStore(root).delete_many(paths, family_ids=ids)
+    assert (root / path).read_bytes() == previous
+    assert not (root / '.gg_store/tombstones.jsonl').exists()
+
+
+def test_delete_many_empty_batch_does_not_allocate_a_generation(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / 'orthogroup')
+    monkeypatch.setattr(store, '_next_generation', lambda: pytest.fail('empty deletion allocated a generation'))
+    store.delete_many([])
+    with pytest.raises(ValueError):
+        store.delete_many('stat_tree/OG0000001_stat.tree.tsv')
+
+
+def test_delete_batch_cli_keeps_live_override_only_when_requested(tmp_path):
+    root, family = tmp_path / 'orthogroup', 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    path = f'stat_tree/{family}_stat.tree.tsv'
+    manifest = tmp_path / 'delete.json'
+    manifest.write_text(json.dumps([{'path': path, 'family_id': family}]))
+    assert run_cli(build_parser().parse_args(['delete-batch', '--root', str(root), '--manifest', str(manifest), '--keep-live'])) == 0
+    assert (root / path).is_file()
+    assert run_cli(build_parser().parse_args(['delete-batch', '--root', str(root), '--manifest', str(manifest)])) == 0
+    assert not GeneFamilyOutputStore(root).logical_exists(path)
+
+
+def test_delete_many_excludes_same_store_producers_without_locking_other_stores(tmp_path, monkeypatch):
+    from workflow.support.gene_family_output_store import family_bucket_lock
+    first, second, family = tmp_path / 'first', tmp_path / 'second', 'OG0000001'
+    _write_family_outputs(first, family, complete=True)
+    _write_family_outputs(second, family, complete=True)
+    store = GeneFamilyOutputStore(first)
+    started, release = threading.Event(), threading.Event()
+    original = store._append_tombstones
+    errors = []
+
+    def paused(changes):
+        started.set()
+        assert release.wait(10)
+        original(changes)
+
+    def worker():
+        try:
+            store.delete_many([f'stat_tree/{family}_stat.tree.tsv'], family_ids={f'stat_tree/{family}_stat.tree.tsv': family})
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(store, '_append_tombstones', paused)
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert started.wait(10)
+        with family_bucket_lock(first / '.gg_store', family, exclusive=True, nonblocking=True) as acquired:
+            assert not acquired
+        with family_bucket_lock(second / '.gg_store', family, exclusive=True, nonblocking=True) as acquired:
+            assert acquired
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive() and not errors
+
+
+def test_delete_many_failed_atomic_log_publish_leaves_prior_history_and_payloads(tmp_path, monkeypatch):
+    import workflow.support.gene_family_output_store as module
+    root, family = tmp_path / 'orthogroup', 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    store = GeneFamilyOutputStore(root)
+    old_path = f'tree_plot/{family}_tree_plot.pdf'
+    store.delete(old_path, family_id=family)
+    log = root / '.gg_store/tombstones.jsonl'
+    before = log.read_bytes()
+    paths = [f'stat_tree/{family}_stat.tree.tsv', f'stat_branch/{family}_stat.branch.tsv']
+    replace = module.os.replace
+
+    def fail_publish(source, target):
+        if Path(target) == log:
+            raise OSError('synthetic interrupted publication')
+        return replace(source, target)
+
+    monkeypatch.setattr(module.os, 'replace', fail_publish)
+    with pytest.raises(OSError, match='interrupted publication'):
+        store.delete_many(paths, family_ids={name: family for name in paths})
+    assert log.read_bytes() == before
+    assert all((root / name).is_file() for name in paths)
+    assert not list(log.parent.glob('.tombstones.jsonl.partial.*'))

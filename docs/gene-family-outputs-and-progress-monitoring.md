@@ -372,6 +372,25 @@ bash workflow/gg_gene_family_archive.sh delete \
   --path stat_branch/2_WOX_stat.branch.tsv
 ```
 
+For a large explicit retirement, use `delete-batch` rather than starting one
+transaction per file. Its JSON manifest is a list of objects such as
+`[{"path":"stat_tree/OG0000001_stat.tree.tsv","family_id":"OG0000001"}]`:
+
+```bash
+bash workflow/gg_gene_family_archive.sh delete-batch \
+  --root workspace/output/orthogroup --manifest deletion.json
+```
+
+`GeneFamilyOutputStore.delete_many(paths, family_ids=...)` provides the same
+operation in Python. It validates the complete plan and family ownership before
+deleting payloads, fences producers only in that store, and appends one durable
+generation for the batch. A partially completed earlier plan can be submitted
+again without restoring deleted members. The operation does not create backups.
+Physical ZIP retirement remains a separate scoped `purge --subdirs` operation.
+Other subdirectories and their tombstones remain intact. The synthetic
+`workflow/benchmarks/benchmark_family_delete_batch.py` compares both APIs and
+checks the retained payload manifest; it does not use biological inputs.
+
 The operation can be reversed, or the archived artifact can be restored as a
 normal file:
 

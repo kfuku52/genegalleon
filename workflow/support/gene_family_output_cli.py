@@ -180,6 +180,11 @@ def build_parser(
     delete_parser.add_argument("--keep-live", action="store_true")
     delete_parser.add_argument("--family-id")
 
+    batch_delete_parser = subparsers.add_parser("delete-batch", help="Retire explicit path/family_id JSON records in one durable batch.")
+    add_root(batch_delete_parser)
+    batch_delete_parser.add_argument("--manifest", required=True, type=Path)
+    batch_delete_parser.add_argument("--keep-live", action="store_true")
+
     undelete_parser = subparsers.add_parser("undelete")
     add_root(undelete_parser)
     undelete_parser.add_argument("--path", required=True)
