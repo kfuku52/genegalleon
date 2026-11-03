@@ -26,6 +26,24 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def validate_producer_output(producer, label, content, family):
+    """Match one required or present optional output to its exact producer."""
+    matches = []
+    for collection in ("outputs", "optional_outputs"):
+        entries = producer.get(collection, [])
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            raise ValueError("Invalid producer output collection: " + family)
+        matches.extend((collection, entry) for entry in entries if entry.get("label") == label)
+    if len(matches) != 1:
+        raise ValueError("Missing or duplicate producer output: " + family + ": " + label)
+    collection, entry = matches[0]
+    if collection == "optional_outputs" and entry.get("state") != "present":
+        raise ValueError("Producer optional output is not present: " + family + ": " + label)
+    if (entry.get("sha256") != hashlib.sha256(content).hexdigest()
+            or ("size_bytes" in entry and entry["size_bytes"] != len(content))):
+        raise ValueError("Species-branch output differs from its producer: " + family)
+
+
 def tag(element):
     return element.tag.rsplit("}", 1)[-1]
 
@@ -213,9 +231,7 @@ def write_tables(engine, store, species_tree, method_manifest=""):
                 if summary_producer.get("family_id") != family or summary_producer.get("step") != "summary_statistics":
                     raise ValueError("Species-branch producer identity mismatch: " + family)
                 for label, content in (("reconciliation_events", bundle_data), ("stat_species_branch", stats_data)):
-                    declared = [e for e in summary_producer.get("outputs", []) if e.get("label") == label]
-                    if len(declared) != 1 or declared[0].get("sha256") != hashlib.sha256(content).hexdigest():
-                        raise ValueError("Species-branch output differs from its producer: " + family)
+                    validate_producer_output(summary_producer, label, content, family)
                 bundle = validate_bundle(json.loads(bundle_data), family, reference)
                 import_bundle(conn, bundle, stats_data)
             elif stats_name in stats_names:
