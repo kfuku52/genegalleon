@@ -315,6 +315,31 @@ def test_assay_proteins_without_a_selected_family_are_counted_separately(tmp_pat
     assert manifest["evidence_audit"]["identified_proteome_genes_without_selected_family"] == 1
 
 
+def test_summary_batches_keep_all_branches_and_final_partial_batch(tmp_path):
+    db, *_ = build_fixture(tmp_path)
+    with sqlite3.connect(db) as source:
+        source.executemany('INSERT INTO reconciliation_family VALUES (?,?,?,?,?,?)', [
+            (f'zz{index:04d}', 'missing_xml', None, '{}', None, None) for index in range(1001)])
+        catalogue = [row[0] for row in source.execute('SELECT orthogroup FROM reconciliation_family ORDER BY orthogroup')]
+        source.execute("UPDATE reconciliation_meta SET value=? WHERE key='family_catalog_sha256'", (digest(catalogue),))
+    config_path, config = config_fixture(tmp_path, db)
+    config['inputs'] = {'branches': config['inputs']['branches']}
+    config_path.write_text(json.dumps(config))
+    output = tmp_path / 'summary'
+    build_results(db, config_path, output)
+    with (output / 'branch_family.tsv').open(newline='') as handle:
+        rows = list(csv.DictReader(handle, delimiter='\t'))
+    assert len(rows) == 2010
+    assert {row['branch_id'] for row in rows} == {'loss_B', 'ancestor'}
+    assert [row['orthogroup'] for row in rows if row['branch_id'] == 'ancestor'] == catalogue
+    assert rows[-1]['orthogroup'] == 'zz1000'
+    with sqlite3.connect(output / 'reconciliation_summary.db') as result:
+        assert result.execute('SELECT branch_id,count(*) FROM branch_family GROUP BY branch_id ORDER BY branch_id').fetchall() == [
+            ('ancestor', 1005), ('loss_B', 1005)]
+        assert result.execute("SELECT products,lineage_extinction_events FROM branch_family WHERE orthogroup='zz1000'").fetchall() == [
+            ('[]', None), ('[]', None)]
+
+
 def test_bh_validates_and_handles_empty_scope():
     assert bh({}) == {}
     assert bh({"x": 1, "y": .01}) == {"x": 1, "y": .02}

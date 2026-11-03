@@ -215,6 +215,56 @@ def test_long_native_structure_field_is_preserved(cohort):
         assert db.execute("SELECT length(feature_block_sequences) FROM gene_annotation WHERE gene_id='OG0001_A'").fetchone() == (200000,)
 
 
+def test_repeated_go_parsing_is_scoped_to_one_import(cohort, monkeypatch):
+    original, seen = annotation._parse_go_values, []
+
+    def counted(values):
+        seen.append(values)
+        return original(values)
+
+    monkeypatch.setattr(annotation, '_parse_go_values', counted)
+    build(cohort)
+    assert len(seen) == 2
+    cohort['target'] = cohort['target'].with_name('second.db')
+    build(cohort)
+    assert len(seen) == 4  # No cross-command retention of parsed input.
+
+
+def test_large_go_keys_bypass_cache_without_truncating_terms(cohort, monkeypatch):
+    for species, rows in cohort['rows'].items():
+        for row in rows:
+            if row['go_ids']:
+                row['go_terms'] = ('x' * 3000) + ';' + ('y' * 3000)
+        update_source(cohort, species)
+    original, seen = annotation._parse_go_values, []
+
+    def counted(values):
+        seen.append(values)
+        return original(values)
+
+    monkeypatch.setattr(annotation, '_parse_go_values', counted)
+    audit = build(cohort)
+    assert len(seen) == audit['genes']
+    with sqlite3.connect(cohort['target']) as db:
+        assert db.execute('SELECT max(length(term)) FROM gene_annotation_go').fetchone() == (3000,)
+
+
+@pytest.mark.parametrize('field,value', [('go_aspects', 'UNKNOWN;F'), ('go_evidence', 'IDA')])
+def test_valid_cached_ids_do_not_hide_changed_invalid_tuple(cohort, field, value):
+    cohort['rows']['C'][-1][field] = value
+    update_source(cohort, 'C')
+    with pytest.raises(ValueError):
+        build(cohort)
+    assert not cohort['target'].exists()
+
+
+def test_go_tuple_result_is_mutable_without_affecting_later_calls():
+    row = dict(go_ids='GO:0000001', go_aspects='P', go_terms='literal', go_evidence='IDA')
+    first = annotation.go_tuples(row, dict(reversed(list(annotation.GO_COLUMNS.items()))))
+    first.clear()
+    assert annotation.go_tuples(row, annotation.GO_COLUMNS) == [(0, 'GO:0000001', 'P', 'literal', 'IDA')]
+
+
 def test_native_provenance_requires_exact_sources_and_records_derivative(cohort, tmp_path):
     record_path = tmp_path / 'provenance.json'
     argv = ['--manifest', str(record_path), '--workspace-root', str(tmp_path),

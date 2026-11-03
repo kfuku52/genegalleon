@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import tempfile
 from contextlib import ExitStack
+from functools import lru_cache
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,6 +30,7 @@ from shared_namespace_lock import namespace_lock
 SCHEMA = "gene_annotation_database_v1"
 GO_COLUMNS = {"ids": "go_ids", "aspects": "go_aspects", "terms": "go_terms", "evidence": "go_evidence"}
 RESERVED = {"annotation_source_id", "source_orthogroup"}
+GO_ID = re.compile(r"GO:[0-9]{7}")
 
 
 def canonical(value):
@@ -132,18 +134,21 @@ def source_rows(source, header):
 def go_tuples(row, columns):
     if not columns:
         return []
-    values = {key: row[column] for key, column in columns.items()}
-    if not any(values.values()):
-        return []
-    parts = {key: [item.strip() for item in value.split(";")] for key, value in values.items()}
-    if len({len(value) for value in parts.values()}) != 1:
+    return list(_parse_go_values(tuple(row[columns[key]] for key in GO_COLUMNS)))
+
+
+def _parse_go_values(values):
+    if not any(values):
+        return ()
+    parts = [[item.strip() for item in value.split(";")] for value in values]
+    if len({len(value) for value in parts}) != 1:
         raise ValueError("GO annotation tuple cardinality mismatch")
     result = []
-    for index, (go_id, aspect, term, evidence) in enumerate(zip(*(parts[key] for key in GO_COLUMNS), strict=True)):
-        if not re.fullmatch(r"GO:[0-9]{7}", go_id) or aspect not in {"P", "F", "C"}:
+    for index, (go_id, aspect, term, evidence) in enumerate(zip(*parts, strict=True)):
+        if not GO_ID.fullmatch(go_id) or aspect not in {"P", "F", "C"}:
             raise ValueError("Invalid GO ID/aspect; no annotation tuples are guessed")
         result.append((index, go_id, aspect, term, evidence))
-    return result
+    return tuple(result)
 
 
 def import_annotations(database, config, sources, guards):
@@ -180,6 +185,9 @@ def import_annotations(database, config, sources, guards):
                      ",".join(quoted(name) + " TEXT" for name in columns) + ", PRIMARY KEY(species,gene_id)) WITHOUT ROWID")
     database.execute("CREATE TABLE gene_annotation_go (species TEXT NOT NULL, gene_id TEXT NOT NULL, ordinal INTEGER NOT NULL, go_id TEXT NOT NULL, aspect TEXT NOT NULL, term TEXT NOT NULL, evidence TEXT NOT NULL, annotation_source_id INTEGER NOT NULL, PRIMARY KEY(species,gene_id,ordinal)) WITHOUT ROWID")
     slots = ",".join("?" for _ in range(5 + len(columns)))
+    # Only immutable parsed tuples are cached, within this import. Large fields
+    # bypass the cache; both entry count and admitted key size remain bounded.
+    parse_go = lru_cache(maxsize=256)(_parse_go_values)
     covered, total, terms, source_counts = set(), 0, 0, {}
     for source_id, (source, (header, product, go)) in enumerate(zip(sources, headers, strict=True), 1):
         species = source["species"]
@@ -196,9 +204,10 @@ def import_annotations(database, config, sources, guards):
                     raise ValueError("Annotation family disagrees with exact reconciliation membership: " + gene)
                 covered.add(key)
             batch.append((species, gene, family if family in families else None, family, source_id,
-                          *(row.get(name) for name in columns)))
-            batch_bytes += sum(len(value) for value in row.values())
-            entries = go_tuples(row, go)
+                          *map(row.get, columns)))
+            batch_bytes += sum(map(len, row.values()))
+            values = tuple(row[go[key]] for key in GO_COLUMNS) if go else ()
+            entries = (parse_go(values) if sum(map(len, values)) <= 4096 else _parse_go_values(values))
             go_batch.extend((species, gene, *entry, source_id) for entry in entries)
             terms += len(entries)
             count += 1

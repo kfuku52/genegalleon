@@ -307,9 +307,16 @@ def _build_results(database, config_path, output_dir, record=None):
                 columns.update({view + "_" + field: dtype for field, dtype in
                                 (("status", "TEXT"), ("logFC", "REAL"), ("p_value", "REAL"), ("q_branch_loss", "REAL"), ("trap_enriched", "INTEGER"))})
             result.execute("CREATE TABLE branch_family (" + ",".join('"' + key + '" ' + dtype for key, dtype in columns.items()) + ", PRIMARY KEY(branch_id,orthogroup))")
+            # These values are independent of the target branch. Serialize once
+            # per family, without caching branch-local event counts or BH results.
+            family_products = {family: canonical(sorted(products[family])) for family in families}
+            family_proteins = {family: canonical(sorted(proteins[family])) for family in families}
+            family_totals = {family: sum(gene_counts[family].values()) for family in families}
+            insert = "INSERT INTO branch_family VALUES (" + ",".join("?" for _ in columns) + ")"
             with (temporary / "branch_family.tsv").open("w", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(columns), delimiter="\t")
-                writer.writeheader()
+                writer = csv.writer(handle, delimiter="\t")
+                writer.writerow(columns)
+                batch = []
                 for key, label in target_keys.items():
                     events = defaultdict(Counter)
                     for family, kind, count in db.execute("SELECT orthogroup,event_type,COUNT(*) FROM reconciliation_event WHERE branch_id=? GROUP BY orthogroup,event_type", (key,)):
@@ -327,7 +334,7 @@ def _build_results(database, config_path, output_dir, record=None):
                                    lineage_extinction_events=events[family]["loss"] if valid else None,
                                    duplication_events=events[family]["duplication"] if valid else None,
                                    extant_genes_inside=inside if valid else None,
-                                   extant_genes_outside=sum(counts.values()) - inside if valid else None,
+                                   extant_genes_outside=family_totals[family] - inside if valid else None,
                                    cafe_status=cafe_status, cafe_copy_change=cafe_change,
                                    cafe_significant_decrease=cafe_significant,
                                    cafe_generax_comparison=("not_analysed" if not valid or cafe_status != "analysed" else
@@ -338,17 +345,23 @@ def _build_results(database, config_path, output_dir, record=None):
                                                     "not_assessable_no_gene" if not members[family] else
                                                     "unique_gene_support" if proteins[family] else
                                                     "shared_family_support" if shared[family] else "not_detected"),
-                                   unique_proteome_genes=canonical(sorted(proteins[family])),
+                                   unique_proteome_genes=family_proteins[family],
                                    shared_family_psms=shared[family] if "shared_peptides" in inputs else None,
-                                   products=canonical(sorted(products[family])))
+                                   products=family_products[family])
                         for view in ("transcript", "cds"):
                             fit_status, effect, pvalue = expression.get(view, {}).get(family, ("not_analysed", None, None))
                             qvalue = qvalues.get(view, {}).get(family)
                             row.update({view + "_status": fit_status, view + "_logFC": effect, view + "_p_value": pvalue,
                                         view + "_q_branch_loss": qvalue,
                                         view + "_trap_enriched": int(qvalue < fdr and effect > logfc) if qvalue is not None else None})
-                        writer.writerow(row)
-                        result.execute("INSERT INTO branch_family VALUES (" + ",".join("?" for _ in columns) + ")", tuple(row.values()))
+                        values = tuple(row.values())
+                        writer.writerow(values)
+                        batch.append(values)
+                        if len(batch) >= 1000:
+                            result.executemany(insert, batch)
+                            batch.clear()
+                if batch:
+                    result.executemany(insert, batch)
             result.execute("CREATE TABLE branch_summary AS SELECT branch_id, COUNT(*) AS families, SUM(reconciliation_status='imported') AS imported_families, SUM(lineage_extinction_events>0) AS families_with_lineage_extinction, SUM(lineage_extinction_events) AS lineage_extinction_events, SUM(extant_genes_inside>0) AS families_with_extant_descendants, SUM(cafe_status='analysed') AS cafe_analysed_families, SUM(cafe_status='not_analysed') AS cafe_unanalysed_families, SUM(cafe_generax_comparison!='not_analysed') AS cafe_generax_comparable_families, SUM(cafe_significant_decrease) AS cafe_significant_decreases, SUM(cafe_generax_comparison='both') AS generax_extinction_and_cafe_decrease, SUM(cafe_generax_comparison='generax_extinction_only') AS generax_extinction_only, SUM(cafe_generax_comparison='cafe_decrease_only') AS cafe_decrease_only, SUM(transcript_trap_enriched) AS transcript_trap_enriched_loss_families, SUM(cds_trap_enriched) AS cds_trap_enriched_loss_families FROM branch_family GROUP BY branch_id")
             with (temporary / "branch_summary.tsv").open("w", newline="") as handle:
                 cursor = result.execute("SELECT * FROM branch_summary ORDER BY branch_id")

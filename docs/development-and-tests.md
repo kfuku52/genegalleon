@@ -583,6 +583,11 @@ and final content revalidation, use `benchmark_audited_database.py` with
 `--baseline-support`, `--warmups 1` and `--samples 3`. See
 [packed metadata audit comparisons](remaining-io-performance.md#complete-audited-builds-with-packed-metadata).
 
+For native annotation import and 15-branch evidence summaries, use
+`benchmark_annotation_summary.py`. It compares all output bytes, records peak
+RSS, and includes a distinct-GO/empty-product control. See
+[annotation and summary performance](annotation-summary-performance.md).
+
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 

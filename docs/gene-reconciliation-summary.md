@@ -230,3 +230,7 @@ python workflow/support/reconciliation_summary.py \
   --config project_reconciliation_summary.json \
   --output-dir workspace/output/gene_summary/orthogroup/reconciliation
 ```
+
+For command-local GO reuse, multi-branch output batching, exact output
+equivalence and reproducible measurements, see
+[annotation and summary performance](annotation-summary-performance.md).
