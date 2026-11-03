@@ -69,7 +69,7 @@ java() {{ echo 'Java must not be called' >&2; return 99; }}
         "reconciliation_num_speciation": 1,
         "reconciliation_num_loss": 1,
     }
-    from workflow.support.species_branch_statistics import build_bundle, branch_rows
+    from workflow.support.species_branch_statistics import branch_rows, build_bundle
     bundle = build_bundle("OG1", species, tmp_path / "output/rooted_tree/OG1_root.nwk", table_path,
                           lca_manifest=tmp_path / "output/artifact_provenance/OG1.reconciliation.json")
     lca = next(source for source in bundle["sources"] if source["method"] == "lca")
