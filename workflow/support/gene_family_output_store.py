@@ -76,6 +76,7 @@ STORE_METADATA_SCHEMA_VERSION = 1
 STATE_LOCK_STRIPES = 16
 MAX_REFERENCED_SHARDS_PER_SUBDIR = 8
 MAX_OPEN_COMPACTION_SOURCES = 32
+MAX_SNAPSHOT_ZIP_READERS = 32
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
 DEFAULT_LARGE_ZIP_WARNING_BYTES = 20 * 1024 * 1024 * 1024
 MATERIALIZATION_RECEIPT_NAME = ".gg_materialized.jsonl"
@@ -859,7 +860,7 @@ class GeneFamilyOutputStore:
         self._cache_epoch: Optional[str] = None
         self._index_update_active = False
         self._read_snapshot_epoch: Optional[str] = None
-        self._snapshot_zip_readers: Dict[threading.Thread, OrderedDict] = {}
+        self._snapshot_zip_readers: OrderedDict[Path, tuple[zipfile.ZipFile, int]] = OrderedDict()
         self._cache_lock = threading.RLock()
         self._zip_reader_cache: weakref.WeakKeyDictionary[
             threading.Thread,
@@ -1201,9 +1202,8 @@ class GeneFamilyOutputStore:
                 yield
             finally:
                 self._read_snapshot_epoch = None
-                for readers in self._snapshot_zip_readers.values():
-                    for archive, _users in readers.values():
-                        archive.close()
+                for archive, _users in self._snapshot_zip_readers.values():
+                    archive.close()
                 self._snapshot_zip_readers.clear()
             self._assert_no_pending_index_update()
             if self._read_index_epoch() != expected:
@@ -1216,21 +1216,22 @@ class GeneFamilyOutputStore:
 
     @contextlib.contextmanager
     def _snapshot_zip_reader(self, path: Path):
-        # A bounded per-thread pool avoids reparsing a large central directory
-        # when an audit alternates provenance manifests and output archives.
+        # Share central directories across joined readers. ZipFile gives each
+        # open member an independent position behind its own shared-file lock.
+        # Per-thread pools thrashed when a family had more than eight subdirs.
         cached = False
         with self._cache_lock:
-            readers = self._snapshot_zip_readers.setdefault(threading.current_thread(), OrderedDict())
+            readers = self._snapshot_zip_readers
             entry = readers.pop(path, None)
             if entry is None:
-                if len(readers) >= 8:
+                if len(readers) >= MAX_SNAPSHOT_ZIP_READERS:
                     for old_path, (old_archive, users) in list(readers.items()):
                         if users == 0:
                             readers.pop(old_path)
                             old_archive.close()
                             break
                 archive = zipfile.ZipFile(path, "r")
-                if len(readers) < 8:
+                if len(readers) < MAX_SNAPSHOT_ZIP_READERS:
                     readers[path] = archive, 1
                     cached = True
             else:

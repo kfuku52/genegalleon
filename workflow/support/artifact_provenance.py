@@ -31,6 +31,8 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
 from metadata_store import archived_bytes, archived_exists, archived_info
+from metadata_store import read_snapshot as metadata_read_snapshot
+from metadata_store import snapshot_reader as metadata_snapshot_reader
 from metadata_store import writer as metadata_writer
 from shared_namespace_lock import NamespaceLockError, namespace_lock
 
@@ -138,8 +140,11 @@ def digest_observation(*, workers=1, progress=None, spill_guards=False):
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
     try:
-        yield memo
-        without_digest_reuse(lambda: memo.validate(workers=workers, progress=progress))
+        # One immutable metadata fence spans collection, DB construction and
+        # final content revalidation. Header checks are not repeated per member.
+        with metadata_read_snapshot():
+            yield memo
+            without_digest_reuse(lambda: memo.validate(workers=workers, progress=progress))
     finally:
         _DIGEST_OBSERVATION.reset(token)
         configure_digest_cache(previous.database if previous is not None else None)
@@ -580,12 +585,12 @@ def _gene_family_collection_digest(root, subdir=None, *, workers=1):
         memo = _DIGEST_OBSERVATION.get()
         if memo is not None:
             memo.guard((str(store.root), "collection_subdirs", subdir), tuple(subdirs),
-                       lambda: tuple([subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]))
+                       scoped_digest_reader(lambda: tuple([subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR])))
         for selected in subdirs:
             names = store.file_names(selected)
             if memo is not None:
                 memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
-                           lambda selected=selected: tuple(store.file_names(selected)))
+                           scoped_digest_reader(lambda selected=selected: tuple(store.file_names(selected))))
             context = contextvars.copy_context()
             def read_member(name, selected=selected, context=context):
                 return context.copy().run(_store_member_digest, store, selected, name)
@@ -1830,7 +1835,7 @@ def _audit(args, memo, progress, workers):
     rows = []
     inventory_digest = hashlib.sha256()
     try:
-        with store.read_snapshot():
+        with store.read_snapshot(), metadata_read_snapshot():
             _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest)
     except (OSError, ValueError, ArchiveStoreError) as exc:
         rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",
@@ -1861,7 +1866,7 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
             memo.guard((str(logical_root), MANIFEST_SUBDIR, name),
                        (identity, payload_hash),
-                       lambda: _audit_manifest_identity(store, name))
+                       scoped_digest_reader(lambda: _audit_manifest_identity(store, name)))
             family_id = str(payload.get("family_id", ""))
             step = str(payload.get("step", ""))
             if not family_id or not step:
@@ -1881,12 +1886,13 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
     if MANIFEST_SUBDIR in store.logical_subdirs():
         names = store.file_names(MANIFEST_SUBDIR)
         memo.guard((str(logical_root), "manifest_inventory"), tuple(names),
-                   lambda: tuple(store.file_names(MANIFEST_SUBDIR)))
+                   scoped_digest_reader(lambda: tuple(store.file_names(MANIFEST_SUBDIR))))
         progress.phase("manifest_hash", len(names))
+        inspect_in_context = metadata_snapshot_reader(inspect_manifest)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for offset in range(0, len(names), workers * 8):
                 batch = names[offset:offset + workers * 8]
-                for name, (row, payload_hash) in zip(batch, executor.map(inspect_manifest, batch), strict=True):
+                for name, (row, payload_hash) in zip(batch, executor.map(inspect_in_context, batch), strict=True):
                     rows.append(row)
                     if row["step"] != "unknown":
                         manifested_steps.add((row["family_id"], row["step"]))

@@ -78,3 +78,57 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_remai
 Use `--case` to select one of the table cases and `--repeats` for more trials.
 Compare every `output_sha256` before interpreting timing differences. The helper
 builds only private synthetic data; it neither reads project data nor submits jobs.
+
+## Complete audited builds with packed metadata
+
+The operation-scoped metadata snapshot shares source identities across joined
+audit threads. SQLite connections remain thread-local in the existing bounded
+cache. Initial and final database headers, including SQLite commit counters,
+still fence the operation; absent databases becoming present, replacements,
+symlinks and active journals invalidate it. A copied context cannot reuse an
+expired snapshot. Every logical body is still read and checked against its SHA,
+and every unique audit content digest is recomputed before publication.
+
+Snapshot ZIP readers share one bounded 32-archive pool across threads instead
+of separate eight-archive pools. This avoids repeatedly parsing central
+directories when a family spans many output subdirectories. Active members
+cannot be evicted, excess active readers close on return, and all pooled
+handles close when the joined snapshot ends. Ordinary non-snapshot readers
+retain their existing path-identity checks and per-thread cache.
+
+`workflow/tests/benchmark_audited_database.py` measures the full native audit,
+database build and final source revalidation in fresh processes. The packed
+fixture combines per-family ZIP outputs with SQLite-held provenance; `--layout
+raw` is a control. Before/after runs use one identical input directory, compare
+all table schemas and sorted rows, require byte-identical audit reports and
+equal inventory hashes, and record header/ZIP-open counts. Time excludes fixture
+creation and output comparison; peak RSS includes imports and comparison.
+These synthetic results do not establish a SHIROKANE production speedup or
+change the resources and fixed source of a running project job.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/tests/benchmark_audited_database.py \
+  --baseline-support /path/to/saved/workflow/support --families 512 \
+  --warmups 1 --samples 3 --layout packed --output /tmp/audited-db-packed.json
+```
+
+Mount the saved support tree read-only with `GENEGALLEON_DOCKER_EXTRA_BINDS` or
+`GENEGALLEON_SIF_EXTRA_BINDS`. Run both revisions serially in the same immutable
+runtime with no concurrent tests or benchmark builds. Optional `--profile`
+writes profiling details to each worker log.
+
+2026-11-03 comparison against `524cfc4d0b857d5155251aa98db69ff38cd938c9`
+(0.8.477): Linux/arm64 Docker image
+`sha256:f0632dbd422a3ee87e3c2a82c3612cf64413a06c932140e69c178a16ef73b708`,
+Python 3.12.15, four audit workers, one discarded warmup per revision and three
+measured fresh processes. The packed fixture contains 512 families, 6,144 ZIP
+members across 12 archives and 2,048 SQLite-held manifests. The median full
+audited build fell from 26.450 to 16.566 seconds (37.4% less time, 1.60x).
+Median peak RSS fell from 196.2 to 178.2 MiB. Header checks fell from 28,687 to
+13 and median ZIP opens from 8,314 to 12. Both revisions retained all 6,146
+unique content reads and 6,146 final revalidation reads, 6,817,320 hashed bytes
+and 8,206 source guards, including disk-spilled guards. Complete logical DB,
+audit-report and inventory hashes matched across all six measured runs.
+The raw-layout control was effectively unchanged: 7.593 to 7.667 seconds,
+155.8 to 156.9 MiB peak RSS, with the same complete output hashes. No raw-layout
+speedup is claimed.

@@ -578,6 +578,11 @@ see [remaining I/O performance](remaining-io-performance.md) and
 [batch I/O performance](batch-io-performance.md). Its benchmark also
 checks equivalent logical outputs and separates parent/child peak RSS.
 
+For complete audited DB builds, including ZIP outputs, SQLite-packed provenance
+and final content revalidation, use `benchmark_audited_database.py` with
+`--baseline-support`, `--warmups 1` and `--samples 3`. See
+[packed metadata audit comparisons](remaining-io-performance.md#complete-audited-builds-with-packed-metadata).
+
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 

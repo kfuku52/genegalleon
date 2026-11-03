@@ -562,6 +562,95 @@ def test_snapshot_checks_only_bounded_database_headers(tmp_path, monkeypatch):
     assert sizes and -1 not in sizes and sum(sizes) <= 400
 
 
+def test_snapshot_threads_share_identities_but_not_sqlite_connections(tmp_path, monkeypatch):
+    import concurrent.futures
+    import threading
+
+    root = tmp_path / "versions"
+    root.mkdir()
+    for index in range(64):
+        (root / f"run.{index}.log").write_bytes(str(index).encode())
+    pack(root)
+    original, headers, lock = store._db_signature, [], threading.Lock()
+    def signature(path):
+        with lock:
+            headers.append(path)
+        return original(path)
+    monkeypatch.setattr(store, "_db_signature", signature)
+    barrier = threading.Barrier(4)
+    def read(offset):
+        barrier.wait(timeout=10)
+        return [store.archived_bytes(root / f"run.{index}.log") for index in range(offset, 64, 4)]
+    with store.read_snapshot():
+        reader = store.snapshot_reader(read)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(reader, range(4)))
+    assert results == [[str(index).encode() for index in range(offset, 64, 4)] for offset in range(4)]
+    assert len(headers) <= 6  # initial identity, four opens, final identity
+
+
+def test_snapshot_does_not_reuse_a_closed_lru_connection(tmp_path):
+    roots = []
+    for index in range(10):
+        root = tmp_path / str(index) / "versions"
+        root.mkdir(parents=True)
+        (root / "run.log").write_bytes(str(index).encode())
+        pack(root)
+        roots.append(root)
+    with store.read_snapshot():
+        for index, root in enumerate(roots):
+            assert store.archived_bytes(root / "run.log") == str(index).encode()
+        assert store.archived_bytes(roots[0] / "run.log") == b"0"
+
+
+def test_copied_context_cannot_reuse_a_completed_snapshot(tmp_path):
+    import contextvars
+    import shutil
+
+    root = tmp_path / "versions"
+    root.mkdir()
+    path = root / "run.log"
+    path.write_bytes(b"original")
+    pack(root)
+    with store.read_snapshot():
+        assert store.archived_bytes(path) == b"original"
+        saved = contextvars.copy_context()
+    replacement = tmp_path / "replacement.db"
+    shutil.copyfile(root / store.DATABASE, replacement)
+    with sqlite3.connect(replacement) as database:
+        database.execute("UPDATE files SET sha256=?", ("0" * 64,))
+    os.replace(replacement, root / store.DATABASE)
+    with pytest.raises(ValueError, match="corrupt"):
+        saved.run(store.archived_bytes, path)
+
+
+@pytest.mark.parametrize("mutation", ["commit", "journal", "missing_appears"])
+def test_snapshot_final_fence_rejects_metadata_changes(tmp_path, monkeypatch, mutation):
+    import shutil
+
+    root = tmp_path / "versions"
+    root.mkdir()
+    path = root / "run.log"
+    path.write_bytes(b"original")
+    pack(root)
+    database = root / store.DATABASE
+    coarse_database_stamps(monkeypatch)
+    if mutation == "missing_appears":
+        saved = tmp_path / "saved.db"
+        shutil.copyfile(database, saved)
+        database.unlink()
+    with pytest.raises(ValueError, match="changed|standalone"):
+        with store.read_snapshot():
+            assert store.archived_bytes(path) == (None if mutation == "missing_appears" else b"original")
+            if mutation == "commit":
+                with sqlite3.connect(database) as db:
+                    db.execute("UPDATE files SET sha256=?", ("0" * 64,))
+            elif mutation == "journal":
+                Path(str(database) + "-journal").write_bytes(b"")
+            else:
+                shutil.copyfile(saved, database)
+
+
 def test_collection_prefetch_preserves_order_and_bounded_read_ahead(tmp_path, monkeypatch):
     import threading
     import time

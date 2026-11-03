@@ -97,35 +97,86 @@ def _db_signature(path):
     return (*value, int.from_bytes(header[24:28], "big"), int.from_bytes(header[92:96], "big"))
 
 
+class _ReadSnapshot:
+    """Share a source-identity fence, never SQLite connections, across readers."""
+    def __init__(self):
+        self.identities = {}
+        self.lock = threading.RLock()
+        self.active = True
+        self.pid = os.getpid()
+
+    def identity(self, path, observe):
+        with self.lock:
+            if path not in self.identities:
+                if observe is not None:
+                    observe(path)
+                try:
+                    value = _db_signature(path)
+                except FileNotFoundError:
+                    value = None
+                self.identities[path] = value
+            return self.identities[path]
+
+    def validate(self):
+        for path, expected in self.identities.items():
+            current = None if not path.exists() else _db_signature(path)
+            if current != expected:
+                raise ValueError("Metadata database changed during observation")
+
+
+def _snapshot():
+    value = _SNAPSHOT.get()
+    return value if value is not None and value.active and value.pid == os.getpid() else None
+
+
+def snapshot_reader(reader):
+    """Carry only the metadata identity fence into a joined worker thread."""
+    snapshot = _snapshot()
+    if snapshot is None:
+        return reader
+    def read(*args, **kwargs):
+        token = _SNAPSHOT.set(snapshot)
+        try:
+            return reader(*args, **kwargs)
+        finally:
+            _SNAPSHOT.reset(token)
+    return read
+
+
 @contextlib.contextmanager
 def read_snapshot():
-    if _SNAPSHOT.get() is not None:
+    """Fence database identities once per joined read operation.
+
+    A copied Context can share this fence between threads. Connections remain
+    in each reader's bounded thread-local cache; no SQLite handle crosses a
+    thread boundary. Final headers still detect commits with coarse timestamps.
+    """
+    if _snapshot() is not None:
         yield
         return
-    opened = {}
+    opened = _ReadSnapshot()
     token = _SNAPSHOT.set(opened)
     try:
         yield
-        for path, connection in opened.items():
-            current = None if not path.exists() else _db_signature(path)
-            if current != (None if connection is None else connection[2]):
-                raise ValueError("Metadata database changed during observation")
+        opened.validate()
     finally:
+        opened.active = False
         _SNAPSHOT.reset(token)
 
 
 def _connection(root, observe=None):
     path = root / DATABASE
-    snapshot = _SNAPSHOT.get()
-    if snapshot is not None and path in snapshot:
-        return snapshot[path]
-    if observe is not None:
-        observe(path)
-    try:
-        identity = _db_signature(path)
-    except FileNotFoundError:
-        if snapshot is not None:
-            snapshot[path] = None
+    snapshot = _snapshot()
+    if snapshot is not None:
+        identity = snapshot.identity(path, observe)
+    else:
+        if observe is not None:
+            observe(path)
+        try:
+            identity = _db_signature(path)
+        except FileNotFoundError:
+            identity = None
+    if identity is None:
         return None
     cache = getattr(_LOCAL, "connections", None)
     if cache is None:
@@ -150,8 +201,6 @@ def _connection(root, observe=None):
             cache.popitem(last=False)[1].close()
     cache.move_to_end(key)
     opened = cache[key], path, identity
-    if snapshot is not None:
-        snapshot[path] = opened
     return opened
 
 
@@ -161,7 +210,7 @@ def _query(root, sql, values=(), observe=None):
         return []
     db, path, before = opened
     rows = db.execute(sql, values).fetchall()
-    if _SNAPSHOT.get() is None and _db_signature(path) != before:
+    if _snapshot() is None and _db_signature(path) != before:
         raise ValueError("Metadata database changed during read")
     return rows
 

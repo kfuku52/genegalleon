@@ -687,6 +687,48 @@ def test_threaded_audit_matches_serial_and_binds_machine_result(tmp_path):
     assert reports[0].read_bytes() == reports[1].read_bytes()
 
 
+def test_packed_manifest_audit_reuses_headers_and_rechecks_every_body(tmp_path, monkeypatch):
+    import sqlite3
+
+    import metadata_store
+
+    logical = fixture(tmp_path, families=64)
+    metadata_store.pack(logical / "artifact_provenance", writers_stopped=True, delete_originals=True)
+    original, calls, lock = metadata_store._db_signature, [], threading.Lock()
+    def header(path):
+        with lock:
+            calls.append(path)
+        return original(path)
+    monkeypatch.setattr(metadata_store, "_db_signature", header)
+    report = tmp_path / "audit.tsv"
+    assert provenance.audit(arguments(tmp_path, logical, report, workers=4)) == 0
+    assert len(calls) <= 12
+    assert json.loads(report.with_suffix(".tsv.result.json").read_bytes())["status_counts"] == {"current": 64}
+    # A fresh operation must read the packed bytes again, not accept a saved proof.
+    with sqlite3.connect(logical / "artifact_provenance" / metadata_store.DATABASE) as db:
+        db.execute("UPDATE files SET sha256=? WHERE path=?", ("0" * 64, "OG0000000.example.json"))
+    assert provenance.audit(arguments(tmp_path, logical, report, workers=4)) != 0
+
+
+def test_packed_manifest_commit_after_content_fence_rejects_publication(tmp_path, monkeypatch):
+    import sqlite3
+
+    import metadata_store
+
+    logical = fixture(tmp_path, families=4)
+    root = logical / "artifact_provenance"
+    metadata_store.pack(root, writers_stopped=True, delete_originals=True)
+    original = AuditDigests.validate
+    def changed(memo, **kwargs):
+        original(memo, **kwargs)
+        with sqlite3.connect(root / metadata_store.DATABASE) as db:
+            db.execute("UPDATE files SET sha256=?", ("0" * 64,))
+    monkeypatch.setattr(AuditDigests, "validate", changed)
+    report = tmp_path / "audit.tsv"
+    assert provenance.audit(arguments(tmp_path, logical, report, workers=4)) != 0
+    assert "audit_error" in report.read_text()
+
+
 def test_manifest_mutation_during_audit_fails_before_success_publication(tmp_path, monkeypatch):
     logical = fixture(tmp_path, 1)
     original = provenance.audit_manifest

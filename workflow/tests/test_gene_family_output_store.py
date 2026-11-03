@@ -3777,3 +3777,64 @@ def test_empty_genecount_family_cannot_shift_array_identity(tmp_path):
     catalog.write_text("Orthogroup\tTotal\n\t1\nHOG0000004\t2\n", encoding="utf-8")
     with pytest.raises(ValueError, match="empty family identity"):
         family_context("orthogroup", genecount=catalog)
+
+
+def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch):
+    paths = []
+    for index in range(12):
+        path = tmp_path / f"payload{index}.zip"
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for member in range(4):
+                archive.writestr(str(member), bytes([index, member]) * 65536)
+        paths.append(path)
+    original, opened, lock = zipfile.ZipFile.__init__, [], threading.Lock()
+    def init(archive, path, *a, **kw):
+        with lock:
+            opened.append(archive)
+        original(archive, path, *a, **kw)
+    monkeypatch.setattr(zipfile.ZipFile, "__init__", init)
+    store = GeneFamilyOutputStore(tmp_path)
+    barrier = threading.Barrier(4)
+    def read(member):
+        barrier.wait(timeout=10)
+        for _ in range(3):
+            for index, path in enumerate(paths):
+                with store._snapshot_zip_reader(path) as archive, archive.open(str(member)) as handle:
+                    assert handle.read(17) == (bytes([index, member]) * 9)[:17]
+                    handle.seek(0)
+                    assert handle.read() == bytes([index, member]) * 65536
+    with store.read_snapshot():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(read, range(4)))
+        assert len(opened) == len(paths)
+    assert not store._snapshot_zip_readers and all(archive.fp is None for archive in opened)
+
+
+@pytest.mark.parametrize("all_busy", [False, True])
+def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path, monkeypatch, all_busy):
+    import contextlib
+
+    import workflow.support.gene_family_output_store as module
+
+    monkeypatch.setattr(module, "MAX_SNAPSHOT_ZIP_READERS", 2)
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"{index}.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("payload", str(index))
+        paths.append(path)
+    store = GeneFamilyOutputStore(tmp_path)
+    with store.read_snapshot(), contextlib.ExitStack() as stack:
+        first = stack.enter_context(store._snapshot_zip_reader(paths[0]))
+        second = store._snapshot_zip_reader(paths[1])
+        if all_busy:
+            second_archive = stack.enter_context(second)
+        else:
+            with second as second_archive:
+                assert second_archive.read("payload") == b"1"
+        with store._snapshot_zip_reader(paths[2]) as third:
+            assert third.read("payload") == b"2" and len(store._snapshot_zip_readers) == 2
+            assert first.read("payload") == b"0"
+        assert (third.fp is None) == all_busy
+        assert (second_archive.fp is None) != all_busy
+    assert first.fp is None and not store._snapshot_zip_readers
