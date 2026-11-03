@@ -36,6 +36,19 @@ RESERVED = {"annotation_source_id", "source_orthogroup"}
 GO_ID = re.compile(r"GO:[0-9]{7}")
 
 
+def reconciled_gene_catalogue(database):
+    query = "SELECT gene_id,species,orthogroup FROM reconciliation_gene"
+    if database.execute("SELECT 1 FROM sqlite_master WHERE name='species_reconciliation_gene'").fetchone():
+        query += " UNION SELECT gene_id,species,orthogroup FROM species_reconciliation_gene"
+    result, identities = {}, {}
+    for gene, species, family in database.execute(query):
+        if gene in identities and identities[gene] != (species, family):
+            raise ValueError("Reconciliation methods disagree on gene identity: " + gene)
+        identities[gene] = (species, family)
+        result[species, gene] = family
+    return result
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
@@ -120,8 +133,7 @@ def preflight_annotations(source_db, config, sources, guards):
                 or meta.get("gene_model_contract_sha256") != config["gene_model_contract_sha256"]
                 or meta.get("family_catalog_sha256") != config["family_catalog_sha256"]):
             raise ValueError("Annotation/reconciliation model or family contract mismatch")
-        expected = {(species, gene): family for gene, species, family in database.execute(
-            "SELECT gene_id,species,orthogroup FROM reconciliation_gene")}
+        expected = reconciled_gene_catalogue(database)
         expected_species = {json.loads(row[0])[0] for row in database.execute(
             "SELECT descendant_taxa FROM reconciliation_species_branch WHERE terminal=1")}
     if config.get("require_complete_genes", True) and {v["species"] for v in sources} != expected_species:
@@ -223,8 +235,7 @@ def import_annotations(database, config, sources, guards):
     if database.execute("SELECT 1 FROM sqlite_master WHERE name='gene_annotation'").fetchone():
         raise ValueError("Use the original family DB, not an already annotated derivative")
     families = {row[0] for row in database.execute("SELECT orthogroup FROM reconciliation_family")}
-    expected = {(species, gene): family for gene, species, family in database.execute(
-        "SELECT gene_id,species,orthogroup FROM reconciliation_gene")}
+    expected = reconciled_gene_catalogue(database)
     expected_species = {json.loads(row[0])[0] for row in database.execute(
         "SELECT descendant_taxa FROM reconciliation_species_branch WHERE terminal=1")}
     if config.get("require_complete_genes", True) and {item["species"] for item in sources} != expected_species:

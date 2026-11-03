@@ -52,6 +52,25 @@ def read_reconciliation_stats(path):
     }
 
 
+def read_species_branch_stats(path):
+    table = pandas.read_csv(path, sep="\t")
+    required = {"method", "source_id", "species_branch_id", "status", "loss_count", "duplication_count", "speciation_count"}
+    if not required <= set(table.columns) or table.duplicated(["source_id", "species_branch_id"]).any():
+        raise ValueError("Invalid species-branch statistics")
+    result = {}
+    for method, rows in table.groupby("method"):
+        if method not in {"lca", "generax"} or rows.source_id.nunique() != 1:
+            raise ValueError("Ambiguous reconciliation method/source")
+        resolved = rows.status.eq("analysed")
+        result[method + "_status"] = "analysed" if resolved.any() else "not_available"
+        for event in ("loss", "duplication", "speciation"):
+            values = pandas.to_numeric(rows.loc[resolved, event + "_count"], errors="raise")
+            if values.isna().any() or (values < 0).any() or (values % 1 != 0).any():
+                raise ValueError("Species-branch event counts must be nonnegative integers")
+            result[method + "_num_" + event] = int(values.sum()) if resolved.any() else None
+    return result
+
+
 def read_dating_stats(path):
     """Retain the actual estimator and the interpretation of native intervals."""
     with open(path, encoding="utf-8") as handle:
@@ -448,6 +467,8 @@ def build_arg_parser():
     parser.add_argument("--generax_nhx", metavar="PATH", default="", type=str, help="Path used by --generax_nhx.")
     parser.add_argument("--reconciliation", metavar="PATH", default="", type=str,
                         help="NWKIT LCA reconciliation TSV for event/loss counts.")
+    parser.add_argument("--species_branch_stats", metavar="PATH", default="", type=str,
+                        help="Method-separated species-branch event counts.")
     parser.add_argument("--dated_tree", metavar="PATH", default="", type=str, help="Path used by --dated_tree.")
     parser.add_argument("--dated_log", metavar="PATH", default="", type=str, help="Path used by --dated_log.")
 
@@ -1908,6 +1929,11 @@ def main():
         tree_info.update(tree_tmp)
     if os.path.exists(params["reconciliation"]):
         tree_info.update(read_reconciliation_stats(params["reconciliation"]))
+    if os.path.exists(params["species_branch_stats"]):
+        species_stats = read_species_branch_stats(params["species_branch_stats"])
+        if "reconciliation_num_loss" in tree_info and species_stats.get("lca_num_loss") != tree_info["reconciliation_num_loss"]:
+            raise ValueError("LCA tree and species-branch loss totals differ")
+        tree_info.update(species_stats)
     if os.path.exists(params["iqtree_model"]):
         tree_tmp = kfog.get_iqtree_model_stats(params["iqtree_model"])
         tree_info.update(tree_tmp)

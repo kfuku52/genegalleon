@@ -1989,6 +1989,26 @@ def test_purge_physically_applies_tombstones_live_overrides_and_family_filter(
     refreshed.verify()
 
 
+def test_scoped_purge_removes_only_selected_payloads_and_keeps_other_tombstones(tmp_path: Path):
+    root, family = tmp_path / "orthogroup", "OG0000001"
+    _write_family_outputs(root, family, complete=True)
+    convert_storage_to_zip(root, "orthogroup", [family], orthogroup_id_from_name)
+    store = GeneFamilyOutputStore(root)
+    store.delete(f"stat_branch/{family}_stat.branch.tsv", family_id=family)
+    store.delete(f"mafft/{family}_cds.aln.fa.gz", family_id=family)
+    archives = {p: p.read_bytes() for p in root.rglob("*.zip") if p.parent.name != "stat_branch" and p.name != "stat_branch.zip"}
+    purge_archives(root, "orthogroup", subdirs={"stat_branch"})
+    assert all(p.read_bytes() == content for p, content in archives.items())
+    refreshed = GeneFamilyOutputStore(root)
+    assert not refreshed.logical_exists(f"stat_branch/{family}_stat.branch.tsv")
+    assert not refreshed.logical_exists(f"mafft/{family}_cds.aln.fa.gz")
+    assert refreshed.logical_exists(f"stat_tree/{family}_stat.tree.tsv")
+    assert (root / ".gg_store/tombstones.jsonl").is_file()
+    assert not [p for p in root.rglob("*.zip") if p.parent.name == "stat_branch" or p.name == "stat_branch.zip"]
+    with pytest.raises(ValueError, match="global catalogue"):
+        purge_archives(root, "orthogroup", subdirs={"stat_tree"}, valid_family_ids={family})
+
+
 def test_tmp_cleanup_enforces_total_byte_and_file_limits(tmp_path: Path):
     root = tmp_path / "orthogroup"
     candidates = []

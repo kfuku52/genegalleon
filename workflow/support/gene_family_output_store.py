@@ -6597,7 +6597,14 @@ def purge_archives(
     family_from_name: Optional[Callable[[str], Optional[str]]] = None,
     compression: str = "adaptive",
     compression_level: int = 6,
+    subdirs: Optional[Iterable[str]] = None,
 ) -> List[Path]:
+    selected = None if subdirs is None else set(subdirs)
+    if selected is not None:
+        if valid_family_ids is not None:
+            raise ValueError("A scoped purge cannot drop families from the global catalogue")
+        for subdir in selected:
+            _safe_logical_path(subdir, "__archive__")
     root = Path(root).resolve()
     archive_root = _archive_state_root(root)
     payload_root = _archive_payload_root(root)
@@ -6617,6 +6624,8 @@ def purge_archives(
             created: List[Path] = []
             archived_subdirs = list(store._logical_subdirs_unlocked())
             for subdir in archived_subdirs:
+                if selected is not None and subdir not in selected:
+                    continue
                 archived = store._load_subdir_artifacts(subdir)
                 retained: List[Artifact] = []
                 for logical_path, artifact in archived.items():
@@ -6661,10 +6670,10 @@ def purge_archives(
                         path.unlink()
                 _fsync_directory(payload_root / subdir)
             tombstone_path = archive_root / TOMBSTONE_FILE
-            if tombstone_path.is_file() and not tombstone_path.is_symlink():
+            if selected is None and tombstone_path.is_file() and not tombstone_path.is_symlink():
                 tombstone_path.unlink()
             legacy_state_path = archive_root / FAMILY_STATE_FILE
-            if legacy_state_path.is_file() and not legacy_state_path.is_symlink():
+            if selected is None and legacy_state_path.is_file() and not legacy_state_path.is_symlink():
                 legacy_state_path.unlink()
             if valid_family_ids is not None:
                 state_dir = archive_root / FAMILY_STATE_DIR_NAME
@@ -7574,6 +7583,7 @@ def run_cli(args: argparse.Namespace) -> int:
             family_from_name=family_from_name,
             compression=args.compression,
             compression_level=args.compression_level,
+            subdirs=_parse_subdirs(args.subdirs),
         ):
             print(f"purged\t{zip_path}")
         _write_archive_status(root)

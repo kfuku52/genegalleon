@@ -48,11 +48,13 @@ def load_config(path):
         raise ValueError("Unsupported reconciliation summary configuration")
     unknown = set(config) - {"schema", "inputs", "family_catalog_sha256", "gene_model_contract_sha256",
                              "expression_p_value_semantics", "expression_fdr", "expression_min_logfc",
-                             "proteome_species", "require_complete_reconciliation"}
+                             "proteome_species", "require_complete_reconciliation", "event_source"}
     if unknown:
         raise ValueError("Unknown summary configuration keys: " + ",".join(sorted(unknown)))
     if not isinstance(config.get("require_complete_reconciliation", False), bool):
         raise ValueError("require_complete_reconciliation must be a JSON boolean")
+    if config.get("event_source", "generax") not in {"generax", "lca"}:
+        raise ValueError("event_source must be generax or lca")
     inputs = {}
     for key, entry in config.get("inputs", {}).items():
         if key not in {"branches", "cafe", "expression_transcript", "expression_cds",
@@ -122,8 +124,9 @@ def read_expression(path, families):
     return result
 
 
-def collect_evidence(inputs, config, db, families):
-    gene_family = dict(db.execute("SELECT gene_id,orthogroup FROM reconciliation_gene"))
+def collect_evidence(inputs, config, db, families, gene_query=None):
+    gene_query = gene_query or "SELECT gene_id,orthogroup,species FROM reconciliation_gene"
+    gene_family = dict(db.execute("SELECT gene_id,orthogroup FROM ("+gene_query+")"))
     expression = {view: read_expression(inputs["expression_" + view], families)
                   for view in ("transcript", "cds") if "expression_" + view in inputs}
     if expression and config.get("expression_p_value_semantics") != "one_sided_trap_enrichment_positive_logfc_v1":
@@ -139,7 +142,7 @@ def collect_evidence(inputs, config, db, families):
                 or annotation_meta.get("family_catalog_sha256") != meta["family_catalog_sha256"]):
             raise ValueError("Embedded gene annotations disagree with the reconciliation contract")
         for gene, family, product in db.execute(
-                "SELECT r.gene_id,r.orthogroup,a.product FROM reconciliation_gene r "
+                "SELECT r.gene_id,r.orthogroup,a.product FROM ("+gene_query+") r "
                 "JOIN gene_annotation_product a ON a.species=r.species AND a.gene_id=r.gene_id"):
             database_products[gene] = product or ""
             if product:
@@ -151,7 +154,7 @@ def collect_evidence(inputs, config, db, families):
         if not species:
             raise ValueError("Explicit proteome_species is required")
         expected = {gene: family for gene, family in db.execute(
-            "SELECT gene_id,orthogroup FROM reconciliation_gene WHERE species=?", (species,))}
+            "SELECT gene_id,orthogroup FROM ("+gene_query+") WHERE species=?", (species,))}
         found = {}
         for row in read_tsv(inputs["proteome_members"], ("gene_id", "orthogroup")):
             gene, family = row["gene_id"], row["orthogroup"]
@@ -251,10 +254,23 @@ def _build_results(database, config_path, output_dir, record=None):
                                  config.get("gene_model_contract_sha256") != meta["gene_model_contract_sha256"]):
                 raise ValueError("Functional evidence requires the identical gene-model contract")
             families = dict(db.execute("SELECT orthogroup,status FROM reconciliation_family"))
+            method = config.get("event_source", "generax")
+            common = db.execute("SELECT 1 FROM sqlite_master WHERE name='stat_species_branch'").fetchone() is not None
+            gene_query = "SELECT gene_id,orthogroup,species FROM reconciliation_gene"
+            if common:
+                source_rows = list(db.execute("SELECT orthogroup,status FROM species_reconciliation_source WHERE method=?", (method,)))
+                if len(source_rows) != len(dict(source_rows)):
+                    raise ValueError("Ambiguous reconciliation sources for selected method")
+                source_status = dict(source_rows)
+                families = {f: "imported" if source_status.get(f) == "analysed" else source_status.get(f, "missing_statistics") for f in families}
+                gene_query = ("SELECT g.gene_id,g.orthogroup,g.species FROM species_reconciliation_gene g "
+                              "JOIN species_reconciliation_source s ON g.source_id=s.source_id WHERE s.method='"+method+"'")
+            elif method != "generax":
+                raise ValueError("LCA branch statistics are missing; regenerate gg_gene_evolution statistics")
             if config.get("require_complete_reconciliation", False) and any(status != "imported" for status in families.values()):
-                raise ValueError("Complete reconciliation was required, but XML is missing")
+                raise ValueError("Complete reconciliation was required, but selected-method results are missing")
             gene_counts = defaultdict(Counter)
-            for family, species, count in db.execute("SELECT orthogroup,species,COUNT(*) FROM reconciliation_gene GROUP BY orthogroup,species"):
+            for family, species, count in db.execute("SELECT orthogroup,species,COUNT(*) FROM ("+gene_query+") GROUP BY orthogroup,species"):
                 gene_counts[family][species] = count
             branches = json.loads(inputs["branches"].read_bytes())
             if not isinstance(branches, list) or not branches:
@@ -291,7 +307,7 @@ def _build_results(database, config_path, output_dir, record=None):
                     cafe[key] = (change, significant, status)
                 if len(cafe) != len(labels) * len(families):
                     raise ValueError("CAFE comparison must include every target branch/family, not only significant hits")
-            expression, members, proteins, shared, products, evidence_audit = collect_evidence(inputs, config, db, set(families))
+            expression, members, proteins, shared, products, evidence_audit = collect_evidence(inputs, config, db, set(families), gene_query)
             evidence_audit["cafe_analysed_branch_family_pairs"] = sum(row[2] == "analysed" for row in cafe.values())
             evidence_audit["cafe_explicitly_unanalysed_branch_family_pairs"] = sum(row[2] == "not_analysed" for row in cafe.values())
             fdr = finite(config.get("expression_fdr", 0.05), "FDR")
@@ -306,6 +322,7 @@ def _build_results(database, config_path, output_dir, record=None):
             for view in ("transcript", "cds"):
                 columns.update({view + "_" + field: dtype for field, dtype in
                                 (("status", "TEXT"), ("logFC", "REAL"), ("p_value", "REAL"), ("q_branch_loss", "REAL"), ("trap_enriched", "INTEGER"))})
+            columns.update(loss_events="INTEGER", reconciliation_method="TEXT", cafe_reconciliation_comparison="TEXT")
             result.execute("CREATE TABLE branch_family (" + ",".join('"' + key + '" ' + dtype for key, dtype in columns.items()) + ", PRIMARY KEY(branch_id,orthogroup))")
             # These values are independent of the target branch. Serialize once
             # per family, without caching branch-local event counts or BH results.
@@ -319,19 +336,29 @@ def _build_results(database, config_path, output_dir, record=None):
                 batch = []
                 for key, label in target_keys.items():
                     events = defaultdict(Counter)
-                    for family, kind, count in db.execute("SELECT orthogroup,event_type,COUNT(*) FROM reconciliation_event WHERE branch_id=? GROUP BY orthogroup,event_type", (key,)):
-                        events[family][kind] = count
+                    branch_status = {}
+                    if common:
+                        for family, status, losses, duplications in db.execute(
+                                "SELECT orthogroup,status,loss_count,duplication_count FROM stat_species_branch WHERE method=? AND species_branch_id=?", (method, key)):
+                            branch_status[family] = "imported" if status == "analysed" else status
+                            if status == "analysed":
+                                events[family]["loss"], events[family]["duplication"] = losses, duplications
+                    else:
+                        for family, kind, count in db.execute("SELECT orthogroup,event_type,COUNT(*) FROM reconciliation_event WHERE branch_id=? GROUP BY orthogroup,event_type", (key,)):
+                            events[family][kind] = count
                     candidates = {family for family in families if events[family]["loss"] > 0}
                     qvalues = {view: bh({family: data[family][2] for family in candidates if data[family][0] == "success"})
                                for view, data in expression.items()}
                     for family, status in families.items():
+                        if common:
+                            status = branch_status.get(family, "missing_statistics")
                         valid = status == "imported"
                         counts = gene_counts[family]
                         inside = sum(counts[taxon] for taxon in db_branches[key])
                         cafe_change, cafe_significant, cafe_status = cafe.get((label, family), (None, None, "not_analysed"))
                         row = dict.fromkeys(columns)
                         row.update(branch_id=label, orthogroup=family, reconciliation_status=status,
-                                   lineage_extinction_events=events[family]["loss"] if valid else None,
+                                   lineage_extinction_events=events[family]["loss"] if valid and method == "generax" else None,
                                    duplication_events=events[family]["duplication"] if valid else None,
                                    extant_genes_inside=inside if valid else None,
                                    extant_genes_outside=family_totals[family] - inside if valid else None,
@@ -354,6 +381,12 @@ def _build_results(database, config_path, output_dir, record=None):
                             row.update({view + "_status": fit_status, view + "_logFC": effect, view + "_p_value": pvalue,
                                         view + "_q_branch_loss": qvalue,
                                         view + "_trap_enriched": int(qvalue < fdr and effect > logfc) if qvalue is not None else None})
+                        comparison = row["cafe_generax_comparison"]
+                        row.update(loss_events=events[family]["loss"] if valid else None,
+                                   reconciliation_method=method,
+                                   cafe_reconciliation_comparison="reconciliation_loss_only" if comparison == "generax_extinction_only" else comparison)
+                        if method != "generax":
+                            row["cafe_generax_comparison"] = None
                         values = tuple(row.values())
                         writer.writerow(values)
                         batch.append(values)
@@ -362,7 +395,7 @@ def _build_results(database, config_path, output_dir, record=None):
                             batch.clear()
                 if batch:
                     result.executemany(insert, batch)
-            result.execute("CREATE TABLE branch_summary AS SELECT branch_id, COUNT(*) AS families, SUM(reconciliation_status='imported') AS imported_families, SUM(lineage_extinction_events>0) AS families_with_lineage_extinction, SUM(lineage_extinction_events) AS lineage_extinction_events, SUM(extant_genes_inside>0) AS families_with_extant_descendants, SUM(cafe_status='analysed') AS cafe_analysed_families, SUM(cafe_status='not_analysed') AS cafe_unanalysed_families, SUM(cafe_generax_comparison!='not_analysed') AS cafe_generax_comparable_families, SUM(cafe_significant_decrease) AS cafe_significant_decreases, SUM(cafe_generax_comparison='both') AS generax_extinction_and_cafe_decrease, SUM(cafe_generax_comparison='generax_extinction_only') AS generax_extinction_only, SUM(cafe_generax_comparison='cafe_decrease_only') AS cafe_decrease_only, SUM(transcript_trap_enriched) AS transcript_trap_enriched_loss_families, SUM(cds_trap_enriched) AS cds_trap_enriched_loss_families FROM branch_family GROUP BY branch_id")
+            result.execute("CREATE TABLE branch_summary AS SELECT branch_id, COUNT(*) AS families, SUM(reconciliation_status='imported') AS imported_families, SUM(lineage_extinction_events>0) AS families_with_lineage_extinction, SUM(lineage_extinction_events) AS lineage_extinction_events, SUM(extant_genes_inside>0) AS families_with_extant_descendants, SUM(cafe_status='analysed') AS cafe_analysed_families, SUM(cafe_status='not_analysed') AS cafe_unanalysed_families, SUM(cafe_generax_comparison!='not_analysed') AS cafe_generax_comparable_families, SUM(cafe_significant_decrease) AS cafe_significant_decreases, SUM(cafe_generax_comparison='both') AS generax_extinction_and_cafe_decrease, SUM(cafe_generax_comparison='generax_extinction_only') AS generax_extinction_only, SUM(cafe_generax_comparison='cafe_decrease_only') AS cafe_decrease_only, SUM(transcript_trap_enriched) AS transcript_trap_enriched_loss_families, SUM(cds_trap_enriched) AS cds_trap_enriched_loss_families, SUM(loss_events>0) AS families_with_loss, SUM(loss_events) AS loss_events, SUM(cafe_reconciliation_comparison!='not_analysed') AS reconciliation_comparable_families, SUM(cafe_reconciliation_comparison='both') AS loss_and_cafe_decrease FROM branch_family GROUP BY branch_id")
             with (temporary / "branch_summary.tsv").open("w", newline="") as handle:
                 cursor = result.execute("SELECT * FROM branch_summary ORDER BY branch_id")
                 writer = csv.writer(handle, delimiter="\t")
@@ -373,12 +406,17 @@ def _build_results(database, config_path, output_dir, record=None):
                         "evidence_audit": evidence_audit,
                         "inputs": {key: {"path": str(path), "sha256": config["inputs"][key]["sha256"]} for key, path in inputs.items()},
                         "expression_correction": "BH_within_each_branch_among_successfully_tested_lineage_extinction_families",
+                        "event_source": method,
+                        "loss_semantics": "lca_implied_loss_below_gene_root" if method == "lca" else meta["loss_semantics"],
                         "interpretation": ["Lineage extinction is not a localised molecular gene deletion.",
                                            "Extant descendant presence is not an ancestral copy-number estimate.",
                                            "Expression supports an orthogroup, not a particular extinct copy.",
                                            "Unanalysed CAFE families are not nonsignificant or unchanged; comparisons use analysed families only.",
                                            "Shared peptides support a family only; nondetection is not biological absence."],
                         "outputs": {name: sha256(temporary / name) for name in ("branch_family.tsv", "branch_summary.tsv")}}
+            if method == "lca":
+                manifest["expression_correction"] = "BH_within_each_branch_among_successfully_tested_lca_loss_families"
+                manifest["interpretation"][0] = "LCA implied losses are conditional on the rooted gene/species trees, not localised molecular deletions."
             result.execute("CREATE TABLE provenance (json TEXT NOT NULL)")
             result.execute("INSERT INTO provenance VALUES (?)", (canonical(manifest),))
             result.commit()

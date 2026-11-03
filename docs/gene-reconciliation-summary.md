@@ -56,6 +56,61 @@ not identify a molecular deletion, an extant lost-gene ID or its exact timing.
 Extant descendants are reported as observations, not inferred ancestral copy
 numbers or proof of uninterrupted retention.
 
+## Shared species-branch statistics
+
+`gg_gene_evolution` produces two method-separated records when a species tree
+is available: `reconciliation_events/<family>_reconciliation.json` retains the
+normalised clades, ordered events, genes and source contracts;
+`stat_species_branch/<family>_stat.species_branch.tsv` aggregates them by
+orthogroup, source and species-tree branch. Both use the normal family ZIP
+store. There are no files per species branch or SQLite databases per family.
+
+GeneRax's original XML remains unchanged. The shared records retain its full
+clade/event relationships and original producer metadata. LCA uses NWKIT's
+explicit implied-loss locations on the same rooted gene and species trees.
+Its loss counts are conditional on the observed gene-tree root: branches
+outside that root's species clade have `outside_gene_root_scope` and SQL NULL
+event counts, rather than fabricated zeros. A missing method has
+`not_available`; an analysed branch with no event has zero. Transfers are NULL
+unless the recorded model supports them or transfer events are present.
+Observed descendant gene/species counts are not ancestral copy numbers.
+
+For an existing orthogroup run, set `gene_evolution_statistics_only=1` in
+`gg_gene_evolution_entrypoint.sh` (or
+`GG_GENE_EVOLUTION_GENE_EVOLUTION_STATISTICS_ONLY=1`). This requires debug and
+plot-only modes off. It disables inference and other analysis stages, runs
+LCA and summary statistics, and keeps the previously selected GeneRax rooted
+tree and UFBoot support when `run_generax=1` in the original configuration.
+The reused GeneRax tree and XML must match their producer hashes. It does not
+reroot, refit GeneRax or rerun bootstraps. Use the unchanged input catalogue,
+species mapping and model configuration with `artifact_stale_policy=rebuild`.
+
+When deliberately deleting obsolete derived outputs before regeneration, use
+the native store's `delete` operation for the explicit logical paths. Then
+`gg_gene_family_archive.sh purge --root <root> --mode orthogroup --subdirs
+stat_tree,stat_branch,reconciliation,stat_species_branch,reconciliation_events`
+physically removes their tombstoned payloads without rewriting other archives.
+The scoped purge preserves other tombstones and cannot combine with
+`--drop-unlisted`. Stop writers and keep the original trees, XML, inputs and
+execution records; no backup archive is created by these deletion operations.
+
+Rebuild the family database to import the new records. The additional tables
+are `species_reconciliation_source`, `species_reconciliation_clade`,
+`species_reconciliation_event`, `species_reconciliation_gene` and
+`stat_species_branch`. The existing `reconciliation_*` tables retain their
+GeneRax meaning; `branch` remains a gene-tree branch table. `tree` gains
+method-specific status and event totals, while its existing LCA totals are
+preserved and checked against the species-branch sums. Source contracts bind
+the exact trees, reconciliation inputs and producer/model metadata.
+
+In the downstream configuration below, optional `event_source` selects
+`generax` (default) or `lca`. LCA requires the shared tables. Run each method
+into its own output directory. The same raw expression fits are reused, but
+BH is recalculated within each branch's selected-method loss-family set;
+GeneRax q-values are never copied into LCA results. Generic `loss_events` and
+`cafe_reconciliation_comparison` fields cover both methods; legacy
+`lineage_extinction_events` and `cafe_generax_comparison` stay NULL for LCA.
+
 ## Per-gene product, GO and localisation database
 
 Set `run_gene_annotation_database=1` and `gene_annotation_manifest` to a

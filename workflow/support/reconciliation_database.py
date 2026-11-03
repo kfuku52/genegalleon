@@ -161,6 +161,8 @@ def write_tables(engine, store, species_tree, method_manifest=""):
     overrides = manifest.get("families", {})
     if not isinstance(overrides, dict) or any(not isinstance(value, dict) for value in overrides.values()):
         raise ValueError("Method family overrides must be objects")
+    bundle_names = set(store.file_names("reconciliation_events"))
+    stats_names = set(store.file_names("stat_species_branch"))
     with engine.begin() as conn:
         if conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE name='reconciliation_meta'").first():
             raise ValueError("Reconciliation append is unsupported; rebuild the complete audited database")
@@ -183,6 +185,9 @@ def write_tables(engine, store, species_tree, method_manifest=""):
                 "gene_model_contract_sha256": manifest.get("gene_model_contract_sha256", ""),
                 "loss_semantics": "reconstructed_lineage_extinction_not_localised_molecular_deletion"}
         conn.exec_driver_sql("INSERT INTO reconciliation_meta VALUES (?,?)", list(meta.items()))
+        if bundle_names:
+            from species_branch_statistics import create_tables
+            create_tables(conn)
         available = set(store.file_names("generax_xml"))
         provenance_names = set(store.file_names("artifact_provenance"))
         for family in families:
@@ -190,6 +195,31 @@ def write_tables(engine, store, species_tree, method_manifest=""):
             method = {**manifest.get("default", {}), **overrides.get(family, {})}
             provenance_name = family + ".generax.json"
             source, source_sha = None, None
+            bundle = None
+            bundle_name, stats_name = family + "_reconciliation.json", family + "_stat.species_branch.tsv"
+            if bundle_name in bundle_names:
+                from species_branch_statistics import import_bundle, validate_bundle
+                if stats_name not in stats_names:
+                    raise ValueError("Reconciliation bundle lacks species-branch statistics: " + family)
+                with store.open_binary("reconciliation_events", bundle_name) as handle:
+                    bundle_data = handle.read()
+                with store.open_binary("stat_species_branch", stats_name) as handle:
+                    stats_data = handle.read()
+                summary_name = family + ".summary_statistics.json"
+                if summary_name not in provenance_names:
+                    raise ValueError("Species-branch bundle lacks producer provenance: " + family)
+                with store.open_binary("artifact_provenance", summary_name) as handle:
+                    summary_producer = json.load(handle)
+                if summary_producer.get("family_id") != family or summary_producer.get("step") != "summary_statistics":
+                    raise ValueError("Species-branch producer identity mismatch: " + family)
+                for label, content in (("reconciliation_events", bundle_data), ("stat_species_branch", stats_data)):
+                    declared = [e for e in summary_producer.get("outputs", []) if e.get("label") == label]
+                    if len(declared) != 1 or declared[0].get("sha256") != hashlib.sha256(content).hexdigest():
+                        raise ValueError("Species-branch output differs from its producer: " + family)
+                bundle = validate_bundle(json.loads(bundle_data), family, reference)
+                import_bundle(conn, bundle, stats_data)
+            elif stats_name in stats_names:
+                raise ValueError("Species-branch statistics lack their detailed bundle: " + family)
             if provenance_name in provenance_names:
                 with store.open_binary("artifact_provenance", provenance_name) as handle:
                     source_data = handle.read()
@@ -204,8 +234,14 @@ def write_tables(engine, store, species_tree, method_manifest=""):
                 continue
             with store.open_binary("generax_xml", name) as handle:
                 data = handle.read()
-            clades, events, genes = parse_family(data, family, reference)
             xml_sha = hashlib.sha256(data).hexdigest()
+            if bundle is None:
+                clades, events, genes = parse_family(data, family, reference)
+            else:
+                normal = next(s for s in bundle["sources"] if s["method"] == "generax")
+                if normal["status"] != "analysed" or normal["inputs"].get("reconciliation") != xml_sha:
+                    raise ValueError("Normalised GeneRax source differs from XML: " + family)
+                clades, events, genes = ([tuple(row) for row in normal[k]] for k in ("clades", "events", "genes"))
             if source is not None:
                 declared = [entry for entry in source.get("outputs", []) if entry.get("label") == "generax_xml"]
                 if len(declared) != 1 or declared[0].get("sha256") != xml_sha:

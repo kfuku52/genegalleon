@@ -1288,6 +1288,27 @@ rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upp
 rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
 gene_evolution_plot_only=${gene_evolution_plot_only:-0}
+gene_evolution_statistics_only=${gene_evolution_statistics_only:-0}
+statistics_reuse_generax=0
+case "${gene_evolution_statistics_only}" in
+  0) ;;
+  1)
+    if [[ "${mode_gene_evolution}" != "orthogroup" || ${gg_debug_mode:-0} -ne 0 || ${gene_evolution_plot_only} -ne 0 ]]; then
+      echo "gene_evolution_statistics_only=1 requires orthogroup mode, debug mode off and plot-only mode off." >&2
+      exit 1
+    fi
+    statistics_reuse_generax=${run_generax}
+    while IFS= read -r statistics_only_flag; do
+      if [[ ${statistics_only_flag} == run_* ]]; then printf -v "${statistics_only_flag}" '%s' 0; fi
+    done < <(gg_print_entrypoint_config_vars gg_gene_evolution_entrypoint.sh)
+    unset statistics_only_flag
+    run_reconciliation=1
+    run_summary=1
+    gg_skip_disabled_artifact_checks=1
+    echo "gene_evolution_statistics_only=1: reusing existing gene trees for LCA and method-separated statistics."
+    ;;
+  *) echo "Invalid gene_evolution_statistics_only=${gene_evolution_statistics_only}; expected 0 or 1." >&2; exit 1 ;;
+esac
 case "${gene_evolution_plot_only}" in
   0) ;;
   1)
@@ -1860,6 +1881,8 @@ file_og_generax_xml="${dir_output_active}/generax_xml/${og_id}_generax.xml"
 file_og_rooted_tree="${dir_output_active}/rooted_tree/${og_id}_root.nwk"
 file_og_rooted_log="${dir_output_active}/rooted_tree_log/${og_id}_root.txt"
 file_og_reconciliation="${dir_output_active}/reconciliation/${og_id}_reconciliation.tsv"
+file_og_reconciliation_events="${dir_output_active}/reconciliation_events/${og_id}_reconciliation.json"
+file_og_stat_species_branch="${dir_output_active}/stat_species_branch/${og_id}_stat.species_branch.tsv"
 file_og_wgd_ssd="${dir_output_active}/wgd_ssd/${og_id}_wgd_ssd.zip"
 file_og_root_candidates="${dir_output_active}/root_candidates/${og_id}_roots.nwk"
 file_og_dated_tree="${dir_output_active}/dated_tree/${og_id}_dated.nwk"
@@ -4276,13 +4299,17 @@ if [[ ${run_generax} -eq 1 ]]; then
 else
   gg_step_skip "${task}"
 fi
-if [[ ${run_generax} -eq 1 && -s "${file_og_generax_nhx}" ]]; then
+if [[ ${statistics_reuse_generax} -eq 1 && ! -s "${file_og_generax_nhx}" ]]; then
+  echo "Statistics-only resume requires the existing GeneRax rooted tree: ${file_og_generax_nhx}" >&2
+  exit 1
+fi
+if { [[ ${run_generax} -eq 1 ]] || [[ ${statistics_reuse_generax} -eq 1 ]]; } && [[ -s "${file_og_generax_nhx}" ]]; then
   # GeneRax may change both topology and root.  All post-reconciliation branch
   # tables must therefore use its rooted topology, rather than the earlier
   # orthogroup-extraction/rooting result.
   set_analysis_file rooted_tree "${file_og_generax_nhx}"
 fi
-if [[ ${run_generax} -eq 1 && -s "${file_og_iqtree_generax_ufboot}" ]]; then
+if { [[ ${run_generax} -eq 1 ]] || [[ ${statistics_reuse_generax} -eq 1 ]]; } && [[ -s "${file_og_iqtree_generax_ufboot}" ]]; then
   set_analysis_file unrooted_tree "${file_og_iqtree_generax_ufboot}"
 fi
 
@@ -4298,7 +4325,7 @@ reconciliation_provenance_args=(
   --input "rooted_tree=${file_og_rooted_tree_analysis}"
   --input "species_tree=${species_tree_pruned}"
   --output "reconciliation=${file_og_reconciliation}"
-  --parameter "engine=nwkit-lca-losses-v1"
+  --parameter "engine=nwkit-lca-losses-v2-species-edges"
   --parameter "nwkit_identity=${gene_nwkit_identity}"
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
@@ -6558,6 +6585,8 @@ summary_input_files=(
   "${file_og_rooted_tree_analysis}"
   "${file_og_rooted_log}"
   "${file_og_reconciliation}"
+  "${file_og_generax_xml}"
+  "${dir_output_active}/artifact_provenance/${og_id}.generax.json"
   "${file_og_root_candidates}"
   "${file_og_dated_tree_analysis}"
   "${file_og_dated_tree_log}"
@@ -6706,6 +6735,11 @@ summary_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --output "stat_branch=${file_og_stat_branch}"
   --output "stat_tree=${file_og_stat_tree}"
+  --optional-output "stat_species_branch=${file_og_stat_species_branch}"
+  --optional-output "reconciliation_events=${file_og_reconciliation_events}"
+  --input "species_branch_statistics_script=${gg_support_dir}/species_branch_statistics.py"
+  --input "reconciliation_parser_script=${gg_support_dir}/reconciliation_database.py"
+  --parameter "species_branch_statistics_contract=species_reconciliation_v1"
   --parameter "association_summary=status_counts_v2"
   --parameter "sister_semantics=unique_or_sentinel"
   --parameter "clade_ortholog_prefix=${treevis_clade_ortholog_prefix}"
@@ -6745,7 +6779,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     generax2orthogroup_statistics=${file_og_generax_nhx}
   fi
   generax_ufboot_for_summary="PLACEHOLDER"
-  if [[ ${run_generax} -eq 1 ]] &&
+  if { [[ ${run_generax} -eq 1 ]] || [[ ${statistics_reuse_generax} -eq 1 ]]; } &&
     [[ -s "${file_og_iqtree_generax_ufboot}" && -s "${file_og_unrooted_tree_analysis}" ]]; then
     # After optional pruning this slot is the matching pruned descendant of
     # the GeneRax-topology support tree.
@@ -6771,6 +6805,18 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     summary_tmp_files+=("${summary_promoter_fasta}")
   fi
 
+  species_branch_for_summary="PLACEHOLDER"
+  if [[ -s "${species_tree_pruned}" ]]; then
+    python "${gg_support_dir}/species_branch_statistics.py" \
+      --family-id "${og_id}" --species-tree "${species_tree_pruned}" \
+      --gene-tree "${file_og_rooted_tree_analysis}" --lca "${file_og_reconciliation}" \
+      --generax-tree "${file_og_generax_nhx}" \
+      --generax-xml "${file_og_generax_xml}" --generax-model "${generax_rec_model}" \
+      --generax-manifest "${dir_output_active}/artifact_provenance/${og_id}.generax.json" \
+      --bundle-out orthogroup.reconciliation.json --stats-out orthogroup.species_branch.tsv
+    species_branch_for_summary=orthogroup.species_branch.tsv
+  fi
+
   python "${gg_support_dir}/orthogroup_statistics.py" \
     --species_tree "${species_tree_pruned}" \
     --untrimmed_aln "${summary_untrimmed_fasta}" \
@@ -6780,6 +6826,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --rooted_tree "${file_og_rooted_tree_analysis}" \
     --rooting_log "${file_og_rooted_log}" \
     --reconciliation "${file_og_reconciliation}" \
+    --species_branch_stats "${species_branch_for_summary}" \
     --dated_tree "${file_og_dated_tree_analysis}" \
     --dated_log "${file_og_dated_tree_log}" \
     --generax_nhx "${generax2orthogroup_statistics}" \
@@ -6815,6 +6862,13 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
 
   cp_out orthogroup.branch.tsv "${file_og_stat_branch}"
   cp_out orthogroup.tree.tsv "${file_og_stat_tree}"
+  if [[ -s "${species_tree_pruned}" ]]; then
+    cp_out orthogroup.species_branch.tsv "${file_og_stat_species_branch}"
+    cp_out orthogroup.reconciliation.json "${file_og_reconciliation_events}"
+  else
+    python "${gene_family_store_script}" delete --root "${dir_output_active}" --path "stat_species_branch/${og_id}_stat.species_branch.tsv" --family-id "${og_id}"
+    python "${gene_family_store_script}" delete --root "${dir_output_active}" --path "reconciliation_events/${og_id}_reconciliation.json" --family-id "${og_id}"
+  fi
   summary_outputs_changed=1
 
 else
