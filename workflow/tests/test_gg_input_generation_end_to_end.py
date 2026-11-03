@@ -418,6 +418,14 @@ def _core_env(
         "TMPDIR": str(workspace / "tmp_runtime"),
         "GG_COMMON_TMP_ROOT": "workspace",
         "GG_TASK_CPUS": "1",
+        # The fixture launches direct core children, so keep native libraries
+        # within its one-CPU budget even on large SIF hosts or shared CI VMs.
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
+        "BLIS_NUM_THREADS": "1",
         "gg_workspace_dir": str(workspace),
         "provider": "direct",
         "input_dir": str(input_dir) if input_dir is not None else "",
@@ -485,6 +493,16 @@ def test_core_env_keeps_explicit_dependency_selection(tmp_path, monkeypatch, sel
     result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
                             env=env, capture_output=True, text=True, check=True)
     assert result.stdout.strip() == ("frozen" if selected else "base")
+
+
+def test_core_env_keeps_native_threads_within_fixture_cpu_budget(tmp_path, monkeypatch):
+    keys = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS")
+    for key in keys:
+        monkeypatch.setenv(key, "64")
+    env = _core_env(tmp_path, None, tmp_path / "fake", "array_prepare")
+    assert env["GG_TASK_CPUS"] == "1"
+    assert all(env[key] == "1" for key in keys)
 
 
 def _run_core(
@@ -887,6 +905,7 @@ def test_required_genome_worker_does_not_receipt_header_only_fasta(tmp_path: Pat
     input_dir = _write_direct_species_fixture(tmp_path)
     (input_dir / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.genome.fa").write_text(">chr1\n")
     workspace = tmp_path / "required_genome_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
     fake_bin = _install_fake_toolchain(tmp_path)
     _run_core(workspace, input_dir, fake_bin, "array_prepare", require_genome=True)
     failed = subprocess.run(
@@ -903,6 +922,7 @@ def test_required_genome_worker_does_not_receipt_header_only_fasta(tmp_path: Pat
 def test_required_genome_worker_rejects_reused_truncated_output(tmp_path: Path):
     input_dir = _write_direct_species_fixture(tmp_path)
     workspace = tmp_path / "truncated_genome_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
     fake_bin = _install_fake_toolchain(tmp_path)
     prepare_env = _core_env(workspace, input_dir, fake_bin, "array_prepare", require_genome=True)
     prepare_env["overwrite"] = "0"
