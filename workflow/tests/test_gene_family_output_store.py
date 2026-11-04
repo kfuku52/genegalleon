@@ -4082,3 +4082,127 @@ def test_tmp_cleanup_respects_recent_descendant_inside_old_directory(tmp_path):
     os.utime(candidate, ns=(old_ns, old_ns))
     assert cleanup_stale_tmp(root, older_than_days=7) == []
     assert (candidate / 'recent').read_bytes() == b'keep'
+
+
+def _index_record_fixture(store, index, *, zip_path=None):
+    family = f"OG{index:07d}"
+    logical = f"one/{family}_data.tsv"
+    return Artifact(logical_path=logical, subdir="one", name=logical.split("/", 1)[1],
+                    generation=1, zip_path=zip_path or store.payload_root / "one" / f"{index // 10:08d}.zip",
+                    member_name=logical, size=8, crc=42, sha256="a" * 64,
+                    mtime_ns=1700000000000000000, family_id=family)
+
+
+def test_index_record_batch_preserves_records_and_bounds_path_resolution(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifacts = [_index_record_fixture(store, i) for i in range(200)]
+    expected = [store._index_record(a) for a in artifacts]
+    original = Path.resolve
+    calls = []
+    tracked = {store.root, store.root / "one.zip", *(a.zip_path for a in artifacts)}
+
+    def counted(path, *args, **kwargs):
+        if path in tracked:
+            calls.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    with store._index_record_batch() as record:
+        observed = [record(a) for a in artifacts]
+    assert observed == expected
+    # Twenty immutable ZIPs, their one final path and the root, each checked
+    # on first observation and again at the publication boundary.
+    assert len(calls) <= 44
+
+
+@pytest.mark.parametrize("missing", ["zip_path", "member_name"])
+def test_index_record_batch_still_rejects_live_artifact_after_cache_hit(tmp_path, missing):
+    from dataclasses import replace
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifact = _index_record_fixture(store, 0)
+    with store._index_record_batch() as record:
+        record(artifact)
+        with pytest.raises(ArchiveStoreError, match="Cannot index a live artifact"):
+            record(replace(artifact, **{missing: None}))
+
+
+def test_index_record_batch_revalidates_alias_before_transaction_commit(tmp_path):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"completed payload")
+    other = tmp_path / "other.zip"
+    other.write_bytes(b"other payload")
+    alias = store.payload_root / "one" / "alias.zip"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    expected = store._index_record(artifact)
+    assert expected["zip_location"] == "final"
+    with pytest.raises(ArchiveStoreError, match="path changed during publication"):
+        with store._index_update():
+            with store._index_record_batch() as record:
+                assert record(artifact) == expected
+                alias.unlink()
+                alias.symlink_to(other)
+                assert record(artifact) == expected
+    assert (store.archive_root / "index-update.pending").is_file()
+    assert final.read_bytes() == b"completed payload"
+
+
+def test_index_record_batch_does_not_reuse_a_previous_batch_alias(tmp_path):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"completed payload")
+    active = store.payload_root / "one" / "active.zip"
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active payload")
+    alias = active.with_name("alias.zip")
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    with store._index_record_batch() as record:
+        assert record(artifact)["zip_location"] == "final"
+    alias.unlink()
+    alias.symlink_to(active)
+    with store._index_record_batch() as record:
+        assert record(artifact) == store._index_record(artifact)
+        assert record(artifact)["zip_location"] == "active"
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('generation', -1), ('size', -1), ('crc', -1), ('sha256', 'invalid'),
+    ('member_name', 'one/other.tsv'), ('zip_location', 'unknown'),
+    ('zip_path', 'one/../../outside.zip'),
+])
+def test_index_zip_lexical_cache_preserves_each_record_validation(tmp_path, field, value):
+    store = GeneFamilyOutputStore(tmp_path / 'orthogroup')
+    artifact = _index_record_fixture(store, 0)
+    record = store._index_record(artifact)
+    # Populate the lexical ZIP mapping before changing another record field.
+    assert store._artifact_from_index_record(artifact.logical_path, record).zip_path == artifact.zip_path
+    with pytest.raises(ArchiveStoreError):
+        store._artifact_from_index_record(artifact.logical_path, dict(record, **{field: value}))
+
+
+def test_index_zip_lexical_cache_keeps_project_roots_separate(tmp_path):
+    first = GeneFamilyOutputStore(tmp_path / 'first')
+    second = GeneFamilyOutputStore(tmp_path / 'second')
+    artifact = _index_record_fixture(first, 0)
+    record = first._index_record(artifact)
+    a = first._artifact_from_index_record(artifact.logical_path, record)
+    b = second._artifact_from_index_record(artifact.logical_path, record)
+    assert a.zip_path == first.payload_root / record['zip_path']
+    assert b.zip_path == second.payload_root / record['zip_path']
+    assert a.zip_path != b.zip_path
+
+
+def test_index_zip_lexical_cache_is_bounded(tmp_path):
+    from workflow.support.gene_family_output_store import _indexed_zip_path
+    _indexed_zip_path.cache_clear()
+    try:
+        for index in range(4100):
+            _indexed_zip_path(tmp_path, tmp_path / 'archives', 'one', f'one/{index:08}.zip', 'active')
+        assert _indexed_zip_path.cache_info().currsize == 4096
+    finally:
+        _indexed_zip_path.cache_clear()

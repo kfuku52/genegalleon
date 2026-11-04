@@ -630,6 +630,44 @@ control; `--scope partial` also exercises ordered partial references. Fixture
 creation and result hashing are excluded from the timed read. RSS includes all
 retained records and the bounded caches; it is not a whole-analysis memory claim.
 
+## Archive index publication
+
+`workflow/benchmarks/benchmark_archive_index.py` measures native index publication
+for 2,500 synthetic families, 29 output subdirectories and 100 changed families.
+Fixture creation is outside the timed section. After each run it verifies all
+72,500 logical payloads through the native reader, hashes all index views and
+checks that every ZIP body is unchanged. This measures index publication rather
+than compression or a full workflow.
+
+Run through the container wrapper, using a new process and fixture for each
+repetition:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python -B \
+  workflow/benchmarks/benchmark_archive_index.py
+```
+
+Use `--module-root /mounted/baseline/workflow/support` for a saved baseline and
+`--work-dir /mounted/scratch` to choose fixture storage. Alternate at least three
+baseline/current pairs on the same runtime and storage. Compare both
+`index_manifest_sha256` and `logical_payload_sha256`, then report median elapsed
+time and peak RSS. The RSS includes fixture preparation. Filesystem and runtime
+differences can substantially change the timings; do not extrapolate an index
+comparison to whole-analysis speed.
+
+The 0.8.495 comparison against `6ad798b3` used three fresh-process pairs with the
+fixture above. All 286 index files and 72,500 logical payloads matched, and the
+ZIP bodies stayed unchanged within each run:
+
+| Runtime and fixture storage | Baseline median | Current median | Median process peak RSS, baseline/current |
+| --- | ---: | ---: | ---: |
+| Docker, container temporary filesystem | 5.25 s | 0.69 s | 170.2 / 129.4 MiB |
+| SHIROKANE SIF, scheduler `TMPDIR` | 10.20 s | 0.95 s | 176.7 / 127.5 MiB |
+
+The same candidate passed 307 affected archive, queue, integrity and database
+tests in both runtimes. The SIF fixture used scheduler scratch; these timings do
+not measure the production Lustre collector or predict its total runtime.
+
 ## Reference annotation comparisons
 
 For representative BUSCO copy extraction, per-marker path caching, exact

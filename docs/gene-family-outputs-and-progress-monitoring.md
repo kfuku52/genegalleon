@@ -482,6 +482,14 @@ subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
 before replacing the indexes; restore the ZIP bytes before retrying. Repair
 reconstructs metadata from valid ZIPs, not damaged ZIP contents.
 
+Index publication shares physical ZIP path resolutions within one update and
+rechecks those paths before the update can commit or remove live sources.
+Logical records retain their own size, CRC, SHA-256, generation and timestamps.
+Index decoding also reuses bounded, purely lexical ZIP path validation across
+records; it does not cache filesystem identity or skip member validation.
+See [the archive index benchmark](development-and-tests.md#archive-index-publication)
+for a reproducible synthetic comparison.
+
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress
 fields as conversion. The orthogroup finalization triggered by explicit
