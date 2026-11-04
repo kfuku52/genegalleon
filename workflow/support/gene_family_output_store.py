@@ -2232,6 +2232,17 @@ class GeneFamilyOutputStore:
                 with archive.open(artifact.member_name, "r") as handle:
                     yield handle
 
+    @staticmethod
+    def _restore_materialized_mtime(path: Path, mtime_ns: Optional[int]) -> None:
+        if mtime_ns is None:
+            return
+        try:
+            os.utime(path, ns=(mtime_ns, mtime_ns))
+        except (OSError, OverflowError) as exc:
+            raise ArchiveStoreError(f"Cannot restore archive mtime_ns={mtime_ns}: {path}") from exc
+        if path.stat().st_mtime_ns != mtime_ns:
+            raise ArchiveStoreError(f"Filesystem did not preserve archive mtime_ns={mtime_ns}: {path}")
+
     def materialize(
         self,
         subdir: str,
@@ -2271,8 +2282,7 @@ class GeneFamilyOutputStore:
                     os.fsync(target.fileno())
                 # Keep publication inside the read lock: a maintenance writer may
                 # otherwise commit newer content before this old snapshot replaces it.
-                if artifact.mtime_ns is not None:
-                    os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
+                self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                 os.replace(temporary, destination)
                 _fsync_directory(destination.parent)
         finally:
@@ -2378,11 +2388,7 @@ class GeneFamilyOutputStore:
                         shutil.copyfileobj(source, target, length=1024 * 1024)
                         target.flush()
                         os.fsync(target.fileno())
-                    if artifact.mtime_ns is not None:
-                        os.utime(
-                            temporary,
-                            ns=(artifact.mtime_ns, artifact.mtime_ns),
-                        )
+                    self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                     os.replace(temporary, destination)
                     touched_directories.add(destination.parent)
                 finally:

@@ -205,7 +205,11 @@ materializes only that family's archived artifacts at their historical paths,
 preserves their mtimes, and then applies the normal stage skip/staleness tests.
 ZIP headers represent years 1980–2107; timestamps outside that range are clamped
 only in the ZIP header. The manifest retains the original nanosecond mtime for
-restoration. Publication stays inside the reader lock so maintenance cannot
+restoration. If the destination filesystem rejects or silently rounds that
+time, materialization fails before publication and retains the archived member
+and any previously published destination. Use a filesystem that supports the
+recorded timestamp to restore it; the logical ZIP reader still exposes its bytes.
+Publication stays inside the reader lock so maintenance cannot
 commit a newer result before an older restored snapshot is published.
 Consequently, a legacy run converted after MAFFT, for example, can resume from
 the later stages instead of starting over. A controlled failure records

@@ -1,5 +1,6 @@
 """Regression coverage for ZIP encoding, destinations, and materialization."""
 import os
+import time
 import zipfile
 from dataclasses import replace
 
@@ -44,22 +45,80 @@ def test_compression_level_controls_streamed_member_bytes(tmp_path, compact):
 @pytest.mark.parametrize("mtime_ns,year", [(0, 1980), (7258118400_000000000, 2107)])
 @pytest.mark.parametrize("compact", [False, True])
 def test_zip_timestamp_limits_preserve_precise_manifest_mtime(tmp_path, mtime_ns, year, compact):
-    archive_path, artifacts, _ = raw_archive(tmp_path, mtime_ns=None if compact else mtime_ns)
+    # ZIP manifests can carry a future timestamp which an older filesystem
+    # silently clamps. Raw archiving records the source's actual stat value;
+    # compacting preserves its explicit manifest value even on that filesystem.
+    probe = tmp_path / "mtime-probe"
+    probe.write_bytes(b"timestamp capability")
+    try:
+        os.utime(probe, ns=(mtime_ns, mtime_ns))
+    except (OSError, OverflowError):
+        pass
+    supported = probe.stat().st_mtime_ns == mtime_ns
+    source_mtime_ns = mtime_ns if supported else probe.stat().st_mtime_ns
+    probe.unlink()
+    archive_path, artifacts, _ = raw_archive(tmp_path, mtime_ns=None if compact else source_mtime_ns)
+    expected_mtime_ns = mtime_ns if compact else source_mtime_ns
     if compact:
         artifacts = [replace(artifacts[0], mtime_ns=mtime_ns)]
         archive_path, artifacts = store._compact_artifact_chunk(
             tmp_path / "archives", "mafft", artifacts, "orthogroup", 2,
         )
+    expected_year = year if compact else min(2107, max(1980, time.localtime(expected_mtime_ns / 1e9).tm_year))
     with zipfile.ZipFile(archive_path) as archive:
         assert archive.read(artifacts[0].member_name) == CONTENT
-        assert archive.getinfo(artifacts[0].member_name).date_time[0] == year
-    assert artifacts[0].mtime_ns == mtime_ns
+        assert archive.getinfo(artifacts[0].member_name).date_time[0] == expected_year
+    assert artifacts[0].mtime_ns == expected_mtime_ns
     store.repair_archive_index(tmp_path)
     source = tmp_path / artifacts[0].logical_path
     source.unlink()
-    restored = store.GeneFamilyOutputStore(tmp_path).materialize("mafft", source.name)
-    assert restored.read_bytes() == CONTENT
-    assert restored.stat().st_mtime_ns == mtime_ns
+    reader = store.GeneFamilyOutputStore(tmp_path)
+    if compact and not supported:
+        with pytest.raises(store.ArchiveStoreError, match="archive mtime_ns"):
+            reader.materialize("mafft", source.name)
+        assert not source.exists()
+        assert not list(source.parent.glob(".*.materialize.*"))
+        with reader.open_binary("mafft", source.name) as stream:
+            assert stream.read() == CONTENT
+    else:
+        restored = reader.materialize("mafft", source.name)
+        assert restored.read_bytes() == CONTENT
+        assert restored.stat().st_mtime_ns == expected_mtime_ns
+
+
+@pytest.mark.parametrize("route", ["single", "family"])
+@pytest.mark.parametrize("failure", ["clamp", "error"])
+def test_materialization_rejects_lost_mtime_before_publication(tmp_path, monkeypatch, route, failure):
+    _, artifacts, _ = raw_archive(tmp_path)
+    store.repair_archive_index(tmp_path)
+    (tmp_path / artifacts[0].logical_path).unlink()
+    output = tmp_path / "restored"
+    destination = output / artifacts[0].logical_path
+    if route == "single":
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"previous published output")
+    original_utime = os.utime
+
+    def inaccurate_utime(path, *, ns):
+        if failure == "error":
+            raise OSError("filesystem cannot represent timestamp")
+        original_utime(path, ns=(ns[0], ns[1] - 1_000_000_000))
+
+    monkeypatch.setattr(store.os, "utime", inaccurate_utime)
+    reader = store.GeneFamilyOutputStore(tmp_path)
+    with pytest.raises(store.ArchiveStoreError, match="archive mtime_ns"):
+        if route == "single":
+            reader.materialize("mafft", destination.name, destination_root=output, overwrite=True)
+        else:
+            reader.materialize_family("OG0000001", store.orthogroup_id_from_name, destination_root=output)
+    if route == "single":
+        assert destination.read_bytes() == b"previous published output"
+    else:
+        assert not destination.exists()
+    assert not list(output.rglob(".*.materialize.*"))
+    with reader.open_binary("mafft", destination.name) as stream:
+        assert stream.read() == CONTENT
+
 
 
 @pytest.mark.parametrize("compact", [False, True])
