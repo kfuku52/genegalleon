@@ -3125,3 +3125,48 @@ def test_runtime_open_race_retains_policy_and_reports_identity_changes(tmp_path,
         assert 'Explicit runtime release file' in result.stderr
     if mutation == 'mtime':
         assert f'mtime_ns={original_mtime_ns}->{original_mtime_ns + 1000000000}' in result.stderr
+
+
+@pytest.mark.parametrize('policy', ['', 'readonly-hardlinks-v1'])
+@pytest.mark.parametrize('persistent', [False, True])
+@pytest.mark.parametrize('timing', ['open', 'final'])
+def test_runtime_mtime_cache_disagreement_restarts_complete_observation(tmp_path, policy, persistent, timing):
+    release = tmp_path / 'release'
+    snapshot = _write_runtime_release_contract(release, 'gg_input_generation', launch_storage=policy)
+    wrapper = tmp_path / 'python-stale-metadata'
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os,sys,types,hashlib\n'
+        'code=sys.stdin.read();sys.argv=sys.argv[1:];real_stat=os.stat;real_hash=hashlib.sha256;seen=0;hashed=False\n'
+        f'root={str(release)!r};persistent={persistent!r};timing={timing!r}\n'
+        'def stale_stat(path,*args,**kwargs):\n'
+        ' global seen,hashed\n'
+        ' value=real_stat(path,*args,**kwargs)\n'
+        ' match=(str(path)=="VERSION" and kwargs.get("dir_fd")is not None)if timing=="open"else(str(path)==root+"/VERSION" and hashed)\n'
+        ' if match and (persistent or seen==0):\n'
+        '  seen+=1;hashed=False\n'
+        '  fields={name:getattr(value,name)for name in dir(value)if name.startswith("st_")}\n'
+        '  fields["st_mtime_ns"]+=1000000000\n'
+        '  return types.SimpleNamespace(**fields)\n'
+        ' return value\n'
+        'class Hasher:\n'
+        ' def __init__(self,data=b""):self.inner=real_hash(data)\n'
+        ' def update(self,data):\n'
+        '  global hashed\n'
+        '  hashed=True;self.inner.update(data)\n'
+        ' def hexdigest(self):return self.inner.hexdigest()\n'
+        'os.stat=stale_stat;hashlib.sha256=Hasher;exec(compile(code,"<stale-metadata>","exec"))\n'
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / 'workflow/support/gg_entrypoint_bootstrap.sh'
+    result = run_bash(f'source {shlex.quote(str(bootstrap))}; export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; '
+                      f'export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; '
+                      f'gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation', tmp_path)
+    expected = bool(policy) and not persistent
+    assert (result.returncode == 0) is expected, result.stderr
+    if policy:
+        assert result.stderr.count('restarting complete verification') == (2 if persistent else 1)
+    else:
+        assert 'restarting complete verification' not in result.stderr
+    if expected:
+        assert result.stdout.strip() == str(release / 'workflow')

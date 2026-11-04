@@ -205,7 +205,11 @@ materializes only that family's archived artifacts at their historical paths,
 preserves their mtimes, and then applies the normal stage skip/staleness tests.
 ZIP headers represent years 1980–2107; timestamps outside that range are clamped
 only in the ZIP header. The manifest retains the original nanosecond mtime for
-restoration. Publication stays inside the reader lock so maintenance cannot
+restoration. If the destination filesystem rejects or silently rounds that
+time, materialization fails before publication and retains the archived member
+and any previously published destination. Use a filesystem that supports the
+recorded timestamp to restore it; the logical ZIP reader still exposes its bytes.
+Publication stays inside the reader lock so maintenance cannot
 commit a newer result before an older restored snapshot is published.
 Consequently, a legacy run converted after MAFFT, for example, can resume from
 the later stages instead of starting over. A controlled failure records
@@ -250,6 +254,14 @@ views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
 caches, avoid opening every ZIP manifest for normal listing, status, and
 task-level materialization.
+New family provenance manifests are registered in the workflow's explicitly
+enabled output inventory before publication, including manifests created by a
+provenance check. This lets queue collection include them with the other family
+outputs. For an older workspace with unqueued live manifests, stop its writers
+and run `archive-completed` with the original family catalog before finalization.
+The native command preserves those live overrides and automatically finalizes a
+fully completed orthogroup catalog. Direct `finalize` continues to reject
+uncollected live outputs.
 Repeated transparent reads reuse one ZIP reader per worker thread until that
 worker moves to another archive. This avoids reparsing a large central
 directory once per member in summaries and database generation; an index
@@ -477,6 +489,14 @@ Repair also checks finalized ZIP identities retained in readable family or
 subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
 before replacing the indexes; restore the ZIP bytes before retrying. Repair
 reconstructs metadata from valid ZIPs, not damaged ZIP contents.
+
+Index publication shares physical ZIP path resolutions within one update and
+rechecks those paths before the update can commit or remove live sources.
+Logical records retain their own size, CRC, SHA-256, generation and timestamps.
+Index decoding also reuses bounded, purely lexical ZIP path validation across
+records; it does not cache filesystem identity or skip member validation.
+See [the archive index benchmark](development-and-tests.md#archive-index-publication)
+for a reproducible synthetic comparison.
 
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress

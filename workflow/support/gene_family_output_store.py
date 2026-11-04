@@ -14,6 +14,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -337,9 +338,29 @@ def _catalog_conflicting_final_zip_paths(
     return conflicts
 
 
-def _final_archive_path(root: Path | str, subdir: str) -> Path:
+@functools.lru_cache(maxsize=4096)
+def _indexed_zip_path(root: Path, payload_root: Path, subdir: str, zip_name: str, zip_location: str) -> Path:
+    # This cache contains lexical validation and immutable Path objects only.
+    # Filesystem identity, member content and per-record metadata stay live.
+    relative_zip = Path(zip_name)
+    unsafe = relative_zip.is_absolute() or ".." in relative_zip.parts
+    if zip_location == "active":
+        unsafe = unsafe or len(relative_zip.parts) != 2 or relative_zip.parent.name != subdir
+        zip_path = payload_root / relative_zip
+    elif zip_location == "final":
+        unsafe = unsafe or len(relative_zip.parts) != 1 or relative_zip.name != f"{subdir}.zip"
+        zip_path = root / relative_zip
+    else:
+        unsafe = True
+        zip_path = root / relative_zip
+    if unsafe or relative_zip.suffix.lower() != ".zip":
+        raise ArchiveStoreError(f"Archive index contains an unsafe ZIP path: {relative_zip}")
+    return zip_path
+
+
+def _final_archive_path(root: Path | str, subdir: str, *, resolve=None) -> Path:
     _safe_logical_path(subdir, "__archive__")
-    return Path(root).resolve() / f"{subdir}.zip"
+    return (Path.resolve if resolve is None else resolve)(Path(root)) / f"{subdir}.zip"
 
 
 def _family_index_bucket(family_id: Optional[str]) -> str:
@@ -1149,20 +1170,8 @@ class GeneFamilyOutputStore:
         except ValueError as exc:
             raise ArchiveStoreError(f"Archive index contains an invalid logical path: {logical_path!r}") from exc
         _safe_logical_path(subdir, name)
-        relative_zip = Path(str(record["zip_path"]))
-        zip_location = str(record.get("zip_location", "active"))
-        unsafe = relative_zip.is_absolute() or ".." in relative_zip.parts
-        if zip_location == "active":
-            unsafe = unsafe or len(relative_zip.parts) != 2 or relative_zip.parent.name != subdir
-            zip_path = self.payload_root / relative_zip
-        elif zip_location == "final":
-            unsafe = unsafe or len(relative_zip.parts) != 1 or relative_zip.name != f"{subdir}.zip"
-            zip_path = self.root / relative_zip
-        else:
-            unsafe = True
-            zip_path = self.root / relative_zip
-        if unsafe or relative_zip.suffix.lower() != ".zip":
-            raise ArchiveStoreError(f"Archive index contains an unsafe ZIP path: {relative_zip}")
+        zip_path = _indexed_zip_path(self.root, self.payload_root, subdir,
+                                     str(record["zip_path"]), str(record.get("zip_location", "active")))
         artifact = Artifact(
             logical_path=logical_path,
             subdir=subdir,
@@ -1548,6 +1557,19 @@ class GeneFamilyOutputStore:
         *,
         changed_paths: Optional[Set[str]] = None,
     ) -> None:
+        # A batch rewrites many logical records that share immutable ZIPs.
+        # Resolve each physical mapping once and revalidate every mapping before
+        # the surrounding index transaction can commit or delete live sources.
+        with self._index_record_batch() as record:
+            self._merge_index_subdirs_records(updated_subdirs, changed_paths=changed_paths, record=record)
+
+    def _merge_index_subdirs_records(
+        self,
+        updated_subdirs: Dict[str, Dict[str, Artifact]],
+        *,
+        changed_paths: Optional[Set[str]],
+        record: Callable[[Artifact], dict],
+    ) -> None:
         # Queue commits know the exact additions. Preserve unrelated family
         # buckets instead of rewriting every bucket for a changed subdirectory.
         # Full replacements (compaction/deletion) keep the original path.
@@ -1578,7 +1600,7 @@ class GeneFamilyOutputStore:
                     "schema_version": INDEX_SCHEMA_VERSION,
                     "subdir": subdir,
                     "artifacts": {
-                        logical_path: self._index_record(artifact)
+                        logical_path: record(artifact)
                         for logical_path, artifact in sorted(artifacts.items())
                     },
                 }
@@ -1623,7 +1645,7 @@ class GeneFamilyOutputStore:
                     default=0,
                 ),
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(bucket_artifacts.items())
                 },
             }
@@ -2232,6 +2254,17 @@ class GeneFamilyOutputStore:
                 with archive.open(artifact.member_name, "r") as handle:
                     yield handle
 
+    @staticmethod
+    def _restore_materialized_mtime(path: Path, mtime_ns: Optional[int]) -> None:
+        if mtime_ns is None:
+            return
+        try:
+            os.utime(path, ns=(mtime_ns, mtime_ns))
+        except (OSError, OverflowError) as exc:
+            raise ArchiveStoreError(f"Cannot restore archive mtime_ns={mtime_ns}: {path}") from exc
+        if path.stat().st_mtime_ns != mtime_ns:
+            raise ArchiveStoreError(f"Filesystem did not preserve archive mtime_ns={mtime_ns}: {path}")
+
     def materialize(
         self,
         subdir: str,
@@ -2271,8 +2304,7 @@ class GeneFamilyOutputStore:
                     os.fsync(target.fileno())
                 # Keep publication inside the read lock: a maintenance writer may
                 # otherwise commit newer content before this old snapshot replaces it.
-                if artifact.mtime_ns is not None:
-                    os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
+                self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                 os.replace(temporary, destination)
                 _fsync_directory(destination.parent)
         finally:
@@ -2378,11 +2410,7 @@ class GeneFamilyOutputStore:
                         shutil.copyfileobj(source, target, length=1024 * 1024)
                         target.flush()
                         os.fsync(target.fileno())
-                    if artifact.mtime_ns is not None:
-                        os.utime(
-                            temporary,
-                            ns=(artifact.mtime_ns, artifact.mtime_ns),
-                        )
+                    self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                     os.replace(temporary, destination)
                     touched_directories.add(destination.parent)
                 finally:
@@ -2501,21 +2529,48 @@ class GeneFamilyOutputStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _index_record(self, artifact: Artifact) -> dict:
+    @contextlib.contextmanager
+    def _index_record_batch(self):
+        resolved: Dict[Path, Path] = {}
+        mappings = {}
+
+        def resolve(path):
+            path = Path(path)
+            if path not in resolved:
+                resolved[path] = path.resolve()
+            return resolved[path]
+
+        def record(artifact):
+            key = (artifact.zip_path, artifact.subdir)
+            value = self._index_record(artifact, _path_record=mappings.get(key), _resolve=resolve)
+            mappings[key] = (value["zip_path"], value["zip_location"])
+            return value
+
+        yield record
+        for path, expected in resolved.items():
+            if path.resolve() != expected:
+                raise ArchiveStoreError(f"Archive index path changed during publication: {path}")
+
+    def _index_record(self, artifact: Artifact, *, _path_record=None, _resolve=None) -> dict:
         if artifact.zip_path is None or artifact.member_name is None:
             raise ArchiveStoreError(f"Cannot index a live artifact as an archive member: {artifact.logical_path}")
-        final_path = _final_archive_path(self.root, artifact.subdir)
-        if artifact.zip_path.resolve() == final_path.resolve():
-            relative_zip = Path(final_path.name)
-            zip_location = "final"
+        if _path_record is None:
+            resolve = Path.resolve if _resolve is None else _resolve
+            final_path = _final_archive_path(self.root, artifact.subdir, resolve=resolve)
+            if resolve(artifact.zip_path) == resolve(final_path):
+                relative_zip = Path(final_path.name)
+                zip_location = "final"
+            else:
+                try:
+                    relative_zip = artifact.zip_path.relative_to(self.payload_root)
+                except ValueError as exc:
+                    raise ArchiveStoreError(f"Archive member is outside the payload root: {artifact.zip_path}") from exc
+                zip_location = "active"
+            zip_name = relative_zip.as_posix()
         else:
-            try:
-                relative_zip = artifact.zip_path.relative_to(self.payload_root)
-            except ValueError as exc:
-                raise ArchiveStoreError(f"Archive member is outside the payload root: {artifact.zip_path}") from exc
-            zip_location = "active"
+            zip_name, zip_location = _path_record
         return {
-            "zip_path": relative_zip.as_posix(),
+            "zip_path": zip_name,
             "zip_location": zip_location,
             "member_name": artifact.member_name,
             "generation": artifact.generation,

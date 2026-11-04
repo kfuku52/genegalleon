@@ -53,6 +53,7 @@ from gene_family_output_store import (
     query_id_from_name,
     query_id_matchers,
     read_only_observation,
+    record_family_output_inventory,
 )
 from orthofinder_output_store import logical_directory_exists as managed_directory_exists
 from orthofinder_output_store import logical_directory_records as orthofinder_directory_records
@@ -1066,6 +1067,10 @@ def _write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        family_id = payload.get("family_id")
+        if path.parent.name == "artifact_provenance" and isinstance(family_id, str) and family_id:
+            root = path.parent.parent.resolve()
+            record_family_output_inventory(root, family_id, root / "artifact_provenance" / path.name)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
