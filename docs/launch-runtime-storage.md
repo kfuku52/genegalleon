@@ -27,3 +27,10 @@ code only after a second identical body read, retaining inode/mode/owner/group/
 size/mtime checks and returning the current complete signature. Other metadata
 sources, database identity checks and retirement/publication fences keep their
 original full signatures. This also covers resuming an archived execution.
+
+Startup failures distinguish lookup/open, read, re-read and final path-fence
+changes, recording the differing attribute names and their exact before/after
+values. Timestamp diagnostics use integer nanoseconds. Body or permission
+mismatches record expected and observed SHA-256 and modes. These diagnostics
+do not retry verification, waive a fence or identify a filesystem as the cause;
+preserve the failed launch and its logs when investigating intermittent errors.

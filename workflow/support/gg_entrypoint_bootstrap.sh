@@ -214,6 +214,12 @@ def fingerprint(info):
             info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def identity_changes(before, after):
+    names = ("device", "inode", "mode", "uid", "gid", "links", "size", "mtime_ns", "ctime_ns")
+    return ", ".join("{}={}->{}".format(name, left, right)
+                     for name, left, right in zip(names, before, after) if left != right)
+
+
 def content_identity(identity):
     # New readonly packages permit concurrent links. Mode/owner/inode/bytes and
     # mtime remain protected; legacy files retain their complete fingerprint.
@@ -260,17 +266,15 @@ def verify_file(relative, parent_fd):
         if readonly_launch and before.st_uid != os.getuid():
             fail("Explicit runtime release file owner changed: {}".format(relative))
         if content_identity(fingerprint(before)) != content_identity(fingerprint(leaf_info)):
-            names = ("device", "inode", "mode", "uid", "gid", "links", "size", "mtime", "ctime")
-            changed = [name for name, left, right in zip(names, fingerprint(leaf_info), fingerprint(before))
-                       if left != right]
             fail("Explicit runtime release file identity changed between stat and open: {} ({}).".format(
-                relative, ",".join(changed)))
+                relative, identity_changes(fingerprint(leaf_info), fingerprint(before))))
         hasher = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
         after = os.fstat(stream.fileno())
         if content_identity(fingerprint(after)) != content_identity(fingerprint(before)):
-            fail("Explicit runtime release file changed: {}".format(relative))
+            fail("Explicit runtime release file changed: {} (during read: {}).".format(
+                relative, identity_changes(fingerprint(before), fingerprint(after))))
         if fingerprint(after) != fingerprint(before):
             # A link may have appeared during the read. Hash the current body
             # again rather than treating metadata churn as a content proof.
@@ -280,10 +284,12 @@ def verify_file(relative, parent_fd):
                 hasher.update(chunk)
             after = os.fstat(stream.fileno())
             if content_identity(fingerprint(after)) != content_identity(fingerprint(before)):
-                fail("Explicit runtime release file changed: {}".format(relative))
+                fail("Explicit runtime release file changed: {} (during re-read: {}).".format(
+                    relative, identity_changes(fingerprint(before), fingerprint(after))))
     observed = hasher.hexdigest()
     if observed != item["sha256"] or stat.S_IMODE(before.st_mode) != item["mode"]:
-        fail("Explicit runtime release file changed: {}".format(relative))
+        fail("Explicit runtime release file changed: {} (sha256={}; expected={}; mode={:o}; expected={:o}).".format(
+            relative, observed, item["sha256"], stat.S_IMODE(before.st_mode), item["mode"]))
     return relative, observed, fingerprint(after)
 
 
@@ -337,7 +343,8 @@ try:
         current = fingerprint(release_root.joinpath(*parts).lstat())
         if current != identity:
             if content_identity(current) != content_identity(identity):
-                fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+                fail("Explicit runtime release file changed: {} (final path fence: {}).".format(
+                    "/".join(parts), identity_changes(identity, current)))
             # Revalidate the whole body after late link/ctime changes, through
             # pinned no-follow directory descriptors. No legacy fence is waived.
             descriptor = os.dup(root_fd)
@@ -348,7 +355,8 @@ try:
                     descriptor = child
                 _, _, checked = verify_file("/".join(parts), descriptor)
                 if content_identity(checked) != content_identity(identity):
-                    fail("Explicit runtime release file changed: {}".format("/".join(parts)))
+                    fail("Explicit runtime release file changed: {} (late revalidation: {}).".format(
+                        "/".join(parts), identity_changes(identity, checked)))
             finally:
                 os.close(descriptor)
     if fingerprint(manifest_path.lstat()) != fingerprint(manifest_info):
