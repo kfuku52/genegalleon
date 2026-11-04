@@ -433,6 +433,21 @@ def test_version_context_preserves_host_identity(monkeypatch):
     assert before != versions.version_context_identity(command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env)
 
 
+def test_version_context_retains_apptainer_source_only_bindings():
+    import version_report_identity as versions
+    def identity(scratch, bindings):
+        command, env = inventory_context(scratch)
+        env.update(APPTAINER_BIND=bindings, SINGULARITY_BIND=bindings)
+        return versions.version_context_identity(command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env)
+    one, two = "/scratch/task.1", "/scratch/task.2"
+    stable = "/site/reference,/site/tools"
+    assert identity(one, stable) == identity(two, stable)
+    assert identity(one, stable) != identity(one, "/different/reference,/site/tools")
+    # A source-only mount in scratch remains a distinct literal context.
+    assert identity(one, stable + "," + one) != identity(two, stable + "," + two)
+    assert versions._scratch_binds(stable + ",", one, "/gg_tmp") is None
+
+
 def test_cache_copy_uses_exact_verified_bytes_and_distinguishes_miss(tmp_path, monkeypatch):
     import version_report_identity as versions
     path = tmp_path / "cache.log"

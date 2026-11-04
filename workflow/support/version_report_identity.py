@@ -84,7 +84,10 @@ def _scratch_binds(value, scratch, mount):
     matched = False
     for entry in value.split(","):
         fields = entry.split(":")
-        if len(fields) not in (2, 3):
+        # Apptainer's inherited bind list also uses source-only entries, whose
+        # destination is the same path. Keep those literal; only the explicit
+        # managed source:destination pair below may lose its scratch name.
+        if len(fields) not in (1, 2, 3) or not fields[0]:
             return None
         if fields[:2] == [scratch, mount]:
             entries.append([{"managed_task_scratch": True}, mount, *fields[2:]])
