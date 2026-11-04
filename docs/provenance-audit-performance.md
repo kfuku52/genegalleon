@@ -157,10 +157,119 @@ One producer read lock and an initial/final metadata fence replace repeated
 archive-index scans. Raw/ZIP source selection, pending-index, symlink, tombstone
 and generation checks remain enforced. Thread pools and their submission windows
 are bounded; the default is up to four workers, capped by `GG_TASK_CPUS`.
-`--workers 1` selects serial operation. Run-scoped caches hold at most 250,000
-sources/guards; either capacity overflow fails instead of dropping a check.
+`--workers 1` selects serial operation. Full audits and the audited database
+pipeline retain at most 16,384 digest entries and logical-source resolutions in
+RAM. Resolution uses an LRU cache so later families can reuse their own sources
+after the cache fills. Once the digest inventory exceeds that RAM threshold,
+all digest identities are indexed in a private temporary SQLite database;
+the RAM cache keeps only recent entries. Final validation streams the complete
+inventory in insertion order without copying the full entry/guard lists.
+Every unique source is still read initially and rehashed before publication.
+
+The digest index has a 1 GiB disk budget and a two-million-reader bound.
+Source guards retain their separate 4,096-entry RAM threshold, 512 MiB spill
+budget and two-million-reader bound. Reader callables remain in process, so
+total memory still grows with the number of sources; the RAM cache limit is
+not a whole-process memory cap. Indexes are deleted on success or failure and
+are never reused across runs. Storage failures, inventory loss and capacity
+overflow fail the whole audit instead of dropping checks or reporting families
+as corrupt. Small read-only queries retain their existing finite capacity.
 Repeated reads reject a changed source identity instead of rebinding its digest.
 The audit holds up to eight ZIP readers per thread and closes them at the fence.
+
+Re-registering a source guard checks its identity and retains its first reader.
+That reader belongs to the original query snapshot; replacing it with a later,
+short-lived fingerprint store caused per-source lock/epoch checks after that
+store closed. A 128-family diagnostic reduced final-stage epoch reads from
+1,564 to 28 while preserving all 1,538 content revalidations and 2,062 logical
+guards. Initial/final archive epoch fences, fresh content reads and late-mutation
+rejection remain required. The audited-database benchmark records `index_epochs`
+alongside ZIP opens and metadata-header checks to expose this regression.
+
+`*.tree_plot.args.json` files are renderer argument outputs, not provenance
+manifests. The audit excludes this known suffix only when selecting manifests;
+the files remain visible through the logical store and its inventory fence.
+Their owning `*.tree_plot.json` manifests still check their bytes and presence.
+Other malformed manifests, including missing `family_id` or `step`, remain
+errors. This works with existing raw, ZIP and metadata-SQLite storage without
+moving or regenerating saved files.
+
+## Digest spill qualification, 2026-11-04
+
+Measurements use the same Linux aarch64 / Python 3.12.15 Docker image
+`sha256:f0632dbd422a3ee87e3c2a82c3612cf64413a06c932140e69c178a16ef73b708`,
+limited to four CPUs and 8 GiB. OS caches were not forcibly cleared. The image's
+freshness check fails against current runtime inputs/upstream revisions; these
+are Python behavior and benchmark results in that known image, not current
+upstream-runtime or SIF compatibility evidence.
+
+The paired audited-database fixture used 512 families, four manifests and twelve
+unique artifacts per family, with ZIP artifacts and SQLite-packed metadata.
+Against `b8996c14df2074c48cf5b0fb7465d790c21fb235`, one discarded warmup per
+revision and three alternating fresh-process trials gave median times of
+16.05 / 9.28 seconds (42.2% less time) and peak RSS of 179.53 / 177.39 MiB.
+Epoch reads fell from 6,201 to 57. This fixture stays below the digest spill
+threshold, isolating the repeated source-guard snapshot checks. All complete
+logical database, audit-report and manifest-inventory
+SHA256 values matched; each trial retained all 6,146 final content reads and
+8,206 source guards.
+
+Full measurements, counters, source hashes and validation commands are retained
+in [the machine-readable evidence](benchmarks/provenance-audit-spill-2026-11-04.json).
+
+Use the same runner, runtime and CPU/memory budget for both revisions:
+
+```bash
+python -B workflow/tests/benchmark_audited_database.py \
+  --baseline-support /path/to/baseline/workflow/support \
+  --families 512 --samples 3 --warmups 1 --layout packed \
+  --output /tmp/gg-audited-db-paired.json
+```
+
+The expanded qualification includes renderer arguments and deliberately crosses
+the former 250,000-digest ceiling with independent artifacts, rather than only
+increasing the number of manifests referencing shared sources:
+
+A complete final-code run reused those immutable synthetic inputs in a fresh
+temporary root, with copied lock namespaces omitted. It published the audited
+database with 18,811 rows each in `tree` and `branch`, 94,055 `current` audit rows
+and 18,811 `legacy_untracked` rows under the unchanged legacy policy. All
+319,789 unique digests were reread before publication and all 413,860 guards
+were retained. The RAM digest cache held 16,384 entries. The single qualification
+took 556.37 seconds with 2,302 MiB peak RSS, 13 metadata-header checks and 73
+archive-epoch reads. This is synthetic execution/scale evidence, not a real
+scientific analysis, a before/after large-run speedup or a whole-process RAM cap.
+
+```bash
+python -B workflow/tests/benchmark_audited_database.py \
+  --families 18811 --files-per-family 14 --plot-arguments \
+  --samples 1 --warmups 0 --layout packed \
+  --output /tmp/gg-audited-db-large.json
+```
+
+For an isolated memory/time comparison, run the same revalidation fixture in
+alternating fresh processes. Both revisions use source-guard spill; enable
+`--spill` only for the candidate's new digest spill. Compare the complete
+source-set SHA256 and every initial/final read counter as well as peak RSS,
+collection time (including private fixture writes) and final validation time:
+
+For 80,000 real 8 KiB files, one discarded warmup per revision and three
+alternating trials reduced median peak RSS from 183.13 to 140.33 MiB (23.4%).
+Median collection-plus-validation wall time increased from 20.52 to 24.96
+seconds (21.6%): SQLite spill trades additional work for lower RAM use and
+larger inventories. All complete source-set SHA256 values matched; both
+revisions read every file twice, checked all 80,000 guards and hashed
+1,310,720,000 source bytes. This isolated result is not a whole-workflow memory
+claim or an end-to-end speedup.
+
+```bash
+python -B workflow/benchmarks/benchmark_audit_revalidation.py \
+  --support-root /path/to/baseline/workflow/support \
+  --files 80000 --workers 4 --latency local
+python -B workflow/benchmarks/benchmark_audit_revalidation.py \
+  --support-root workflow/support --spill \
+  --files 80000 --workers 4 --latency local
+```
 
 ## Evidence, 2026-09-30
 
@@ -224,6 +333,10 @@ phase; heartbeat time and last advancement time are separate.
 SHA256, status counts, exit code, elapsed time and bounded cache counters.
 `digest_bytes_read` counts declared-source hash stream bytes, including the final
 reread; it excludes manifest JSON and physical/compressed filesystem traffic.
+`cache_entries` counts the current RAM digest cache; `digest_spilled_entries`
+counts the complete disk-indexed digest inventory (including hot entries), or
+zero before spilling. `unique_digest_reads` and `digest_revalidation_reads`
+continue to count initial and final content reads, respectively.
 `progress_write_ns` measures progress publication time.
 
 Observed jobs additionally write `progress-artifact_audit.json` and

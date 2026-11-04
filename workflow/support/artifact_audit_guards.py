@@ -28,6 +28,25 @@ def encode(value):
     return body
 
 
+def decode(body):
+    """Read only the tagged JSON types written by this private run's index."""
+    def restore(item):
+        kind, value = item
+        if kind in {'NoneType', 'str', 'int', 'float', 'bool'}:
+            return value
+        if kind == 'tuple':
+            return tuple(restore(child) for child in value)
+        if kind == 'list':
+            return [restore(child) for child in value]
+        if kind == 'dict':
+            return {restore(key): restore(child) for key, child in value}
+        raise ValueError('Unknown identity type')
+    try:
+        return restore(json.loads(body))
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise AuditCapacityError('Audit spill record is invalid') from exc
+
+
 class GuardSpill:
     """No cross-run reuse: keep every reader, stream identities from private disk.
 
@@ -35,6 +54,9 @@ class GuardSpill:
     its 512 MiB disk budget and two-million-reader budget fail closed.
     Callers serialize access through their existing audit lock.
     """
+    label = 'source guard'
+    max_pages = 131072
+
     def __init__(self):
         self.directory = tempfile.TemporaryDirectory(prefix='gg-audit-guards-')
         self.readers = []
@@ -42,7 +64,7 @@ class GuardSpill:
             self.database = sqlite3.connect(Path(self.directory.name) / 'guards.sqlite3',
                                             isolation_level=None, check_same_thread=False)
             self.database.execute('PRAGMA page_size=4096')
-            self.database.execute('PRAGMA max_page_count=131072')
+            self.database.execute(f'PRAGMA max_page_count={self.max_pages}')
             self.database.execute('PRAGMA journal_mode=OFF')
             self.database.execute('PRAGMA synchronous=OFF')
             self.database.execute('PRAGMA cache_size=-4096')
@@ -61,28 +83,57 @@ class GuardSpill:
             if prior is not None:
                 if prior[0] != expected:
                     raise ValueError('Audit source changed during the audit')
-                self.readers[prior[1]] = reader
+                # The first reader owns this query's original source/snapshot.
+                # A later, short-lived store must not replace that context.
                 return
             if len(self.readers) >= 2_000_000:
-                raise AuditCapacityError('Audit source guard spill exceeds its bounded capacity')
+                raise AuditCapacityError(f'Audit {self.label} spill exceeds its bounded capacity')
             self.database.execute('INSERT INTO guards VALUES (?,?,?)', (encoded_key, expected, len(self.readers)))
             self.readers.append(reader)
         except sqlite3.Error as exc:
-            raise AuditCapacityError('Audit source guard spill failed') from exc
+            raise AuditCapacityError(f'Audit {self.label} spill failed') from exc
 
-    def values(self):
+    def _records(self):
         try:
             count, low, high = self.database.execute('SELECT count(*), min(reader), max(reader) FROM guards').fetchone()
             if (count != len(self.readers) or count and (low != 0 or high != count - 1)):
-                raise AuditCapacityError('Audit source guard spill inventory changed')
-            cursor = self.database.execute('SELECT identity,reader FROM guards')
+                raise AuditCapacityError(f'Audit {self.label} spill inventory changed')
+            cursor = self.database.execute('SELECT key,identity,reader FROM guards ORDER BY rowid')
             while rows := cursor.fetchmany(512):
-                for identity, index in rows:
-                    yield identity, self.readers[index]
+                yield from rows
         except sqlite3.Error as exc:
-            raise AuditCapacityError('Audit source guard spill failed') from exc
+            raise AuditCapacityError(f'Audit {self.label} spill failed') from exc
+
+    def values(self):
+        for _key, identity, index in self._records():
+            yield identity, self.readers[index]
 
     def close(self):
         if hasattr(self, 'database'):
             self.database.close()
         self.directory.cleanup()
+
+
+class DigestSpill(GuardSpill):
+    """One run's digest identities, with a 1 GiB disk and two-million-reader bound.
+
+    Callables stay in process; keys, signatures, results and directory inventories
+    use tagged JSON on private disk. No executable serialization or cross-run reuse.
+    """
+    label = 'digest'
+    max_pages = 262144
+
+    def get(self, key):
+        try:
+            row = self.database.execute('SELECT identity,reader FROM guards WHERE key=?', (encode(key),)).fetchone()
+        except sqlite3.Error as exc:
+            raise AuditCapacityError('Audit digest spill failed') from exc
+        if row is not None:
+            before, value, members = decode(row[0])
+            return before, value, members, self.readers[row[1]]
+        return None
+
+    def items(self):
+        for key, identity, index in self._records():
+            before, value, members = decode(identity)
+            yield decode(key), (before, value, members, self.readers[index])

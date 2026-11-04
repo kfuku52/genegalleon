@@ -135,7 +135,7 @@ def digest_observation(*, workers=1, progress=None, spill_guards=False):
     if existing is not None:
         yield existing
         return
-    memo = AuditDigests(spill_guards=spill_guards)
+    memo = AuditDigests(spill_guards=spill_guards, spill_digests=spill_guards)
     previous = digest_cache()
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
@@ -1814,7 +1814,7 @@ def branch_identity_rows(
 def audit(args: argparse.Namespace) -> int:
     workers = getattr(args, "workers", 1)
     interval = getattr(args, "progress_interval", 10)
-    memo = AuditDigests(spill_guards=True)
+    memo = AuditDigests(spill_guards=True, spill_digests=True)
     source_sha256 = source_identity(SCRIPT_DIR)
     previous_cache = digest_cache()
     previous_path = previous_cache.database if previous_cache is not None else None
@@ -1887,6 +1887,10 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         names = store.file_names(MANIFEST_SUBDIR)
         memo.guard((str(logical_root), "manifest_inventory"), tuple(names),
                    scoped_digest_reader(lambda: tuple(store.file_names(MANIFEST_SUBDIR))))
+        # Renderer argument snapshots are declared outputs of FAMILY.tree_plot.json,
+        # not standalone manifests. Keep them visible to the store and its inventory
+        # fence; the real manifest still verifies their bytes and presence.
+        names = [name for name in names if not name.endswith('.tree_plot.args.json')]
         progress.phase("manifest_hash", len(names))
         inspect_in_context = metadata_snapshot_reader(inspect_manifest)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:

@@ -24,7 +24,7 @@ from pathlib import Path
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
 
-def fixture(root, support, families, packed):
+def fixture(root, support, families, packed, files_per_family=10, plot_arguments=False):
     sys.path.insert(0, str(support))
     import metadata_store
     from gene_family_output_store import archive_completed_outputs
@@ -40,7 +40,7 @@ def fixture(root, support, families, packed):
             "stat_tree/" + family + "_stat.tree.tsv": b"num_branch\tnum_spe\tnum_dup\tnum_sp\n1\t2\t0\t1\n",
             "stat_branch/" + family + "_stat.branch.tsv": b"branch_id\tnode_name\tnum_sp\tso_event\n0\tg1\t1\tS\n",
             **{f"fixture_{index}/{family}.txt": (f"{family} fixture {index}\n" * 32).encode()
-               for index in range(10)},
+               for index in range(files_per_family)},
         }
         outputs = []
         for relative, body in contents.items():
@@ -55,6 +55,15 @@ def fixture(root, support, families, packed):
                                         sha256=hashlib.sha256(shared.read_bytes()).hexdigest(), size_bytes=shared.stat().st_size)],
                            outputs=outputs)
             (manifests / f"{family}.example_{step}.json").write_text(json.dumps(payload))
+        if plot_arguments:
+            from gene_tree_plot_config import record
+            snapshot = manifests / f'{family}.tree_plot.args.json'
+            record(snapshot, logical, ['--panel1=tree'], 'taxonomic')
+            payload = dict(schema_version=1, family_id=family, step='tree_plot', inputs=[], outputs=[
+                dict(label='tree_plot_arguments', scope='logical', path='artifact_provenance/' + snapshot.name,
+                     artifact_type='file', sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                     size_bytes=snapshot.stat().st_size)])
+            (manifests / f'{family}.tree_plot.json').write_text(json.dumps(payload))
     if packed:
         metadata_store.pack(manifests, writers_stopped=True, delete_originals=True)
         archive_completed_outputs(logical, "orthogroup", catalog, lambda name: name.split("_")[0].split(".")[0],
@@ -69,6 +78,7 @@ def measure(args):
     import artifact_audit_runtime
     import gene_family_database_pipeline as pipeline
     import metadata_store
+    from gene_family_output_store import GeneFamilyOutputStore
 
     spec = importlib.util.spec_from_file_location("db_benchmark", Path(__file__).with_name("benchmark_orthogroup_database.py"))
     fingerprint = importlib.util.module_from_spec(spec)
@@ -87,8 +97,9 @@ def measure(args):
     record = ["--workspace-root", str(root), "--logical-root", str(global_root), "--family-id", "orthogroup",
               "--step", "gene_family_database", "--manifest", str(manifest),
               "--input-gene-family-store", "families=" + str(logical), "--output", "database=" + str(database)]
-    counts, lock = {"metadata_headers": 0, "zip_opens": 0}, threading.Lock()
+    counts, lock = {"metadata_headers": 0, "zip_opens": 0, "index_epochs": 0}, threading.Lock()
     original_signature, original_zip = metadata_store._db_signature, zipfile.ZipFile.__init__
+    original_epoch = GeneFamilyOutputStore._read_index_epoch
     def signature(*a, **kw):
         with lock:
             counts["metadata_headers"] += 1
@@ -97,7 +108,12 @@ def measure(args):
         with lock:
             counts["zip_opens"] += 1
         return original_zip(*a, **kw)
+    def epoch(*a, **kw):
+        with lock:
+            counts["index_epochs"] += 1
+        return original_epoch(*a, **kw)
     metadata_store._db_signature, zipfile.ZipFile.__init__ = signature, archive
+    GeneFamilyOutputStore._read_index_epoch = epoch
     phases = []
     original_phase = artifact_audit_runtime.AuditProgress.phase
     def phase(progress, name, total=None):
@@ -132,6 +148,8 @@ def main():
     parser.add_argument("--baseline-support", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--families", type=int, default=128)
+    parser.add_argument("--files-per-family", type=int, default=10, help="Unique extra artifacts, excluding two statistics")
+    parser.add_argument("--plot-arguments", action="store_true", help="Include real renderer argument outputs and manifests")
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--layout", choices=["raw", "packed"], default="packed")
@@ -143,26 +161,28 @@ def main():
     if args.worker:
         measure(args)
         return
-    if (not args.output or not 1 <= args.families <= 4096 or not 1 <= args.samples <= 10
+    if (not args.output or not 1 <= args.families <= 20000 or not 1 <= args.files_per_family <= 32
+            or not 1 <= args.samples <= 10
             or not 0 <= args.warmups <= 3):
-        parser.error("--output, families 1..4096, samples 1..10 and warmups 0..3 required")
+        parser.error("--output, families 1..20000, files-per-family 1..32, samples 1..10 and warmups 0..3 required")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     implementations = [("baseline", args.baseline_support)] if args.baseline_support else []
     implementations.append(("candidate", SUPPORT))
-    result = dict(families=args.families, layout=args.layout, workers=4, samples=args.samples,
+    result = dict(families=args.families, files_per_family=args.files_per_family, plot_arguments=args.plot_arguments,
+                  layout=args.layout, workers=4, samples=args.samples,
                   warmups=args.warmups, measurements=[])
     with tempfile.TemporaryDirectory(prefix="gg-audited-db-benchmark-") as temporary:
         root = Path(temporary)
-        fixture(root, SUPPORT, args.families, args.layout == "packed")
+        fixture(root, SUPPORT, args.families, args.layout == "packed", args.files_per_family, args.plot_arguments)
         for iteration in range(-args.warmups, args.samples):
-            for label, support in implementations:
+            for label, support in (implementations if iteration % 2 == 0 else implementations[::-1]):
                 target = root / f"{label}-{iteration}.json"
                 argv = [sys.executable, str(Path(__file__).resolve()), "--worker", str(root),
                         "--support", str(support.resolve()), "--result", str(target)]
                 if args.profile:
                     argv.append("--profile")
                 with args.output.with_name(f"{args.output.stem}-{label}-{iteration}.log").open("w") as handle:
-                    subprocess.run(argv, check=True, stdout=handle, stderr=subprocess.STDOUT)
+                    subprocess.run(argv, check=True, cwd=root, stdout=handle, stderr=subprocess.STDOUT)
                 row = dict(label=label, iteration=iteration, **json.loads(target.read_bytes()))
                 if iteration >= 0:
                     result["measurements"].append(row)

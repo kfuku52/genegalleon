@@ -1281,11 +1281,17 @@ def test_mixed_tsv_discards_spool_before_reparsing_original_values(tmp_path, mon
     assert pandas.concat(frames)['label'].tolist() == ['001', 'text', '003', 'more', '005']
 
 
-@pytest.mark.parametrize('layout', ['raw', 'zip'])
-def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, monkeypatch, layout):
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'packed'])
+@pytest.mark.parametrize('failure', ['content', 'digest_inventory'])
+def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, monkeypatch, layout, failure):
+    monkeypatch.chdir(tmp_path)
     sys.path.insert(0, str(SCRIPT_PATH.parent))
     import artifact_provenance as p
     import gene_family_database_pipeline as pipeline
+    original_memo = p.AuditDigests
+    def small_memo(**kwargs):
+        return original_memo(limit=2, **kwargs)
+    monkeypatch.setattr(p, 'AuditDigests', small_memo)
     root = tmp_path / 'output/orthogroup'
     global_root = tmp_path / 'output/.gg_global_artifacts'
     global_root.mkdir(parents=True)
@@ -1301,7 +1307,16 @@ def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, m
     assert p.dispatch(['record',*common,'--family-id','OG0001','--step','summary_statistics',
         '--manifest',str(root/'artifact_provenance/OG0001.summary_statistics.json'),
         '--input','alignment='+str(alignment),'--output','branch='+str(branch),'--output','tree='+str(tree)]) == 0
-    if layout == 'zip':
+    from gene_tree_plot_config import record as record_arguments
+    snapshot = root / 'artifact_provenance/OG0001.tree_plot.args.json'
+    record_arguments(snapshot, root, ['--panel1=tree'], 'taxonomic')
+    assert p.dispatch(['record', *common, '--family-id', 'OG0001', '--step', 'tree_plot',
+        '--manifest', str(snapshot.with_name('OG0001.tree_plot.json')),
+        '--output', 'tree_plot_arguments=' + str(snapshot)]) == 0
+    if layout == 'packed':
+        import metadata_store
+        metadata_store.pack(snapshot.parent, writers_stopped=True, delete_originals=True)
+    if layout in ('zip', 'packed'):
         archive_completed_outputs(root, 'orthogroup', {'OG0001'}, lambda name: name.split('_')[0].split('.')[0])
     database = tmp_path/'database.db'
     report = tmp_path/'audit.tsv'
@@ -1313,13 +1328,20 @@ def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, m
               '--step','gene_family_database','--manifest',str(manifest),
               '--input-gene-family-store','families='+str(root),'--output','database='+str(database)]
     assert pipeline.run(audit, db, record) == 0
+    import json
+    result = json.loads(report.with_suffix('.tsv.result.json').read_text())
+    assert result['metrics']['digest_spilled_entries'] > 2
+    assert result['metrics']['cache_entries'] <= 2
     saved_db, saved_manifest = database.read_bytes(), manifest.read_bytes()
     assert p.dispatch(['needs-run',*record,'--dry-run']) == 1
     original = pipeline.database._populate_database
     def mutate(*args):
         result = original(*args)
-        alignment.parent.mkdir(exist_ok=True)
-        alignment.write_text('>g1\nTGCA\n')
+        if failure == 'content':
+            alignment.parent.mkdir(exist_ok=True)
+            alignment.write_text('>g1\nTGCA\n')
+        else:
+            p._DIGEST_OBSERVATION.get().digest_spill.database.execute('DELETE FROM guards WHERE reader=0')
         return result
     monkeypatch.setattr(pipeline.database, '_populate_database', mutate)
     with pytest.raises((ValueError, RuntimeError), match='changed'):
@@ -1327,7 +1349,6 @@ def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, m
     assert database.read_bytes() == saved_db
     assert manifest.read_bytes() == saved_manifest
     assert 'audit_error' in report.read_text()
-    import json
     result = json.loads(report.with_suffix('.tsv.result.json').read_text())
     assert result['exit_code'] != 0
 
