@@ -448,6 +448,16 @@ def test_version_context_retains_apptainer_source_only_bindings():
     assert versions._scratch_binds(stable + ",", one, "/gg_tmp") is None
 
 
+def test_version_collection_coordination_is_bounded_and_context_scoped(tmp_path):
+    import version_report_identity as versions
+    paths = [tmp_path / (f"{i:064x}" + ".log") for i in range(1000)]
+    locks = {versions.collection_lock_path(path) for path in paths}
+    assert 1 < len(locks) <= 64
+    assert all(path.parent == tmp_path for path in locks)
+    assert versions.collection_lock_path(paths[0]) != versions.cache_lock_path(paths[0])
+    assert not list(tmp_path.iterdir())  # Computing lock names creates no per-context files.
+
+
 def test_cache_copy_uses_exact_verified_bytes_and_distinguishes_miss(tmp_path, monkeypatch):
     import version_report_identity as versions
     path = tmp_path / "cache.log"

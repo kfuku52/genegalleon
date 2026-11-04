@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -43,7 +44,7 @@ gg_container_bind_destination_exists() {{ return 0; }}
 gg_print_version_summary() {{ printf '%s\\n' 'synthetic runtime inventory'; }}
 date() {{ if [[ $# -eq 0 ]]; then printf '%s\\n' 'fixed synthetic benchmark time'; else command date "$@"; fi; }}
 gg_run_container_shell_script() {{
-  printf '%s\\n' called >> {quote(str(work / 'calls'))}
+  printf '%s\\n' called > {quote(str(work / 'calls'))}/"${{BASHPID:-$$}}"
   sleep {delay}
   cat {quote(str(work / 'payload'))}
 }}
@@ -61,6 +62,7 @@ def trial(args):
     unit = b"synthetic package 1.0\n"
     payload = (unit * ((args.payload_bytes + len(unit) - 1) // len(unit)))[:args.payload_bytes]
     (work / "payload").write_bytes(payload)
+    (work / "calls").mkdir(mode=0o700)
     support = source / "workflow/support"
     sys.path.insert(0, str(support))
     import metadata_store
@@ -69,10 +71,11 @@ def trial(args):
     cache = work / "workspace/downloads/version_inventory"
     version_report_identity.private_cache(cache)
     metadata_store.pack(cache, writers_stopped=True)
+    if args.cache_limit is not None:
+        metadata_store.pack(cache, writers_stopped=True, cache_limit=args.cache_limit)
     script = shell_fixture(source, work, args.probe_delay, runtime)
-    output_sha = []
     started = time.perf_counter()
-    for task in range(args.contexts):
+    def run_context(task):
         scratch = work / "scratch" / ("job.1.task." + str(task))
         scratch.mkdir(mode=0o700, parents=True)
         env = dict(os.environ, TMPDIR=str(scratch), TMP=str(scratch), TEMP=str(scratch),
@@ -82,6 +85,8 @@ def trial(args):
                    GG_TMP_WORKSPACE_ID=str(work / "workspace"),
                    SINGULARITYENV_GG_VERSION="0.0.0-synthetic-benchmark",
                    APPTAINERENV_GG_VERSION="0.0.0-synthetic-benchmark")
+        if args.distinct_contexts:
+            env["GG_BENCHMARK_VERSION_CONTEXT"] = str(task)
         for prefix in ("SINGULARITYENV_", "APPTAINERENV_"):
             for key in ("GG_COMMON_TMP_ROOT", "GG_TMP_HOST_ROOT", "GG_TMP_MOUNT"):
                 env[prefix + key] = env[key]
@@ -98,9 +103,12 @@ def trial(args):
         report = Path(reports[0])
         if not report.is_file():
             raise RuntimeError("Native inventory receipt does not name a regular report")
-        output_sha.append(file_sha(report))
+        return file_sha(report)
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        output_sha = list(pool.map(run_context, range(args.contexts)))
     elapsed = time.perf_counter() - started
-    invocations = (work / "calls").read_text().splitlines()
+    invocations = list((work / "calls").iterdir())
+    assert all(path.read_bytes() == b"called\n" for path in invocations)
     run_provenance = list((work / "workspace/output/versions").glob("run.*.log"))
     if len(run_provenance) != args.contexts or len(set(output_sha)) != 1:
         raise AssertionError("Inventory changed or per-invocation provenance was lost")
@@ -121,11 +129,16 @@ def main():
     parser.add_argument("--bash", default="bash")
     parser.add_argument("--contexts", type=int, default=8)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--distinct-contexts", action="store_true",
+                        help="Retain a different software context for each task")
+    parser.add_argument("--cache-limit", type=int)
     parser.add_argument("--payload-bytes", type=int, default=213000)
     parser.add_argument("--probe-delay", type=float, default=0.1)
     parser.add_argument("--trial", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.contexts < 2 or args.repeats < 1 or args.payload_bytes < 1 or args.probe_delay < 0:
+    if (args.contexts < 2 or args.repeats < 1 or args.payload_bytes < 1 or args.probe_delay < 0
+            or not 1 <= args.workers <= 32 or args.cache_limit is not None and args.cache_limit < 1):
         parser.error("Require multiple contexts, positive repeats/payload and nonnegative delay")
     fixture = args.runtime_fixture.absolute()
     expected = b"#!/bin/sh\nprintf '%s\\n' 'synthetic runtime inspect identity'\n"
@@ -148,8 +161,12 @@ def main():
         command = [sys.executable, "-B", str(Path(__file__).resolve()), "--trial",
                    "--source", str(args.source.resolve()), "--workdir", str(root / str(index)),
                    "--runtime-fixture", str(fixture),
-                   "--bash", args.bash, "--contexts", str(args.contexts),
+                   "--bash", args.bash, "--contexts", str(args.contexts), "--workers", str(args.workers),
                    "--payload-bytes", str(args.payload_bytes), "--probe-delay", str(args.probe_delay)]
+        if args.distinct_contexts:
+            command.append("--distinct-contexts")
+        if args.cache_limit is not None:
+            command += ["--cache-limit", str(args.cache_limit)]
         result = subprocess.run(command, capture_output=True, text=True, timeout=600)
         if result.returncode:
             raise RuntimeError(result.stderr[-6000:])
@@ -158,7 +175,8 @@ def main():
     if any(row["output_sha256"] != records[0]["output_sha256"] for row in measured):
         raise AssertionError("Trials produced different logical inventories")
     report = {"synthetic_workload": True, "command": sys.argv,
-              "python": sys.version, "contexts": args.contexts,
+              "python": sys.version, "contexts": args.contexts, "workers": args.workers,
+              "distinct_contexts": args.distinct_contexts, "cache_limit": args.cache_limit,
               "runtime_fixture": str(fixture), "runtime_fixture_sha256": file_sha(fixture),
               "probe_delay_seconds": args.probe_delay, "payload_bytes": args.payload_bytes,
               "warmup": records[0], "measured": measured,

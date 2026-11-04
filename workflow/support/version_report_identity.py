@@ -1,6 +1,7 @@
 """Fresh image identities and conservative version-inventory cache contexts."""
 
 import argparse
+import contextlib
 import errno
 import fcntl
 import hashlib
@@ -248,7 +249,7 @@ SQLITE_VERSION_CACHE_LOCK_V1 = True
 
 
 def cache_lock_path(cache_file):
-    """Preserve legacy locking; collected inventories use one bounded lock."""
+    """Preserve legacy publisher coordination for SQLite or flat caches."""
     cache_file = Path(cache_file)
     database = cache_file.parent / DATABASE
     if database.is_symlink():
@@ -256,9 +257,39 @@ def cache_lock_path(cache_file):
     return cache_file.parent / ".versions-cache.lock" if database.is_file() else Path(str(cache_file) + ".lock")
 
 
+def collection_lock_path(cache_file):
+    """Bound metadata inodes while separating slow, unrelated collections."""
+    cache_file = Path(cache_file)
+    stripe = hashlib.sha256(cache_file.name.encode()).digest()[0] % 64
+    return cache_file.parent / f".versions-collection.{stripe:02x}.lock"
+
+
+def publish_cache(cache_file, source, key, *, lock_publication=False, lock_timeout=300):
+    guard = (namespace_lock(cache_lock_path(cache_file), exclusive=True, timeout=lock_timeout)
+             if lock_publication else contextlib.nullcontext())
+    with guard:
+        if cache_file.is_symlink():
+            raise ValueError("Symlinked version cache file")
+        temporary = cache_file.with_suffix(f".tmp.{os.getpid()}")
+        try:
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, cache_file)
+            atomic_json(cache_file.with_suffix(".json"), {"schema_version": 1, "key": key,
+                        "sha256": digest(cache_file)})
+            if (cache_file.parent / DATABASE).is_file():
+                # Publication, including SQLite packing, is the only cache
+                # write phase. Other contexts may collect outside this guard.
+                limit = cache_policy(cache_file.parent)
+                pack(cache_file.parent, scratch="/tmp", writers_stopped=True, delete_originals=True)
+                if limit is not None:
+                    pack(cache_file.parent, scratch="/tmp", writers_stopped=True, cache_limit=limit)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("image", "environment", "context", "cache-ready", "publish-cache", "private-cache", "copy-cache", "cache-lock"))
+    parser.add_argument("action", choices=("image", "environment", "context", "cache-ready", "publish-cache", "private-cache", "copy-cache", "cache-lock", "collection-lock"))
     parser.add_argument("--image", type=Path)
     parser.add_argument("--cache-file", type=Path)
     parser.add_argument("--source", type=Path)
@@ -267,6 +298,8 @@ def main():
     parser.add_argument("--command")
     parser.add_argument("--versions-script-sha256")
     parser.add_argument("--if-ready", action="store_true")
+    parser.add_argument("--lock-publication", action="store_true")
+    parser.add_argument("--lock-timeout", type=int, default=300)
     args = parser.parse_args()
     if args.action == "image":
         if args.image is None:
@@ -283,6 +316,8 @@ def main():
         private_cache(args.cache_file)
     elif args.action == "cache-lock":
         print(cache_lock_path(args.cache_file))
+    elif args.action == "collection-lock":
+        print(collection_lock_path(args.cache_file))
     elif args.action == "cache-ready":
         raise SystemExit(0 if cache_ready(args.cache_file, args.key) else 1)
     elif args.action == "copy-cache":
@@ -291,22 +326,8 @@ def main():
                 raise SystemExit(3)
             raise ValueError("Version inventory is not verified for this context")
     else:
-        if args.cache_file.is_symlink():
-            raise ValueError("Symlinked version cache file")
-        temporary = args.cache_file.with_suffix(f".tmp.{os.getpid()}")
-        try:
-            shutil.copyfile(args.source, temporary)
-            os.replace(temporary, args.cache_file)
-            atomic_json(args.cache_file.with_suffix(".json"), {"schema_version": 1, "key": args.key,
-                        "sha256": digest(args.cache_file)})
-            if (args.cache_file.parent / DATABASE).is_file():
-                # The caller holds the version-cache singleton namespace lock.
-                limit = cache_policy(args.cache_file.parent)
-                pack(args.cache_file.parent, scratch="/tmp", writers_stopped=True, delete_originals=True)
-                if limit is not None:
-                    pack(args.cache_file.parent, scratch="/tmp", writers_stopped=True, cache_limit=limit)
-        finally:
-            temporary.unlink(missing_ok=True)
+        publish_cache(args.cache_file, args.source, args.key,
+                      lock_publication=args.lock_publication, lock_timeout=args.lock_timeout)
 
 
 if __name__ == "__main__":

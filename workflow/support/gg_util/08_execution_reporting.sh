@@ -127,7 +127,7 @@ gg_trigger_versions_dump() {
   cache_dir="${GG_VERSIONS_CACHE_DIR:-$(workspace_downloads_root "${gg_workspace_dir}")/version_inventory}"
   "${identity_python}" "${identity_helper}" private-cache --cache-file "${cache_dir}" || return 1
   cache_file="${cache_dir}/${container_key_hash}.log"
-  lock_file=$("${identity_python}" "${identity_helper}" cache-lock --cache-file "${cache_file}") || return 1
+  lock_file=$("${identity_python}" "${identity_helper}" collection-lock --cache-file "${cache_file}") || return 1
   # Preserve per-invocation host/time provenance even on an inventory cache hit.
   {
     echo "$(date): ${trigger_name}; image_identity=${image_file_hash:-unavailable}; context=${container_key_hash}"
@@ -149,8 +149,10 @@ gg_trigger_versions_dump() {
     [[ ${cache_copy_status} -eq 3 ]] || return "${cache_copy_status}"
   fi
 
-  # Keep version/runtime environment setup in the caller; isolate only lock
-  # ownership and its EXIT cleanup from the caller's traps.
+  # Collections of different contexts may run concurrently. Fixed lock stripes
+  # bound lock metadata and coalesce equivalent requests; publication acquires
+  # the separate cache writer guard only after the inventory has been collected.
+  # Keep environment setup in the caller and isolate EXIT cleanup ownership.
   (
   lock_python=$(gg_shared_lock_python) || return 1
   lock_helper="${gg_support_dir}/shared_namespace_lock.py"
@@ -249,7 +251,8 @@ gg_trigger_versions_dump() {
   fi
 
   if [[ -s "${tmp_log_file}" ]]; then
-    "${identity_python}" "${identity_helper}" publish-cache --source "${tmp_log_file}" --cache-file "${cache_file}" --key "${container_key_hash}" || return 1
+    "${identity_python}" "${identity_helper}" publish-cache --source "${tmp_log_file}" --cache-file "${cache_file}" --key "${container_key_hash}" \
+      --lock-publication --lock-timeout "$(gg_lock_acquire_timeout_seconds)" || return 1
     mv_out "${tmp_log_file}" "${log_file}"
   fi
   echo "gg_trigger_versions_dump: wrote ${log_file}"

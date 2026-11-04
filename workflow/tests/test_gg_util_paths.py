@@ -231,7 +231,7 @@ gg_require_versions_dump fixture
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
-def test_version_cache_hit_preserves_live_publisher_and_cold_miss_waits(tmp_path):
+def test_version_cache_hit_preserves_live_publisher_and_cold_publication_waits(tmp_path):
     sys.path.insert(0, str(GG_UTIL_PATH.parent))
     import metadata_store
     import shared_namespace_lock
@@ -275,8 +275,41 @@ gg_require_versions_dump fixture
         cold = run()
         assert cold.returncode != 0 and "Timed out" in cold.stderr, cold.stdout + cold.stderr
         assert owner.read_bytes() == before
-    assert calls.read_text().splitlines() == ["called"]
+    assert calls.read_text().splitlines() == ["called", "called"]
     assert len(list((workspace / "output/versions").glob("run.*.log"))) == 3
+
+    # Slow inventory probing must leave the publisher guard available to other
+    # contexts. Its successful payload is still published under that guard.
+    collecting, release = tmp_path / "collecting", tmp_path / "release-collection"
+    pause = (f"touch {shlex.quote(str(collecting))}; "
+             f"while [[ ! -e {shlex.quote(str(release))} ]]; do sleep 0.02; done; ")
+    delayed = script.replace("echo 'fixture versions';", pause + "echo 'fixture versions';")
+    process = subprocess.Popen(["bash", "-c", delayed], cwd=REPO_ROOT,
+                               env={**os.environ, "GG_LOCK_ACQUIRE_TIMEOUT_SECONDS": "1"},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 15
+        while not collecting.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert collecting.exists(), "inventory collector did not start"
+        with shared_namespace_lock.namespace_lock(lock, exclusive=True, nonblocking=True) as acquired:
+            assert acquired, "slow inventory probing holds the publisher guard"
+            owner = Path(str(lock) + ".namespace-v1/gate/owner.json")
+            before = owner.read_bytes()
+            release.touch()
+            time.sleep(0.2)
+            assert process.poll() is None and owner.read_bytes() == before
+    finally:
+        release.touch(exist_ok=True)
+        try:
+            stdout, stderr = process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+    assert process.returncode == 0, stdout + stderr
+    assert calls.read_text().splitlines() == ["called"] * 3
+    assert not list(cache.rglob("gate/owner.json"))
 
 
 @pytest.mark.parametrize("copied_shim", [False, True])

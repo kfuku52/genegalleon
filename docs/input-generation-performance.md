@@ -122,10 +122,18 @@ directory name. Custom scripts, software paths or extra scratch overlays keep
 their literal context. Host identity, software environment, other bindings and
 runtime options still distinguish inventories. Verified cache hits read one
 consistent metadata/payload snapshot without taking the publisher's singleton
-lock; misses recheck under that lock before collecting. Output write failures
+lock. Misses coalesce in 64 fixed collection-lock stripes, so probing unrelated
+contexts can proceed concurrently without creating one lock namespace per task.
+Only successful publication and SQLite packing take the publisher guard.
+Software paths and other differing contexts remain distinct. Output write failures
 remain errors. The synthetic scheduler-context comparison is reproducible with
 `workflow/benchmarks/benchmark_version_inventory_cache.py`; its fixed inventory
 probe is not an estimate of scientific workflow runtime.
+Its `--workers 8 --distinct-contexts --cache-limit 16` mode measures cold,
+different-context collection separately from same-context reuse. An explicitly
+prepared private cache can use the existing metadata-store cache-limit policy
+for large arrays; configure it while writers are stopped. The full invocation
+reports under `output/versions` are retained independently of cache eviction.
 Docker inventories use the currently resolved immutable image ID and collect
 with that ID, so replacing a tag invalidates its cached inventory.
 
