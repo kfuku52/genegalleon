@@ -254,6 +254,14 @@ views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
 caches, avoid opening every ZIP manifest for normal listing, status, and
 task-level materialization.
+New family provenance manifests are registered in the workflow's explicitly
+enabled output inventory before publication, including manifests created by a
+provenance check. This lets queue collection include them with the other family
+outputs. For an older workspace with unqueued live manifests, stop its writers
+and run `archive-completed` with the original family catalog before finalization.
+The native command preserves those live overrides and automatically finalizes a
+fully completed orthogroup catalog. Direct `finalize` continues to reject
+uncollected live outputs.
 Repeated transparent reads reuse one ZIP reader per worker thread until that
 worker moves to another archive. This avoids reparsing a large central
 directory once per member in summaries and database generation; an index
