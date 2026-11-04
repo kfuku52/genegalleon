@@ -231,6 +231,54 @@ gg_require_versions_dump fixture
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
+def test_version_cache_hit_preserves_live_publisher_and_cold_miss_waits(tmp_path):
+    sys.path.insert(0, str(GG_UTIL_PATH.parent))
+    import metadata_store
+    import shared_namespace_lock
+    image = tmp_path / "fixture.sif"
+    image.write_text("fixture identity")
+    runtime = tmp_path / "runtime"
+    runtime.write_text("#!/bin/sh\nexit 0\n")
+    runtime.chmod(0o755)
+    workspace = tmp_path / "workspace"
+    calls = tmp_path / "calls"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+gg_support_dir={shlex.quote(str(GG_UTIL_PATH.parent))}
+gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}
+gg_workspace_dir={shlex.quote(str(workspace))}
+gg_container_image_path={shlex.quote(str(image))}
+gg_container_shell_command_is_set() {{ return 0; }}
+gg_container_shell_command_runtime_bin() {{ echo {shlex.quote(str(runtime))}; }}
+gg_container_bind_destination_exists() {{ return 0; }}
+gg_print_version_summary() {{ :; }}
+gg_run_container_shell_script() {{ echo called >> {shlex.quote(str(calls))}; echo 'fixture versions'; }}
+gg_require_versions_dump fixture
+"""
+    def run():
+        return subprocess.run(["bash", "-c", script], cwd=REPO_ROOT,
+                              env={**os.environ, "GG_LOCK_ACQUIRE_TIMEOUT_SECONDS": "1"},
+                              capture_output=True, text=True, timeout=20)
+    first = run()
+    assert first.returncode == 0, first.stdout + first.stderr
+    cache = workspace / "downloads/version_inventory"
+    metadata_store.pack(cache, writers_stopped=True, delete_originals=True)
+    lock = cache / ".versions-cache.lock"
+    with shared_namespace_lock.namespace_lock(lock, exclusive=True):
+        owner = Path(str(lock) + ".namespace-v1/gate/owner.json")
+        before = owner.read_bytes()
+        hit = run()
+        assert hit.returncode == 0 and "reused verified" in hit.stdout, hit.stdout + hit.stderr
+        assert owner.read_bytes() == before
+        image.write_text("new fixture identity")
+        cold = run()
+        assert cold.returncode != 0 and "Timed out" in cold.stderr, cold.stdout + cold.stderr
+        assert owner.read_bytes() == before
+    assert calls.read_text().splitlines() == ["called"]
+    assert len(list((workspace / "output/versions").glob("run.*.log"))) == 3
+
+
 @pytest.mark.parametrize("copied_shim", [False, True])
 def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path, copied_shim):
     workspace = tmp_path / "workspace"
