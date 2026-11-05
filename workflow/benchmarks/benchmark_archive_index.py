@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Synthetic native archive-index publication; run in a GeneGalleon container.
+"""Synthetic native archive maintenance; run in a GeneGalleon container.
 
-Only index publication is timed. Valid ZIPs and deterministic logical payloads
-are prepared beforehand and all payloads are verified afterwards. Use separate
-processes/fixtures for repetitions and --module-root for the baseline helper.
+Valid ZIPs and deterministic logical payloads are prepared beforehand and all
+payloads are verified afterwards. Use separate processes/fixtures for repetitions
+and --module-root for the baseline helper. Finalization includes native locks,
+ZIP verification, index publication, source retirement and status publication.
 """
 import argparse
 import hashlib
@@ -24,6 +25,7 @@ parser.add_argument('--families', type=int, default=2500)
 parser.add_argument('--subdirs', type=int, default=29)
 parser.add_argument('--changed-families', type=int, default=100)
 parser.add_argument('--work-dir', type=Path)
+parser.add_argument('--operation', choices=('merge-index', 'write-index', 'finalize'), default='merge-index')
 args = parser.parse_args()
 if not 1 <= args.changed_families <= args.families or args.subdirs < 1:
     parser.error('Require positive subdirs and 1 <= changed-families <= families')
@@ -78,13 +80,31 @@ with tempfile.TemporaryDirectory(prefix='gg-archive-index-', dir=args.work_dir) 
     before_zip = {str(path.relative_to(root)): sha(path) for path in zip_paths}
     with m.producer_quiescence_lock(store.archive_root), m.archive_lock(store.archive_root):
         store._write_index(artifacts)
+        store._write_generation_counter(1)
     updated = {subdir: {key: value for key, value in artifacts.items() if value.subdir == subdir}
                for subdir in sorted({artifact.subdir for artifact in artifacts.values()})}
     changed = {key for key, value in artifacts.items() if int(value.family_id[2:]) < args.changed_families}
     started = time.monotonic()
-    with m.producer_quiescence_lock(store.archive_root), m.archive_lock(store.archive_root):
-        with store._index_update():
-            store._merge_index_subdirs_uncommitted(updated, changed_paths=changed)
+    if args.operation == 'finalize':
+        # Only ZIP creation metadata is fixed; clocks, locks, CRC/SHA checks,
+        # source retirement and all filesystem operations remain native.
+        original_strftime = m.time.strftime
+        m.time.strftime = lambda pattern, *rest: (
+            '2026-01-01T00:00:00Z' if pattern == '%Y-%m-%dT%H:%M:%SZ'
+            else original_strftime(pattern, *rest))
+        try:
+            finalized = m.finalize_archives(root, 'orthogroup',
+                                           [f'OG{i:07d}' for i in range(args.families)])
+            assert len(finalized) == args.subdirs
+        finally:
+            m.time.strftime = original_strftime
+    else:
+        with m.producer_quiescence_lock(store.archive_root), m.archive_lock(store.archive_root):
+            if args.operation == 'write-index':
+                store._write_index(artifacts)
+            else:
+                with store._index_update():
+                    store._merge_index_subdirs_uncommitted(updated, changed_paths=changed)
     elapsed = time.monotonic() - started
     paths = (list((store.archive_root / m.INDEX_DIR_NAME).glob('*.json')) +
              list((store.archive_root / m.SUBDIR_INDEX_DIR_NAME).glob('*.json')) +
@@ -100,11 +120,26 @@ with tempfile.TemporaryDirectory(prefix='gg-archive-index-', dir=args.work_dir) 
             assert digest == artifacts[logical].sha256
             observed.update(logical.encode() + b'\0' + digest.encode() + b'\n')
     assert observed.hexdigest() == expected.hexdigest()
-    assert before_zip == {str(path.relative_to(root)): sha(path) for path in zip_paths}
+    if args.operation == 'finalize':
+        assert not any(path.exists() for path in zip_paths)
+        # ZIP header creation dates vary between processes; compare every member
+        # and the complete native manifest rather than those incidental dates.
+        zip_manifest = {}
+        for path in finalized:
+            with zipfile.ZipFile(path) as archive:
+                zip_manifest[path.name] = [
+                    (info.filename, info.file_size, info.CRC,
+                     hashlib.sha256(archive.read(info)).hexdigest())
+                    for info in archive.infolist()]
+    else:
+        assert before_zip == {str(path.relative_to(root)): sha(path) for path in zip_paths}
+        zip_manifest = before_zip
     assert not (store.archive_root / m.INDEX_UPDATE_FILE).exists()
-    print(json.dumps(dict(kind='synthetic_native_archive_index_commit', families=args.families,
+    print(json.dumps(dict(kind='synthetic_native_archive_index_commit', operation=args.operation, families=args.families,
                           subdirs=args.subdirs, indexed_members=len(artifacts), changed_members=len(changed),
                           elapsed_seconds=elapsed, peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                           module_sha256=sha(Path(m.__file__)), index_files=len(manifest),
                           index_manifest_sha256=hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
-                          logical_payload_sha256=observed.hexdigest(), zip_bodies_unchanged=True), sort_keys=True))
+                          logical_payload_sha256=observed.hexdigest(),
+                          zip_manifest_sha256=hashlib.sha256(json.dumps(zip_manifest, sort_keys=True).encode()).hexdigest(),
+                          zip_bodies_unchanged=args.operation != 'finalize'), sort_keys=True))

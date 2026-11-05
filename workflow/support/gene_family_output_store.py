@@ -451,14 +451,25 @@ def lock_available_family_ids(
     *,
     nonblocking: bool,
 ) -> Iterator[Set[str]]:
+    identifiers = sorted(set(family_ids))
     acquired_ids: Set[str] = set()
-    with contextlib.ExitStack() as stack:
-        for family_id in sorted(set(family_ids)):
-            if stack.enter_context(family_bucket_lock(
-                archive_root, family_id, exclusive=True, nonblocking=nonblocking,
-            )):
-                acquired_ids.add(family_id)
+    if not identifiers:
         yield acquired_ids
+        return
+    _validate_archive_root(archive_root)
+    # The shared gate spans the entire batch, as each nested gate did before.
+    # Keep every per-family exclusive lock while publishing only one gate owner.
+    with _bucket_lock(family_gate_path(archive_root), exclusive=False, nonblocking=nonblocking) as gate:
+        if not gate:
+            yield acquired_ids
+            return
+        with contextlib.ExitStack() as stack:
+            for family_id in identifiers:
+                if stack.enter_context(_bucket_lock(
+                    family_lock_path(archive_root, family_id), exclusive=True, nonblocking=nonblocking,
+                )):
+                    acquired_ids.add(family_id)
+            yield acquired_ids
 
 
 @contextlib.contextmanager
@@ -2594,6 +2605,15 @@ class GeneFamilyOutputStore:
         self,
         artifacts: Optional[Dict[str, Artifact]] = None,
     ) -> None:
+        with self._index_record_batch() as record:
+            self._write_index_records(artifacts, record=record)
+
+    def _write_index_records(
+        self,
+        artifacts: Optional[Dict[str, Artifact]],
+        *,
+        record: Callable[[Artifact], dict],
+    ) -> None:
         artifacts = self._archived if artifacts is None else artifacts
         self.archive_root.mkdir(parents=True, exist_ok=True)
         index_dir = self.archive_root / INDEX_DIR_NAME
@@ -2618,7 +2638,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "generation": bucket_generation,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(bucket_artifacts.items())
                 },
             }
@@ -2653,7 +2673,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "subdir": subdir,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(subdir_artifacts.items())
                 },
             }
@@ -4399,9 +4419,7 @@ def archive_completed_outputs(
                 final_subdir_artifacts = {artifact.logical_path: artifact for artifact in artifacts}
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(artifacts)
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -4635,11 +4653,7 @@ def archive_completed_outputs(
                 # index commit finishes.
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, subdir_signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve()
-                    for artifact in final_subdir_artifacts.values()
-                    if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(final_subdir_artifacts.values())
                 try:
                     _remove_unreferenced_subdir_archives(
                         root,
@@ -6072,9 +6086,7 @@ def compact_archives(
                         compacted_all.extend(compacted)
                 updated_subdir = {artifact.logical_path: artifact for artifact in compacted_all}
                 store._merge_index_subdirs({subdir: updated_subdir})
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in updated_subdir.values() if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(updated_subdir.values())
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -6082,6 +6094,13 @@ def compact_archives(
                     referenced_paths,
                 )
             return [path for path in created if path.is_file()]
+
+
+def _referenced_zip_paths(artifacts: Iterable[Artifact]) -> Set[Path]:
+    # A finalized ZIP can hold thousands of logical members. Deduplicate lexical
+    # paths before filesystem resolution; resolve fresh on every invocation.
+    paths = {artifact.zip_path for artifact in artifacts if artifact.zip_path is not None}
+    return {path.resolve() for path in paths}
 
 
 def _write_archive_status(
@@ -6113,7 +6132,7 @@ def _write_archive_status(
                 else 0
             )
             zip_paths = sorted(
-                {artifact.zip_path.resolve() for artifact in artifacts.values() if artifact.zip_path is not None}
+                _referenced_zip_paths(artifacts.values())
             )
             final_path = _final_archive_path(root, subdir).resolve()
             if zip_paths and set(zip_paths) == {final_path}:
@@ -6256,7 +6275,7 @@ def _finalize_subdirs_locked(
                 verify_bytes_total=0,
                 current_zip_bytes=(final_path.stat().st_size if final_path.is_file() else 0),
             )
-        referenced_before = {artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None}
+        referenced_before = _referenced_zip_paths(artifacts)
         if referenced_before == {final_path.resolve()}:
             _remove_unreferenced_subdir_archives(
                 root,
@@ -6346,7 +6365,7 @@ def _finalize_subdirs_locked(
         )
         updated = {artifact.logical_path: artifact for artifact in finalized}
         store._merge_index_subdirs({subdir: updated})
-        referenced = {artifact.zip_path.resolve() for artifact in updated.values() if artifact.zip_path is not None}
+        referenced = _referenced_zip_paths(updated.values())
         _remove_unreferenced_subdir_archives(
             root,
             payload_root,
@@ -6676,7 +6695,7 @@ def repair_archive_index(
                         repair_bytes_verified=verified_bytes,
                         current_zip=zip_path.name,
                     )
-            referenced = {artifact.zip_path.resolve() for artifact in rebuilt.values() if artifact.zip_path is not None}
+            referenced = _referenced_zip_paths(rebuilt.values())
             referenced_modes = {mode_by_path[path] for path in referenced if path in mode_by_path}
             if len(referenced_modes) > 1:
                 raise ArchiveStoreError(
@@ -6788,11 +6807,7 @@ def purge_archives(
                     for artifact in compacted:
                         remaining_subdir[artifact.logical_path] = artifact
                 store._merge_index_subdirs({subdir: remaining_subdir})
-                referenced = {
-                    artifact.zip_path.resolve()
-                    for artifact in remaining_subdir.values()
-                    if artifact.zip_path is not None
-                }
+                referenced = _referenced_zip_paths(remaining_subdir.values())
                 physical_subdir_paths = list((payload_root / subdir).glob("*.zip"))
                 final_path = _final_archive_path(root, subdir)
                 if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):
