@@ -253,6 +253,25 @@ and does not inspect provider availability or guarantee scientific completion.
 
 ## Verify declared completion, including ZIP storage
 
+Before admitting completed families to a restarted workflow, use `reuse-plan`
+with the same arguments as `verify`:
+
+```bash
+python -B workflow/support/workflow_api.py reuse-plan \
+  --root workspace/output/orthogroup --workspace-root workspace \
+  --family-id OG0001 --require-step summary_statistics --require-step reconciliation
+```
+
+`reusable_families` contains only families whose required-step verification is
+`verified_declared_steps`. `unverified_families` retains exact step/error/input
+reasons and the response includes the complete verification and its digest.
+Equal output bytes, successful scheduler exit, or equality of selected source
+functions do not replace recorded input-script verification. Unverified evidence
+does not by itself imply that scientific inference failed or should be rerun.
+Inspect its reason and choose the owning standard workflow stage. The command
+supports the same bounded `--batch-file` (at most 32 requests), reads raw/ZIP
+artifacts without changes, and never authorizes or submits execution.
+
 ```bash
 python -B workflow/support/workflow_api.py verify \
   --root workspace/output/orthogroup --workspace-root workspace \

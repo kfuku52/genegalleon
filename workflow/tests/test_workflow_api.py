@@ -23,7 +23,8 @@ PROVENANCE = SUPPORT / "artifact_provenance.py"
 
 
 @pytest.fixture
-def observer_module():
+def observer_module(monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT))
     spec = importlib.util.spec_from_file_location('observation_under_test', OBSERVER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -1350,3 +1351,47 @@ def test_frozen_plot_observation_roundtrip_and_preflight_keep_strict_data_checks
         assert result["error_code"] == ("inputs_changed" if change == "input" else "outputs_changed")
     assert cli(PROVENANCE, "needs-run", *exported, "--dry-run").returncode == result["runtime_exit_code"]
     assert snapshot(workspace) == before
+
+
+@pytest.mark.parametrize('mutation', ['none', 'parser', 'output', 'missing_manifest'])
+def test_reuse_plan_checks_recorded_inputs_even_when_output_is_unchanged(project, tmp_path, mutation):
+    workspace, root, _, output, manifest, argv, _ = project
+    parser = tmp_path / 'reconciliation_parser.py'
+    parser.write_text('original parser\n')
+    assert cli(PROVENANCE, 'record', *argv, '--input', f'reconciliation_parser_script={parser}').returncode == 0
+    original_output = output.read_bytes()
+    if mutation == 'parser':
+        parser.write_text('updated parser\n')
+    elif mutation == 'output':
+        output.write_bytes(b'changed output\n')
+    elif mutation == 'missing_manifest':
+        manifest.unlink()
+    before = snapshot(workspace)
+    result = query('reuse-plan', '--root', root, '--workspace-root', workspace,
+                   '--family-id', 'OG0001', '--require-step', 'summary_statistics')
+    assert result['plan_schema'] == 'verified-family-reuse-v1'
+    assert result['execution_authorized'] is False
+    assert result['reusable_families'] == (['OG0001'] if mutation == 'none' else [])
+    assert len(result['unverified_families']) == int(mutation != 'none')
+    if mutation == 'parser':
+        assert output.read_bytes() == original_output
+        assert result['unverified_families'][0]['contracts'][0] == {
+            'step': 'summary_statistics', 'state': 'unverified',
+            'error_code': 'changed_input', 'detail': 'reconciliation_parser_script'}
+    assert snapshot(workspace) == before
+
+
+def test_batch_reuse_plan_keeps_current_families_and_is_bounded(project, tmp_path):
+    workspace, root, _, output, _, argv, _ = project
+    assert cli(PROVENANCE, 'record', *argv).returncode == 0
+    plan = tmp_path / 'batch.json'
+    requests = [{'family_id': 'OG0001'}, {'family_id': 'OG_missing'}]
+    plan.write_text(json.dumps({'schema': 'genegalleon-verify-batch-v1', 'requests': requests}))
+    result = query('reuse-plan', '--root', root, '--workspace-root', workspace,
+                   '--batch-file', plan, '--require-step', 'summary_statistics')
+    assert result['reusable_families'] == ['OG0001']
+    assert [r['family_id'] for r in result['unverified_families']] == ['OG_missing']
+    assert output.exists()
+    plan.write_text(json.dumps({'schema': 'genegalleon-verify-batch-v1', 'requests': requests * 17}))
+    assert cli(API, 'reuse-plan', '--root', root, '--workspace-root', workspace,
+               '--batch-file', plan, '--require-step', 'summary_statistics').returncode == 2
