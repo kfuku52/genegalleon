@@ -155,6 +155,7 @@ def capabilities(_args):
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
         verify_batches="shared-source-verification-v1", verify_batch_limit=32,
+        reuse_plans="verified-family-reuse-v1",
         preflight_stale_policy_override=True,
         requires_kfauto=False, observations_opt_in="GG_OBSERVABILITY=1")
 
@@ -501,6 +502,34 @@ def verify_batch(args):
     return envelope("verify", batch_schema="genegalleon-verify-batch-v1", results=results)
 
 
+def reuse_plan(args):
+    """Classify reuse with the same input/output audit used by verification.
+
+    Successful execution, equal output bytes or a narrower code comparison do
+    not replace the recorded-input checks. Unverified is not permission to run.
+    """
+    observed = verify(args)
+    results = observed.get("results", [observed])
+    reusable, unverified = [], []
+    for result in results:
+        if result["completion_state"] == "verified_declared_steps":
+            reusable.append(result["family_id"])
+        else:
+            unverified.append({
+                "family_id": result["family_id"],
+                "analytical_state": result["analytical_state"],
+                "contracts": [
+                    {key: row.get(key) for key in ("step", "state", "error_code", "detail")}
+                    for row in result["contracts"] if row["state"] != "verified_current"
+                ],
+            })
+    return envelope("reuse-plan", plan_schema="verified-family-reuse-v1",
+                    reusable_families=reusable, unverified_families=unverified,
+                    verification_sha256=digest(observed), verification=observed,
+                    execution_authorized=False,
+                    coverage="required-steps-only; unverified requires investigation, not automatic regeneration")
+
+
 def verify(args):
     if getattr(args, "batch_file", None):
         return verify_batch(args)
@@ -658,22 +687,23 @@ def main(argv=None):
     producers_parser = commands.add_parser("producers")
     producers_parser.add_argument("--plan", type=Path, required=True)
     producers_parser.set_defaults(handler=producers)
-    verify_parser = commands.add_parser("verify")
-    verify_parser.add_argument("--root", type=Path, required=True)
-    verify_parser.add_argument("--workspace-root", type=Path, required=True)
-    verify_source = verify_parser.add_mutually_exclusive_group(required=True)
-    verify_source.add_argument("--family-id")
-    verify_source.add_argument("--batch-file", type=Path, help="bounded genegalleon-verify-batch-v1 JSON plan")
-    verify_parser.add_argument("--require-step", action="append", required=True)
-    verify_parser.add_argument("--manifest", action="append", default=[], metavar="STEP=FILENAME",
-                               help="override a required step's FAMILY.STEP.json name within artifact_provenance")
-    verify_parser.add_argument("--include-queue", action="store_true", help="also inventory the root-wide archive queue")
-    verify_parser.add_argument("--attempt", type=Path, help="require matching successful-attempt contract receipts")
-    verify_parser.add_argument("--recorded-workspace-root", type=Path,
-                               help="explicit original workspace mapping for --attempt; relocate only its declared paths")
-    verify_parser.add_argument("--profile", choices=("gene-evolution-terminal-v1",),
-                               help="also validate the owned terminal statistics and PDF structure")
-    verify_parser.set_defaults(handler=verify)
+    for command, handler in (("verify", verify), ("reuse-plan", reuse_plan)):
+        verify_parser = commands.add_parser(command)
+        verify_parser.add_argument("--root", type=Path, required=True)
+        verify_parser.add_argument("--workspace-root", type=Path, required=True)
+        verify_source = verify_parser.add_mutually_exclusive_group(required=True)
+        verify_source.add_argument("--family-id")
+        verify_source.add_argument("--batch-file", type=Path, help="bounded genegalleon-verify-batch-v1 JSON plan")
+        verify_parser.add_argument("--require-step", action="append", required=True)
+        verify_parser.add_argument("--manifest", action="append", default=[], metavar="STEP=FILENAME",
+                                   help="override a required step's FAMILY.STEP.json name within artifact_provenance")
+        verify_parser.add_argument("--include-queue", action="store_true", help="also inventory the root-wide archive queue")
+        verify_parser.add_argument("--attempt", type=Path, help="require matching successful-attempt contract receipts")
+        verify_parser.add_argument("--recorded-workspace-root", type=Path,
+                                   help="explicit original workspace mapping for --attempt; relocate only its declared paths")
+        verify_parser.add_argument("--profile", choices=("gene-evolution-terminal-v1",),
+                                   help="also validate the owned terminal statistics and PDF structure")
+        verify_parser.set_defaults(handler=handler)
     runtime_parser = commands.add_parser("runtime")
     runtime_parser.add_argument("--attempt", type=Path, required=True)
     runtime_parser.set_defaults(handler=runtime)

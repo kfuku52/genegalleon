@@ -278,7 +278,15 @@ def test_dispatch_direct_hosts_independently_without_pool_head_of_line(monkeypat
 
 
 def test_dispatch_skips_shared_cooldown_and_full_db_and_copies_local(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import input_download_limiter as limiter
     from format_species_download import manifest
+
+    now = [1000.0]
+    monkeypatch.setattr(limiter, "time", SimpleNamespace(
+        time=lambda: now[0], monotonic=time.monotonic, sleep=time.sleep,
+    ))
     monkeypatch.setenv("GG_INPUT_DOWNLOAD_LIMIT_DIR", str(tmp_path))
     monkeypatch.setenv("GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI", "1")
     monkeypatch.setenv("GG_INPUT_REQUEST_INTERVAL_NCBI", "0")
@@ -302,6 +310,9 @@ def test_dispatch_skips_shared_cooldown_and_full_db_and_copies_local(tmp_path, m
         blocked.cooldown(0.15)
         blocked.close()
         assert not Admission("https://ftp.ncbi.nlm.nih.gov/queued").ready()
+        # Advance only the admission clock; filesystem/CI latency cannot expire it.
+        now[0] += 0.15
+        assert Admission("https://ftp.ncbi.nlm.nih.gov/queued").ready()
         remaining = list(results)
         assert len(remaining) == 2
         assert observed[-1] == "https://ftp.ncbi.nlm.nih.gov/queued"
