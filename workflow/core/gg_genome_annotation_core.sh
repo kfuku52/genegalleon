@@ -820,60 +820,8 @@ if [[ ${uniprot_needs_update} -eq 1 && ${run_uniprot_annotation} -eq 1 ]]; then
     seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
       > uniprot.query.pep.fas
 
-  if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"; then
-      echo "Invalid UniProt Swiss-Prot BLASTP DB prefix. Exiting."
-      exit 1
-    fi
-
-    blastp \
-      -query uniprot.query.pep.fas \
-      -num_threads "${GG_TASK_CPUS}" \
-      -db "${uniprot_db_prefix}" \
-      -out uniprot.search.tsv \
-      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
-      -max_target_seqs 1 \
-      -evalue 1e-2
-  else
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"; then
-      echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
-      exit 1
-    fi
-
-    mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
-    mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-      --threads "${GG_TASK_CPUS}" \
-      --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
-      --max-seqs 1 \
-      -e 1e-2 \
-      -s 7.5
-    mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-      --threads "${GG_TASK_CPUS}" \
-      --format-output "query,target,pident,alnlen,evalue,bits,qlen"
-    rm -f -- uniprot.queryDB* uniprot.resultDB*
-    rm -rf -- "tmp_mmseqs2_uniprot"
-  fi
-
-  uniprot_meta_tsv=""
-  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_db_prefix}" 2>/dev/null); then
-    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
-    uniprot_meta_tsv=""
-  fi
-
-  python "${gg_support_dir}/reformat_uniprot_diamond.py" \
-    --diamond_tsv uniprot.search.tsv \
-    --query_fasta uniprot.query.pep.fas \
-    --uniprot_fasta "${uniprot_db_prefix}.pep" \
-    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
-    --outfile uniprot.annotation.tsv
+  gg_annotate_uniprot_proteins uniprot.query.pep.fas "${gg_workspace_dir}" \
+    "${uniprot_annotation_method}" "${GG_TASK_CPUS}" "${GG_MEM_TOOL_GB}" uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_sp_uniprot_annotation}"
   gg_artifact_record "${uniprot_provenance_args[@]}"

@@ -577,6 +577,19 @@ run_presence_absence_summary_for_source() {
     file_busco_table=""
   fi
 
+  local -a ortholog_jobs=() presence_plot_jobs=()
+  local render_reference=0 render_query=0 presence_plot_count=0
+  local plot_common_args=(
+    --species_tree="${file_species_tree}"
+    --width="${presence_absence_plot_width}"
+    --label_map="${presence_absence_label_map}"
+    --focus_species="${presence_absence_focus_species}"
+    --legend_columns="${presence_absence_legend_columns}"
+  )
+  if [[ -n "${file_species_tree_ci}" ]]; then plot_common_args+=(--species_tree_ci="${file_species_tree_ci}"); fi
+  if [[ -n "${file_species_tree_support}" ]]; then plot_common_args+=(--support_tree="${file_species_tree_support}"); fi
+  if [[ -n "${file_busco_table}" ]]; then plot_common_args+=(--busco_table="${file_busco_table}"); fi
+
   local outbase="${gene_family_source}_presence_absence"
   local file_presence="${summary_output_dir}/${outbase}.tsv"
   local file_copy_number="${summary_output_dir}/${gene_family_source}_copy_number.tsv"
@@ -618,26 +631,15 @@ run_presence_absence_summary_for_source() {
     python "${gg_support_dir}/gene_family_presence_absence.py" "${collect_args[@]}"
 
     local plot_args=(
-      --species_tree="${file_species_tree}" \
+      "${plot_common_args[@]}"
       --long_table="${file_plot_long}" \
       --value="${presence_absence_heatmap_value}" \
-      --width="${presence_absence_plot_width}" \
       --out_pdf="${file_pdf}" \
       --out_svg="${file_svg}"
-      --label_map="${presence_absence_label_map}"
-      --focus_species="${presence_absence_focus_species}"
-      --legend_columns="${presence_absence_legend_columns}"
     )
-    if [[ -n "${file_species_tree_ci}" ]]; then
-      plot_args+=(--species_tree_ci="${file_species_tree_ci}")
-    fi
-    if [[ -n "${file_species_tree_support}" ]]; then
-      plot_args+=(--support_tree="${file_species_tree_support}")
-    fi
-    if [[ -n "${file_busco_table}" ]]; then
-      plot_args+=(--busco_table="${file_busco_table}")
-    fi
-    Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${plot_args[@]}"
+    if [[ ${#presence_plot_jobs[@]} -gt 0 ]]; then presence_plot_jobs+=(--next-plot); fi
+    presence_plot_jobs+=("${plot_args[@]}")
+    presence_plot_count=$((presence_plot_count + 1))
   fi
 
   if [[ "${gene_family_source}" == "query2family" || -n "${presence_absence_family_manifest}" ]]; then
@@ -682,56 +684,24 @@ run_presence_absence_summary_for_source() {
       local file_reference_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
       local file_reference_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
 
-      python "${gg_support_dir}/query_gene_orthologs.py" \
-        --basis reference_species \
-        --dir_gene_family "${dir_gene_family}" \
-        --dir_query_gene "${dir_query_gene}" \
-        --family_file "${file_selection}" \
-        --reference_species "${reference_species_resolved}" \
-        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}" \
-        --out_dup_conf "${file_reference_dup_conf}" \
-        --out_columns "${file_reference_columns}" \
-        --out_glyphs "${file_reference_glyphs}" \
-        --out_tree "${file_reference_tree}" \
-        --out_synteny "${file_reference_synteny}" \
+      if [[ ${#ortholog_jobs[@]} -gt 0 ]]; then ortholog_jobs+=(--next-job); fi
+      ortholog_jobs+=(
+        --basis reference_species
+        --dir_gene_family "${dir_gene_family}"
+        --dir_query_gene "${dir_query_gene}"
+        --family_file "${file_selection}"
+        --reference_species "${reference_species_resolved}"
+        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}"
+        --out_dup_conf "${file_reference_dup_conf}"
+        --out_columns "${file_reference_columns}"
+        --out_glyphs "${file_reference_glyphs}"
+        --out_tree "${file_reference_tree}"
+        --out_synteny "${file_reference_synteny}"
         --out_ufboot "${file_reference_ufboot}"
+      )
 
-      if [[ $(wc -l < "${file_reference_columns}") -gt 1 && $(wc -l < "${file_reference_glyphs}") -gt 1 ]]; then
-        local reference_plot_args=(
-          --species_tree="${file_species_tree}"
-          --long_table="${file_plot_long}"
-          --ortholog_column_table="${file_reference_columns}"
-          --ortholog_glyph_table="${file_reference_glyphs}"
-          --ortholog_tree_table="${file_reference_tree}"
-          --ortholog_synteny_table="${file_reference_synteny}"
-          --ortholog_ufboot_table="${file_reference_ufboot}"
-          --ortholog_dup_conf_table="${file_reference_dup_conf}"
-          --species_mapping_tree="${file_species_mapping_tree}"
-          --ortholog_basis=reference_species
-          --reference_species="${reference_species_resolved}"
-          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
-          --evidence_layout="${presence_absence_evidence_layout}"
-          --value=presence
-          --width="${presence_absence_plot_width}"
-          --out_pdf="${file_reference_pdf}"
-          --out_svg="${file_reference_svg}"
-          --label_map="${presence_absence_label_map}"
-          --focus_species="${presence_absence_focus_species}"
-          --legend_columns="${presence_absence_legend_columns}"
-        )
-        if [[ -n "${file_species_tree_ci}" ]]; then
-          reference_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
-        fi
-        if [[ -n "${file_species_tree_support}" ]]; then
-          reference_plot_args+=(--support_tree="${file_species_tree_support}")
-        fi
-        if [[ -n "${file_busco_table}" ]]; then
-          reference_plot_args+=(--busco_table="${file_busco_table}")
-        fi
-        Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${reference_plot_args[@]}"
-      else
-        echo "Skipping reference-gene ortholog plot because no mapped reference-gene glyphs were found."
-      fi
+      render_reference=1
+
     fi
 
     if [[ "${presence_absence_ortholog_basis}" == "query_gene" || "${presence_absence_ortholog_basis}" == "both" ]]; then
@@ -760,22 +730,58 @@ run_presence_absence_summary_for_source() {
         --out_dup_conf "${file_query_dup_conf}"
       )
 
-      python "${gg_support_dir}/query_gene_orthologs.py" \
-        --basis query_gene \
-        --dir_gene_family "${dir_gene_family}" \
-        --dir_query_gene "${dir_query_gene:-}" \
-        --family_file "${file_selection}" \
-        --out_columns "${file_query_columns}" \
-        --out_glyphs "${file_query_glyphs}" \
-        --out_tree "${file_query_tree}" \
-        --out_synteny "${file_query_synteny}" \
-        --out_ufboot "${file_query_ufboot}" \
-        --out_query_map "${file_query_map}" \
+      if [[ ${#ortholog_jobs[@]} -gt 0 ]]; then ortholog_jobs+=(--next-job); fi
+      ortholog_jobs+=(
+        --basis query_gene
+        --dir_gene_family "${dir_gene_family}"
+        --dir_query_gene "${dir_query_gene:-}"
+        --family_file "${file_selection}"
+        --out_columns "${file_query_columns}"
+        --out_glyphs "${file_query_glyphs}"
+        --out_tree "${file_query_tree}"
+        --out_synteny "${file_query_synteny}"
+        --out_ufboot "${file_query_ufboot}"
+        --out_query_map "${file_query_map}"
         "${query_input_args[@]}"
+      )
 
+      render_query=1
+
+    fi
+    if [[ ${#ortholog_jobs[@]} -gt 0 ]]; then
+      python "${gg_support_dir}/query_gene_orthologs.py" --batch "${ortholog_jobs[@]}"
+    fi
+    if [[ ${render_reference} -eq 1 ]]; then
+      if [[ $(wc -l < "${file_reference_columns}") -gt 1 && $(wc -l < "${file_reference_glyphs}") -gt 1 ]]; then
+        local reference_plot_args=(
+          "${plot_common_args[@]}"
+          --long_table="${file_plot_long}"
+          --ortholog_column_table="${file_reference_columns}"
+          --ortholog_glyph_table="${file_reference_glyphs}"
+          --ortholog_tree_table="${file_reference_tree}"
+          --ortholog_synteny_table="${file_reference_synteny}"
+          --ortholog_ufboot_table="${file_reference_ufboot}"
+          --ortholog_dup_conf_table="${file_reference_dup_conf}"
+          --species_mapping_tree="${file_species_mapping_tree}"
+          --ortholog_basis=reference_species
+          --reference_species="${reference_species_resolved}"
+          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
+          --evidence_layout="${presence_absence_evidence_layout}"
+          --value=presence
+          --out_pdf="${file_reference_pdf}"
+          --out_svg="${file_reference_svg}"
+        )
+        if [[ ${#presence_plot_jobs[@]} -gt 0 ]]; then presence_plot_jobs+=(--next-plot); fi
+        presence_plot_jobs+=("${reference_plot_args[@]}")
+        presence_plot_count=$((presence_plot_count + 1))
+      else
+        echo "Skipping reference-gene ortholog plot because no mapped reference-gene glyphs were found."
+      fi
+    fi
+    if [[ ${render_query} -eq 1 ]]; then
       if [[ $(wc -l < "${file_query_columns}") -gt 1 && $(wc -l < "${file_query_glyphs}") -gt 1 ]]; then
         local query_gene_plot_args=(
-          --species_tree="${file_species_tree}"
+          "${plot_common_args[@]}"
           --long_table="${file_query_long}"
           --ortholog_column_table="${file_query_columns}"
           --ortholog_glyph_table="${file_query_glyphs}"
@@ -788,26 +794,22 @@ run_presence_absence_summary_for_source() {
           --ortholog_basis=query_gene
           --evidence_layout="${presence_absence_evidence_layout}"
           --value=presence
-          --width="${presence_absence_plot_width}"
           --out_pdf="${file_query_pdf}"
           --out_svg="${file_query_svg}"
-          --label_map="${presence_absence_label_map}"
-          --focus_species="${presence_absence_focus_species}"
-          --legend_columns="${presence_absence_legend_columns}"
         )
-        if [[ -n "${file_species_tree_ci}" ]]; then
-          query_gene_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
-        fi
-        if [[ -n "${file_species_tree_support}" ]]; then
-          query_gene_plot_args+=(--support_tree="${file_species_tree_support}")
-        fi
-        if [[ -n "${file_busco_table}" ]]; then
-          query_gene_plot_args+=(--busco_table="${file_busco_table}")
-        fi
-        Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${query_gene_plot_args[@]}"
+        if [[ ${#presence_plot_jobs[@]} -gt 0 ]]; then presence_plot_jobs+=(--next-plot); fi
+        presence_plot_jobs+=("${query_gene_plot_args[@]}")
+        presence_plot_count=$((presence_plot_count + 1))
       else
         echo "Skipping query-gene ortholog plot because no mapped query-anchor glyphs were found."
       fi
+    fi
+  fi
+  if [[ ${#presence_plot_jobs[@]} -gt 0 ]]; then
+    if [[ ${presence_plot_count} -gt 1 ]]; then
+      Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" --batch "${presence_plot_jobs[@]}"
+    else
+      Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${presence_plot_jobs[@]}"
     fi
   fi
 }

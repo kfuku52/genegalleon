@@ -3799,9 +3799,10 @@ def test_empty_genecount_family_cannot_shift_array_identity(tmp_path):
         family_context("orthogroup", genecount=catalog)
 
 
-def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch):
+@pytest.mark.parametrize('archive_count', [12, 40])
+def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch, archive_count):
     paths = []
-    for index in range(12):
+    for index in range(archive_count):
         path = tmp_path / f"payload{index}.zip"
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for member in range(4):
@@ -3831,18 +3832,26 @@ def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("all_busy", [False, True])
-def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path, monkeypatch, all_busy):
+@pytest.mark.parametrize('bound', ['readers', 'directory_bytes', 'members'])
+def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path, monkeypatch, all_busy, bound):
     import contextlib
 
     import workflow.support.gene_family_output_store as module
 
-    monkeypatch.setattr(module, "MAX_SNAPSHOT_ZIP_READERS", 2)
+    if bound == 'readers':
+        monkeypatch.setattr(module, "MAX_SNAPSHOT_ZIP_READERS", 2)
+    elif bound == 'members':
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_MEMBERS', 2)
     paths = []
     for index in range(3):
         path = tmp_path / f"{index}.zip"
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("payload", str(index))
         paths.append(path)
+    if bound == 'directory_bytes':
+        with zipfile.ZipFile(paths[0]) as archive:
+            size = paths[0].stat().st_size - archive.start_dir
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES', 2 * size)
     store = GeneFamilyOutputStore(tmp_path)
     with store.read_snapshot(), contextlib.ExitStack() as stack:
         first = stack.enter_context(store._snapshot_zip_reader(paths[0]))
@@ -3858,6 +3867,33 @@ def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path
         assert (third.fp is None) == all_busy
         assert (second_archive.fp is None) != all_busy
     assert first.fp is None and not store._snapshot_zip_readers
+
+
+@pytest.mark.parametrize('bound', ['directory_bytes', 'members'])
+def test_oversized_snapshot_zip_index_does_not_evict_small_indexes(tmp_path, monkeypatch, bound):
+    import workflow.support.gene_family_output_store as module
+    small, large = tmp_path / 'small.zip', tmp_path / 'large.zip'
+    with zipfile.ZipFile(small, 'w') as archive:
+        archive.writestr('payload', b'small')
+    with zipfile.ZipFile(large, 'w') as archive:
+        for index in range(3):
+            archive.writestr(str(index), b'large')
+        archive.comment = b'x' * 4096
+    if bound == 'directory_bytes':
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES', 1024)
+    else:
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_MEMBERS', 2)
+    store = GeneFamilyOutputStore(tmp_path)
+    with store.read_snapshot():
+        with store._snapshot_zip_reader(small) as retained:
+            assert retained.read('payload') == b'small'
+        with store._snapshot_zip_reader(large) as oversized:
+            assert oversized.read('0') == b'large'
+            assert list(store._snapshot_zip_readers) == [small]
+        assert oversized.fp is None
+        with store._snapshot_zip_reader(small) as again:
+            assert again is retained
+    assert retained.fp is None
 
 
 def test_delete_many_keeps_payloads_and_family_states_outside_the_batch(tmp_path):
@@ -4206,3 +4242,81 @@ def test_index_zip_lexical_cache_is_bounded(tmp_path):
         assert _indexed_zip_path.cache_info().currsize == 4096
     finally:
         _indexed_zip_path.cache_clear()
+
+
+def test_full_index_publication_reuses_zip_resolution(tmp_path, monkeypatch):
+    from collections import Counter
+
+    from workflow.support import gene_family_output_store as module
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifacts = [_index_record_fixture(store, i) for i in range(200)]
+    expected = {a.logical_path: store._index_record(a) for a in artifacts}
+    tracked = {a.zip_path for a in artifacts}
+    calls = Counter()
+    original = Path.resolve
+
+    def counted(path, *args, **kwargs):
+        if path in tracked:
+            calls[path] += 1
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    with module.producer_quiescence_lock(store.archive_root), module.archive_lock(store.archive_root):
+        store._write_index({a.logical_path: a for a in artifacts})
+    assert max(calls.values()) <= 2
+    observed = {}
+    for path in (store.archive_root / module.INDEX_DIR_NAME).glob("*.json"):
+        observed.update(json.loads(path.read_text())["artifacts"])
+    assert observed == expected
+
+
+def test_full_index_revalidates_alias_before_commit(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"preserved")
+    other = tmp_path / "other.zip"
+    other.write_bytes(b"other")
+    alias = store.payload_root / "one" / "alias.zip"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    original = store._write_index_catalog
+
+    def change_alias(artifacts):
+        original(artifacts)
+        alias.unlink()
+        alias.symlink_to(other)
+
+    monkeypatch.setattr(store, "_write_index_catalog", change_alias)
+    with pytest.raises(ArchiveStoreError, match="path changed during publication"):
+        store._write_index({artifact.logical_path: artifact})
+    assert (store.archive_root / "index-update.pending").is_file()
+    assert final.read_bytes() == b"preserved"
+
+
+def test_referenced_zip_paths_resolve_distinct_names_fresh_each_time(tmp_path, monkeypatch):
+    from workflow.support.gene_family_output_store import _referenced_zip_paths
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+    first.touch()
+    second.touch()
+    alias = tmp_path / "alias.zip"
+    alias.symlink_to(first)
+    artifacts = [_index_record_fixture(store, i, zip_path=alias) for i in range(100)]
+    calls = []
+    original = Path.resolve
+
+    def counted(path, *args, **kwargs):
+        if path == alias:
+            calls.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    assert _referenced_zip_paths(artifacts) == {first}
+    assert len(calls) == 1
+    alias.unlink()
+    alias.symlink_to(second)
+    assert _referenced_zip_paths(artifacts) == {second}
+    assert len(calls) == 2

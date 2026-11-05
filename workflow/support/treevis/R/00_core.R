@@ -86,99 +86,14 @@ treevis_site_panel_width <- function(num_sites) {
     max(0.45, 0.09 * num_sites)
 }
 
-treevis_taxonomic_genus_only_placeholders <- c("sp", "spp")
-treevis_taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
-treevis_taxonomic_hybrid_connectors <- c("x", "\u00d7", "hybrid")
-treevis_taxonomic_rank_aliases <- c(
-    "subsp" = "subsp",
-    "ssp" = "subsp",
-    "subspecies" = "subsp",
-    "var" = "var",
-    "variety" = "var",
-    "forma" = "forma",
-    "form" = "forma",
-    "f" = "forma",
-    "strain" = "strain",
-    "substrain" = "substrain",
-    "serovar" = "serovar",
-    "serotype" = "serotype",
-    "serogroup" = "serogroup",
-    "pathovar" = "pathovar",
-    "pv" = "pathovar",
-    "biovar" = "biovar",
-    "biotype" = "biotype",
-    "chemovar" = "chemovar",
-    "morphovar" = "morphovar",
-    "cultivar" = "cultivar",
-    "cv" = "cultivar",
-    "isolate" = "isolate",
-    "group" = "group",
-    "subgroup" = "subgroup",
-    "complex" = "complex",
-    "clade" = "clade",
-    "lineage" = "lineage",
-    "section" = "section",
-    "series" = "series",
-    "ecotype" = "ecotype",
-    "breed" = "breed"
-)
-
-treevis_taxonomic_token_key <- function(token) {
-    key <- tolower(sub("[.]$", "", as.character(token)))
-    if (key %in% treevis_taxonomic_hybrid_connectors) {
-        return("x")
-    }
-    if (key %in% treevis_taxonomic_genus_only_placeholders) {
-        return("sp")
-    }
-    if (key %in% names(treevis_taxonomic_rank_aliases)) {
-        return(unname(treevis_taxonomic_rank_aliases[[key]]))
-    }
-    key
-}
-
-treevis_is_hybrid_connector_token <- function(token) {
-    treevis_taxonomic_token_key(token) == "x"
-}
-
-treevis_is_hybrid_binomial_connector <- function(parts, index = 3L) {
-    if (length(parts) < index + 2L) {
-        return(FALSE)
-    }
-    if (!treevis_is_hybrid_connector_token(parts[[index]])) {
-        return(FALSE)
-    }
-    next_genus <- trimws(as.character(parts[[index + 1L]]))
-    nzchar(next_genus) && grepl("^[A-Z]", next_genus)
-}
-
-treevis_species_prefix_token_count <- function(parts) {
-    parts <- parts[nzchar(parts)]
-    if (length(parts) < 2) {
-        return(0L)
-    }
-    second <- treevis_taxonomic_token_key(parts[[2]])
-    third <- if (length(parts) >= 3) treevis_taxonomic_token_key(parts[[3]]) else ""
-    if (second == "x") {
-        return(if (length(parts) >= 3) 3L else 2L)
-    }
-    if (second %in% treevis_taxonomic_genus_only_placeholders) {
-        return(if (length(parts) >= 3) 3L else 2L)
-    }
-    if (second %in% treevis_taxonomic_proximity_qualifiers) {
-        return(if (length(parts) >= 3) 3L else 2L)
-    }
-    if (treevis_is_hybrid_binomial_connector(parts, 3L)) {
-        return(5L)
-    }
-    if (third %in% treevis_taxonomic_proximity_qualifiers) {
-        return(3L)
-    }
-    if (third %in% unname(treevis_taxonomic_rank_aliases)) {
-        return(if (length(parts) >= 4) 4L else 3L)
-    }
-    return(2L)
-}
+treevis_taxonomic_genus_only_placeholders <- GG_TAXONOMIC_GENUS_ONLY_PLACEHOLDERS
+treevis_taxonomic_proximity_qualifiers <- GG_TAXONOMIC_PROXIMITY_QUALIFIERS
+treevis_taxonomic_hybrid_connectors <- GG_TAXONOMIC_HYBRID_CONNECTORS
+treevis_taxonomic_rank_aliases <- GG_TAXONOMIC_RANK_ALIASES
+treevis_taxonomic_token_key <- gg_taxonomic_token_key
+treevis_is_hybrid_connector_token <- gg_is_hybrid_connector_token
+treevis_is_hybrid_binomial_connector <- gg_is_hybrid_binomial_connector
+treevis_species_prefix_token_count <- function(parts) as.integer(gg_species_prefix_token_count(parts))
 
 treevis_extract_species_label <- function(x) {
     text <- as.character(x)
@@ -625,7 +540,17 @@ append_branch_tiplab_colors = function(g, branch_color, path_species_color_table
             cat('Generating species color. File was not found at:', path_species_color_table, '\n')
             has_ubar = grepl('_',g[['data']][['label']])
             spp = g[['data']][['label']][has_ubar]
+            if (treevis_species_parser == 'extended-taxonomic') {
+                request <- tempfile(fileext='.json'); response <- tempfile(fileext='.json')
+                on.exit(unlink(c(request,response)),add=TRUE)
+                jsonlite::write_json(as.character(spp), request, auto_unbox=FALSE)
+                status <- system2('python',c('-m','nwkit.species_parser','--species-parser',
+                    'extended-taxonomic','--infile',shQuote(request),'--outfile',shQuote(response)))
+                if (status != 0L) stop('NWKIT species parsing failed')
+                spp <- sort(unique(gsub('_',' ',as.character(jsonlite::read_json(response,simplifyVector=TRUE)),fixed=TRUE)))
+            } else {
             spp = sort(unique(get_species_name(spp, species_parser=treevis_species_parser)))
+            }
             num_spp = length(spp)
             # https://stackoverflow.com/questions/15282580/how-to-generate-a-number-of-most-distinctive-colors-in-r
             #qual_col_pals = RColorBrewer::brewer.pal.info[RColorBrewer::brewer.pal.info[['category']] == 'qual',]
@@ -812,31 +737,28 @@ get_domain_fill_colors = function(df_domain) {
     return(mycolors)
 }
 
+treevis_cdskit_r <- local({
+  api <- NULL
+  function() {
+    if (is.null(api)) {
+      path <- system2("python", c("-c", shQuote("from cdskit.coordinates import r_functions_path; print(r_functions_path())")), stdout=TRUE)
+      if (!is.null(attr(path, "status")) || length(path) != 1L) stop("Cannot locate CDSKIT R coordinates")
+      api <<- new.env(parent=baseenv())
+      sys.source(path, envir=api)
+    }
+    api
+  }
+})
+
 map_trimmed_to_untrimmed_nongap_index = function(seq_trim, seq_untrim, gap_code='04') {
-  seq_trim = as.character(seq_trim)
-  seq_untrim = as.character(seq_untrim)
-  out = rep(NA_integer_, length(seq_trim))
-  if (length(seq_trim)==0 || length(seq_untrim)==0) {
-    return(out)
-  }
-  trim_non_gap_idx = which(seq_trim != gap_code)
-  untrim_non_gap_idx = which(seq_untrim != gap_code)
-  if (length(trim_non_gap_idx)==0 || length(untrim_non_gap_idx)==0) {
-    return(out)
-  }
-  trim_tokens = seq_trim[trim_non_gap_idx]
-  untrim_tokens = seq_untrim[untrim_non_gap_idx]
-  u_ptr = 1L
-  for (i in seq_along(trim_tokens)) {
-    tok = trim_tokens[i]
-    while (u_ptr <= length(untrim_tokens) && untrim_tokens[u_ptr] != tok) {
-      u_ptr = u_ptr + 1L
-    }
-    if (u_ptr > length(untrim_tokens)) {
-      return(rep(NA_integer_, length(seq_trim)))
-    }
-    out[trim_non_gap_idx[i]] = u_ptr
-    u_ptr = u_ptr + 1L
-  }
-  return(out)
+  treevis_cdskit_r()$map_trimmed_to_untrimmed_nongap_index(seq_trim, seq_untrim, gap_code)
+}
+
+treevis_cdskit_request <- function(data) {
+  request <- tempfile(fileext=".json"); response <- tempfile(fileext=".json")
+  on.exit(unlink(c(request,response)),add=TRUE)
+  jsonlite::write_json(data,request,auto_unbox=TRUE,null="null",na="null")
+  status <- system2("python",c("-m","cdskit.coordinates",shQuote(request),shQuote(response)))
+  if (status != 0L) stop("CDSKIT alignment coordinates failed")
+  jsonlite::read_json(response,simplifyVector=FALSE)
 }

@@ -151,12 +151,31 @@ continues to inspect the entire store. Changing the catalog during a build
 prevents publication of the database and its provenance.
 
 Full audits use the allocated CPU count. Above 4,096 source identity guards,
-their identities spill into a private temporary SQLite index, bounded to
-512 MiB and two million readers. Every guard is still rechecked before
-publication; no previous-run digest or guard is reused. Disk exhaustion,
+their identities spill into a private temporary SQLite index, with a bounded
+page cache and two million readers. Digest inventories spill above 16,384
+entries. Both indexes grow with the data within SQLite/filesystem limits;
+the former 512 MiB guard and 1 GiB digest ceilings no longer apply. Every guard
+is still rechecked before publication; no previous-run digest or guard is reused. Disk exhaustion,
 identity changes and the remaining explicit capacity bounds stop the audit.
 The index is removed on success and failure, and progress reports the total
 guard count and whether spilling occurred.
+
+Provide sufficient free space and quota in the runtime's temporary filesystem
+(`TMPDIR`). Storage errors name the failing location and stop the whole audit,
+preserving any previously published database. Existing outputs need no deletion
+or conversion. See [capacity qualification and performance measurements](provenance-audit-performance.md#spill-capacity-and-write-amplification-2026-11-05).
+
+The audit carries fixed runtime path mappings and read-only observation into
+every manifest worker. ZIP readers are shared within a snapshot, with limits on
+open readers, central-directory bytes and member counts. They close before the
+independent final content pass, which opens current ZIP paths again even when
+filesystem attributes are cached.
+
+Database and provenance publication restores the previous pair on caught write
+failures, including packed provenance. If filesystem recovery itself fails,
+backups are retained and their paths reported. Database, provenance and audit
+outputs must name distinct files, including hard-link aliases. This rollback
+protects caught publication failures; it is not a crash-atomic multi-file commit.
 
 Raw file listings use directory-entry file types without following symlinks,
 avoiding two metadata requests per selected name on shared filesystems. Actual
@@ -262,10 +281,11 @@ and run `archive-completed` with the original family catalog before finalization
 The native command preserves those live overrides and automatically finalizes a
 fully completed orthogroup catalog. Direct `finalize` continues to reject
 uncollected live outputs.
-Repeated transparent reads reuse one ZIP reader per worker thread until that
-worker moves to another archive. This avoids reparsing a large central
-directory once per member in summaries and database generation; an index
-epoch change closes the cached readers before refreshed artifacts are used.
+Repeated transparent reads use bounded ZIP reader pools to avoid reparsing a
+central directory per member. Full read snapshots share readers between joined
+workers; other reads retain up to eight readers per worker and check their
+signatures. Index epoch changes close cached readers before refreshed artifacts
+are used.
 
 Temporary task data remains under the historical
 `workspace/output/{query2family,orthogroup}/tmp/` roots, avoiding an

@@ -115,6 +115,16 @@ TAXONOMIC_RANK_PLURALS: Dict[str, str] = {
 }
 
 
+import sys
+from pathlib import Path
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from boolean_values import parse_boolish as parse_boolish
+
+
 def taxonomy_rank_column(side: str, rank: str) -> str:
     return f"{side}_{rank}"
 
@@ -338,17 +348,6 @@ def split_gene_labels(value) -> List[str]:
     if text == "":
         return []
     return [token.strip() for token in text.split(";") if token.strip() != ""]
-
-
-def parse_boolish(value):
-    if pandas.isna(value):
-        return pandas.NA
-    text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y"}:
-        return True
-    if text in {"0", "false", "f", "no", "n"}:
-        return False
-    return pandas.NA
 
 
 def normalize_sci_name(name: str) -> str:

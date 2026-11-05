@@ -97,7 +97,7 @@ def measure(args):
     record = ["--workspace-root", str(root), "--logical-root", str(global_root), "--family-id", "orthogroup",
               "--step", "gene_family_database", "--manifest", str(manifest),
               "--input-gene-family-store", "families=" + str(logical), "--output", "database=" + str(database)]
-    counts, lock = {"metadata_headers": 0, "zip_opens": 0, "index_epochs": 0}, threading.Lock()
+    counts, lock = {"metadata_headers": 0, "zip_opens": 0, "zip_open_ns": 0, "index_epochs": 0}, threading.Lock()
     original_signature, original_zip = metadata_store._db_signature, zipfile.ZipFile.__init__
     original_epoch = GeneFamilyOutputStore._read_index_epoch
     def signature(*a, **kw):
@@ -105,9 +105,13 @@ def measure(args):
             counts["metadata_headers"] += 1
         return original_signature(*a, **kw)
     def archive(*a, **kw):
-        with lock:
-            counts["zip_opens"] += 1
-        return original_zip(*a, **kw)
+        started = time.perf_counter_ns()
+        try:
+            return original_zip(*a, **kw)
+        finally:
+            with lock:
+                counts["zip_opens"] += 1
+                counts["zip_open_ns"] += time.perf_counter_ns() - started
     def epoch(*a, **kw):
         with lock:
             counts["index_epochs"] += 1
@@ -124,8 +128,10 @@ def measure(args):
     if profile:
         profile.enable()
     began = time.monotonic()
+    cpu_before = resource.getrusage(resource.RUSAGE_SELF)
     assert pipeline.run(audit, db, record) == 0
     seconds = time.monotonic() - began
+    cpu_after = resource.getrusage(resource.RUSAGE_SELF)
     if profile:
         profile.disable()
         profile.dump_stats(str(target.with_suffix(".prof")))
@@ -133,7 +139,9 @@ def measure(args):
     phases.append(("finished", time.monotonic()))
     output_hash, tables = fingerprint.fingerprint(database)
     result = json.loads(report.with_suffix(".tsv.result.json").read_bytes())
-    measured = dict(seconds=seconds, peak_rss_kib_linux=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+    measured = dict(seconds=seconds,
+                    cpu_seconds=cpu_after.ru_utime + cpu_after.ru_stime - cpu_before.ru_utime - cpu_before.ru_stime,
+                    peak_rss_kib_linux=cpu_after.ru_maxrss,
                     logical_sha256=output_hash, table_rows=tables, counts=counts,
                     audit_sha256=hashlib.sha256(report.read_bytes()).hexdigest(),
                     inventory_sha256=result["inventory_sha256"], status_counts=result["status_counts"],

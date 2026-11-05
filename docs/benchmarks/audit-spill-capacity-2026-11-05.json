@@ -1,0 +1,767 @@
+{
+  "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+  "platform": "Linux-7.0.14-linuxkit-aarch64-with-glibc2.39",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "runtime": "sha256:093ff1fe6e21c9a318c4f8038f683defb7d9dc390d9048162339a705bb9225b5",
+  "docker_memory_bytes": 8214519808,
+  "cache_condition": "fresh processes, discarded warmup, alternating revisions; OS cache not forcibly cleared",
+  "records": [
+    {
+      "label": "baseline",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": true,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5530399579999994,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80900
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": true,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.24519783300002018,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80892
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5527362919999632,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80908
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.2509874579998268,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80912
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.25752741600012996,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80964
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5832773760000691,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 81480
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5667615840000053,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 81300
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "guards",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "guards",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.2423597920001157,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80968
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": true,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.585396375000073,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80908
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": true,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.26170304199990824,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80912
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5870717089999289,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80896
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.2579595409999911,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80908
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.2572044589999223,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80904
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.5557992080000531,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80840
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.551408376000154,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 960132,
+          "syscr": 60003,
+          "wchar": 561467392,
+          "syscw": 137077
+        },
+        "peak_rss_kib": 80908
+      }
+    },
+    {
+      "label": "candidate",
+      "kind": "digests",
+      "guards": 30000,
+      "identity_bytes": 0,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "digests",
+        "--guards",
+        "30000",
+        "--identity-bytes",
+        "0"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 0.23737570899993443,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 0,
+        "database_bytes": 15843328,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 30001,
+        "identity_set_sha256": "2d45d10c9d44cf1070ae9098cbe5909d816b9c53e29f1b59fed7f0e904edad18",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 115,
+          "syscr": 2,
+          "wchar": 14729216,
+          "syscw": 3596
+        },
+        "peak_rss_kib": 80844
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "guards",
+      "guards": 18000,
+      "identity_bytes": 32768,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "guards",
+        "--guards",
+        "18000",
+        "--identity-bytes",
+        "32768"
+      ],
+      "exit_code": 1,
+      "error": "Traceback (most recent call last):\n  File \"/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support/artifact_audit_guards.py\", line 91, in guard\n    self.database.execute('INSERT INTO guards VALUES (?,?,?)', (encoded_key, expected, len(self.readers)))\nsqlite3.OperationalError: database or disk is full\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py\", line 79, in <module>\n    main()\n  File \"/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py\", line 51, in main\n    spill.guard(key, identity, lambda identity=identity: identity)\n  File \"/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support/artifact_audit_guards.py\", line 94, in guard\n    raise AuditCapacityError(f'Audit {self.label} spill failed') from exc\nartifact_audit_guards.AuditCapacityError: Audit source guard spill failed"
+    },
+    {
+      "label": "candidate",
+      "kind": "guards",
+      "guards": 18000,
+      "identity_bytes": 32768,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "guards",
+        "--guards",
+        "18000",
+        "--identity-bytes",
+        "32768"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 1.884454918000074,
+        "inventory_members": 107841,
+        "kind": "guards",
+        "identity_bytes": 32768,
+        "database_bytes": 606576640,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 18001,
+        "identity_set_sha256": "a67152e593967b592d9c05c49055921f643075e352ab9b8f4084b1df7c4a7ce0",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 823411,
+          "syscr": 203,
+          "wchar": 606285824,
+          "syscw": 148019
+        },
+        "peak_rss_kib": 82216
+      }
+    },
+    {
+      "label": "baseline",
+      "kind": "digests",
+      "guards": 35000,
+      "identity_bytes": 32768,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support",
+        "--kind",
+        "digests",
+        "--guards",
+        "35000",
+        "--identity-bytes",
+        "32768"
+      ],
+      "exit_code": 1,
+      "error": "Traceback (most recent call last):\n  File \"/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support/artifact_audit_guards.py\", line 91, in guard\n    self.database.execute('INSERT INTO guards VALUES (?,?,?)', (encoded_key, expected, len(self.readers)))\nsqlite3.OperationalError: database or disk is full\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py\", line 79, in <module>\n    main()\n  File \"/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py\", line 51, in main\n    spill.guard(key, identity, lambda identity=identity: identity)\n  File \"/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-issue58-emtljxfc/baseline-support/artifact_audit_guards.py\", line 94, in guard\n    raise AuditCapacityError(f'Audit {self.label} spill failed') from exc\nartifact_audit_guards.AuditCapacityError: Audit digest spill failed"
+    },
+    {
+      "label": "candidate",
+      "kind": "digests",
+      "guards": 35000,
+      "identity_bytes": 32768,
+      "warmup": false,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/Users/kf/repos/genegalleon/workflow/support",
+        "--kind",
+        "digests",
+        "--guards",
+        "35000",
+        "--identity-bytes",
+        "32768"
+      ],
+      "exit_code": 0,
+      "measurement": {
+        "seconds": 4.0895682519999355,
+        "inventory_members": 107841,
+        "kind": "digests",
+        "identity_bytes": 32768,
+        "database_bytes": 1174970368,
+        "initial_database_bytes": 4763648,
+        "distinct_guards": 35001,
+        "identity_set_sha256": "10222e7a516eb3e218c059a2ea78099fbb73adea23a616e4741dd0dbb9b651f7",
+        "identities_and_readers_verified": true,
+        "io_delta": {
+          "rchar": 1740915,
+          "syscr": 427,
+          "wchar": 1175592960,
+          "syscw": 287010
+        },
+        "peak_rss_kib": 89328
+      }
+    }
+  ],
+  "source_sha256": {
+    "baseline": "ddbbdac63a74971ab4b4851417eea486304289e3f3722351287cb30b323aeadd",
+    "candidate": "e8b957a6d3ea0b7613e7b390837e4e8e8967f7187233544c5b5b52e531949e4e",
+    "runner": "d38b0d2f0b2fde7c1b63113c50aa6d13e3b8fbb0afe7a7dd968d602b13fe2b7f"
+  },
+  "sqlite_version": "3.53.4"
+}

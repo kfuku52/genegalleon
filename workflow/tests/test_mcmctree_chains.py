@@ -122,6 +122,25 @@ def test_diagnostics_detect_shift_and_constant(tmp_path):
     assert chains.diagnose(paths, tmp_path)['state'] == 'diagnostic_failed'
 
 
+@pytest.mark.parametrize('header,values', [
+    ('Gen a a', '1 1'), ('iteration a', '1'), ('Gen', ''),
+    ('Gen a', 'NaN'), ('Gen a', 'invalid'),
+])
+def test_native_posterior_rejects_invalid_sample_columns_without_replacing_report(tmp_path, header, values):
+    from nwkit.posterior_diagnostics import diagnose_chains
+
+    paths = []
+    for index in range(2):
+        path = tmp_path / f'chain-{index}.tsv'
+        path.write_text(header + '\n' + ''.join(f'{draw} {values}\n' for draw in range(8)))
+        paths.append(path)
+    output = tmp_path / 'diagnostics.tsv'
+    output.write_bytes(b'previous report')
+    with pytest.raises(subprocess.CalledProcessError):
+        diagnose_chains(paths, output)
+    assert output.read_bytes() == b'previous report'
+
+
 @pytest.mark.parametrize('fail_one', [False, True])
 def test_four_processes_overlap_and_partial_failure_only_warns(tmp_path, monkeypatch, fail_one):
     template = tmp_path / 'template'

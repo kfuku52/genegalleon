@@ -10,19 +10,6 @@ import sys
 import tempfile
 import time
 
-try:
-    from distutils.util import strtobool
-except ModuleNotFoundError:
-
-    def strtobool(val):
-        val = str(val).strip().lower()
-        if val in ("y", "yes", "t", "true", "on", "1"):
-            return 1
-        if val in ("n", "no", "f", "false", "off", "0"):
-            return 0
-        raise ValueError("invalid truth value {!r}".format(val))
-
-
 import numpy
 import pandas
 from Bio import SeqIO
@@ -31,6 +18,15 @@ from ete4 import NCBITaxa
 pandas.options.mode.chained_assignment = None
 DOMAIN_RANK_ALIASES = frozenset({"domain", "superkingdom"})
 MMSEQS_TAXONOMY_COLUMNS = ["query", "lca_taxid", "lca_sciname", "lineage_taxids"]
+
+
+from pathlib import Path
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from boolean_values import strtobool as strtobool
 
 
 def rank_aliases(rank):

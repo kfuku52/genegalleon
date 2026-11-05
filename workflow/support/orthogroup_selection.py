@@ -14,19 +14,6 @@ import sys
 import time
 from pathlib import Path
 
-try:
-    from distutils.util import strtobool
-except ModuleNotFoundError:
-
-    def strtobool(val):
-        val = str(val).strip().lower()
-        if val in ("y", "yes", "t", "true", "on", "1"):
-            return 1
-        if val in ("n", "no", "f", "false", "off", "0"):
-            return 0
-        raise ValueError("invalid truth value {!r}".format(val))
-
-
 import numpy
 import pandas
 
@@ -37,6 +24,13 @@ ORTHOGROUP_SELECTION_TMP_FILES = (
     "tmp.mmseqs2.out.tsv",
     "tmp.Orthogroups.GeneCount.quartile_genes.tsv",
 )
+
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from boolean_values import strtobool as strtobool
 
 
 def _format_command_arg_for_log(arg):

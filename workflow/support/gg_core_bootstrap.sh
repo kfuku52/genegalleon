@@ -56,10 +56,7 @@ gg_configure_python_pycacheprefix_from_core() {
   storage_support=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   # shellcheck disable=SC1090
   source "${storage_support}/gg_tmp_storage.sh"
-  local selected runtime_tmp
-  selected=$(gg_resolve_tmp_root) || return 1
-  runtime_tmp=$(gg_private_runtime_tmp "${selected}") || return 1
-  export PYTHONPYCACHEPREFIX="${runtime_tmp}/pycache"
+  gg_set_python_pycacheprefix
 }
 
 gg_bootstrap_core_runtime() {

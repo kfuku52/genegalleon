@@ -107,6 +107,8 @@ def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str]
         "RAPIDNJ_REPO_SHA",
         "RAPIDNJ_ARM_REPO_SHA",
         "SMUDGEPLOT_REPO_SHA",
+        "KMC_REPO_SHA",
+        "GENOMESCOPE_REPO_SHA",
     ):
         env[sha_var] = "0" * 40
     if extra_env:
@@ -144,6 +146,8 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
         "RAPIDNJ_REPO_SHA",
         "RAPIDNJ_ARM_REPO_SHA",
         "SMUDGEPLOT_REPO_SHA",
+        "KMC_REPO_SHA",
+        "GENOMESCOPE_REPO_SHA",
     ):
         env[sha_var] = "0" * 40
     if extra_env:

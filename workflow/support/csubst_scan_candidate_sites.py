@@ -61,17 +61,10 @@ BESTHIT_COLUMNS = [
 ]
 
 
-def _fsync_directory(path):
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
 
 
 CANDIDATE_REQUIRED_COLUMNS = [

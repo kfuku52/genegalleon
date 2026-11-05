@@ -32,7 +32,6 @@ from typing import BinaryIO, Iterable
 
 from metadata_store import archived_bytes, archived_exists, archived_info
 from metadata_store import read_snapshot as metadata_read_snapshot
-from metadata_store import snapshot_reader as metadata_snapshot_reader
 from metadata_store import writer as metadata_writer
 from shared_namespace_lock import NamespaceLockError, namespace_lock
 
@@ -45,7 +44,6 @@ from artifact_audit_runtime import signature as physical_audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
-from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
 from gene_family_output_store import (
     ArchiveStoreError,
     GeneFamilyOutputStore,
@@ -305,7 +303,12 @@ def declared_output_fasta_contracts(args: argparse.Namespace) -> list[tuple[str,
 
 
 def output_fasta_contract_failure(args: argparse.Namespace) -> str:
-    for label, path, expected in declared_output_fasta_contracts(args):
+    contracts = declared_output_fasta_contracts(args)
+    if not contracts:
+        return ""
+    from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
+
+    for label, path, expected in contracts:
         if not declared_path_exists(path):
             continue
         try:
@@ -1897,7 +1900,12 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         # fence; the real manifest still verifies their bytes and presence.
         names = [name for name in names if not name.endswith('.tree_plot.args.json')]
         progress.phase("manifest_hash", len(names))
-        inspect_in_context = metadata_snapshot_reader(inspect_manifest)
+        context = contextvars.copy_context()
+
+        def inspect_in_context(name):
+            # Preserve fixed runtime paths and read-only observation as well
+            # as the metadata fence. Each joined worker needs its own copy.
+            return context.copy().run(inspect_manifest, name)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for offset in range(0, len(names), workers * 8):
                 batch = names[offset:offset + workers * 8]
@@ -1932,6 +1940,10 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
     progress.phase("source_revalidation")
     try:
         if revalidate:
+            # Cached descriptors can still refer to an unlinked old ZIP after
+            # replacement while a shared filesystem serves cached attributes.
+            # Reopen current paths for the independent final content fence.
+            store._close_snapshot_zip_readers()
             memo.validate(workers=workers, progress=progress)
     except (OSError, ValueError) as exc:
         rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",

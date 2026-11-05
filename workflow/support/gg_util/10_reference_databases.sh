@@ -428,3 +428,68 @@ ensure_mmseqs_uniref90_db() {
     return 1
   fi
 }
+
+# Search a prepared protein query. Sequence preparation and provenance belong to callers.
+gg_annotate_uniprot_proteins() {
+  local query=$1 workspace=$2 method=$3 threads=$4 memory_gb=$5 outfile=$6
+  local uniprot_db_prefix uniprot_meta_tsv
+  case "${method}" in
+    blastp|mmseqs2) ;;
+    *) echo "Unsupported UniProt annotation method: ${method}" >&2; return 1 ;;
+  esac
+  if [[ "${method}" == "blastp" ]]; then
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${workspace}"); then
+      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
+      return 1
+    fi
+    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"; then
+      echo "Invalid UniProt Swiss-Prot BLASTP DB prefix. Exiting."
+      return 1
+    fi
+
+    blastp \
+      -query "${query}" \
+      -num_threads "${threads}" \
+      -db "${uniprot_db_prefix}" \
+      -out uniprot.search.tsv \
+      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
+      -max_target_seqs 1 \
+      -evalue 1e-2 || return $?
+  else
+    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${workspace}"); then
+      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
+      return 1
+    fi
+    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"; then
+      echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
+      return 1
+    fi
+
+    mmseqs createdb "${query}" "uniprot.queryDB" || return $?
+    mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
+      --threads "${threads}" \
+      --split-memory-limit "$(gg_memory_fraction_gb "${memory_gb}" 3 4)G" \
+      --max-seqs 1 \
+      -e 1e-2 \
+      -s 7.5 || return $?
+    mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
+      --threads "${threads}" \
+      --format-output "query,target,pident,alnlen,evalue,bits,qlen" || return $?
+    rm -f -- uniprot.queryDB* uniprot.resultDB*
+    rm -rf -- "tmp_mmseqs2_uniprot"
+  fi
+
+  uniprot_meta_tsv=""
+  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${workspace}" "${uniprot_db_prefix}" 2>/dev/null); then
+    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
+    uniprot_meta_tsv=""
+  fi
+
+  python "${gg_support_dir}/reformat_uniprot_diamond.py" \
+    --diamond_tsv uniprot.search.tsv \
+    --query_fasta "${query}" \
+    --uniprot_fasta "${uniprot_db_prefix}.pep" \
+    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
+    --outfile "${outfile}" || return $?
+
+}

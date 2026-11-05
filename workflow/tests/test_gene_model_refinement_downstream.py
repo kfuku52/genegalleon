@@ -8,6 +8,7 @@ import importlib
 import json
 import os
 import random
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -260,7 +261,7 @@ def test_genome_evolution_resolves_codes_from_the_routed_input_table(tmp_path, s
     environment = dict(os.environ, gg_workspace_input_dir=str(raw_dir.parent), dir_sp_cds=str(cds_dir),
                        genetic_code='1', file_species_genetic_code_resolved=str(resolved),
                        file_species_genetic_code=str(selected_table if selected else raw_table))
-    result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + functions + '\n' + call],
+    result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + 'source ' + shlex.quote(str(ROOT / 'workflow/support/gg_util/06_workspace_validation.sh')) + '\n' + functions + '\n' + call],
                             env=environment, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
     with resolved.open(newline='') as handle:

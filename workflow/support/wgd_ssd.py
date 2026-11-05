@@ -782,7 +782,7 @@ def main():
     for field in ("gene-tree", "species-tree", "evidence", "output"):
         node.add_argument("--" + field, required=True, type=Path)
     node.add_argument("--family-id", required=True)
-    node.add_argument("--species-parser", default="taxonomic")
+    node.add_argument("--species-parser", default="extended-taxonomic")
     node.add_argument("--species-regex", default="")
     node.add_argument("--species-map", default="")
     node.add_argument("--proximal-distance", type=int, default=10)

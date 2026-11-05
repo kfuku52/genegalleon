@@ -50,21 +50,22 @@ def decode(body):
 class GuardSpill:
     """No cross-run reuse: keep every reader, stream identities from private disk.
 
-    SQLite is only an ephemeral index, never workflow or execution history. Both
-    its 512 MiB disk budget and two-million-reader budget fail closed.
+    SQLite is only an ephemeral index, never workflow or execution history.
+    Disk grows with the inventory in the selected temporary filesystem; the
+    cache, per-record size and two-million-reader budget remain bounded.
     Callers serialize access through their existing audit lock.
     """
     label = 'source guard'
-    max_pages = 131072
-
     def __init__(self):
-        self.directory = tempfile.TemporaryDirectory(prefix='gg-audit-guards-')
         self.readers = []
+        self.failure = None
         try:
+            self.directory = tempfile.TemporaryDirectory(prefix='gg-audit-guards-')
             self.database = sqlite3.connect(Path(self.directory.name) / 'guards.sqlite3',
                                             isolation_level=None, check_same_thread=False)
             self.database.execute('PRAGMA page_size=4096')
-            self.database.execute(f'PRAGMA max_page_count={self.max_pages}')
+            # Do not impose a dataset-size ceiling below SQLite/filesystem
+            # limits. Both guards and digests can legitimately exceed 1 GiB.
             self.database.execute('PRAGMA journal_mode=OFF')
             self.database.execute('PRAGMA synchronous=OFF')
             self.database.execute('PRAGMA cache_size=-4096')
@@ -72,11 +73,30 @@ class GuardSpill:
             # inventory identities. A WITHOUT ROWID index carries those large
             # payloads through unrelated key lookups and insertion paths.
             self.database.execute('CREATE TABLE guards (key BLOB PRIMARY KEY NOT NULL, identity BLOB NOT NULL, reader INTEGER NOT NULL UNIQUE)')
+            # This connection is private to one audit and never published.
+            # A single transaction avoids rewriting index pages per source;
+            # the bounded page cache still spills dirty pages to disk.
+            self.database.execute('BEGIN')
+        except (OSError, sqlite3.Error) as exc:
+            self.close()
+            raise self._storage_failure(exc) from exc
         except BaseException:
             self.close()
             raise
 
+    def _storage_failure(self, exc):
+        directory = getattr(self, 'directory', None)
+        location = directory.name if directory is not None else 'the configured temporary filesystem'
+        self.failure = (f'Audit {self.label} spill failed in {location}: {exc}. '
+                        'Check free space/quota or set TMPDIR to a larger writable filesystem before starting the audit')
+        return AuditCapacityError(self.failure)
+
+    def _check_available(self):
+        if self.failure is not None:
+            raise AuditCapacityError(self.failure)
+
     def guard(self, key, identity, reader):
+        self._check_available()
         encoded_key, expected = encode(key), encode(identity)
         try:
             prior = self.database.execute('SELECT identity,reader FROM guards WHERE key=?', (encoded_key,)).fetchone()
@@ -91,43 +111,49 @@ class GuardSpill:
             self.database.execute('INSERT INTO guards VALUES (?,?,?)', (encoded_key, expected, len(self.readers)))
             self.readers.append(reader)
         except sqlite3.Error as exc:
-            raise AuditCapacityError(f'Audit {self.label} spill failed') from exc
+            # SQLITE_FULL can roll back the whole private transaction. Never
+            # accept a later retry with part of the original inventory lost.
+            raise self._storage_failure(exc) from exc
 
     def _records(self):
+        self._check_available()
         try:
             count, low, high = self.database.execute('SELECT count(*), min(reader), max(reader) FROM guards').fetchone()
             if (count != len(self.readers) or count and (low != 0 or high != count - 1)):
                 raise AuditCapacityError(f'Audit {self.label} spill inventory changed')
-            cursor = self.database.execute('SELECT key,identity,reader FROM guards ORDER BY rowid')
-            while rows := cursor.fetchmany(512):
-                yield from rows
+            # A record can be 16 MiB. Count-bounded batches retained hundreds
+            # of large identities (and two batches during the next fetch).
+            # Let the validation submission window bound retained records.
+            yield from self.database.execute('SELECT key,identity,reader FROM guards ORDER BY rowid')
         except sqlite3.Error as exc:
-            raise AuditCapacityError(f'Audit {self.label} spill failed') from exc
+            raise self._storage_failure(exc) from exc
 
     def values(self):
         for _key, identity, index in self._records():
             yield identity, self.readers[index]
 
     def close(self):
-        if hasattr(self, 'database'):
-            self.database.close()
-        self.directory.cleanup()
+        try:
+            if hasattr(self, 'database'):
+                self.database.close()
+        finally:
+            if hasattr(self, 'directory'):
+                self.directory.cleanup()
 
 
 class DigestSpill(GuardSpill):
-    """One run's digest identities, with a 1 GiB disk and two-million-reader bound.
+    """One run's digest identities, with a two-million-reader bound.
 
     Callables stay in process; keys, signatures, results and directory inventories
     use tagged JSON on private disk. No executable serialization or cross-run reuse.
     """
     label = 'digest'
-    max_pages = 262144
-
     def get(self, key):
+        self._check_available()
         try:
             row = self.database.execute('SELECT identity,reader FROM guards WHERE key=?', (encode(key),)).fetchone()
         except sqlite3.Error as exc:
-            raise AuditCapacityError('Audit digest spill failed') from exc
+            raise self._storage_failure(exc) from exc
         if row is not None:
             before, value, members = decode(row[0])
             return before, value, members, self.readers[row[1]]

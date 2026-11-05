@@ -315,6 +315,56 @@ def arguments(root, logical, report, workers=4):
         "--workers", str(workers), "--progress-interval", "0"])
 
 
+@pytest.mark.parametrize('workers', [1, 4])
+def test_full_audit_preserves_fixed_runtime_mapping_in_manifest_workers(tmp_path, workers):
+    logical = fixture(tmp_path, families=8)
+    support = tmp_path / 'fixed-runtime/support'
+    support.mkdir(parents=True)
+    source = support / 'audit_unique_runtime_source.py'
+    source.write_bytes(b'fixed runtime source\n')
+    for path in (logical / 'artifact_provenance').iterdir():
+        payload = json.loads(path.read_text())
+        payload['inputs'] = [dict(label='runtime', scope='absolute',
+            path='/script/support/' + source.name, artifact_type='file',
+            sha256=hashlib.sha256(source.read_bytes()).hexdigest(), size_bytes=source.stat().st_size)]
+        path.write_text(json.dumps(payload))
+    report = tmp_path / 'audit.tsv'
+    with provenance.runtime_support_root(support):
+        assert provenance.audit(arguments(tmp_path, logical, report, workers)) == 0
+    assert '\tmissing_input\t' not in report.read_text()
+    assert report.read_text().count('\tcurrent\t') == 8
+
+
+def test_final_audit_reopens_replaced_zip_even_with_cached_filesystem_attributes(tmp_path, monkeypatch):
+    import zipfile
+    logical = collection_fixture(tmp_path, 'zip', families=8)
+    store = GeneFamilyOutputStore(logical)
+    source = store.source_artifact('artifact_provenance', 'OG0000000.example.json').zip_path
+    original_signature = runtime.signature
+    frozen = original_signature(source)
+    def cached_attributes(path):
+        return frozen if Path(path) == source else original_signature(path)
+    monkeypatch.setattr(runtime, 'signature', cached_attributes)
+    monkeypatch.setattr(provenance, 'physical_audit_signature', cached_attributes)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    validate = AuditDigests.validate
+    def replace_before_validation(memo, *args, **kwargs):
+        with zipfile.ZipFile(source) as archive:
+            members = [(item.filename, archive.read(item.filename)) for item in archive.infolist()]
+        replacement = source.with_suffix('.replacement')
+        with zipfile.ZipFile(replacement, 'w') as archive:
+            for name, body in members:
+                if name.endswith('OG0000000.example.json'):
+                    body = body.replace(b'example', b'changed')
+                archive.writestr(name, body)
+        os.replace(replacement, source)
+        return validate(memo, *args, **kwargs)
+    monkeypatch.setattr(AuditDigests, 'validate', replace_before_validation)
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) != 0
+    assert '\taudit_error\t' in report.read_text()
+
+
 @pytest.mark.parametrize('layout', ['raw', 'zip', 'packed'])
 @pytest.mark.parametrize('family', ['OG0000000', 'query.with.dots'])
 def test_plot_arguments_are_outputs_not_manifests(tmp_path, layout, family):
@@ -623,7 +673,7 @@ def test_large_spilled_inventory_does_not_amplify_unrelated_guard_reads():
         values = list(spill.values())
         assert len(values) == 513
         assert all(expected == encode(reader()) for expected, reader in values)
-        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] == 131072
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] > 262144
         with pytest.raises(ValueError, match='changed during'):
             spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), (), lambda: ())
     finally:
@@ -776,14 +826,63 @@ def test_digest_spill_storage_failure_is_one_audit_error(tmp_path, monkeypatch):
     assert 'invalid_manifest' not in report.read_text()
 
 
-def test_digest_spill_sqlite_capacity_failure_is_explicit():
-    from artifact_audit_guards import DigestSpill
-    spill = DigestSpill()
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+def test_spill_grows_beyond_old_application_limits(kind):
+    import artifact_audit_guards as guards
+    spill = getattr(guards, kind)()
+    try:
+        # Check the effective SQLite ceiling without allocating a GiB in every
+        # regression run. Large capacity qualification uses the benchmark.
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] > 262144
+        spill.guard('key', ('original', 1), lambda: ('original', 1))
+        assert list(spill.values())[0][0] == guards.encode(('original', 1))
+    finally:
+        spill.close()
+
+
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+@pytest.mark.parametrize('stage', ['directory', 'connect', 'schema'])
+def test_spill_initialization_failure_is_a_clean_audit_error(tmp_path, monkeypatch, kind, stage):
+    import artifact_audit_guards as guards
+    original = guards.sqlite3.connect
+    if stage == 'directory':
+        def fail(**kwargs):
+            raise OSError('temporary disk is full')
+        monkeypatch.setattr(guards.tempfile, 'TemporaryDirectory', fail)
+    else:
+        monkeypatch.setattr(guards.tempfile, 'tempdir', str(tmp_path))
+        def connect(*args, **kwargs):
+            if stage == 'connect':
+                raise guards.sqlite3.OperationalError('unable to open database file')
+            connection = original(*args, **kwargs)
+            connection.execute('PRAGMA query_only=ON')
+            return connection
+        monkeypatch.setattr(guards.sqlite3, 'connect', connect)
+    with pytest.raises(runtime.AuditCapacityError, match='spill failed.*TMPDIR'):
+        getattr(guards, kind)()
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+def test_spill_sqlite_capacity_failure_is_explicit_and_cannot_be_reused(kind):
+    import artifact_audit_guards as guards
+    spill = getattr(guards, kind)()
     directory = Path(spill.directory.name)
     try:
+        spill.guard('original', 1, lambda: 1)
         spill.database.execute('PRAGMA max_page_count=16')
-        with pytest.raises(runtime.AuditCapacityError, match='Audit digest spill failed'):
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed.*full.*TMPDIR'):
             spill.guard('key', 'x' * 65536, lambda: None)
+        # SQLite may have rolled back all previously registered rows. Even
+        # after space is restored this audit must restart, never lose fences.
+        spill.database.execute('PRAGMA max_page_count=262144')
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+            spill.guard('retry', 2, lambda: 2)
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+            list(spill.values())
+        if kind == 'DigestSpill':
+            with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+                spill.get('original')
     finally:
         spill.close()
     assert not directory.exists()

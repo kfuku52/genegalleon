@@ -21,11 +21,11 @@ import tempfile
 from pathlib import Path
 
 from artifact_provenance import audit_manifest, load_manifest, resolve_reference, runtime_support_root
-from format_species_common import is_fasta_filename, provider_raw_dir
+from format_species_common import provider_raw_dir
+from format_species_constants import FASTA_EXTENSIONS
 from gene_family_output_store import GeneFamilyOutputStore
 from runtime_asset_io import atomic_json, file_sha
 from shared_namespace_lock import namespace_lock
-from species_labeling import extract_species_label
 
 ANNOTATION_RUN_FLAGS = ('COLLECT_GFF_INFO', 'BUSCO_CDS', 'UNIPROT_ANNOTATION', 'CDSKIT_LOCALIZE',
                         'CDS_FX2TAB', 'CDS_MMSEQS2TAXONOMY', 'SCAFFOLD_TAXONOMY',
@@ -33,6 +33,12 @@ ANNOTATION_RUN_FLAGS = ('COLLECT_GFF_INFO', 'BUSCO_CDS', 'UNIPROT_ANNOTATION', '
                         'SUBPHASER', 'GENOME_FX2TAB', 'SCAFFOLD_HISTOGRAM', 'GENOME_MMSEQS2TAXONOMY',
                         'GENOME_CONTAMINATION_REMOVAL', 'JCVI_DOTPLOT', 'GENOMESCOPE', 'SMUDGEPLOT',
                         'MULTISPECIES_SUMMARY')
+
+
+def matches_formatted_cds(filename, species):
+    """Match the complete frozen ID and a known CDS/FASTA filename suffix."""
+    suffixes = {role + extension for role in ('', '.cds') for extension in FASTA_EXTENSIONS}
+    return filename.startswith(species) and filename[len(species):].lower() in suffixes
 
 
 def physical(path, *, directory=False):
@@ -56,8 +62,8 @@ def select(manifest, task):
             raise ValueError('Invalid species label')
         if member['filename'] not in (member['species'] + '.genome.fa', member['species'] + '.genome.fa.gz'):
             raise ValueError('Genome filename must bind the frozen species and role')
-        if extract_species_label(member['filename'], strip_extension=True) != member['species']:
-            raise ValueError('Species differs from the native filename parser')
+        # These are frozen opaque IDs. Keep their exact spelling and filename
+        # binding here; taxonomic interpretation belongs to the native runtime.
     if type(task) is not int or not 1 <= task <= len(members):
         raise ValueError('Task is outside the frozen cohort')
     return members[task - 1]
@@ -222,7 +228,7 @@ def annotate(manifest, member, workspace, phase):
         # The audit above covers the complete formatted triplet. CPU CDS BUSCO
         # consumes only CDS; duplicating the genome and GFF adds no evidence.
         files = [p for p in (directory / 'species_cds').iterdir() if p.is_file() and not p.name.startswith('.')
-                 and is_fasta_filename(p.name) and extract_species_label(p.name, strip_extension=True) == species]
+                 and matches_formatted_cds(p.name, species)]
         if len(files) != 1:
             raise ValueError('Expected one verified formatted CDS file')
         bind(files[0], phase_workspace / 'input/species_cds' / files[0].name)

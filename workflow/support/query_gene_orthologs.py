@@ -35,6 +35,7 @@ import io
 import math
 import os
 import re
+import sys
 import warnings
 from collections import defaultdict
 from pathlib import Path
@@ -59,6 +60,22 @@ def observe_summary_input(path):
         sources = _SUMMARY_SOURCES.get()
         if sources is not None:
             sources.add(source)
+
+
+def family_scope(store, family_id):
+    # Manifest adapters are distinct input scopes even when family IDs coincide.
+    root = str(store.root.absolute()) if type(store) is GeneFamilyOutputStore else id(store)
+    return type(store), root, family_id
+
+
+def finish_family_iterator(iterator):
+    try:
+        while True:
+            next(iterator)
+    except StopIteration as completed:
+        return completed.value
+    finally:
+        iterator.close()
 
 
 class FamilyInputs:
@@ -102,10 +119,17 @@ class FamilyInputs:
         return self.values[key]
 
     def __enter__(self):
+        active = _FAMILY_INPUTS.get()
+        self.shared = active is not None and family_scope(active.store, active.family_id) == family_scope(self.store, self.family_id)
+        if self.shared:
+            active.check()
+            return active
         self.token = _FAMILY_INPUTS.set(self)
         return self
 
     def __exit__(self, kind, _value, _traceback):
+        if self.shared:
+            return
         try:
             if kind is None:
                 self.check()
@@ -368,7 +392,8 @@ SELECTION_FIELDS = [
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog="Related views: --batch JOB_ARGS --next-job JOB_ARGS. "
+                                           "Inputs are shared one family at a time; all tables publish together.")
     parser.add_argument("--dir_gene_family", metavar="PATH", required=True)
     parser.add_argument("--dir_query_gene", metavar="PATH", default="")
     parser.add_argument("--family_file", metavar="PATH", default="")
@@ -461,7 +486,7 @@ def add_weak_duplication_candidates(store, columns, glyphs, threshold):
         by_id, children, root = build_tree_index(rows)
         counts = species_overlap_counts(by_id, children, root)
         cds_ids = set(read_family_cds_fasta_ids(store, family_id))
-        ancestors = {node: ancestor_chain(by_id, node) for node in by_id}
+        ancestors = ancestor_index(by_id)
         support, support_source = normalized_ufboot_by_branch(by_id, family_id)
         family_columns.sort(key=lambda column: int(column["column_order"]))
         grouped = defaultdict(list)
@@ -608,7 +633,7 @@ def select_closest_queries(rows, definitions, family_id, species_tree, target_sp
     """Conservatively replace only farther, orthologous, coverage-redundant queries."""
     assignments = select_query_tip_assignments(rows, definitions)
     by_id, _children, _root = build_tree_index(rows)
-    ancestors = {node: ancestor_chain(by_id, node) for node in by_id}
+    ancestors = ancestor_index(by_id)
     distances = {}
     if policy == "closest":
         if not species_tree or not target_species:
@@ -867,7 +892,7 @@ def _int_value(value, default=-999):
 
 def read_stat_branch(store, family_id):
     inputs = _FAMILY_INPUTS.get()
-    if inputs is not None and inputs.store is store and inputs.family_id == family_id:
+    if inputs is not None and family_scope(inputs.store, inputs.family_id) == family_scope(store, family_id):
         return inputs.get('rows', lambda: _read_stat_branch(store, family_id), check=True)
     return _read_stat_branch(store, family_id)
 
@@ -1063,7 +1088,7 @@ def read_fasta_ids_from_store(store, subdir, name):
 
 def read_family_cds_fasta_ids(store, family_id):
     inputs = _FAMILY_INPUTS.get()
-    if inputs is not None and inputs.store is store and inputs.family_id == family_id:
+    if inputs is not None and family_scope(inputs.store, inputs.family_id) == family_scope(store, family_id):
         return inputs.get('cds_ids', lambda: _read_family_cds_fasta_ids(store, family_id), check=True)
     return _read_family_cds_fasta_ids(store, family_id)
 
@@ -1341,42 +1366,28 @@ def _build_tree_index(rows):
             children[branch_id] = sorted(implied)
 
     root = roots[0]
-    visit_state = {}
-
-    def visit(node):
-        state = visit_state.get(node, 0)
-        if state == 1:
-            raise ValueError(f"stat_branch contains a cycle involving branch_id={node}")
-        if state == 2:
-            return
-        visit_state[node] = 1
-        for child in children.get(node, []):
-            visit(child)
-        visit_state[node] = 2
-
-    visit(root)
-    unreachable = sorted(set(by_id) - set(visit_state))
-    if unreachable:
-        raise ValueError(
-            "stat_branch contains branches disconnected from its root: "
-            f"root={root}, branches={unreachable}"
-        )
+    from nwkit.parent_index import validate_parent_links
+    try:
+        validate_parent_links(parent_by_id, children, root)
+    except ValueError as exc:
+        raise ValueError(f"stat_branch {exc}") from exc
     return by_id, children, root
 
 
 def depth_first_tip_order(by_id, children, root):
-    ordered = []
+    from nwkit.parent_index import traversal_order
+    return [node for node in traversal_order(children, root)
+            if str(by_id[node].get("so_event") or "") == "L" or not children.get(node)]
 
-    def visit(node):
-        row = by_id[node]
-        if str(row.get("so_event") or "") == "L" or not children.get(node):
-            ordered.append(node)
-            return
-        for child in children[node]:
-            visit(child)
 
-    visit(root)
-    return ordered
+def ancestor_index(by_id):
+    from nwkit.parent_index import ParentIndex
+    inputs = _FAMILY_INPUTS.get()
+    def build():
+        return ParentIndex({node: _int_value(row.get("parent")) for node, row in by_id.items()})
+    if inputs is not None and inputs.values.get('tree', (None,))[0] is by_id:
+        return inputs.get('ancestor_index', build)
+    return build()
 
 
 def ancestor_chain(by_id, node):
@@ -1400,6 +1411,8 @@ def _ancestor_chain(by_id, node):
 
 
 def mrca_node(ancestor_by_node, left, right):
+    if hasattr(ancestor_by_node, "common_ancestor"):
+        return ancestor_by_node.common_ancestor(left, right)
     right_ancestors = set(ancestor_by_node[right])
     for node in ancestor_by_node[left]:
         if node in right_ancestors:
@@ -1877,9 +1890,7 @@ def collect_reference_ufboot_evidence(
                     f"family={family_id}"
                 )
             by_id, _children, root = build_tree_index(rows)
-            ancestor_by_node = {
-                node: ancestor_chain(by_id, node) for node in by_id
-            }
+            ancestor_by_node = ancestor_index(by_id)
             leaf_by_name = {}
             for branch_id, row in by_id.items():
                 if str(row.get("so_event") or "") != "L":
@@ -2073,7 +2084,7 @@ def _collect_family_orthologs_for_anchors(
         family_order=family_order,
     )
 
-    ancestor_by_node = {node: ancestor_chain(by_id, node) for node in by_id}
+    ancestor_by_node = ancestor_index(by_id)
     grouped = defaultdict(list)
     for branch_id, row in by_id.items():
         if str(row.get("so_event") or "") != "L":
@@ -2203,6 +2214,16 @@ def collect_query_gene_orthologs(
     family_file="",
     _family_transform=None,
 ):
+    return finish_family_iterator(_iter_collect_query_gene_orthologs(dir_gene_family, dir_query_gene, reference_species, family_file, _family_transform))
+
+
+def _iter_collect_query_gene_orthologs(
+    dir_gene_family,
+    dir_query_gene,
+    reference_species,
+    family_file="",
+    _family_transform=None,
+):
     query_dir = Path(dir_query_gene)
     family_ids = read_family_ids(query_dir, family_file=family_file)
     store = GeneFamilyOutputStore(dir_gene_family)
@@ -2212,6 +2233,9 @@ def collect_query_gene_orthologs(
     next_column_order = 1
     next_family_order = 1
     for family_id in family_ids:
+        # Do not suspend a view while retaining the previous family's parsed inputs.
+        rows = cds_fasta_ids = None
+        yield store, family_id
         with FamilyInputs(store, family_id):
             rows = read_stat_branch(store, family_id)
             if not rows:
@@ -2403,6 +2427,24 @@ def collect_query_anchor_orthologs(
     long_rows=None,
     _family_transform=None,
 ):
+    return finish_family_iterator(_iter_collect_query_anchor_orthologs(dir_gene_family, dir_query_gene, family_file, manifest_records, query_metadata, query_selection, species_tree, target_species, selection_species, query_label, selection_audit, long_rows, _family_transform))
+
+
+def _iter_collect_query_anchor_orthologs(
+    dir_gene_family,
+    dir_query_gene,
+    family_file="",
+    manifest_records=None,
+    query_metadata=None,
+    query_selection="all",
+    species_tree="",
+    target_species="",
+    selection_species="",
+    query_label="id",
+    selection_audit=None,
+    long_rows=None,
+    _family_transform=None,
+):
     query_dir = Path(dir_query_gene)
     if manifest_records is None and not dir_query_gene:
         raise ValueError("--dir_query_gene or --family_manifest is required")
@@ -2419,6 +2461,9 @@ def collect_query_anchor_orthologs(
     next_family_order = 1
     next_query_order = 1
     for family_id in family_ids:
+        # Do not suspend a view while retaining the previous family's parsed inputs.
+        rows = cds_fasta_ids = None
+        yield store, family_id
         with FamilyInputs(store, family_id):
             rows = read_stat_branch(store, family_id)
             if not rows:
@@ -2623,22 +2668,27 @@ class FamilyEvidence:
 
 
 def run(args):
-    """Publish the complete table set only after all reads and writes succeed."""
+    run_many([args])
+
+
+def run_many(jobs):
+    """Interleave views by family; fence and publish all their tables together."""
     from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
     from nwkit.output_transaction import output_transaction
 
-    roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf']
-    if getattr(args, 'basis', 'reference_species') == 'query_gene':
-        roles += ['out_query_map', 'out_selection', 'out_long', 'out_overlap']
-    outputs = []
-    for name in roles:
-        value = getattr(args, name, '')
-        if name == 'out_query_map':
-            value = str(value).strip()
-        if value:
-            outputs.append((name, Path(value)))
-    inputs = [(name, getattr(args, name, '')) for name in
-              ('family_file', 'family_manifest', 'query_metadata', 'species_tree')]
+    outputs, inputs = [], []
+    for args in jobs:
+        roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf']
+        if getattr(args, 'basis', 'reference_species') == 'query_gene':
+            roles += ['out_query_map', 'out_selection', 'out_long', 'out_overlap']
+        for name in roles:
+            value = getattr(args, name, '')
+            if name == 'out_query_map':
+                value = str(value).strip()
+            if value:
+                outputs.append((name, Path(value)))
+        inputs.extend((name, getattr(args, name, '')) for name in
+                      ('family_file', 'family_manifest', 'query_metadata', 'species_tree'))
     validate_distinct_output_paths(outputs)
     validate_outputs_do_not_replace_inputs(inputs, outputs)
     with contextlib.ExitStack() as publication:
@@ -2661,12 +2711,37 @@ def run(args):
         # Keep both observations live until every staged table is complete.
         # Exiting them verifies the sources before the transaction publishes.
         with read_only_observation(), species_inputs():
-            message = _run(args, write)
+            messages = [None] * len(jobs)
+            pending = {}
+
+            def advance(index, iterator):
+                try:
+                    pending[index] = next(iterator)
+                except StopIteration as completed:
+                    messages[index] = completed.value
+                    pending.pop(index, None)
+
+            iterators = [_iter_run(args, write) for args in jobs]
+            for index, iterator in enumerate(iterators):
+                publication.callback(iterator.close)
+                advance(index, iterator)
+            while pending:
+                store, family_id = next(iter(pending.values()))
+                scope = family_scope(store, family_id)
+                with FamilyInputs(store, family_id):
+                    for index, request in list(pending.items()):
+                        if family_scope(*request) == scope:
+                            advance(index, iterators[index])
             validate_outputs_do_not_replace_inputs([('summary source', path) for path in sources], outputs)
-    print(message, flush=True)
+    for message in messages:
+        print(message, flush=True)
 
 
 def _run(args, write):
+    return finish_family_iterator(_iter_run(args, write))
+
+
+def _iter_run(args, write):
     dup_threshold = validate_dup_conf_threshold(getattr(args, "dup_conf_score_threshold", 0))
     if dup_threshold > 0 and not getattr(args, "out_dup_conf", ""):
         raise ValueError("--out_dup_conf is required when --dup_conf_score_threshold is positive")
@@ -2679,14 +2754,13 @@ def _run(args, write):
             raise ValueError("Family manifests and query selection require --basis=query_gene")
         if not str(args.reference_species).strip():
             raise ValueError("--reference_species is required when --basis=reference_species")
-        with read_only_observation(), species_inputs():
-            columns, glyphs, tree_nodes = collect_query_gene_orthologs(
-                dir_gene_family=args.dir_gene_family,
-                dir_query_gene=args.dir_query_gene,
-                reference_species=args.reference_species,
-                family_file=args.family_file,
-                _family_transform=evidence.process,
-            )
+        columns, glyphs, tree_nodes = yield from _iter_collect_query_gene_orthologs(
+            dir_gene_family=args.dir_gene_family,
+            dir_query_gene=args.dir_query_gene,
+            reference_species=args.reference_species,
+            family_file=args.family_file,
+            _family_transform=evidence.process,
+        )
         dup_evidence, synteny_evidence, ufboot_evidence = evidence.tables()
         write(args.out_columns, COLUMN_FIELDS, columns)
         write(args.out_glyphs, GLYPH_FIELDS, glyphs)
@@ -2714,22 +2788,21 @@ def _run(args, write):
     selection_output = getattr(args, "out_selection", "")
     if getattr(args, "query_selection", "all") == "closest" and not selection_output:
         raise ValueError("closest requires --out_selection to record excluded queries")
-    with read_only_observation(), species_inputs():
-        columns, glyphs, tree_nodes, query_map = collect_query_anchor_orthologs(
-            dir_gene_family=args.dir_gene_family,
-            dir_query_gene=args.dir_query_gene,
-            family_file=args.family_file,
-            manifest_records=manifest_records,
-            query_metadata=read_query_metadata(getattr(args, "query_metadata", "")),
-            query_selection=getattr(args, "query_selection", "all"),
-            species_tree=getattr(args, "species_tree", ""),
-            target_species=getattr(args, "target_species", ""),
-            selection_species=getattr(args, "selection_species", ""),
-            query_label=getattr(args, "query_label", "id"),
-            selection_audit=selection_audit,
-            long_rows=long_rows,
-            _family_transform=evidence.process,
-        )
+    columns, glyphs, tree_nodes, query_map = yield from _iter_collect_query_anchor_orthologs(
+        dir_gene_family=args.dir_gene_family,
+        dir_query_gene=args.dir_query_gene,
+        family_file=args.family_file,
+        manifest_records=manifest_records,
+        query_metadata=read_query_metadata(getattr(args, "query_metadata", "")),
+        query_selection=getattr(args, "query_selection", "all"),
+        species_tree=getattr(args, "species_tree", ""),
+        target_species=getattr(args, "target_species", ""),
+        selection_species=getattr(args, "selection_species", ""),
+        query_label=getattr(args, "query_label", "id"),
+        selection_audit=selection_audit,
+        long_rows=long_rows,
+        _family_transform=evidence.process,
+    )
     dup_evidence, synteny_evidence, ufboot_evidence = evidence.tables()
     write(args.out_columns, QUERY_COLUMN_FIELDS, query_columns_for_output(columns))
     write(args.out_glyphs, QUERY_GLYPH_FIELDS, query_glyphs_for_output(glyphs))
@@ -2789,7 +2862,20 @@ def _run(args, write):
 
 
 def main():
-    run(build_arg_parser().parse_args())
+    arguments = sys.argv[1:]
+    if arguments[:1] != ["--batch"]:
+        run(build_arg_parser().parse_args(arguments))
+        return
+    jobs, current = [], []
+    for argument in arguments[1:] + ["--next-job"]:
+        if argument == "--next-job":
+            if not current:
+                raise ValueError("Empty ortholog batch job")
+            jobs.append(build_arg_parser().parse_args(current))
+            current = []
+        else:
+            current.append(argument)
+    run_many(jobs)
 
 
 if __name__ == "__main__":

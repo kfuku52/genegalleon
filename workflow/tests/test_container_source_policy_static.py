@@ -80,14 +80,17 @@ def test_program_source_defaults_are_moving_branches_not_commit_pins():
     assert "GG_SOURCE_IQTREE_REPO_REF=master" in branches
     assert set(branch_assignments) <= {"main", "master"}
 
+    build_common = (REPO_ROOT / "container/build_common.sh").read_text()
+    assert 'source "${script_dir}/build_common.sh"' in buildx
+    assert 'source "${script_dir}/build_common.sh"' in apptainer
     for sha_var in PROGRAM_SHA_VARS:
         assert f'ARG {sha_var}=""' in dockerfile
-        assert f"{sha_var}=${{{sha_var}:-}}" in buildx
-        assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
+        assert f"{sha_var}=${{{sha_var}:-}}" in build_common
 
     policy_files = [
         REPO_ROOT / "container" / "Dockerfile",
         REPO_ROOT / "container" / "buildx.sh",
+        REPO_ROOT / "container" / "build_common.sh",
         REPO_ROOT / "container" / "apptainer_local_build.sh",
         REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh",
         REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml",
@@ -161,9 +164,10 @@ def test_container_build_paths_refresh_system_security_packages_daily():
     assert 'io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"' in dockerfile
     assert '"security_refresh_epoch=${security_refresh_epoch}"' in build_hash
     assert 'hash_mode="runtime"' in build_hash
-    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in buildx
+    build_common = (REPO_ROOT / "container/build_common.sh").read_text()
+    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in build_common
     assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
-    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in apptainer_build
+    assert 'source "${script_dir}/build_common.sh"' in apptainer_build
     assert "s|@@SECURITY_REFRESH_EPOCH@@|" in apptainer_build
     assert "io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@" in apptainer_template
     assert "security_refresh_epoch.txt" in dockerfile

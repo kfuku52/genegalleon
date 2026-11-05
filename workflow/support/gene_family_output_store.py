@@ -77,7 +77,9 @@ STORE_METADATA_SCHEMA_VERSION = 1
 STATE_LOCK_STRIPES = 16
 MAX_REFERENCED_SHARDS_PER_SUBDIR = 8
 MAX_OPEN_COMPACTION_SOURCES = 32
-MAX_SNAPSHOT_ZIP_READERS = 32
+MAX_SNAPSHOT_ZIP_READERS = 64
+MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES = 32 * 1024 * 1024
+MAX_SNAPSHOT_ZIP_MEMBERS = 262144
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
 DEFAULT_LARGE_ZIP_WARNING_BYTES = 20 * 1024 * 1024 * 1024
 MATERIALIZATION_RECEIPT_NAME = ".gg_materialized.jsonl"
@@ -235,17 +237,10 @@ def _signature_matches(path: Path, signature: Sequence[int]) -> bool:
         return False
 
 
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
 
 
 def _validate_archive_root(archive_root: Path) -> None:
@@ -451,14 +446,25 @@ def lock_available_family_ids(
     *,
     nonblocking: bool,
 ) -> Iterator[Set[str]]:
+    identifiers = sorted(set(family_ids))
     acquired_ids: Set[str] = set()
-    with contextlib.ExitStack() as stack:
-        for family_id in sorted(set(family_ids)):
-            if stack.enter_context(family_bucket_lock(
-                archive_root, family_id, exclusive=True, nonblocking=nonblocking,
-            )):
-                acquired_ids.add(family_id)
+    if not identifiers:
         yield acquired_ids
+        return
+    _validate_archive_root(archive_root)
+    # The shared gate spans the entire batch, as each nested gate did before.
+    # Keep every per-family exclusive lock while publishing only one gate owner.
+    with _bucket_lock(family_gate_path(archive_root), exclusive=False, nonblocking=nonblocking) as gate:
+        if not gate:
+            yield acquired_ids
+            return
+        with contextlib.ExitStack() as stack:
+            for family_id in identifiers:
+                if stack.enter_context(_bucket_lock(
+                    family_lock_path(archive_root, family_id), exclusive=True, nonblocking=nonblocking,
+                )):
+                    acquired_ids.add(family_id)
+            yield acquired_ids
 
 
 @contextlib.contextmanager
@@ -881,7 +887,7 @@ class GeneFamilyOutputStore:
         self._cache_epoch: Optional[str] = None
         self._index_update_active = False
         self._read_snapshot_epoch: Optional[str] = None
-        self._snapshot_zip_readers: OrderedDict[Path, tuple[zipfile.ZipFile, int]] = OrderedDict()
+        self._snapshot_zip_readers: OrderedDict[Path, tuple[zipfile.ZipFile, int, int, int]] = OrderedDict()
         self._cache_lock = threading.RLock()
         self._zip_reader_cache: weakref.WeakKeyDictionary[
             threading.Thread,
@@ -1211,7 +1217,7 @@ class GeneFamilyOutputStore:
                 yield
             finally:
                 self._read_snapshot_epoch = None
-                for archive, _users in self._snapshot_zip_readers.values():
+                for archive, _users, _directory_bytes, _members in self._snapshot_zip_readers.values():
                     archive.close()
                 self._snapshot_zip_readers.clear()
             self._assert_no_pending_index_update()
@@ -1223,36 +1229,64 @@ class GeneFamilyOutputStore:
         return (contextlib.nullcontext() if self._read_snapshot_epoch is not None
                 else producer_read_lock(self.archive_root))
 
+    def _close_snapshot_zip_readers(self):
+        """Start a fresh content-read phase after every prior reader joined."""
+        with self._cache_lock:
+            if any(entry[1] for entry in self._snapshot_zip_readers.values()):
+                raise ArchiveStoreError('Snapshot ZIP readers are still active')
+            for archive, _users, _bytes, _members in self._snapshot_zip_readers.values():
+                archive.close()
+            self._snapshot_zip_readers.clear()
+
     @contextlib.contextmanager
     def _snapshot_zip_reader(self, path: Path):
         # Share central directories across joined readers. ZipFile gives each
         # open member an independent position behind its own shared-file lock.
-        # Per-thread pools thrashed when a family had more than eight subdirs.
+        # Retain enough small indexes for wide family layouts without retaining
+        # unbounded large central directories. Active readers are never evicted.
         cached = False
         with self._cache_lock:
             readers = self._snapshot_zip_readers
             entry = readers.pop(path, None)
             if entry is None:
-                if len(readers) >= MAX_SNAPSHOT_ZIP_READERS:
-                    for old_path, (old_archive, users) in list(readers.items()):
-                        if users == 0:
-                            readers.pop(old_path)
-                            old_archive.close()
-                            break
                 archive = zipfile.ZipFile(path, "r")
-                if len(readers) < MAX_SNAPSHOT_ZIP_READERS:
-                    readers[path] = archive, 1
-                    cached = True
+                try:
+                    directory_bytes = os.fstat(archive.fp.fileno()).st_size - archive.start_dir
+                    members = len(archive.filelist)
+                    if directory_bytes < 0:
+                        raise ArchiveStoreError(f"ZIP changed while opening its directory: {path}")
+                    used_bytes = sum(entry[2] for entry in readers.values())
+                    used_members = sum(entry[3] for entry in readers.values())
+                    if (directory_bytes <= MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                            and members <= MAX_SNAPSHOT_ZIP_MEMBERS):
+                        while (len(readers) >= MAX_SNAPSHOT_ZIP_READERS
+                               or used_bytes + directory_bytes > MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                               or used_members + members > MAX_SNAPSHOT_ZIP_MEMBERS):
+                            idle = next((key for key, entry in readers.items() if entry[1] == 0), None)
+                            if idle is None:
+                                break
+                            old_archive, _users, old_bytes, old_members = readers.pop(idle)
+                            used_bytes -= old_bytes
+                            used_members -= old_members
+                            old_archive.close()
+                        if (len(readers) < MAX_SNAPSHOT_ZIP_READERS
+                                and used_bytes + directory_bytes <= MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                                and used_members + members <= MAX_SNAPSHOT_ZIP_MEMBERS):
+                            readers[path] = archive, 1, directory_bytes, members
+                            cached = True
+                except BaseException:
+                    archive.close()
+                    raise
             else:
-                archive, users = entry
-                readers[path] = archive, users + 1
+                archive, users, directory_bytes, members = entry
+                readers[path] = archive, users + 1, directory_bytes, members
                 cached = True
         try:
             yield archive
         finally:
             if cached:
                 with self._cache_lock:
-                    readers[path] = archive, readers[path][1] - 1
+                    readers[path] = archive, readers[path][1] - 1, directory_bytes, members
             else:
                 archive.close()
 
@@ -2594,6 +2628,15 @@ class GeneFamilyOutputStore:
         self,
         artifacts: Optional[Dict[str, Artifact]] = None,
     ) -> None:
+        with self._index_record_batch() as record:
+            self._write_index_records(artifacts, record=record)
+
+    def _write_index_records(
+        self,
+        artifacts: Optional[Dict[str, Artifact]],
+        *,
+        record: Callable[[Artifact], dict],
+    ) -> None:
         artifacts = self._archived if artifacts is None else artifacts
         self.archive_root.mkdir(parents=True, exist_ok=True)
         index_dir = self.archive_root / INDEX_DIR_NAME
@@ -2618,7 +2661,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "generation": bucket_generation,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(bucket_artifacts.items())
                 },
             }
@@ -2653,7 +2696,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "subdir": subdir,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(subdir_artifacts.items())
                 },
             }
@@ -4399,9 +4442,7 @@ def archive_completed_outputs(
                 final_subdir_artifacts = {artifact.logical_path: artifact for artifact in artifacts}
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(artifacts)
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -4635,11 +4676,7 @@ def archive_completed_outputs(
                 # index commit finishes.
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, subdir_signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve()
-                    for artifact in final_subdir_artifacts.values()
-                    if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(final_subdir_artifacts.values())
                 try:
                     _remove_unreferenced_subdir_archives(
                         root,
@@ -6072,9 +6109,7 @@ def compact_archives(
                         compacted_all.extend(compacted)
                 updated_subdir = {artifact.logical_path: artifact for artifact in compacted_all}
                 store._merge_index_subdirs({subdir: updated_subdir})
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in updated_subdir.values() if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(updated_subdir.values())
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -6082,6 +6117,13 @@ def compact_archives(
                     referenced_paths,
                 )
             return [path for path in created if path.is_file()]
+
+
+def _referenced_zip_paths(artifacts: Iterable[Artifact]) -> Set[Path]:
+    # A finalized ZIP can hold thousands of logical members. Deduplicate lexical
+    # paths before filesystem resolution; resolve fresh on every invocation.
+    paths = {artifact.zip_path for artifact in artifacts if artifact.zip_path is not None}
+    return {path.resolve() for path in paths}
 
 
 def _write_archive_status(
@@ -6113,7 +6155,7 @@ def _write_archive_status(
                 else 0
             )
             zip_paths = sorted(
-                {artifact.zip_path.resolve() for artifact in artifacts.values() if artifact.zip_path is not None}
+                _referenced_zip_paths(artifacts.values())
             )
             final_path = _final_archive_path(root, subdir).resolve()
             if zip_paths and set(zip_paths) == {final_path}:
@@ -6256,7 +6298,7 @@ def _finalize_subdirs_locked(
                 verify_bytes_total=0,
                 current_zip_bytes=(final_path.stat().st_size if final_path.is_file() else 0),
             )
-        referenced_before = {artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None}
+        referenced_before = _referenced_zip_paths(artifacts)
         if referenced_before == {final_path.resolve()}:
             _remove_unreferenced_subdir_archives(
                 root,
@@ -6346,7 +6388,7 @@ def _finalize_subdirs_locked(
         )
         updated = {artifact.logical_path: artifact for artifact in finalized}
         store._merge_index_subdirs({subdir: updated})
-        referenced = {artifact.zip_path.resolve() for artifact in updated.values() if artifact.zip_path is not None}
+        referenced = _referenced_zip_paths(updated.values())
         _remove_unreferenced_subdir_archives(
             root,
             payload_root,
@@ -6676,7 +6718,7 @@ def repair_archive_index(
                         repair_bytes_verified=verified_bytes,
                         current_zip=zip_path.name,
                     )
-            referenced = {artifact.zip_path.resolve() for artifact in rebuilt.values() if artifact.zip_path is not None}
+            referenced = _referenced_zip_paths(rebuilt.values())
             referenced_modes = {mode_by_path[path] for path in referenced if path in mode_by_path}
             if len(referenced_modes) > 1:
                 raise ArchiveStoreError(
@@ -6788,11 +6830,7 @@ def purge_archives(
                     for artifact in compacted:
                         remaining_subdir[artifact.logical_path] = artifact
                 store._merge_index_subdirs({subdir: remaining_subdir})
-                referenced = {
-                    artifact.zip_path.resolve()
-                    for artifact in remaining_subdir.values()
-                    if artifact.zip_path is not None
-                }
+                referenced = _referenced_zip_paths(remaining_subdir.values())
                 physical_subdir_paths = list((payload_root / subdir).glob("*.zip"))
                 final_path = _final_archive_path(root, subdir)
                 if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):

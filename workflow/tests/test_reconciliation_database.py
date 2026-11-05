@@ -119,6 +119,18 @@ def test_internal_renumbering_and_tip_order_do_not_change_mapping(namespace):
     assert len(clades) == 5 and len(events) == 5 and len(genes) == 2
 
 
+def test_deep_species_reference_preserves_ids_without_recursive_traversal():
+    ordered, _ = reference_branches(b"(A,(B,C)inner)root;")
+    assert [row[2] for row in ordered] == ["root", "A", "inner", "B", "C"]
+    count = 1200
+    text = "(" * count + "A,B)"
+    text += "".join(f",T{index})" for index in range(count - 1)) + ";"
+    rows, _topology = reference_branches(text.encode())
+    assert len(rows) == 2 * count + 1
+    assert rows[0][1] is None
+    assert sum(row[4] for row in rows) == count + 1
+
+
 @pytest.mark.parametrize("change,match", [
     ((b'speciesLocation="B"', b'speciesLocation="unknown"'), "Unmapped"),
     ((b'<loss speciesLocation', b'<unsupported speciesLocation'), "Unsupported"),

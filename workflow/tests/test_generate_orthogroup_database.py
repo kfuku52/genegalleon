@@ -1282,7 +1282,7 @@ def test_mixed_tsv_discards_spool_before_reparsing_original_values(tmp_path, mon
 
 
 @pytest.mark.parametrize('layout', ['raw', 'zip', 'packed'])
-@pytest.mark.parametrize('failure', ['content', 'digest_inventory'])
+@pytest.mark.parametrize('failure', ['content', 'digest_inventory', 'guard_storage', 'digest_storage', 'manifest_write'])
 def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, monkeypatch, layout, failure):
     monkeypatch.chdir(tmp_path)
     sys.path.insert(0, str(SCRIPT_PATH.parent))
@@ -1340,17 +1340,114 @@ def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, m
         if failure == 'content':
             alignment.parent.mkdir(exist_ok=True)
             alignment.write_text('>g1\nTGCA\n')
-        else:
+        elif failure == 'digest_inventory':
             p._DIGEST_OBSERVATION.get().digest_spill.database.execute('DELETE FROM guards WHERE reader=0')
+        elif failure == 'manifest_write':
+            import sqlite3
+            with sqlite3.connect(result[0]) as connection:
+                connection.execute('CREATE TABLE new_generation (value INTEGER)')
+            def fail(*args, **kwargs):
+                raise OSError('manifest publication failed')
+            monkeypatch.setattr(p, 'write_manifest_atomic', fail)
+        else:
+            memo = p._DIGEST_OBSERVATION.get()
+            spill = memo.guard_spill if failure == 'guard_storage' else memo.digest_spill
+            # Fail during the real contract-building reads, after the pipeline
+            # has taken ownership of its private database and cleanup path.
+            spill.database.execute('PRAGMA query_only=ON')
         return result
     monkeypatch.setattr(pipeline.database, '_populate_database', mutate)
-    with pytest.raises((ValueError, RuntimeError), match='changed'):
+    error = 'publication failed' if failure == 'manifest_write' else ('spill failed' if failure.endswith('_storage') else 'changed')
+    with pytest.raises((ValueError, RuntimeError, OSError), match=error):
         pipeline.run(audit, db, record)
     assert database.read_bytes() == saved_db
     assert manifest.read_bytes() == saved_manifest
+    assert not list(tmp_path.glob('.database.db.*.tmp'))
     assert 'audit_error' in report.read_text()
     result = json.loads(report.with_suffix('.tsv.result.json').read_text())
     assert result['exit_code'] != 0
+
+
+@pytest.mark.parametrize('previous', ['absent', 'files', 'packed'])
+@pytest.mark.parametrize('when', ['before_manifest', 'after_manifest'])
+def test_database_pair_publication_restores_previous_state_on_write_failure(tmp_path, monkeypatch, previous, when):
+    import argparse
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    import gene_family_database_pipeline as pipeline
+    import metadata_store
+    target, private = tmp_path / 'out.db', tmp_path / '.out.db.new.tmp'
+    manifest = tmp_path / 'artifact_provenance/database.json'
+    manifest.parent.mkdir()
+    old_manifest = b'{"family_id":"orthogroup","step":"database"}\n'
+    if previous != 'absent':
+        target.write_bytes(b'previous database')
+        manifest.write_bytes(old_manifest)
+        if previous == 'packed':
+            metadata_store.pack(manifest.parent, writers_stopped=True, delete_originals=True)
+    private.write_bytes(b'new database')
+    original = p.write_manifest_atomic
+    def fail(path, payload):
+        if when == 'after_manifest':
+            original(path, payload)
+        raise OSError('manifest write failed')
+    monkeypatch.setattr(p, 'write_manifest_atomic', fail)
+    with pytest.raises(OSError, match='manifest write failed'):
+        pipeline.publish_database((private, target, 'create' if previous == 'absent' else 'replace', True),
+                                  argparse.Namespace(manifest=manifest), {'family_id':'orthogroup', 'generation':2})
+    if previous == 'absent':
+        assert not target.exists() and not manifest.exists()
+    else:
+        assert target.read_bytes() == b'previous database'
+        assert (manifest.read_bytes() if manifest.exists() else metadata_store.archived_bytes(manifest)) == old_manifest
+    assert not list(tmp_path.rglob('*.publish-*'))
+
+
+def test_database_pair_keeps_recovery_backups_if_rollback_fails(tmp_path, monkeypatch):
+    import argparse
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    import gene_family_database_pipeline as pipeline
+    target, private, manifest = tmp_path / 'out.db', tmp_path / 'private.db', tmp_path / 'out.json'
+    target.write_bytes(b'previous database')
+    private.write_bytes(b'new database')
+    manifest.write_bytes(b'previous manifest')
+    def fail(*args):
+        raise OSError('manifest write failed')
+    monkeypatch.setattr(p, 'write_manifest_atomic', fail)
+    replace = pipeline.os.replace
+    def cannot_restore(source, destination):
+        if Path(source).name == 'original' and destination == target:
+            raise OSError('recovery filesystem unavailable')
+        return replace(source, destination)
+    monkeypatch.setattr(pipeline.os, 'replace', cannot_restore)
+    with pytest.raises(RuntimeError, match='rollback needs recovery; backups retained') as error:
+        pipeline.publish_database((private, target, 'replace', True), argparse.Namespace(manifest=manifest), {})
+    backups = list(tmp_path.glob('.out.db.publish-*/original'))
+    assert len(backups) == 1 and backups[0].read_bytes() == b'previous database'
+    assert str(backups[0].parent) in str(error.value)
+    assert manifest.read_bytes() == b'previous manifest'
+
+
+@pytest.mark.parametrize('alias', ['database_manifest', 'database_report', 'manifest_result', 'hardlink'])
+def test_database_publication_rejects_aliased_outputs_before_writing(tmp_path, alias):
+    import argparse
+    import os
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import gene_family_database_pipeline as pipeline
+    database, manifest, report = tmp_path / 'out.db', tmp_path / 'out.json', tmp_path / 'audit.tsv'
+    database.write_bytes(b'preserved database')
+    if alias == 'database_manifest':
+        manifest = database
+    elif alias == 'database_report':
+        report = database
+    elif alias == 'manifest_result':
+        manifest = report.with_suffix('.tsv.result.json')
+    else:
+        os.link(database, manifest)
+    with pytest.raises(ValueError, match='output paths must be distinct'):
+        pipeline.validate_destinations(argparse.Namespace(output_tsv=report), argparse.Namespace(manifest=manifest), database)
+    assert database.read_bytes() == b'preserved database'
 
 
 @pytest.mark.parametrize('layout', ['raw', 'zip'])

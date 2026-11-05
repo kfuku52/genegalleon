@@ -1,141 +1,21 @@
-taxonomic_genus_only_placeholders <- c("sp", "spp")
-taxonomic_proximity_qualifiers <- c("cf", "aff", "nr")
-taxonomic_hybrid_connectors <- c("x", "\u00d7", "hybrid")
-taxonomic_rank_aliases <- c(
-  "subsp" = "subsp",
-  "ssp" = "subsp",
-  "subspecies" = "subsp",
-  "var" = "var",
-  "variety" = "var",
-  "forma" = "forma",
-  "form" = "forma",
-  "f" = "forma",
-  "strain" = "strain",
-  "substrain" = "substrain",
-  "serovar" = "serovar",
-  "serotype" = "serotype",
-  "serogroup" = "serogroup",
-  "pathovar" = "pathovar",
-  "pv" = "pathovar",
-  "biovar" = "biovar",
-  "biotype" = "biotype",
-  "chemovar" = "chemovar",
-  "morphovar" = "morphovar",
-  "cultivar" = "cultivar",
-  "cv" = "cultivar",
-  "isolate" = "isolate",
-  "group" = "group",
-  "subgroup" = "subgroup",
-  "complex" = "complex",
-  "clade" = "clade",
-  "lineage" = "lineage",
-  "section" = "section",
-  "series" = "series",
-  "ecotype" = "ecotype",
-  "breed" = "breed"
-)
-taxonomic_display_ranks <- c(
-  "subsp" = "subsp.",
-  "var" = "var.",
-  "forma" = "f.",
-  "strain" = "strain",
-  "substrain" = "substrain",
-  "serovar" = "serovar",
-  "serotype" = "serotype",
-  "serogroup" = "serogroup",
-  "pathovar" = "pathovar",
-  "biovar" = "biovar",
-  "biotype" = "biotype",
-  "chemovar" = "chemovar",
-  "morphovar" = "morphovar",
-  "cultivar" = "cultivar",
-  "isolate" = "isolate",
-  "group" = "group",
-  "subgroup" = "subgroup",
-  "complex" = "complex",
-  "clade" = "clade",
-  "lineage" = "lineage",
-  "section" = "section",
-  "series" = "series",
-  "ecotype" = "ecotype",
-  "breed" = "breed"
-)
+# Keep the public plotting helpers on the common species-label contract.
+gg_tree_label_sources <- Filter(function(path) is.character(path) && length(path) == 1L && nzchar(path),
+                              lapply(sys.frames(), function(frame) frame$ofile))
+gg_tree_label_source <- tail(gg_tree_label_sources, 1L)[[1L]]
+source(file.path(dirname(normalizePath(gg_tree_label_source, mustWork = TRUE)),
+                 "species_label_utils.r"), local = TRUE)
+rm(gg_tree_label_source, gg_tree_label_sources)
 
-taxonomic_token_key <- function(token) {
-  key <- tolower(sub("[.]$", "", as.character(token)))
-  if (key %in% taxonomic_hybrid_connectors) {
-    return("x")
-  }
-  if (key %in% taxonomic_genus_only_placeholders) {
-    return("sp")
-  }
-  if (key %in% names(taxonomic_rank_aliases)) {
-    return(unname(taxonomic_rank_aliases[[key]]))
-  }
-  key
-}
-
-is_hybrid_connector_token <- function(token) {
-  taxonomic_token_key(token) == "x"
-}
-
-is_hybrid_binomial_connector <- function(parts, index = 3L) {
-  if (length(parts) < index + 2L) {
-    return(FALSE)
-  }
-  if (!is_hybrid_connector_token(parts[[index]])) {
-    return(FALSE)
-  }
-  next_genus <- trimws(as.character(parts[[index + 1L]]))
-  nzchar(next_genus) && grepl("^[A-Z]", next_genus)
-}
-
-species_prefix_token_count <- function(parts) {
-  parts <- parts[nzchar(parts)]
-  if (length(parts) < 2) {
-    return(0L)
-  }
-  second <- taxonomic_token_key(parts[[2]])
-  third <- if (length(parts) >= 3) taxonomic_token_key(parts[[3]]) else ""
-  if (second == "x") {
-    return(if (length(parts) >= 3) 3L else 2L)
-  }
-  if (second %in% taxonomic_genus_only_placeholders) {
-    return(if (length(parts) >= 3) 3L else 2L)
-  }
-  if (second %in% taxonomic_proximity_qualifiers) {
-    return(if (length(parts) >= 3) 3L else 2L)
-  }
-  if (is_hybrid_binomial_connector(parts, 3L)) {
-    return(5L)
-  }
-  if (third %in% taxonomic_proximity_qualifiers) {
-    return(3L)
-  }
-  if (third %in% unname(taxonomic_rank_aliases)) {
-    return(if (length(parts) >= 4) 4L else 3L)
-  }
-  return(2L)
-}
-
-extract_species_label <- function(x) {
-  text <- as.character(x)
-  if (!nzchar(text)) {
-    return("")
-  }
-  parts <- strsplit(text, "_", fixed = TRUE)[[1]]
-  parts <- parts[nzchar(parts)]
-  prefix_count <- species_prefix_token_count(parts)
-  if (prefix_count == 0) {
-    return("")
-  }
-  selected <- parts[seq_len(prefix_count)]
-  is_hybrid_connector <- vapply(selected, is_hybrid_connector_token, logical(1), USE.NAMES = FALSE)
-  if (any(is_hybrid_connector)) {
-    selected[is_hybrid_connector] <- "x"
-  }
-  paste(selected, collapse = "_")
-}
+taxonomic_genus_only_placeholders <- GG_TAXONOMIC_GENUS_ONLY_PLACEHOLDERS
+taxonomic_proximity_qualifiers <- GG_TAXONOMIC_PROXIMITY_QUALIFIERS
+taxonomic_hybrid_connectors <- GG_TAXONOMIC_HYBRID_CONNECTORS
+taxonomic_rank_aliases <- GG_TAXONOMIC_RANK_ALIASES
+taxonomic_display_ranks <- GG_TAXONOMIC_DISPLAY_RANKS
+taxonomic_token_key <- gg_taxonomic_token_key
+is_hybrid_connector_token <- gg_is_hybrid_connector_token
+is_hybrid_binomial_connector <- gg_is_hybrid_binomial_connector
+species_prefix_token_count <- function(parts) as.integer(gg_species_prefix_token_count(parts))
+extract_species_label <- function(x) gg_species_label_from_value_one(x)
 
 strip_species_label <- function(x) {
   text <- as.character(x)
