@@ -32,7 +32,6 @@ from typing import BinaryIO, Iterable
 
 from metadata_store import archived_bytes, archived_exists, archived_info
 from metadata_store import read_snapshot as metadata_read_snapshot
-from metadata_store import snapshot_reader as metadata_snapshot_reader
 from metadata_store import writer as metadata_writer
 from shared_namespace_lock import NamespaceLockError, namespace_lock
 
@@ -1897,7 +1896,12 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         # fence; the real manifest still verifies their bytes and presence.
         names = [name for name in names if not name.endswith('.tree_plot.args.json')]
         progress.phase("manifest_hash", len(names))
-        inspect_in_context = metadata_snapshot_reader(inspect_manifest)
+        context = contextvars.copy_context()
+
+        def inspect_in_context(name):
+            # Keep the fixed runtime mapping as well as the metadata fence.
+            # A fresh copy per call permits concurrent worker entry.
+            return context.copy().run(inspect_manifest, name)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for offset in range(0, len(names), workers * 8):
                 batch = names[offset:offset + workers * 8]

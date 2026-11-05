@@ -975,6 +975,44 @@ def test_audit_infers_raw_query2family_ids_from_query_directory(tmp_path):
     assert row["step"] == "csubst_scan"
 
 
+@pytest.mark.parametrize("workers", [1, 4])
+@pytest.mark.parametrize("changed", [False, True])
+def test_parallel_audit_preserves_fixed_runtime_source_mapping(tmp_path, monkeypatch, workers, changed):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import artifact_provenance as provenance
+
+    workspace = tmp_path / "workspace"
+    root = workspace / "output" / "orthogroup"
+    runtime = tmp_path / "fixed-source" / "support"
+    runtime.mkdir(parents=True)
+    script = runtime / "context_mapping_fixture.py"
+    script.write_bytes(b"recorded source\n")
+    output = root / "stat_branch" / "OG0001_stat.branch.tsv"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"synthetic output\n")
+    manifest = root / "artifact_provenance" / "OG0001.summary_statistics.json"
+    recorded = run_cli("record", *contract_args(workspace, manifest, script, output))
+    assert recorded.returncode == 0, recorded.stderr
+    payload = json.loads(manifest.read_bytes())
+    payload["inputs"][0]["path"] = "/script/support/context_mapping_fixture.py"
+    manifest.write_text(json.dumps(payload))
+    original_manifest = manifest.read_bytes()
+    if changed:
+        script.write_bytes(b"changed source\n")
+
+    report = tmp_path / "audit.tsv"
+    with provenance.runtime_support_root(runtime):
+        result = provenance.dispatch([
+            "audit", "--logical-root", str(root), "--workspace-root", str(workspace),
+            "--output-tsv", str(report), "--mode", "orthogroup", "--workers", str(workers),
+        ])
+    assert result == int(changed)
+    frame = pd.read_csv(report, sep="\t", keep_default_na=False)
+    assert frame["status"].tolist() == ["changed_input" if changed else "current"]
+    assert frame["reason"].tolist() == ["rooted_tree" if changed else ""]
+    assert manifest.read_bytes() == original_manifest
+
+
 def test_audit_detects_changed_input_from_recorded_contract(tmp_path):
     workspace = tmp_path / "workspace"
     logical_root = workspace / "output" / "orthogroup"

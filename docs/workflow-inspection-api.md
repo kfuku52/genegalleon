@@ -391,3 +391,7 @@ project migrations still require their appropriate runtime validation.
 
 For bounded multi-family `verify --batch-file` and its exact-attempt/final-content
 fences, see [batch I/O performance](batch-io-performance.md#verification).
+
+Parallel provenance audits retain the caller's fixed runtime source mapping in
+each worker and during final revalidation. A missing or changed mapped script
+remains an audit failure; equal output bytes do not admit reuse.
