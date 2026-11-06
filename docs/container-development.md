@@ -1,7 +1,7 @@
 # Container Development
 
-GeneGalleon keeps one scientific environment and builds the eleven moving
-upstream sources independently. A source update therefore recompiles that
+GeneGalleon keeps one scientific environment and builds moving upstream
+sources independently. A source update therefore recompiles that
 source before assembling and validating the complete runtime. Normal workflow
 edits are read from the mounted checkout and need no container rebuild.
 
@@ -10,16 +10,22 @@ flowchart LR
     Base[Micromamba base] --> DevOS[APT runtime and development packages]
     Base --> RunOS[APT runtime packages]
     DevOS --> Build[Conda dependencies and stable native tools]
-    Build --> Sources[11 independent source stages]
+    DevOS --> IQTree[IQ-TREE CLI and library]
+    Build --> Sources[Independent source stages]
+    IQTree --> Adapter[NWKIT adapter]
+    Sources -->|NWKIT wheel and Conda environment| Adapter
     Build -->|copy Conda once and stable native tools| Assemble[Assemble and validate selected target]
     Sources -->|wheels, R packages, binaries| Assemble
+    Adapter --> Assemble
     RunOS -->|runtime base| Assemble
     DevOS -->|development base| Assemble
     Assemble --> Targets[runtime or development image]
 ```
 
-The source stages start from the same dependency environment. Each stage
-declares only its own revision arguments; the IQ-TREE adapter stage additionally consumes the matching NWKIT wheel.
+Most source stages start from the shared dependency environment. IQ-TREE's
+CLI and library compile from the OS toolchain while Conda is being prepared.
+The adapter stage joins the compiled library with the matching NWKIT wheel
+and uses its Conda environment as a temporary mount.
 Seven Python wheels, two installed R packages, PAML `mcmctree`, and the IQ-TREE
 CLI/library worker are mounted read-only during assembly. Build checkouts and
 static libraries remain in build stages. IQ-TREE corresponding source and
@@ -68,7 +74,8 @@ change the contents of a public image that is only being pulled.
 | Bundled `workflow/support/treevis` | `treevis` installation and subsequent validation |
 | Runtime validation scripts or command manifests | Final validation |
 | Security-refresh date | Late APT security refresh and subsequent validation |
-| Conda requirements or common build dependencies | Dependency environment and every source artifact |
+| Conda requirements | Dependency environment, its source stages, and the NWKIT adapter |
+| Common OS build dependencies | All affected source stages, including IQ-TREE |
 | Runtime/development selection | Reuse dependencies and source artifacts; assemble on the selected cached OS base |
 
 The wrappers resolve moving branches concurrently with

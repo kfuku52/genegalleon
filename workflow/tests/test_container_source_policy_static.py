@@ -119,6 +119,33 @@ def test_all_container_build_paths_resolve_one_snapshot_per_build():
     assert "install_source_artifacts.sh" in dockerfile
 
 
+def test_buildx_passes_each_external_cache_importer_as_one_argument(tmp_path):
+    docker = tmp_path / "docker"
+    docker.write_text('''#!/bin/sh
+case "$1:$2" in
+    buildx:ls) exit 0 ;;
+    buildx:inspect) printf 'Driver: docker-container\\n' ;;
+    buildx:build) printf '%s\\n' "$@" > "$BUILD_ARGS" ;;
+    *) exit 1 ;;
+esac
+''')
+    docker.chmod(0o755)
+    args_path = tmp_path / "build-args"
+    cache_sources = ["type=registry,ref=ghcr.io/example/genegalleon:latest", "type=gha,scope=container-linux-amd64"]
+    result = subprocess.run(
+        ["bash", "container/buildx.sh"], cwd=REPO_ROOT,
+        env=os.environ | {var: f"{index:040x}" for index, var in enumerate(PROGRAM_SHA_VARS, start=1)} | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}", "MODE": "push", "BUILD_ARGS": str(args_path),
+            "CACHE_FROM": "\n\n".join(cache_sources) + "\n", "CACHE_TO": "type=inline",
+            "PRINT_BUILD_INPUT_HASH": "0",
+        }, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = args_path.read_text().splitlines()
+    assert [args[index + 1] for index, arg in enumerate(args) if arg == "--cache-from"] == cache_sources
+    assert args[args.index("--cache-to") + 1] == "type=inline"
+
+
 def test_container_build_paths_share_python_compatibility_constraints():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
@@ -411,9 +438,10 @@ def test_standard_container_builds_iqtree_cli_library_and_matching_nwkit_worker(
     builder = (REPO_ROOT / "container/scripts/build_iqtree_artifact.sh").read_text()
     installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
     validator = (REPO_ROOT / "container/scripts/validate_runtime.sh").read_text()
-    assert "FROM source-builder AS iqtree-build" in dockerfile
+    assert "FROM system AS iqtree-build" in dockerfile
     assert "FROM iqtree-build AS iqtree-worker-build" in dockerfile
-    assert "--mount=from=nwkit-build" in dockerfile
+    assert "--mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact" in dockerfile
+    assert "--mount=from=nwkit-build,source=/opt/conda,target=/opt/conda,rw" in dockerfile
     assert "--mount=from=iqtree-worker-build" in dockerfile
     for path in (dockerfile, native):
         assert "build_iqtree_artifact.sh library" in path

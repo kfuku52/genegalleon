@@ -27,8 +27,10 @@ def commands_for(suite, workers, extra):
     commands = []
     if suite != "r":
         command = [sys.executable, "-m", "pytest", "-q"]
-        if suite in {"fast", "integration-download", "integration-workflow", "runtime-python", "full"}:
-            command += ["-n", workers, "--dist", "load"]
+        if suite in {"fast", "integration-download", "integration-workflow", "runtime-python", "full"} or (
+            suite == "runtime" and workers is not None
+        ):
+            command += ["-n", workers or "2", "--dist", "load"]
         if suite not in {"full", "runtime-extra"}:
             # This option is defined in the test-directory conftest. Keeping
             # its value attached prevents pytest's initial parse from treating
@@ -43,8 +45,11 @@ def commands_for(suite, workers, extra):
         # paths and -k/-x/--lf retain their native meaning without a second root.
         commands.append(command + extra)
     if suite == "runtime":
-        commands.append([sys.executable, "-m", "pytest", "-q", "--gg-strict-runtime"]
-                        + manifest["runtime_extra_python"] + extra)
+        extra_command = [sys.executable, "-m", "pytest", "-q", "--gg-strict-runtime"]
+        # The HGT integration cases can each use two CPUs.
+        if workers is not None and (workers == "auto" or int(workers) > 1):
+            extra_command += ["-n", "2", "--dist", "load"]
+        commands.append(extra_command + manifest["runtime_extra_python"] + extra)
     if suite in {"runtime", "full", "r"}:
         commands.extend(manifest["r_commands"])
     return commands
@@ -53,11 +58,11 @@ def commands_for(suite, workers, extra):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("suite", choices=SUITES)
-    parser.add_argument("--workers", default=os.environ.get("GG_PYTEST_WORKERS", "2"))
+    parser.add_argument("--workers", default=os.environ.get("GG_PYTEST_WORKERS") or None)
     parser.add_argument("--gg-shard", metavar="INDEX/COUNT", help="Run one partition of the selected Python tests")
     parser.add_argument("--list", action="store_true", help="Print commands without running them")
     args, extra = parser.parse_known_args()
-    if args.workers != "auto" and (not args.workers.isdigit() or int(args.workers) < 1):
+    if args.workers not in (None, "auto") and (not args.workers.isdigit() or int(args.workers) < 1):
         parser.error("--workers must be a positive integer or auto")
     if extra[:1] == ["--"]:
         extra = extra[1:]

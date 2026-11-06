@@ -108,10 +108,6 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
   idx <- 1
   xmax_val <- 0
   
-  mappings <- NULL
-  if (!is.null(seqs_untrim) && length(seqs_untrim)) {
-    mappings <- treevis_cdskit_request(list(operation="mapping",trimmed=seqs,untrimmed=seqs_untrim))
-  }
   for (seqname in df_tip[['label']]) {
     seqname <- as.character(seqname)
     # Get the sequence associated with this tip
@@ -125,8 +121,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     if (!is.null(seqs_untrim) && !is.null(seqs_untrim[[seqname]])) {
       seq_untrim_vec = as.character(seqs_untrim[[seqname]])
       if (length(seq_untrim_vec) > 0) {
-        mapped <- mappings[[seqname]]$mapping
-        mapped_untrim_nt <- vapply(mapped,function(x) if (is.null(x)) NA_integer_ else as.integer(x),integer(1))
+        mapped_untrim_nt <- map_trimmed_to_untrimmed_nongap_index(seq_vec, seq_untrim_vec)
       }
     }
 

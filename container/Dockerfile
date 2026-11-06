@@ -175,11 +175,15 @@ RUN source /opt/pg/source_branches.env \
       "${ASTER_REPO_SHA:-${ASTER_REPO_REF:-${GG_SOURCE_ASTER_REPO_REF}}}" \
       /opt/pg/artifact
 
-FROM source-builder AS iqtree-build
+# IQ-TREE uses the OS toolchain. Start compiling while Conda is being solved.
+FROM system AS iqtree-build
 
+ARG GG_BUILD_JOBS=2
 ARG IQTREE_REPO_URL="https://github.com/iqtree/iqtree3.git"
 ARG IQTREE_REPO_REF=""
 ARG IQTREE_REPO_SHA=""
+COPY container/source_branches.env /opt/pg/source_branches.env
+COPY container/scripts/resolve_git_branch_sha.sh /opt/pg/scripts/resolve_git_branch_sha.sh
 COPY container/scripts/build_iqtree_artifact.sh /opt/pg/scripts/build_iqtree_artifact.sh
 
 RUN source /opt/pg/source_branches.env \
@@ -191,6 +195,7 @@ RUN source /opt/pg/source_branches.env \
 # Updating NWKIT rebuilds only its thin adapter, not the IQ-TREE library.
 FROM iqtree-build AS iqtree-worker-build
 RUN --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact \
+ --mount=from=nwkit-build,source=/opt/conda,target=/opt/conda,rw \
  bash /opt/pg/scripts/build_iqtree_artifact.sh worker /opt/pg/artifact /tmp/nwkit-artifact
 
 FROM source-builder AS kffractbias-build

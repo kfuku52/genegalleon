@@ -20,7 +20,7 @@ inputs:
     description: Optional INDEX/COUNT partition for runtime-python.
     default: ""
   workers:
-    description: Pytest processes per SIF Python partition; other suites retain their own execution.
+    description: Pytest processes for the runtime Python lane.
     default: "2"
   prepared-runtime-input:
     description: Exact runtime input prepared once by an earlier job in this run.
@@ -126,8 +126,18 @@ runs:
     - name: Reclaim runner disk space for SIF conversion
       if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        PREPARED_IMAGE_REF: ${{ inputs.image-ref }}
       run: |
         set -euo pipefail
+        if [[ -n "${PREPARED_IMAGE_REF}" ]]; then
+          # The publisher converts an existing image without a local Docker build.
+          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+          if (( available_bytes >= 32 * 1024 * 1024 * 1024 )); then
+            echo "Skipping runner cleanup for registry conversion with ${available_bytes} free bytes."
+            exit 0
+          fi
+        fi
         echo "Disk usage before cleanup:"
         df -h /
         sudo rm -rf -- \
@@ -193,7 +203,9 @@ runs:
       if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true' && steps.validation-image.outputs.source == 'local'
       shell: bash
       env:
-        CACHE_FROM: type=gha,scope=container-linux-amd64
+        CACHE_FROM: |
+          type=registry,ref=${{ steps.runtime-input.outputs.published_image }}:latest
+          type=gha,scope=container-linux-amd64
         BUILD_TARGET: runtime
         # Leave room for the validated SIF in the shared Actions cache quota.
         CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=min,scope=container-linux-amd64,ignore-error=true' || '' }}
@@ -214,7 +226,7 @@ runs:
           bash ./gg_container_build_entrypoint.sh
 
     - name: Reclaim BuildKit cache before SIF conversion
-      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
+      if: steps.validation-image.outputs.source == 'local'
       shell: bash
       run: |
         set -euo pipefail
@@ -223,18 +235,16 @@ runs:
         docker buildx prune --all --force
         echo "Disk usage after BuildKit cleanup:"
         df -h /
-        if [[ "${{ steps.validation-image.outputs.source }}" == "local" ]]; then
-          docker system df
-          image_bytes="$(docker image inspect --format '{{.Size}}' local/genegalleon:ci)"
-          reserve_bytes=$((6 * 1024 * 1024 * 1024))
-          required_bytes=$((2 * image_bytes + reserve_bytes))
-          available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
-          printf 'SIF disk preflight: image=%s required_free=%s available=%s bytes\n' \
-            "${image_bytes}" "${required_bytes}" "${available_bytes}"
-          if (( available_bytes < required_bytes )); then
-            echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
-            exit 1
-          fi
+        docker system df
+        image_bytes="$(docker image inspect --format '{{.Size}}' local/genegalleon:ci)"
+        reserve_bytes=$((6 * 1024 * 1024 * 1024))
+        required_bytes=$((2 * image_bytes + reserve_bytes))
+        available_bytes="$(df --output=avail -B1 "${RUNNER_TEMP}" | awk 'NR == 2 { print $1 }')"
+        printf 'SIF disk preflight: image=%s required_free=%s available=%s bytes\n' \
+          "${image_bytes}" "${required_bytes}" "${available_bytes}"
+        if (( available_bytes < required_bytes )); then
+          echo "::error::Insufficient disk space for SIF conversion: need ${required_bytes} bytes, have ${available_bytes} bytes."
+          exit 1
         fi
         free -h
 
@@ -357,7 +367,7 @@ runs:
         VALIDATION_WORKERS: ${{ inputs.workers }}
       run: |
         args=()
-        if [[ "${VALIDATION_SUITE}" == "runtime-python" ]]; then
+        if [[ "${VALIDATION_SUITE}" == "runtime" || "${VALIDATION_SUITE}" == "runtime-python" ]]; then
           args+=("--workers=${VALIDATION_WORKERS}")
         fi
         if [[ -n "${VALIDATION_SHARD}" ]]; then

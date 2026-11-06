@@ -23,7 +23,8 @@ Commands:
   build                                 Build local/genegalleon:dev with development tools.
 
 Environment:
-  GG_PYTEST_WORKERS=N                   Parallel workers for fast/integration/runtime-python/full (default: 2).
+  GG_PYTEST_WORKERS=N                   Parallel Python workers (default: 2 for fast/integration/runtime-python/full).
+                                       Set explicitly to parallelize the main Python lane in runtime.
   GG_RUNTIME_FRESHNESS=daily|always|off Runtime/upstream freshness policy (default: daily).
   GG_RUNTIME_FRESHNESS_SCOPE=owned|all  Upstreams checked locally (default: owned).
   BUILD_TARGET=development|runtime     Target for dev build (default: development).
@@ -49,8 +50,12 @@ case "${command_name}" in
   check)
     suite="${1:-fast}"
     if [[ $# -gt 0 ]]; then shift; fi
+    check_args=("${suite}")
+    if [[ -n "${GG_PYTEST_WORKERS:-}" ]]; then
+      check_args+=(--workers "${pytest_workers}")
+    fi
     exec bash "${runtime_runner}" python "${repo_root}/workflow/tests/run_checks.py" \
-      "${suite}" --workers "${pytest_workers}" "$@"
+      "${check_args[@]}" "$@"
     ;;
   lint)
     cd "${repo_root}"

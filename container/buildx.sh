@@ -123,7 +123,11 @@ else
 fi
 if [[ -n "${CACHE_FROM}" || -n "${CACHE_TO}" ]]; then
   if [[ -n "${CACHE_FROM}" ]]; then
-    cache_args+=(--cache-from "${CACHE_FROM}")
+    while IFS= read -r cache_source; do
+      if [[ -n "${cache_source}" ]]; then
+        cache_args+=(--cache-from "${cache_source}")
+      fi
+    done <<< "${CACHE_FROM}"
   fi
   if [[ -n "${CACHE_TO}" ]]; then
     cache_args+=(--cache-to "${CACHE_TO}")

@@ -393,9 +393,13 @@ are enabled, so new marker names must be registered in `pyproject.toml`.
 Adding `@pytest.mark.runtime` to a function does not change its file's lane.
 Keep tests that execute container tools in a separate file registered under
 `runtime_python_files`, leaving dependency-light unit tests in the fast lane.
-The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
-uses the same default; override it with `GG_PYTEST_WORKERS=N` or
-`GG_PYTEST_WORKERS=auto`.
+The fast and integration CI lanes use two pytest-xdist workers. The daily
+publisher uses four workers for the main runtime Python lane and two for its
+additional HGT and download checks in Docker and SIF. The combined runtime
+suite defaults to serial execution in `bash ./dev`. Set `GG_PYTEST_WORKERS=N`
+or `GG_PYTEST_WORKERS=auto` to opt in. The additional checks use at most two
+workers because each HGT case can use two CPUs. R checks run serially.
+Other parallel Python lanes default to two workers.
 
 For timing feedback, append `--durations=25 --durations-min=0.5` to a focused
 `dev check` command. Keep regression fixtures small while preserving the failure
