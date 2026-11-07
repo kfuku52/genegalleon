@@ -232,7 +232,8 @@ plot_nrow = ceiling(length(plots) / plot_ncol)
 panel_height = max(2.6, 0.95 + max_tip_count * font_size / 72 * 1.03)
 pdf_height = 0.5 + plot_nrow * panel_height
 if (pdf_height <= 50) {
-  ggsave('species_trees.pdf', plot = plot_list(gglist = plots, ncol = plot_ncol),
+  out = plot_list(gglist = plots, ncol = plot_ncol)
+  ggsave('species_trees.pdf', plot = out,
          width = 7.2, height = pdf_height, units = 'in')
 } else {
   # Keep whole trees and their original label size on each page. When a

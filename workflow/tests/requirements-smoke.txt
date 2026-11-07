@@ -4,3 +4,5 @@ openpyxl
 numpy<2
 pandas
 biopython
+# The end-to-end input generation smoke test uses NWKit taxonomy helpers.
+nwkit @ git+https://github.com/kfuku52/nwkit.git@master
