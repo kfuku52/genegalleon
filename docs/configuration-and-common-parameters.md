@@ -878,6 +878,10 @@ see [NOTUNG replacement](notung-replacement.md).
 
 ## CDSKIT localization model
 
+For CDS inputs, GeneGalleon masks internal stop codons before localization
+and preserves the terminal stop so the protein keeps its original C terminus.
+The localization provenance records this preprocessing policy.
+
 Both genome annotation and gene evolution default to `cdskit_localize_model=latest`.
 On the first download, GeneGalleon queries the official CDSKIT GitHub releases and
 selects the most recently published non-draft, non-prerelease `localize-*` release

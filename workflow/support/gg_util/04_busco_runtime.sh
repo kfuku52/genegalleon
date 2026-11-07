@@ -482,7 +482,8 @@ gg_prepare_cdskit_localize_cds_input() {
   seqkit seq --remove-gaps --upper-case --only-id --threads "${threads}" "${infile}" |
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" |
     cdskit pad --codon_table "${codontable}" |
-    cdskit mask --codon_table "${codontable}" --stop_codon no --ambiguous_codon yes --mask_char 'N' \
+    cdskit mask --codon_table "${codontable}" --stop_codon yes --preserve_terminal_stop yes \
+      --ambiguous_codon yes --mask_char 'N' \
       > "${outfile}"
 }
 

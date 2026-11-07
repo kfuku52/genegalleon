@@ -851,6 +851,7 @@ cdskit_localize_provenance_args+=(
   --parameter "include_features=${cdskit_localize_include_features}"
   --parameter "no_model_download=${cdskit_localize_no_model_download}"
   --parameter "genetic_code=${genetic_code}"
+  --parameter "cds_mask_policy=internal-stop-only"
 )
 gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
 if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then
