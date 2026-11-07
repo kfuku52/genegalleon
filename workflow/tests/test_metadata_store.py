@@ -375,6 +375,132 @@ def test_cache_publish_and_copy_use_sqlite_policy(tmp_path):
     assert store.cache_policy(root) == 1
 
 
+def inventory_context(scratch="/scratch/task.1"):
+    env = {"PATH": "/usr/bin:/opt/conda/bin", "HOME": "/home/fixture",
+           "GG_TMP_HOST_ROOT": scratch, "GG_COMMON_TMP_ROOT": scratch,
+           "GG_TMP_MOUNT": "/gg_tmp", "GG_TMP_WORKSPACE_ID": "/work/project",
+           "TMPDIR": scratch + "/runtime/tmp", "TEMP": scratch,
+           "APPTAINER_BINDPATH": scratch + ":/gg_tmp,/work/project:/workspace",
+           "APPTAINERENV_TMPDIR": "/gg_tmp/runtime/tmp",
+           "SGE_TASK_ID": "1", "JOB_ID": "100"}
+    command = "apptainer exec --bind " + scratch + ":/gg_tmp --bind /work/project:/workspace"
+    return command, env
+
+
+def test_version_context_reuses_only_reviewed_managed_scratch():
+    import version_report_identity as versions
+    script_sha = hashlib.sha256((SUPPORT / "gg_versions.sh").read_bytes()).hexdigest()
+    assert script_sha == versions.MANAGED_SCRATCH_INVENTORY_SHA256
+    first, env = inventory_context()
+    second, other = inventory_context("/scratch/task.2")
+    other.update(SGE_TASK_ID="2", JOB_ID="101")
+    def identity(command, values, script=script_sha):
+        return versions.version_context_identity(command, script, environ=values)
+    assert identity(first, env) == identity(second, other)
+    assert identity(first, env, "custom-script") != identity(second, other, "custom-script")
+    assert identity(first, env) != identity(first + " --cleanenv", env)
+    assert identity(first, env) != identity(first.replace(":/workspace", ":/workspace:ro"), env)
+    for key in ("PATH", "PYTHONPATH", "LD_LIBRARY_PATH", "GG_TMP_WORKSPACE_ID", "CUSTOM_CONFIG"):
+        assert identity(first, env) != identity(first, dict(env, **{key: "/different"})), key
+
+
+@pytest.mark.parametrize("field,value", [
+    ("PATH", "{scratch}/bin:/usr/bin"),
+    ("PYTHONPATH", "/gg_tmp/custom-library"),
+    ("CUSTOM_CONFIG", "{scratch}/config"),
+    ("APPTAINERENV_GG_TMP_HOST_ROOT", "/mismatched/root"),
+    ("TMPDIR", "{scratch}/../other"),
+    ("APPTAINER_BINDPATH", "{scratch}:/gg_tmp,{scratch}/tools:/usr/bin"),
+    ("GG_COMMON_TMP_ROOT", "/different/storage"),
+])
+def test_version_context_keeps_literal_custom_scratch(field, value):
+    import version_report_identity as versions
+    contexts = []
+    for scratch in ("/scratch/task.1", "/scratch/task.2"):
+        command, env = inventory_context(scratch)
+        env[field] = value.format(scratch=scratch)
+        contexts.append(versions.version_context_identity(
+            command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env))
+    assert contexts[0] != contexts[1]
+
+
+def test_version_context_preserves_host_identity(monkeypatch):
+    import version_report_identity as versions
+    command, env = inventory_context()
+    before = versions.version_context_identity(command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env)
+    uname = versions.platform.uname()
+    monkeypatch.setattr(versions.platform, "uname", lambda: uname._replace(node="another-host"))
+    assert before != versions.version_context_identity(command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env)
+
+
+def test_version_context_retains_apptainer_source_only_bindings():
+    import version_report_identity as versions
+    def identity(scratch, bindings):
+        command, env = inventory_context(scratch)
+        env.update(APPTAINER_BIND=bindings, SINGULARITY_BIND=bindings)
+        return versions.version_context_identity(command, versions.MANAGED_SCRATCH_INVENTORY_SHA256, environ=env)
+    one, two = "/scratch/task.1", "/scratch/task.2"
+    stable = "/site/reference,/site/tools"
+    assert identity(one, stable) == identity(two, stable)
+    assert identity(one, stable) != identity(one, "/different/reference,/site/tools")
+    # A source-only mount in scratch remains a distinct literal context.
+    assert identity(one, stable + "," + one) != identity(two, stable + "," + two)
+    assert versions._scratch_binds(stable + ",", one, "/gg_tmp") is None
+
+
+def test_version_collection_coordination_is_bounded_and_context_scoped(tmp_path):
+    import version_report_identity as versions
+    paths = [tmp_path / (f"{i:064x}" + ".log") for i in range(1000)]
+    locks = {versions.collection_lock_path(path) for path in paths}
+    assert 1 < len(locks) <= 64
+    assert all(path.parent == tmp_path for path in locks)
+    assert versions.collection_lock_path(paths[0]) != versions.cache_lock_path(paths[0])
+    assert not list(tmp_path.iterdir())  # Computing lock names creates no per-context files.
+
+
+def test_cache_copy_uses_exact_verified_bytes_and_distinguishes_miss(tmp_path, monkeypatch):
+    import version_report_identity as versions
+    path = tmp_path / "cache.log"
+    payload = b"verified inventory\n"
+    path.write_bytes(payload)
+    path.with_suffix(".json").write_text(json.dumps({"schema_version": 1, "key": "fixture",
+                                                   "sha256": hashlib.sha256(payload).hexdigest()}))
+    read = versions.read_bytes
+    calls = []
+    def replace_after_read(source):
+        raw = read(source)
+        if source == path:
+            calls.append(source)
+            path.write_bytes(b"replaced after read\n")
+        return raw
+    monkeypatch.setattr(versions, "read_bytes", replace_after_read)
+    target = tmp_path / "out.log"
+    assert versions.copy_verified_cache(path, "fixture", target)
+    assert target.read_bytes() == payload and len(calls) == 1
+    command = [sys.executable, str(SUPPORT / "version_report_identity.py"), "copy-cache",
+               "--cache-file", str(path), "--key", "fixture", "--destination", str(target), "--if-ready"]
+    assert subprocess.run(command, capture_output=True).returncode == 3
+    assert target.read_bytes() == payload
+    path.write_bytes(payload)
+    target.unlink()
+    target.mkdir()
+    assert subprocess.run(command, capture_output=True).returncode not in (0, 3)
+
+
+def test_cache_copy_does_not_accept_symlink_or_wrong_key(tmp_path):
+    import version_report_identity as versions
+    path = tmp_path / "cache.log"
+    path.write_bytes(b"versions\n")
+    metadata = path.with_suffix(".json")
+    metadata.write_text(json.dumps({"schema_version": 1, "key": "expected",
+                                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}))
+    assert versions.verified_cache_bytes(path, "wrong") is None
+    saved = tmp_path / "metadata.json"
+    metadata.rename(saved)
+    metadata.symlink_to(saved)
+    assert versions.verified_cache_bytes(path, "expected") is None
+
+
 def test_interrupted_retirement_flushes_completed_directory_and_resumes(tmp_path, monkeypatch):
     root = tmp_path / "versions"
     root.mkdir()

@@ -44,29 +44,8 @@ def tokens(value):
             for item in value.split(",") if item}
 
 
-def phase_conventions(blocks):
-    """Distinguish GFF3 skip-count phases from complementary frame fields."""
-    if not blocks or any(row["phase"] not in {"0", "1", "2"} for row in blocks):
-        return set()
-    first, cumulative = int(blocks[0]["phase"]), 0
-    conventions = {"gff3", "complementary"}
-    for row in blocks:
-        phase = int(row["phase"])
-        if phase != (first - cumulative) % 3:
-            conventions.discard("gff3")
-        if phase != (first + cumulative) % 3:
-            conventions.discard("complementary")
-        cumulative += row["end"] - row["start"]
-    return conventions
-
-
-def protein(sequence, code, *, partial=False):
-    if partial:
-        sequence = sequence[:len(sequence) // 3 * 3]
-    if not sequence or len(sequence) % 3:
-        return None
-    translated = str(Seq(sequence).translate(table=code)).removesuffix("*")
-    return translated if translated and "*" not in translated else None
+from cdskit.cds_features import phase_conventions as phase_conventions
+from cdskit.translate import coding_protein as protein
 
 
 def agrees_with_padding(supplied, genomic):

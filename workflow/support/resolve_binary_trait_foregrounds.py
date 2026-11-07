@@ -58,34 +58,16 @@ def validate_tree(tree):
 
 
 def _foreground_tree_plan(tree):
-    preorder = tuple(tree.find_clades(order="preorder"))
-    parent_by_clade = {
-        child: parent
-        for parent in preorder
-        for child in parent.clades
-    }
-    return parent_by_clade, tuple(tree.find_clades(order="postorder")), preorder
+    return tree
 
 
 def _foreground_components(foreground_species, plan):
-    parent_by_clade, postorder, preorder = plan
-    all_foreground = {}
-    for clade in postorder:
-        if clade.is_terminal():
-            all_foreground[clade] = clade.name in foreground_species
-        else:
-            all_foreground[clade] = bool(clade.clades) and all(all_foreground[child] for child in clade.clades)
-
-    component_leaves = []
-    for clade in preorder:
-        parent = parent_by_clade.get(clade)
-        if all_foreground[clade] and (parent is None or not all_foreground[parent]):
-            component_leaves.append(tuple(sorted(terminal.name for terminal in clade.get_terminals())))
-    return sorted(component_leaves)
+    from nwkit.tree_features import foreground_components
+    return foreground_components(plan, foreground_species)
 
 
 def foreground_components(tree, foreground_species):
-    return _foreground_components(foreground_species, _foreground_tree_plan(tree))
+    return _foreground_components(foreground_species, tree)
 
 
 def resolve_binary_foregrounds(header, rows, tree):

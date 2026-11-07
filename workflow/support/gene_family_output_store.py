@@ -14,6 +14,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -30,7 +31,7 @@ import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import BinaryIO, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -76,7 +77,9 @@ STORE_METADATA_SCHEMA_VERSION = 1
 STATE_LOCK_STRIPES = 16
 MAX_REFERENCED_SHARDS_PER_SUBDIR = 8
 MAX_OPEN_COMPACTION_SOURCES = 32
-MAX_SNAPSHOT_ZIP_READERS = 32
+MAX_SNAPSHOT_ZIP_READERS = 64
+MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES = 32 * 1024 * 1024
+MAX_SNAPSHOT_ZIP_MEMBERS = 262144
 TOMBSTONE_LOG_COMPACT_BYTES = 4 * 1024 * 1024
 DEFAULT_LARGE_ZIP_WARNING_BYTES = 20 * 1024 * 1024 * 1024
 MATERIALIZATION_RECEIPT_NAME = ".gg_materialized.jsonl"
@@ -234,17 +237,10 @@ def _signature_matches(path: Path, signature: Sequence[int]) -> bool:
         return False
 
 
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
 
 
 def _validate_archive_root(archive_root: Path) -> None:
@@ -337,9 +333,29 @@ def _catalog_conflicting_final_zip_paths(
     return conflicts
 
 
-def _final_archive_path(root: Path | str, subdir: str) -> Path:
+@functools.lru_cache(maxsize=4096)
+def _indexed_zip_path(root: Path, payload_root: Path, subdir: str, zip_name: str, zip_location: str) -> Path:
+    # This cache contains lexical validation and immutable Path objects only.
+    # Filesystem identity, member content and per-record metadata stay live.
+    relative_zip = Path(zip_name)
+    unsafe = relative_zip.is_absolute() or ".." in relative_zip.parts
+    if zip_location == "active":
+        unsafe = unsafe or len(relative_zip.parts) != 2 or relative_zip.parent.name != subdir
+        zip_path = payload_root / relative_zip
+    elif zip_location == "final":
+        unsafe = unsafe or len(relative_zip.parts) != 1 or relative_zip.name != f"{subdir}.zip"
+        zip_path = root / relative_zip
+    else:
+        unsafe = True
+        zip_path = root / relative_zip
+    if unsafe or relative_zip.suffix.lower() != ".zip":
+        raise ArchiveStoreError(f"Archive index contains an unsafe ZIP path: {relative_zip}")
+    return zip_path
+
+
+def _final_archive_path(root: Path | str, subdir: str, *, resolve=None) -> Path:
     _safe_logical_path(subdir, "__archive__")
-    return Path(root).resolve() / f"{subdir}.zip"
+    return (Path.resolve if resolve is None else resolve)(Path(root)) / f"{subdir}.zip"
 
 
 def _family_index_bucket(family_id: Optional[str]) -> str:
@@ -430,14 +446,25 @@ def lock_available_family_ids(
     *,
     nonblocking: bool,
 ) -> Iterator[Set[str]]:
+    identifiers = sorted(set(family_ids))
     acquired_ids: Set[str] = set()
-    with contextlib.ExitStack() as stack:
-        for family_id in sorted(set(family_ids)):
-            if stack.enter_context(family_bucket_lock(
-                archive_root, family_id, exclusive=True, nonblocking=nonblocking,
-            )):
-                acquired_ids.add(family_id)
+    if not identifiers:
         yield acquired_ids
+        return
+    _validate_archive_root(archive_root)
+    # The shared gate spans the entire batch, as each nested gate did before.
+    # Keep every per-family exclusive lock while publishing only one gate owner.
+    with _bucket_lock(family_gate_path(archive_root), exclusive=False, nonblocking=nonblocking) as gate:
+        if not gate:
+            yield acquired_ids
+            return
+        with contextlib.ExitStack() as stack:
+            for family_id in identifiers:
+                if stack.enter_context(_bucket_lock(
+                    family_lock_path(archive_root, family_id), exclusive=True, nonblocking=nonblocking,
+                )):
+                    acquired_ids.add(family_id)
+            yield acquired_ids
 
 
 @contextlib.contextmanager
@@ -860,7 +887,7 @@ class GeneFamilyOutputStore:
         self._cache_epoch: Optional[str] = None
         self._index_update_active = False
         self._read_snapshot_epoch: Optional[str] = None
-        self._snapshot_zip_readers: OrderedDict[Path, tuple[zipfile.ZipFile, int]] = OrderedDict()
+        self._snapshot_zip_readers: OrderedDict[Path, tuple[zipfile.ZipFile, int, int, int]] = OrderedDict()
         self._cache_lock = threading.RLock()
         self._zip_reader_cache: weakref.WeakKeyDictionary[
             threading.Thread,
@@ -1149,20 +1176,8 @@ class GeneFamilyOutputStore:
         except ValueError as exc:
             raise ArchiveStoreError(f"Archive index contains an invalid logical path: {logical_path!r}") from exc
         _safe_logical_path(subdir, name)
-        relative_zip = Path(str(record["zip_path"]))
-        zip_location = str(record.get("zip_location", "active"))
-        unsafe = relative_zip.is_absolute() or ".." in relative_zip.parts
-        if zip_location == "active":
-            unsafe = unsafe or len(relative_zip.parts) != 2 or relative_zip.parent.name != subdir
-            zip_path = self.payload_root / relative_zip
-        elif zip_location == "final":
-            unsafe = unsafe or len(relative_zip.parts) != 1 or relative_zip.name != f"{subdir}.zip"
-            zip_path = self.root / relative_zip
-        else:
-            unsafe = True
-            zip_path = self.root / relative_zip
-        if unsafe or relative_zip.suffix.lower() != ".zip":
-            raise ArchiveStoreError(f"Archive index contains an unsafe ZIP path: {relative_zip}")
+        zip_path = _indexed_zip_path(self.root, self.payload_root, subdir,
+                                     str(record["zip_path"]), str(record.get("zip_location", "active")))
         artifact = Artifact(
             logical_path=logical_path,
             subdir=subdir,
@@ -1202,7 +1217,7 @@ class GeneFamilyOutputStore:
                 yield
             finally:
                 self._read_snapshot_epoch = None
-                for archive, _users in self._snapshot_zip_readers.values():
+                for archive, _users, _directory_bytes, _members in self._snapshot_zip_readers.values():
                     archive.close()
                 self._snapshot_zip_readers.clear()
             self._assert_no_pending_index_update()
@@ -1214,36 +1229,64 @@ class GeneFamilyOutputStore:
         return (contextlib.nullcontext() if self._read_snapshot_epoch is not None
                 else producer_read_lock(self.archive_root))
 
+    def _close_snapshot_zip_readers(self):
+        """Start a fresh content-read phase after every prior reader joined."""
+        with self._cache_lock:
+            if any(entry[1] for entry in self._snapshot_zip_readers.values()):
+                raise ArchiveStoreError('Snapshot ZIP readers are still active')
+            for archive, _users, _bytes, _members in self._snapshot_zip_readers.values():
+                archive.close()
+            self._snapshot_zip_readers.clear()
+
     @contextlib.contextmanager
     def _snapshot_zip_reader(self, path: Path):
         # Share central directories across joined readers. ZipFile gives each
         # open member an independent position behind its own shared-file lock.
-        # Per-thread pools thrashed when a family had more than eight subdirs.
+        # Retain enough small indexes for wide family layouts without retaining
+        # unbounded large central directories. Active readers are never evicted.
         cached = False
         with self._cache_lock:
             readers = self._snapshot_zip_readers
             entry = readers.pop(path, None)
             if entry is None:
-                if len(readers) >= MAX_SNAPSHOT_ZIP_READERS:
-                    for old_path, (old_archive, users) in list(readers.items()):
-                        if users == 0:
-                            readers.pop(old_path)
-                            old_archive.close()
-                            break
                 archive = zipfile.ZipFile(path, "r")
-                if len(readers) < MAX_SNAPSHOT_ZIP_READERS:
-                    readers[path] = archive, 1
-                    cached = True
+                try:
+                    directory_bytes = os.fstat(archive.fp.fileno()).st_size - archive.start_dir
+                    members = len(archive.filelist)
+                    if directory_bytes < 0:
+                        raise ArchiveStoreError(f"ZIP changed while opening its directory: {path}")
+                    used_bytes = sum(entry[2] for entry in readers.values())
+                    used_members = sum(entry[3] for entry in readers.values())
+                    if (directory_bytes <= MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                            and members <= MAX_SNAPSHOT_ZIP_MEMBERS):
+                        while (len(readers) >= MAX_SNAPSHOT_ZIP_READERS
+                               or used_bytes + directory_bytes > MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                               or used_members + members > MAX_SNAPSHOT_ZIP_MEMBERS):
+                            idle = next((key for key, entry in readers.items() if entry[1] == 0), None)
+                            if idle is None:
+                                break
+                            old_archive, _users, old_bytes, old_members = readers.pop(idle)
+                            used_bytes -= old_bytes
+                            used_members -= old_members
+                            old_archive.close()
+                        if (len(readers) < MAX_SNAPSHOT_ZIP_READERS
+                                and used_bytes + directory_bytes <= MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES
+                                and used_members + members <= MAX_SNAPSHOT_ZIP_MEMBERS):
+                            readers[path] = archive, 1, directory_bytes, members
+                            cached = True
+                except BaseException:
+                    archive.close()
+                    raise
             else:
-                archive, users = entry
-                readers[path] = archive, users + 1
+                archive, users, directory_bytes, members = entry
+                readers[path] = archive, users + 1, directory_bytes, members
                 cached = True
         try:
             yield archive
         finally:
             if cached:
                 with self._cache_lock:
-                    readers[path] = archive, readers[path][1] - 1
+                    readers[path] = archive, readers[path][1] - 1, directory_bytes, members
             else:
                 archive.close()
 
@@ -1548,6 +1591,19 @@ class GeneFamilyOutputStore:
         *,
         changed_paths: Optional[Set[str]] = None,
     ) -> None:
+        # A batch rewrites many logical records that share immutable ZIPs.
+        # Resolve each physical mapping once and revalidate every mapping before
+        # the surrounding index transaction can commit or delete live sources.
+        with self._index_record_batch() as record:
+            self._merge_index_subdirs_records(updated_subdirs, changed_paths=changed_paths, record=record)
+
+    def _merge_index_subdirs_records(
+        self,
+        updated_subdirs: Dict[str, Dict[str, Artifact]],
+        *,
+        changed_paths: Optional[Set[str]],
+        record: Callable[[Artifact], dict],
+    ) -> None:
         # Queue commits know the exact additions. Preserve unrelated family
         # buckets instead of rewriting every bucket for a changed subdirectory.
         # Full replacements (compaction/deletion) keep the original path.
@@ -1578,7 +1634,7 @@ class GeneFamilyOutputStore:
                     "schema_version": INDEX_SCHEMA_VERSION,
                     "subdir": subdir,
                     "artifacts": {
-                        logical_path: self._index_record(artifact)
+                        logical_path: record(artifact)
                         for logical_path, artifact in sorted(artifacts.items())
                     },
                 }
@@ -1623,7 +1679,7 @@ class GeneFamilyOutputStore:
                     default=0,
                 ),
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(bucket_artifacts.items())
                 },
             }
@@ -2232,6 +2288,17 @@ class GeneFamilyOutputStore:
                 with archive.open(artifact.member_name, "r") as handle:
                     yield handle
 
+    @staticmethod
+    def _restore_materialized_mtime(path: Path, mtime_ns: Optional[int]) -> None:
+        if mtime_ns is None:
+            return
+        try:
+            os.utime(path, ns=(mtime_ns, mtime_ns))
+        except (OSError, OverflowError) as exc:
+            raise ArchiveStoreError(f"Cannot restore archive mtime_ns={mtime_ns}: {path}") from exc
+        if path.stat().st_mtime_ns != mtime_ns:
+            raise ArchiveStoreError(f"Filesystem did not preserve archive mtime_ns={mtime_ns}: {path}")
+
     def materialize(
         self,
         subdir: str,
@@ -2271,8 +2338,7 @@ class GeneFamilyOutputStore:
                     os.fsync(target.fileno())
                 # Keep publication inside the read lock: a maintenance writer may
                 # otherwise commit newer content before this old snapshot replaces it.
-                if artifact.mtime_ns is not None:
-                    os.utime(temporary, ns=(artifact.mtime_ns, artifact.mtime_ns))
+                self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                 os.replace(temporary, destination)
                 _fsync_directory(destination.parent)
         finally:
@@ -2378,11 +2444,7 @@ class GeneFamilyOutputStore:
                         shutil.copyfileobj(source, target, length=1024 * 1024)
                         target.flush()
                         os.fsync(target.fileno())
-                    if artifact.mtime_ns is not None:
-                        os.utime(
-                            temporary,
-                            ns=(artifact.mtime_ns, artifact.mtime_ns),
-                        )
+                    self._restore_materialized_mtime(temporary, artifact.mtime_ns)
                     os.replace(temporary, destination)
                     touched_directories.add(destination.parent)
                 finally:
@@ -2501,21 +2563,48 @@ class GeneFamilyOutputStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _index_record(self, artifact: Artifact) -> dict:
+    @contextlib.contextmanager
+    def _index_record_batch(self):
+        resolved: Dict[Path, Path] = {}
+        mappings = {}
+
+        def resolve(path):
+            path = Path(path)
+            if path not in resolved:
+                resolved[path] = path.resolve()
+            return resolved[path]
+
+        def record(artifact):
+            key = (artifact.zip_path, artifact.subdir)
+            value = self._index_record(artifact, _path_record=mappings.get(key), _resolve=resolve)
+            mappings[key] = (value["zip_path"], value["zip_location"])
+            return value
+
+        yield record
+        for path, expected in resolved.items():
+            if path.resolve() != expected:
+                raise ArchiveStoreError(f"Archive index path changed during publication: {path}")
+
+    def _index_record(self, artifact: Artifact, *, _path_record=None, _resolve=None) -> dict:
         if artifact.zip_path is None or artifact.member_name is None:
             raise ArchiveStoreError(f"Cannot index a live artifact as an archive member: {artifact.logical_path}")
-        final_path = _final_archive_path(self.root, artifact.subdir)
-        if artifact.zip_path.resolve() == final_path.resolve():
-            relative_zip = Path(final_path.name)
-            zip_location = "final"
+        if _path_record is None:
+            resolve = Path.resolve if _resolve is None else _resolve
+            final_path = _final_archive_path(self.root, artifact.subdir, resolve=resolve)
+            if resolve(artifact.zip_path) == resolve(final_path):
+                relative_zip = Path(final_path.name)
+                zip_location = "final"
+            else:
+                try:
+                    relative_zip = artifact.zip_path.relative_to(self.payload_root)
+                except ValueError as exc:
+                    raise ArchiveStoreError(f"Archive member is outside the payload root: {artifact.zip_path}") from exc
+                zip_location = "active"
+            zip_name = relative_zip.as_posix()
         else:
-            try:
-                relative_zip = artifact.zip_path.relative_to(self.payload_root)
-            except ValueError as exc:
-                raise ArchiveStoreError(f"Archive member is outside the payload root: {artifact.zip_path}") from exc
-            zip_location = "active"
+            zip_name, zip_location = _path_record
         return {
-            "zip_path": relative_zip.as_posix(),
+            "zip_path": zip_name,
             "zip_location": zip_location,
             "member_name": artifact.member_name,
             "generation": artifact.generation,
@@ -2538,6 +2627,15 @@ class GeneFamilyOutputStore:
     def _write_index_uncommitted(
         self,
         artifacts: Optional[Dict[str, Artifact]] = None,
+    ) -> None:
+        with self._index_record_batch() as record:
+            self._write_index_records(artifacts, record=record)
+
+    def _write_index_records(
+        self,
+        artifacts: Optional[Dict[str, Artifact]],
+        *,
+        record: Callable[[Artifact], dict],
     ) -> None:
         artifacts = self._archived if artifacts is None else artifacts
         self.archive_root.mkdir(parents=True, exist_ok=True)
@@ -2563,7 +2661,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "generation": bucket_generation,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(bucket_artifacts.items())
                 },
             }
@@ -2598,7 +2696,7 @@ class GeneFamilyOutputStore:
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "subdir": subdir,
                 "artifacts": {
-                    logical_path: self._index_record(artifact)
+                    logical_path: record(artifact)
                     for logical_path, artifact in sorted(subdir_artifacts.items())
                 },
             }
@@ -2661,25 +2759,49 @@ class GeneFamilyOutputStore:
                 self._reset_cache()
 
     def _append_tombstone(self, logical_path: str, operation: str) -> None:
-        subdir, name = logical_path.split("/", 1)
-        _safe_logical_path(subdir, name)
-        if operation not in {"delete", "undelete"}:
-            raise ValueError(operation)
+        self._append_tombstones([(logical_path, operation)])
+
+    def _append_tombstones(self, changes: Sequence[Tuple[str, str]]) -> None:
+        if not changes:
+            return
+        for logical_path, operation in changes:
+            subdir, name = logical_path.split("/", 1)
+            _safe_logical_path(subdir, name)
+            if operation not in {"delete", "undelete"}:
+                raise ValueError(operation)
         self.archive_root.mkdir(parents=True, exist_ok=True)
         generation = self._next_generation()
-        record = {
-            "schema_version": ARCHIVE_SCHEMA_VERSION,
-            "generation": generation,
-            "operation": operation,
-            "logical_path": logical_path,
-        }
         tombstone_path = self.archive_root / TOMBSTONE_FILE
         if tombstone_path.is_symlink():
             raise ArchiveStoreError(f"Symlinked tombstone logs are not supported: {tombstone_path}")
-        with tombstone_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        def append_records(handle):
+            for logical_path, operation in changes:
+                record = {"schema_version": ARCHIVE_SCHEMA_VERSION, "generation": generation,
+                          "operation": operation, "logical_path": logical_path}
+                handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+        if len(changes) == 1:
+            with tombstone_path.open("a", encoding="utf-8") as handle:
+                append_records(handle)
+        else:
+            # A large append can be interrupted between JSON records. Publish
+            # the complete batch atomically, preserving the previous history.
+            temporary = tombstone_path.with_name(f".{tombstone_path.name}.partial.{os.getpid()}.{uuid.uuid4().hex}")
+            try:
+                with temporary.open("x", encoding="utf-8") as handle:
+                    if tombstone_path.exists():
+                        with tombstone_path.open("r", encoding="utf-8") as previous:
+                            shutil.copyfileobj(previous, handle)
+                        os.fchmod(handle.fileno(), stat.S_IMODE(tombstone_path.stat().st_mode))
+                    else:
+                        os.fchmod(handle.fileno(), 0o600)
+                    append_records(handle)
+                os.replace(temporary, tombstone_path)
+                _fsync_directory(self.archive_root)
+            finally:
+                temporary.unlink(missing_ok=True)
         if tombstone_path.stat().st_size > TOMBSTONE_LOG_COMPACT_BYTES:
             self._reset_cache()
             self._load_tombstones()
@@ -2750,7 +2872,7 @@ class GeneFamilyOutputStore:
     def _family_id_for_logical_path(self, logical_path: str) -> Optional[str]:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             self._refresh_if_index_changed()
             artifact = self._load_subdir_artifacts(subdir).get(logical_path)
             if artifact is not None and artifact.family_id is not None:
@@ -2822,6 +2944,59 @@ class GeneFamilyOutputStore:
                         for equivalent_live_path in equivalent_live_paths:
                             if equivalent_live_path.is_file():
                                 equivalent_live_path.unlink()
+
+    def delete_many(
+        self,
+        logical_paths: Sequence[str],
+        *,
+        family_ids: Optional[Mapping[str, str]] = None,
+        remove_live: bool = True,
+    ) -> None:
+        """Retire one explicit batch with one generation and durable append.
+
+        The family gate excludes all producers in this store, while unrelated
+        stores remain independent. Metadata and family ownership are validated
+        before any tombstone or payload is changed. Repeating a partially
+        completed deletion is supported without restoring deleted members.
+        """
+        if isinstance(logical_paths, (str, bytes)):
+            raise ValueError("A deletion batch requires a sequence of logical paths")
+        paths = list(logical_paths)
+        if any(not isinstance(path, str) for path in paths):
+            raise ValueError("Deletion paths must be strings")
+        if family_ids is not None and not isinstance(family_ids, Mapping):
+            raise ValueError("Deletion family IDs must be a mapping")
+        if len(paths) != len(set(paths)):
+            raise ValueError("A deletion batch contains duplicate logical paths")
+        if family_ids is not None and set(family_ids) - set(paths):
+            raise ValueError("Deletion family IDs contain paths outside the batch")
+        for path in paths:
+            subdir, name = path.split("/", 1)
+            _safe_logical_path(subdir, name)
+        if not paths:
+            return
+        # Finish any legacy index migration before taking the exclusive gate.
+        self._ensure_state_index()
+        with all_family_bucket_locks(self.archive_root):
+            live_paths: Set[Path] = set()
+            with self.read_snapshot():
+                for path in paths:
+                    family = None if family_ids is None else family_ids.get(path)
+                    self._managed_family_id(path, family, "batch deletion")
+                    for equivalent in _equivalent_output_logical_paths(*path.split("/", 1)):
+                        live = self.root / equivalent
+                        if live.is_symlink() or live.parent.is_symlink():
+                            raise ArchiveStoreError(f"Symlinked deletion source is not supported: {live}")
+                        live_paths.add(live)
+            with producer_quiescence_lock(self.archive_root) as readers_idle:
+                if not readers_idle:
+                    raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
+                with archive_lock(self.archive_root):
+                    self._append_tombstones([(path, "delete") for path in paths])
+                    if remove_live:
+                        for live in sorted(live_paths):
+                            if live.is_file():
+                                live.unlink()
 
     def undelete(
         self,
@@ -4267,9 +4442,7 @@ def archive_completed_outputs(
                 final_subdir_artifacts = {artifact.logical_path: artifact for artifact in artifacts}
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(artifacts)
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -4503,11 +4676,7 @@ def archive_completed_outputs(
                 # index commit finishes.
                 store._merge_index_subdirs({subdir: final_subdir_artifacts})
                 removed_total += _remove_archived_sources(root, subdir_signatures)
-                referenced_paths = {
-                    artifact.zip_path.resolve()
-                    for artifact in final_subdir_artifacts.values()
-                    if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(final_subdir_artifacts.values())
                 try:
                     _remove_unreferenced_subdir_archives(
                         root,
@@ -5940,9 +6109,7 @@ def compact_archives(
                         compacted_all.extend(compacted)
                 updated_subdir = {artifact.logical_path: artifact for artifact in compacted_all}
                 store._merge_index_subdirs({subdir: updated_subdir})
-                referenced_paths = {
-                    artifact.zip_path.resolve() for artifact in updated_subdir.values() if artifact.zip_path is not None
-                }
+                referenced_paths = _referenced_zip_paths(updated_subdir.values())
                 _remove_unreferenced_subdir_archives(
                     root,
                     payload_root,
@@ -5950,6 +6117,13 @@ def compact_archives(
                     referenced_paths,
                 )
             return [path for path in created if path.is_file()]
+
+
+def _referenced_zip_paths(artifacts: Iterable[Artifact]) -> Set[Path]:
+    # A finalized ZIP can hold thousands of logical members. Deduplicate lexical
+    # paths before filesystem resolution; resolve fresh on every invocation.
+    paths = {artifact.zip_path for artifact in artifacts if artifact.zip_path is not None}
+    return {path.resolve() for path in paths}
 
 
 def _write_archive_status(
@@ -5981,7 +6155,7 @@ def _write_archive_status(
                 else 0
             )
             zip_paths = sorted(
-                {artifact.zip_path.resolve() for artifact in artifacts.values() if artifact.zip_path is not None}
+                _referenced_zip_paths(artifacts.values())
             )
             final_path = _final_archive_path(root, subdir).resolve()
             if zip_paths and set(zip_paths) == {final_path}:
@@ -6124,7 +6298,7 @@ def _finalize_subdirs_locked(
                 verify_bytes_total=0,
                 current_zip_bytes=(final_path.stat().st_size if final_path.is_file() else 0),
             )
-        referenced_before = {artifact.zip_path.resolve() for artifact in artifacts if artifact.zip_path is not None}
+        referenced_before = _referenced_zip_paths(artifacts)
         if referenced_before == {final_path.resolve()}:
             _remove_unreferenced_subdir_archives(
                 root,
@@ -6214,7 +6388,7 @@ def _finalize_subdirs_locked(
         )
         updated = {artifact.logical_path: artifact for artifact in finalized}
         store._merge_index_subdirs({subdir: updated})
-        referenced = {artifact.zip_path.resolve() for artifact in updated.values() if artifact.zip_path is not None}
+        referenced = _referenced_zip_paths(updated.values())
         _remove_unreferenced_subdir_archives(
             root,
             payload_root,
@@ -6544,7 +6718,7 @@ def repair_archive_index(
                         repair_bytes_verified=verified_bytes,
                         current_zip=zip_path.name,
                     )
-            referenced = {artifact.zip_path.resolve() for artifact in rebuilt.values() if artifact.zip_path is not None}
+            referenced = _referenced_zip_paths(rebuilt.values())
             referenced_modes = {mode_by_path[path] for path in referenced if path in mode_by_path}
             if len(referenced_modes) > 1:
                 raise ArchiveStoreError(
@@ -6656,11 +6830,7 @@ def purge_archives(
                     for artifact in compacted:
                         remaining_subdir[artifact.logical_path] = artifact
                 store._merge_index_subdirs({subdir: remaining_subdir})
-                referenced = {
-                    artifact.zip_path.resolve()
-                    for artifact in remaining_subdir.values()
-                    if artifact.zip_path is not None
-                }
+                referenced = _referenced_zip_paths(remaining_subdir.values())
                 physical_subdir_paths = list((payload_root / subdir).glob("*.zip"))
                 final_path = _final_archive_path(root, subdir)
                 if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):
@@ -6806,6 +6976,44 @@ def cleanup_materialization_receipt(
     return removed
 
 
+def _tmp_directory_usage(candidate: Path) -> Optional[Tuple[int, int, int, bytes]]:
+    """Read each non-symlink entry once; retain a fence for a later idle recheck."""
+    try:
+        root_info = candidate.lstat()
+        if not stat.S_ISDIR(root_info.st_mode):
+            return None
+        newest_mtime_ns = root_info.st_mtime_ns
+        total_bytes = 0
+        total_files = 0
+        signature = hashlib.sha256()
+        pending = [(candidate, "", root_info)]
+        while pending:
+            directory, relative, info = pending.pop()
+            signature.update(repr((relative, info.st_dev, info.st_ino, info.st_mode,
+                                   info.st_uid, info.st_size, info.st_mtime_ns,
+                                   info.st_ctime_ns)).encode("utf-8"))
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                name = relative + "/" + entry.name
+                newest_mtime_ns = max(newest_mtime_ns, info.st_mtime_ns)
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append((Path(entry.path), name, info))
+                else:
+                    signature.update(repr((name, info.st_dev, info.st_ino, info.st_mode,
+                                           info.st_uid, info.st_size, info.st_mtime_ns,
+                                           info.st_ctime_ns)).encode("utf-8"))
+                    if stat.S_ISREG(info.st_mode):
+                        total_files += 1
+                        total_bytes += int(info.st_size)
+        return newest_mtime_ns, total_bytes, total_files, signature.digest()
+    except FileNotFoundError:
+        return None
+
+
 def cleanup_stale_tmp(
     root: Path,
     older_than_days: float,
@@ -6829,43 +7037,31 @@ def cleanup_stale_tmp(
     cutoff_ns = time.time_ns() - int(older_than_days * 86400 * 1_000_000_000) if older_than_days > 0 else None
     removed: List[Path] = []
     archive_root = _archive_state_root(root)
-    task_dirs = [
-        candidate
-        for candidate in sorted(tmp_root.iterdir())
-        if candidate.is_dir() and not candidate.is_symlink() and re.fullmatch(r"[0-9]+_.+", candidate.name) is not None
-    ]
-    family_id_by_candidate = {candidate: candidate.name.split("_", 1)[1] for candidate in task_dirs}
-    with lock_available_family_ids(
-        archive_root,
-        family_id_by_candidate.values(),
-        nonblocking=nonblocking,
-    ) as inactive_family_ids:
-        candidates: List[Tuple[Path, int, int, int]] = []
+    # Each array task used to traverse and lock the whole temporary workspace.
+    # A nonblocking caller now leaves that work to the cleaner already running.
+    with _bucket_lock(archive_root / "tmp-cleanup.lock", exclusive=True,
+                      nonblocking=nonblocking) as cleaning:
+        if not cleaning:
+            return []
+        task_dirs = [
+            candidate
+            for candidate in sorted(tmp_root.iterdir())
+            if candidate.is_dir() and not candidate.is_symlink()
+            and re.fullmatch(r"[0-9]+_.+", candidate.name) is not None
+        ]
+        candidates = []
         for candidate in task_dirs:
-            if family_id_by_candidate[candidate] not in inactive_family_ids:
-                continue
-            try:
-                newest_mtime_ns = candidate.stat().st_mtime_ns
-                total_bytes = 0
-                total_files = 0
-                for descendant in candidate.rglob("*"):
-                    if descendant.is_symlink():
-                        continue
-                    descendant_stat = descendant.stat()
-                    newest_mtime_ns = max(newest_mtime_ns, descendant_stat.st_mtime_ns)
-                    if descendant.is_file():
-                        total_files += 1
-                        total_bytes += int(descendant_stat.st_size)
-            except FileNotFoundError:
-                continue
-            candidates.append((candidate, newest_mtime_ns, total_bytes, total_files))
+            family_id = candidate.name.split("_", 1)[1]
+            # Do not hold every idle family while measuring unrelated trees.
+            with family_bucket_lock(archive_root, family_id, exclusive=True,
+                                    nonblocking=nonblocking) as idle:
+                if idle and (usage := _tmp_directory_usage(candidate)) is not None:
+                    candidates.append((candidate, family_id, usage))
         keep_within_limits: Set[Path] = set()
         kept_bytes = 0
         kept_files = 0
-        for candidate, _, candidate_bytes, candidate_files in sorted(
-            candidates,
-            key=lambda item: (-item[1], item[0].name),
-        ):
+        for candidate, _, usage in sorted(candidates, key=lambda item: (-item[2][0], item[0].name)):
+            _, candidate_bytes, candidate_files, _ = usage
             if max_directories > 0 and len(keep_within_limits) >= max_directories:
                 continue
             if max_bytes > 0 and kept_bytes + candidate_bytes > max_bytes:
@@ -6875,28 +7071,29 @@ def cleanup_stale_tmp(
             keep_within_limits.add(candidate)
             kept_bytes += candidate_bytes
             kept_files += candidate_files
-        for candidate, newest_mtime_ns, _, _ in candidates:
-            expired = cutoff_ns is not None and newest_mtime_ns < cutoff_ns
+        for candidate, family_id, usage in candidates:
+            expired = cutoff_ns is not None and usage[0] < cutoff_ns
             limited = max_directories > 0 or max_bytes > 0 or max_files > 0
             excess = limited and candidate not in keep_within_limits
             if not expired and not excess:
                 continue
-            receipt_path = candidate / MATERIALIZATION_RECEIPT_NAME
-            if receipt_path.is_file():
-                cleanup_materialization_receipt(
-                    receipt_path,
-                    nonblocking=False,
-                    _family_locked=True,
-                )
-            shutil.rmtree(candidate)
-            removed.append(candidate)
+            with family_bucket_lock(archive_root, family_id, exclusive=True,
+                                    nonblocking=nonblocking) as idle:
+                # A new writer may have used the family after measurement.
+                # Defer that directory, including same-size/timestamp replacements.
+                if not idle or _tmp_directory_usage(candidate) != usage:
+                    continue
+                receipt_path = candidate / MATERIALIZATION_RECEIPT_NAME
+                if receipt_path.is_file():
+                    cleanup_materialization_receipt(receipt_path, nonblocking=False, _family_locked=True)
+                shutil.rmtree(candidate)
+                removed.append(candidate)
         try:
             if tmp_root.is_dir() and not any(tmp_root.iterdir()):
                 tmp_root.rmdir()
         except OSError:
             pass
     return removed
-
 
 def _parse_subdirs(value: Optional[str]) -> Optional[Set[str]]:
     if value is None or not value.strip():
@@ -7467,6 +7664,15 @@ def run_cli(args: argparse.Namespace) -> int:
             remove_live=not args.keep_live,
             family_id=getattr(args, "family_id", None),
         )
+        return 0
+    if args.command == "delete-batch":
+        records = json.loads(args.manifest.read_text(encoding="utf-8"))
+        if (not isinstance(records, list) or any(not isinstance(v, dict)
+                or set(v) != {"path", "family_id"} for v in records)):
+            raise ValueError("A deletion manifest requires path/family_id objects")
+        store.delete_many([v["path"] for v in records],
+                          family_ids={v["path"]: v["family_id"] for v in records},
+                          remove_live=not args.keep_live)
         return 0
     if args.command == "undelete":
         store.undelete(

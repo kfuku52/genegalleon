@@ -382,9 +382,11 @@ jobs:
             SMUDGEPLOT_REPO_SHA=${{ needs.prepare-build.outputs.smudgeplot_repo_sha }}
             KMC_REPO_SHA=${{ needs.prepare-build.outputs.kmc_repo_sha }}
             GENOMESCOPE_REPO_SHA=${{ needs.prepare-build.outputs.genomescope_repo_sha }}
-          cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
-          # Keep intermediate environments out of the shared Actions quota.
-          cache-to: type=gha,mode=min,scope=container-${{ steps.platform.outputs.pair }}
+          cache-from: |
+            type=registry,ref=${{ needs.prepare-build.outputs.image }}:latest
+            type=gha,scope=container-${{ steps.platform.outputs.pair }}
+          # Ship the cache metadata with the image layers already being pushed.
+          cache-to: type=inline
 
       - name: Validate repository-owned runtime contracts
         shell: bash
@@ -402,7 +404,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -w "${GITHUB_WORKSPACE}" \
             "${IMAGE}@${DIGEST}" \
-            python workflow/tests/run_checks.py runtime
+            python workflow/tests/run_checks.py runtime --workers=4 --durations=25 --durations-min=0.5
 
       - name: Export digest
         shell: bash
@@ -541,3 +543,4 @@ jobs:
           image-ref: ${{ needs.prepare-build.outputs.image }}:${{ needs.prepare-build.outputs.immutable_tag }}
           runtime-input: ${{ needs.build-and-push.outputs.runtime_input }}
           security-refresh-epoch: ${{ needs.prepare-build.outputs.security_refresh_epoch }}
+          workers: "4"

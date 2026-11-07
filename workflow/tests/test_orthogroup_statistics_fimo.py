@@ -279,7 +279,7 @@ def test_sequence_stats_validate_untrimmed_and_trimmed_alignments(tmp_path, monk
             return {"num_site": 5, "num_seq": 2, "len_max": 5, "len_min": 3}
         return {"num_site": 3, "num_seq": 2, "len_max": 3, "len_min": 2}
 
-    monkeypatch.setattr(mod.kfog, "get_aln_stats", strict_alignment_stats, raising=False)
+    monkeypatch.setattr(mod, "alignment_length_stats", strict_alignment_stats)
 
     out = mod.collect_sequence_stats(str(untrimmed), str(trimmed))
 

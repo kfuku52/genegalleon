@@ -37,6 +37,80 @@ def run_cli(*args):
     )
 
 
+def test_new_manifest_publication_is_collected_with_family_outputs(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import artifact_provenance as provenance
+    import gene_family_output_store as storage
+
+    root = tmp_path / "orthogroup"
+    family = "OG0000001"
+    old_manifest = root / "artifact_provenance" / f"{family}.generax.json"
+    old_manifest.parent.mkdir(parents=True)
+    old_manifest.write_text('{"historical":true}\n')
+    storage.convert_storage_to_zip(root, "orthogroup", [family], storage.orthogroup_id_from_name)
+    inventory = storage.family_inventory_path(root, family)
+    inventory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("GG_FAMILY_OUTPUT_INVENTORY", str(inventory))
+    statistic = root / "stat_tree" / f"{family}_stat.tree.tsv"
+    statistic.parent.mkdir()
+    statistic.write_bytes(b"synthetic\t1\n")
+    (inventory / "worker.paths").write_bytes(os.fsencode(statistic.relative_to(root)) + b"\0")
+    manifest = root / "artifact_provenance" / f"{family}.reconciliation.json"
+    payload = {"family_id": family, "step": "reconciliation", "outputs": []}
+    provenance.write_manifest_atomic(manifest, payload)
+    expected = manifest.read_bytes()
+    store = storage.GeneFamilyOutputStore(root)
+    store.mark_family_state(family, "complete", "test-run")
+    storage.enqueue_family_archive(root, "orthogroup", family, "test-run")
+    storage.drain_archive_queue(root, "orthogroup", storage.orthogroup_id_from_name)
+    # Finalization must keep its strict refusal of uncollected live overrides.
+    storage.finalize_archives(root, "orthogroup", [family])
+    assert not manifest.exists()
+    store = storage.GeneFamilyOutputStore(root)
+    with store.open_binary("artifact_provenance", manifest.name) as handle:
+        assert handle.read() == expected
+    with store.open_binary("artifact_provenance", old_manifest.name) as handle:
+        assert handle.read() == b'{"historical":true}\n'
+
+
+def test_manifest_inventory_failure_preserves_previous_publication(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import artifact_provenance as provenance
+
+    manifest = tmp_path / "orthogroup" / "artifact_provenance" / "OG0000001.reconciliation.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b'{"previous":true}\n')
+
+    def fail_inventory(*args):
+        raise OSError("inventory unavailable")
+
+    monkeypatch.setattr(provenance, "record_family_output_inventory", fail_inventory)
+    with pytest.raises(OSError, match="inventory unavailable"):
+        provenance.write_manifest_atomic(manifest, {"family_id": "OG0000001"})
+    assert manifest.read_bytes() == b'{"previous":true}\n'
+    assert not list(manifest.parent.glob(".*.tmp-*"))
+
+
+@pytest.mark.parametrize("scope", ["disabled", "other-family", "other-root"])
+def test_manifest_publication_does_not_write_an_unrelated_inventory(tmp_path, monkeypatch, scope):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import artifact_provenance as provenance
+    import gene_family_output_store as storage
+
+    root = tmp_path / "orthogroup"
+    manifest = root / "artifact_provenance" / "OG0000001.reconciliation.json"
+    inventory = storage.family_inventory_path(
+        root if scope != "other-root" else tmp_path / "other", "OG0000002" if scope == "other-family" else "OG0000001"
+    )
+    inventory.mkdir(parents=True)
+    monkeypatch.delenv("GG_FAMILY_OUTPUT_INVENTORY", raising=False)
+    if scope != "disabled":
+        monkeypatch.setenv("GG_FAMILY_OUTPUT_INVENTORY", str(inventory))
+    provenance.write_manifest_atomic(manifest, {"family_id": "OG0000001"})
+    assert json.loads(manifest.read_text()) == {"family_id": "OG0000001"}
+    assert not list(inventory.iterdir())
+
+
 @pytest.mark.parametrize('option,label,collection', [
     ('--input-gene-family-store', 'rooted_tree', 'input'),
     ('--input-logical-directory', 'rooted_tree', 'input'),
@@ -899,6 +973,44 @@ def test_audit_infers_raw_query2family_ids_from_query_directory(tmp_path):
     row = frame.loc[frame["status"] == "legacy_untracked", :].iloc[0]
     assert row["family_id"] == "gene.with.dot"
     assert row["step"] == "csubst_scan"
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+@pytest.mark.parametrize("changed", [False, True])
+def test_parallel_audit_preserves_fixed_runtime_source_mapping(tmp_path, monkeypatch, workers, changed):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import artifact_provenance as provenance
+
+    workspace = tmp_path / "workspace"
+    root = workspace / "output" / "orthogroup"
+    runtime = tmp_path / "fixed-source" / "support"
+    runtime.mkdir(parents=True)
+    script = runtime / "context_mapping_fixture.py"
+    script.write_bytes(b"recorded source\n")
+    output = root / "stat_branch" / "OG0001_stat.branch.tsv"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"synthetic output\n")
+    manifest = root / "artifact_provenance" / "OG0001.summary_statistics.json"
+    recorded = run_cli("record", *contract_args(workspace, manifest, script, output))
+    assert recorded.returncode == 0, recorded.stderr
+    payload = json.loads(manifest.read_bytes())
+    payload["inputs"][0]["path"] = "/script/support/context_mapping_fixture.py"
+    manifest.write_text(json.dumps(payload))
+    original_manifest = manifest.read_bytes()
+    if changed:
+        script.write_bytes(b"changed source\n")
+
+    report = tmp_path / "audit.tsv"
+    with provenance.runtime_support_root(runtime):
+        result = provenance.dispatch([
+            "audit", "--logical-root", str(root), "--workspace-root", str(workspace),
+            "--output-tsv", str(report), "--mode", "orthogroup", "--workers", str(workers),
+        ])
+    assert result == int(changed)
+    frame = pd.read_csv(report, sep="\t", keep_default_na=False)
+    assert frame["status"].tolist() == ["changed_input" if changed else "current"]
+    assert frame["reason"].tolist() == ["rooted_tree" if changed else ""]
+    assert manifest.read_bytes() == original_manifest
 
 
 def test_audit_detects_changed_input_from_recorded_contract(tmp_path):

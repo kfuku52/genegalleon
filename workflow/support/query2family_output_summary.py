@@ -5,7 +5,6 @@ import argparse
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy
@@ -15,8 +14,12 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from alignment_statistics import _alignment_stats_columns as _alignment_stats_columns
+from alignment_statistics import _read_alignment_stats_file as _read_alignment_stats_file
+from alignment_statistics import _read_alignment_stats_store_file as _read_alignment_stats_store_file
+from alignment_statistics import _visible_entries as _visible_entries
+from alignment_statistics import append_alignment_stats
 from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore, query_id_extractor
-from parallel_io import bounded_results
 
 
 def build_arg_parser():
@@ -32,21 +35,6 @@ def build_arg_parser():
     return parser
 
 
-def _alignment_stats_columns():
-    return [
-        "No_of_taxa",
-        "Alignment_length",
-        "Total_matrix_cells",
-        "Undetermined_characters",
-        "Missing_percent",
-        "No_variable_sites",
-        "Parsimony_informative_sites",
-        "GC_content",
-    ]
-
-
-def _visible_entries(path):
-    return [entry for entry in os.listdir(path) if not entry.startswith(".")]
 
 
 def _query_ids_from_input_dir(path):
@@ -70,98 +58,9 @@ def _extract_query_id(file_name, query_id_matchers):
     return None
 
 
-def _read_alignment_stats_file(file_path, query_id, alignment_stats_cols):
-    tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    # usecols filters columns but retains their order in the input header.
-    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
-
-
-def _read_alignment_stats_store_file(store, subdir, file_name, query_id, alignment_stats_cols):
-    with store.open_binary(subdir, file_name) as handle:
-        tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
-
-
-def get_alignment_stats(
-    df,
-    dir_alignment_stats,
-    extension,
-    query_id_matchers,
-    ncpu,
-    store=None,
-    logical_subdir=None,
-):
-    if store is None and not os.path.isdir(dir_alignment_stats):
-        print(f"{extension}: {dir_alignment_stats} was not found. Skipping.", flush=True)
-        return df
-    if store is not None and logical_subdir not in store.logical_subdirs():
-        print(f"{extension}: logical subdirectory {logical_subdir} was not found. Skipping.", flush=True)
-        return df
-
-    alignment_stats_cols = _alignment_stats_columns()
-    alignment_stats_new_cols = [f"{col}_{extension}" for col in alignment_stats_cols]
-    for ncol in alignment_stats_new_cols:
-        df[ncol] = numpy.nan
-
-    files = sorted(_visible_entries(dir_alignment_stats)) if store is None else store.file_names(logical_subdir)
-    queued = []
-    seen_query_ids = set()
-    valid_query_ids = set(df.index.astype(str))
-    extract_query_id = query_id_extractor(query_id_matchers)
-    for file in files:
-        file_path = os.path.join(dir_alignment_stats, file)
-        if store is None and not os.path.isfile(file_path):
-            continue
-        query_id = extract_query_id(file)
-        if query_id is None:
-            continue
-        if query_id in seen_query_ids:
-            continue
-        if query_id not in valid_query_ids:
-            continue
-        seen_query_ids.add(query_id)
-        queued.append((file, query_id))
-
-    counter = 0
-    result_rows = []
-    if ncpu > 1 and len(queued) > 1:
-        max_workers = min(ncpu, len(queued))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            if store is None:
-                reader = _read_alignment_stats_file
-                arguments = ((os.path.join(dir_alignment_stats, file), query_id, alignment_stats_cols)
-                             for file, query_id in queued)
-            else:
-                reader = _read_alignment_stats_store_file
-                arguments = ((store, logical_subdir, file, query_id, alignment_stats_cols)
-                             for file, query_id in queued)
-            for query_id, values in bounded_results(executor, reader, arguments, max_workers * 8):
-                result_rows.append((query_id, values))
-                counter += 1
-    else:
-        for file, query_id in queued:
-            if store is None:
-                query_id, values = _read_alignment_stats_file(os.path.join(dir_alignment_stats, file), query_id, alignment_stats_cols)
-            else:
-                query_id, values = _read_alignment_stats_store_file(
-                    store,
-                    logical_subdir,
-                    file,
-                    query_id,
-                    alignment_stats_cols,
-                )
-            result_rows.append((query_id, values))
-            counter += 1
-
-    if result_rows:
-        result_df = pandas.DataFrame.from_records(
-            [values for _, values in result_rows],
-            index=[query_id for query_id, _ in result_rows],
-            columns=alignment_stats_new_cols,
-        )
-        df.loc[result_df.index, alignment_stats_new_cols] = result_df
-
-    print(f"{extension}: {counter} alignment-statistics results were appended.", flush=True)
+def get_alignment_stats(df, dir_alignment_stats, extension, query_id_matchers, ncpu, store=None, logical_subdir=None):
+    df, _found = append_alignment_stats(df, dir_alignment_stats, extension, ncpu, query_id_extractor(query_id_matchers),
+                                  store, logical_subdir)
     return df
 
 

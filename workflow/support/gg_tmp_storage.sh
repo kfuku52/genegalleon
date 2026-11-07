@@ -96,3 +96,12 @@ gg_private_runtime_tmp() {
   done
   printf '%s\n' "${path}"
 }
+
+# Use the same private bytecode directory before and after container startup.
+gg_set_python_pycacheprefix() {
+  [[ -z "${PYTHONPYCACHEPREFIX:-}" ]] || return 0
+  local selected runtime_tmp
+  selected=$(gg_resolve_tmp_root) || return 1
+  runtime_tmp=$(gg_private_runtime_tmp "${selected}") || return 1
+  export PYTHONPYCACHEPREFIX="${runtime_tmp}/pycache"
+}

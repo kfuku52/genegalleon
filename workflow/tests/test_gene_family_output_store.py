@@ -3799,9 +3799,10 @@ def test_empty_genecount_family_cannot_shift_array_identity(tmp_path):
         family_context("orthogroup", genecount=catalog)
 
 
-def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch):
+@pytest.mark.parametrize('archive_count', [12, 40])
+def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch, archive_count):
     paths = []
-    for index in range(12):
+    for index in range(archive_count):
         path = tmp_path / f"payload{index}.zip"
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for member in range(4):
@@ -3831,18 +3832,26 @@ def test_snapshot_shares_zip_indexes_across_joined_readers(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("all_busy", [False, True])
-def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path, monkeypatch, all_busy):
+@pytest.mark.parametrize('bound', ['readers', 'directory_bytes', 'members'])
+def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path, monkeypatch, all_busy, bound):
     import contextlib
 
     import workflow.support.gene_family_output_store as module
 
-    monkeypatch.setattr(module, "MAX_SNAPSHOT_ZIP_READERS", 2)
+    if bound == 'readers':
+        monkeypatch.setattr(module, "MAX_SNAPSHOT_ZIP_READERS", 2)
+    elif bound == 'members':
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_MEMBERS', 2)
     paths = []
     for index in range(3):
         path = tmp_path / f"{index}.zip"
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("payload", str(index))
         paths.append(path)
+    if bound == 'directory_bytes':
+        with zipfile.ZipFile(paths[0]) as archive:
+            size = paths[0].stat().st_size - archive.start_dir
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES', 2 * size)
     store = GeneFamilyOutputStore(tmp_path)
     with store.read_snapshot(), contextlib.ExitStack() as stack:
         first = stack.enter_context(store._snapshot_zip_reader(paths[0]))
@@ -3858,3 +3867,456 @@ def test_snapshot_zip_pool_evicts_only_idle_readers_and_remains_bounded(tmp_path
         assert (third.fp is None) == all_busy
         assert (second_archive.fp is None) != all_busy
     assert first.fp is None and not store._snapshot_zip_readers
+
+
+@pytest.mark.parametrize('bound', ['directory_bytes', 'members'])
+def test_oversized_snapshot_zip_index_does_not_evict_small_indexes(tmp_path, monkeypatch, bound):
+    import workflow.support.gene_family_output_store as module
+    small, large = tmp_path / 'small.zip', tmp_path / 'large.zip'
+    with zipfile.ZipFile(small, 'w') as archive:
+        archive.writestr('payload', b'small')
+    with zipfile.ZipFile(large, 'w') as archive:
+        for index in range(3):
+            archive.writestr(str(index), b'large')
+        archive.comment = b'x' * 4096
+    if bound == 'directory_bytes':
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_DIRECTORY_BYTES', 1024)
+    else:
+        monkeypatch.setattr(module, 'MAX_SNAPSHOT_ZIP_MEMBERS', 2)
+    store = GeneFamilyOutputStore(tmp_path)
+    with store.read_snapshot():
+        with store._snapshot_zip_reader(small) as retained:
+            assert retained.read('payload') == b'small'
+        with store._snapshot_zip_reader(large) as oversized:
+            assert oversized.read('0') == b'large'
+            assert list(store._snapshot_zip_readers) == [small]
+        assert oversized.fp is None
+        with store._snapshot_zip_reader(small) as again:
+            assert again is retained
+    assert retained.fp is None
+
+
+def test_delete_many_keeps_payloads_and_family_states_outside_the_batch(tmp_path):
+    root = tmp_path / 'orthogroup'
+    families = ['OG0000001', 'OG0000002']
+    for family in families:
+        _write_family_outputs(root, family, complete=True)
+    convert_storage_to_zip(root, 'orthogroup', families, orthogroup_id_from_name)
+    store = GeneFamilyOutputStore(root)
+    for family in families:
+        store.mark_family_state(family, "complete")
+    paths = [f'{subdir}/{family}_stat.{suffix}.tsv'
+             for family in families for subdir, suffix in [('stat_tree', 'tree'), ('stat_branch', 'branch')]]
+    identities = {name: orthogroup_id_from_name(Path(name).name) for name in paths}
+    protected = {p: p.read_bytes() for p in root.rglob('*.zip') if p.name not in ['stat_tree.zip', 'stat_branch.zip']
+                 and p.parent.name not in ['stat_tree', 'stat_branch']}
+    # A stopped predecessor may already have deleted part of the sealed plan.
+    store.delete(paths[0], family_id=families[0])
+    store.delete_many(paths, family_ids=identities)
+    purge_archives(root, 'orthogroup', subdirs={'stat_tree', 'stat_branch'})
+    refreshed = GeneFamilyOutputStore(root)
+    assert all(not refreshed.logical_exists(name) for name in paths)
+    assert all(refreshed.family_state(family) == 'complete' for family in families)
+    assert all(p.read_bytes() == value for p, value in protected.items())
+    records = [json.loads(line) for line in (root / '.gg_store/tombstones.jsonl').read_text().splitlines()]
+    latest = {name: max(v['generation'] for v in records if v['logical_path'] == name) for name in paths}
+    assert len(set(latest.values())) == 1
+    assert all(refreshed.logical_exists(f'mafft/{family}_cds.aln.fa.gz') for family in families)
+
+
+@pytest.mark.parametrize('failure', ['family', 'duplicate', 'traversal', 'symlink'])
+def test_delete_many_validates_complete_plan_before_deleting_payloads(tmp_path, failure):
+    root = tmp_path / 'orthogroup'
+    family = 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    path = f'stat_tree/{family}_stat.tree.tsv'
+    paths = [path]
+    ids = {path: family}
+    if failure == 'family':
+        other = f'stat_branch/{family}_stat.branch.tsv'
+        paths.append(other)
+        ids[other] = 'OG0000002'
+    elif failure == 'duplicate':
+        paths.append(path)
+    elif failure == 'traversal':
+        paths.append('../escape')
+    else:
+        link = root / 'stat_branch' / f'{family}_link.tsv'
+        link.symlink_to(root / path)
+        paths.append('stat_branch/' + link.name)
+        ids[paths[-1]] = family
+    previous = (root / path).read_bytes()
+    with pytest.raises((ValueError, ArchiveStoreError)):
+        GeneFamilyOutputStore(root).delete_many(paths, family_ids=ids)
+    assert (root / path).read_bytes() == previous
+    assert not (root / '.gg_store/tombstones.jsonl').exists()
+
+
+def test_delete_many_empty_batch_does_not_allocate_a_generation(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / 'orthogroup')
+    monkeypatch.setattr(store, '_next_generation', lambda: pytest.fail('empty deletion allocated a generation'))
+    store.delete_many([])
+    with pytest.raises(ValueError):
+        store.delete_many('stat_tree/OG0000001_stat.tree.tsv')
+
+
+def test_delete_batch_cli_keeps_live_override_only_when_requested(tmp_path):
+    root, family = tmp_path / 'orthogroup', 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    path = f'stat_tree/{family}_stat.tree.tsv'
+    manifest = tmp_path / 'delete.json'
+    manifest.write_text(json.dumps([{'path': path, 'family_id': family}]))
+    assert run_cli(build_parser().parse_args(['delete-batch', '--root', str(root), '--manifest', str(manifest), '--keep-live'])) == 0
+    assert (root / path).is_file()
+    assert run_cli(build_parser().parse_args(['delete-batch', '--root', str(root), '--manifest', str(manifest)])) == 0
+    assert not GeneFamilyOutputStore(root).logical_exists(path)
+
+
+def test_delete_many_excludes_same_store_producers_without_locking_other_stores(tmp_path, monkeypatch):
+    from workflow.support.gene_family_output_store import family_bucket_lock
+    first, second, family = tmp_path / 'first', tmp_path / 'second', 'OG0000001'
+    _write_family_outputs(first, family, complete=True)
+    _write_family_outputs(second, family, complete=True)
+    store = GeneFamilyOutputStore(first)
+    started, release = threading.Event(), threading.Event()
+    original = store._append_tombstones
+    errors = []
+
+    def paused(changes):
+        started.set()
+        assert release.wait(10)
+        original(changes)
+
+    def worker():
+        try:
+            store.delete_many([f'stat_tree/{family}_stat.tree.tsv'], family_ids={f'stat_tree/{family}_stat.tree.tsv': family})
+        except Exception as error:
+            errors.append(error)
+
+    monkeypatch.setattr(store, '_append_tombstones', paused)
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert started.wait(10)
+        with family_bucket_lock(first / '.gg_store', family, exclusive=True, nonblocking=True) as acquired:
+            assert not acquired
+        with family_bucket_lock(second / '.gg_store', family, exclusive=True, nonblocking=True) as acquired:
+            assert acquired
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive() and not errors
+
+
+def test_delete_many_failed_atomic_log_publish_leaves_prior_history_and_payloads(tmp_path, monkeypatch):
+    import workflow.support.gene_family_output_store as module
+    root, family = tmp_path / 'orthogroup', 'OG0000001'
+    _write_family_outputs(root, family, complete=True)
+    store = GeneFamilyOutputStore(root)
+    old_path = f'tree_plot/{family}_tree_plot.pdf'
+    store.delete(old_path, family_id=family)
+    log = root / '.gg_store/tombstones.jsonl'
+    before = log.read_bytes()
+    paths = [f'stat_tree/{family}_stat.tree.tsv', f'stat_branch/{family}_stat.branch.tsv']
+    replace = module.os.replace
+
+    def fail_publish(source, target):
+        if Path(target) == log:
+            raise OSError('synthetic interrupted publication')
+        return replace(source, target)
+
+    monkeypatch.setattr(module.os, 'replace', fail_publish)
+    with pytest.raises(OSError, match='interrupted publication'):
+        store.delete_many(paths, family_ids={name: family for name in paths})
+    assert log.read_bytes() == before
+    assert all((root / name).is_file() for name in paths)
+    assert not list(log.parent.glob('.tombstones.jsonl.partial.*'))
+
+
+def test_nonblocking_tmp_cleanup_coalesces_before_scanning(tmp_path, monkeypatch):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    candidate = root / 'tmp/1_OG0000001'
+    candidate.mkdir(parents=True)
+    with store._bucket_lock(root / '.gg_store/tmp-cleanup.lock', exclusive=True) as cleaning:
+        assert cleaning
+        original = Path.iterdir
+        def guarded(path):
+            assert path != root / 'tmp', 'busy cleanup must not traverse the shared workspace'
+            return original(path)
+        monkeypatch.setattr(Path, 'iterdir', guarded)
+        assert store.cleanup_stale_tmp(root, older_than_days=7, nonblocking=True) == []
+    assert candidate.is_dir()
+
+
+def test_tmp_cleanup_releases_unrelated_families_during_measurement(tmp_path, monkeypatch):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    first = root / 'tmp/1_OG0000001'
+    second = root / 'tmp/2_OG0000002'
+    first.mkdir(parents=True)
+    second.mkdir()
+    original = store._tmp_directory_usage
+    checked = []
+    def inspect(path):
+        if path == second:
+            with store.family_bucket_lock(root / '.gg_store', 'OG0000001',
+                                          exclusive=True, nonblocking=True) as available:
+                assert available, 'unrelated family remained locked during another tree scan'
+                checked.append(True)
+        return original(path)
+    monkeypatch.setattr(store, '_tmp_directory_usage', inspect)
+    assert store.cleanup_stale_tmp(root, older_than_days=7) == []
+    assert checked == [True]
+
+
+@pytest.mark.parametrize('change', ['file', 'replacement', 'symlink'])
+def test_tmp_cleanup_defers_candidate_changed_after_measurement(tmp_path, monkeypatch, change):
+    import gene_family_output_store as store
+    root = tmp_path / 'orthogroup'
+    first = root / 'tmp/1_OG0000001'
+    second = root / 'tmp/2_OG0000002'
+    first.mkdir(parents=True)
+    second.mkdir()
+    original_file = first / 'work.txt'
+    original_file.write_bytes(b'old')
+    old_ns = time.time_ns() - 10 * 86400 * 1_000_000_000
+    for path in [first, second, original_file]:
+        os.utime(path, ns=(old_ns, old_ns))
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'keep').write_bytes(b'protected')
+    original = store._tmp_directory_usage
+    calls = 0
+    def mutate(path):
+        nonlocal calls
+        if path == first:
+            calls += 1
+            if calls == 2:
+                if change == 'symlink':
+                    shutil.rmtree(first)
+                    first.symlink_to(outside, target_is_directory=True)
+                else:
+                    if change == 'replacement':
+                        original_file.unlink()
+                    original_file.write_bytes(b'new')
+                    os.utime(original_file, ns=(old_ns, old_ns))
+                    os.utime(first, ns=(old_ns, old_ns))
+        return original(path)
+    monkeypatch.setattr(store, '_tmp_directory_usage', mutate)
+    removed = store.cleanup_stale_tmp(root, older_than_days=7, nonblocking=True)
+    assert first not in removed and first.exists()
+    assert (outside / 'keep').read_bytes() == b'protected'
+
+
+def test_tmp_cleanup_respects_recent_descendant_inside_old_directory(tmp_path):
+    root = tmp_path / 'orthogroup'
+    candidate = root / 'tmp/1_OG0000001'
+    candidate.mkdir(parents=True)
+    (candidate / 'recent').write_bytes(b'keep')
+    old_ns = time.time_ns() - 10 * 86400 * 1_000_000_000
+    os.utime(candidate, ns=(old_ns, old_ns))
+    assert cleanup_stale_tmp(root, older_than_days=7) == []
+    assert (candidate / 'recent').read_bytes() == b'keep'
+
+
+def _index_record_fixture(store, index, *, zip_path=None):
+    family = f"OG{index:07d}"
+    logical = f"one/{family}_data.tsv"
+    return Artifact(logical_path=logical, subdir="one", name=logical.split("/", 1)[1],
+                    generation=1, zip_path=zip_path or store.payload_root / "one" / f"{index // 10:08d}.zip",
+                    member_name=logical, size=8, crc=42, sha256="a" * 64,
+                    mtime_ns=1700000000000000000, family_id=family)
+
+
+def test_index_record_batch_preserves_records_and_bounds_path_resolution(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifacts = [_index_record_fixture(store, i) for i in range(200)]
+    expected = [store._index_record(a) for a in artifacts]
+    original = Path.resolve
+    calls = []
+    tracked = {store.root, store.root / "one.zip", *(a.zip_path for a in artifacts)}
+
+    def counted(path, *args, **kwargs):
+        if path in tracked:
+            calls.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    with store._index_record_batch() as record:
+        observed = [record(a) for a in artifacts]
+    assert observed == expected
+    # Twenty immutable ZIPs, their one final path and the root, each checked
+    # on first observation and again at the publication boundary.
+    assert len(calls) <= 44
+
+
+@pytest.mark.parametrize("missing", ["zip_path", "member_name"])
+def test_index_record_batch_still_rejects_live_artifact_after_cache_hit(tmp_path, missing):
+    from dataclasses import replace
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifact = _index_record_fixture(store, 0)
+    with store._index_record_batch() as record:
+        record(artifact)
+        with pytest.raises(ArchiveStoreError, match="Cannot index a live artifact"):
+            record(replace(artifact, **{missing: None}))
+
+
+def test_index_record_batch_revalidates_alias_before_transaction_commit(tmp_path):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"completed payload")
+    other = tmp_path / "other.zip"
+    other.write_bytes(b"other payload")
+    alias = store.payload_root / "one" / "alias.zip"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    expected = store._index_record(artifact)
+    assert expected["zip_location"] == "final"
+    with pytest.raises(ArchiveStoreError, match="path changed during publication"):
+        with store._index_update():
+            with store._index_record_batch() as record:
+                assert record(artifact) == expected
+                alias.unlink()
+                alias.symlink_to(other)
+                assert record(artifact) == expected
+    assert (store.archive_root / "index-update.pending").is_file()
+    assert final.read_bytes() == b"completed payload"
+
+
+def test_index_record_batch_does_not_reuse_a_previous_batch_alias(tmp_path):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"completed payload")
+    active = store.payload_root / "one" / "active.zip"
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active payload")
+    alias = active.with_name("alias.zip")
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    with store._index_record_batch() as record:
+        assert record(artifact)["zip_location"] == "final"
+    alias.unlink()
+    alias.symlink_to(active)
+    with store._index_record_batch() as record:
+        assert record(artifact) == store._index_record(artifact)
+        assert record(artifact)["zip_location"] == "active"
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('generation', -1), ('size', -1), ('crc', -1), ('sha256', 'invalid'),
+    ('member_name', 'one/other.tsv'), ('zip_location', 'unknown'),
+    ('zip_path', 'one/../../outside.zip'),
+])
+def test_index_zip_lexical_cache_preserves_each_record_validation(tmp_path, field, value):
+    store = GeneFamilyOutputStore(tmp_path / 'orthogroup')
+    artifact = _index_record_fixture(store, 0)
+    record = store._index_record(artifact)
+    # Populate the lexical ZIP mapping before changing another record field.
+    assert store._artifact_from_index_record(artifact.logical_path, record).zip_path == artifact.zip_path
+    with pytest.raises(ArchiveStoreError):
+        store._artifact_from_index_record(artifact.logical_path, dict(record, **{field: value}))
+
+
+def test_index_zip_lexical_cache_keeps_project_roots_separate(tmp_path):
+    first = GeneFamilyOutputStore(tmp_path / 'first')
+    second = GeneFamilyOutputStore(tmp_path / 'second')
+    artifact = _index_record_fixture(first, 0)
+    record = first._index_record(artifact)
+    a = first._artifact_from_index_record(artifact.logical_path, record)
+    b = second._artifact_from_index_record(artifact.logical_path, record)
+    assert a.zip_path == first.payload_root / record['zip_path']
+    assert b.zip_path == second.payload_root / record['zip_path']
+    assert a.zip_path != b.zip_path
+
+
+def test_index_zip_lexical_cache_is_bounded(tmp_path):
+    from workflow.support.gene_family_output_store import _indexed_zip_path
+    _indexed_zip_path.cache_clear()
+    try:
+        for index in range(4100):
+            _indexed_zip_path(tmp_path, tmp_path / 'archives', 'one', f'one/{index:08}.zip', 'active')
+        assert _indexed_zip_path.cache_info().currsize == 4096
+    finally:
+        _indexed_zip_path.cache_clear()
+
+
+def test_full_index_publication_reuses_zip_resolution(tmp_path, monkeypatch):
+    from collections import Counter
+
+    from workflow.support import gene_family_output_store as module
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    artifacts = [_index_record_fixture(store, i) for i in range(200)]
+    expected = {a.logical_path: store._index_record(a) for a in artifacts}
+    tracked = {a.zip_path for a in artifacts}
+    calls = Counter()
+    original = Path.resolve
+
+    def counted(path, *args, **kwargs):
+        if path in tracked:
+            calls[path] += 1
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    with module.producer_quiescence_lock(store.archive_root), module.archive_lock(store.archive_root):
+        store._write_index({a.logical_path: a for a in artifacts})
+    assert max(calls.values()) <= 2
+    observed = {}
+    for path in (store.archive_root / module.INDEX_DIR_NAME).glob("*.json"):
+        observed.update(json.loads(path.read_text())["artifacts"])
+    assert observed == expected
+
+
+def test_full_index_revalidates_alias_before_commit(tmp_path, monkeypatch):
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    store.root.mkdir(parents=True)
+    final = store.root / "one.zip"
+    final.write_bytes(b"preserved")
+    other = tmp_path / "other.zip"
+    other.write_bytes(b"other")
+    alias = store.payload_root / "one" / "alias.zip"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(final)
+    artifact = _index_record_fixture(store, 0, zip_path=alias)
+    original = store._write_index_catalog
+
+    def change_alias(artifacts):
+        original(artifacts)
+        alias.unlink()
+        alias.symlink_to(other)
+
+    monkeypatch.setattr(store, "_write_index_catalog", change_alias)
+    with pytest.raises(ArchiveStoreError, match="path changed during publication"):
+        store._write_index({artifact.logical_path: artifact})
+    assert (store.archive_root / "index-update.pending").is_file()
+    assert final.read_bytes() == b"preserved"
+
+
+def test_referenced_zip_paths_resolve_distinct_names_fresh_each_time(tmp_path, monkeypatch):
+    from workflow.support.gene_family_output_store import _referenced_zip_paths
+    store = GeneFamilyOutputStore(tmp_path / "orthogroup")
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+    first.touch()
+    second.touch()
+    alias = tmp_path / "alias.zip"
+    alias.symlink_to(first)
+    artifacts = [_index_record_fixture(store, i, zip_path=alias) for i in range(100)]
+    calls = []
+    original = Path.resolve
+
+    def counted(path, *args, **kwargs):
+        if path == alias:
+            calls.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    assert _referenced_zip_paths(artifacts) == {first}
+    assert len(calls) == 1
+    alias.unlink()
+    alias.symlink_to(second)
+    assert _referenced_zip_paths(artifacts) == {second}
+    assert len(calls) == 2

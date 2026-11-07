@@ -22,8 +22,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from Bio.Data import CodonTable
-from Bio.Seq import Seq
 from cds_model_normalisation import CdsModelNormaliser, phase_conventions, protein
+from cdskit.codonutil import get_codon_table_components
+from cdskit.translate import translate_sequence_string
 from fasta_sequence_store import fasta_records
 from format_species_annotation.common import parse_gff_attributes, sanitize_identifier
 from format_species_annotation.grouping import (
@@ -121,24 +122,7 @@ def create_index(path, staged):
         raise ValueError("FASTA index warning or failure: " + indexing.stderr.strip())
 
 
-def reconstruct_sequence(blocks, seqid, strand, genome):
-    """Fetch biological CDS without per-exon phase trimming."""
-    if strand not in {"+", "-"}:
-        raise ValueError("Unknown CDS contig or strand: " + seqid)
-    # FastaFile already maintains a reference-name hash index. Preserve the
-    # original reference-sequence protocol without importing a new dependency
-    # for callers supplying a different genome implementation.
-    native_fasta = getattr(sys.modules.get("pysam"), "FastaFile", None)
-    references = genome if type(genome) is native_fasta and type(seqid) is str else genome.references
-    if seqid not in references:
-        raise ValueError("Unknown CDS contig or strand: " + seqid)
-    pieces = []
-    for start, end, _phase in blocks:
-        if start < 0 or end <= start or end > genome.get_reference_length(seqid):
-            raise ValueError("CDS outside genome bounds: " + seqid)
-        piece = genome.fetch(seqid, start, end).upper()
-        pieces.append(str(Seq(piece).reverse_complement()) if strand == "-" else piece)
-    return "".join(pieces)
+from cdskit.cds_features import reconstruct_sequence as reconstruct_sequence
 
 
 def _coding_key(candidate, genome_sha256):
@@ -284,8 +268,8 @@ def validate_candidate(candidate, genetic_code=1):
     phase_conflict = not blocks or not allowed_first
     phase_offset = first if not phase_conflict else 0
     coding = sequence[phase_offset:]
-    codon_table = CodonTable.unambiguous_dna_by_id[code]
-    dual_codons = set(codon_table.stop_codons) & set(codon_table.forward_table)
+    codon_table = get_codon_table_components(code)
+    dual_codons = set(codon_table["stop_codons"]) & set(codon_table["forward_table"])
     uncertain_codons = (sorted({coding[position:position + 3] for position in range(0, len(coding) - 2, 3)
                                if coding[position:position + 3] in dual_codons}) if dual_codons else [])
     # Existing GG translators use context-free codon meaning, rather than
@@ -294,11 +278,11 @@ def validate_candidate(candidate, genetic_code=1):
     translation_uncertain = bool(previous.get('translation_uncertain') or uncertain_codons)
     incomplete_codon = bool(len(coding) % 3)
     invalid_base = any(base not in "ACGTRYSWKMBDHVN" for base in sequence)
-    translated = (str(Seq(coding[:len(coding) // 3 * 3]).translate(table=code))
+    translated = (translate_sequence_string(coding[:len(coding) // 3 * 3], code, False)
                   if len(coding) >= 3 and not invalid_base else "")
     internal_stop = "*" in translated.removesuffix("*")
-    starts = codon_table.start_codons
-    stops = codon_table.stop_codons
+    starts = codon_table["start_codons"]
+    stops = codon_table["stop_codons"]
     has_start = bool(coding) and coding[:3] in starts
     has_stop = len(coding) >= 3 and not incomplete_codon and coding[-3:] in stops
     partial = bool(previous.get("annotated_partial") or first or incomplete_codon or not has_start or not has_stop)

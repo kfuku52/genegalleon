@@ -546,6 +546,7 @@ run_individual_iqtree_dna
 run_astral_pep
 run_astral_dna
 run_plot_species_trees
+species_tree_plot_only
 run_constrained_tree
 run_plot_constrained_tree
 run_mcmctree1

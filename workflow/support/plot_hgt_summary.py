@@ -228,17 +228,6 @@ def wrap_label(value: str, width: int = 14) -> str:
     return "\n".join(textwrap.wrap(text, width=width))
 
 
-def value_to_boolish(value):
-    if pandas.isna(value):
-        return pandas.NA
-    text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y"}:
-        return True
-    if text in {"0", "false", "f", "no", "n"}:
-        return False
-    return pandas.NA
-
-
 def normalize_numeric_frame(df: pandas.DataFrame) -> pandas.DataFrame:
     out = df.copy()
     for col in out.columns:

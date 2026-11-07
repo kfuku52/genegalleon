@@ -1,5 +1,11 @@
+import hashlib
+import json
+import re
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 CORE_PATH = WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh"
@@ -85,3 +91,64 @@ def test_species_tree_plot_stages_do_not_mutate_the_shared_user_flag():
     assert 'disable_if_no_input_file "run_plot_species_trees"' not in plotting_stages
     assert 'disable_if_no_nonempty_input_file "run_plot_species_trees"' not in plotting_stages
     assert 'disable_if_no_matching_input_file "run_plot_species_trees"' not in plotting_stages
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="requires the GeneGalleon R runtime")
+@pytest.mark.parametrize(("tips", "pages"), [(12, 1), (374, 2)])
+def test_species_tree_comparison_pdf_paginates_without_an_extra_render(tmp_path, tips, pages):
+    def balanced_tree(labels):
+        if len(labels) == 1:
+            return labels[0] + ":1"
+        mid = len(labels) // 2
+        return f"({balanced_tree(labels[:mid])},{balanced_tree(labels[mid:])})95:1"
+
+    tree = tmp_path / "fixture.nwk"
+    tree.write_text(balanced_tree([f"Taxon_{i}" for i in range(tips)]) + ";\n")
+    script = WORKFLOW_DIR / "support" / "plot_species_trees.r"
+    labels = ("iqtree_dna", "iqtree_pep", "astral_dna", "astral_pep")
+    result = subprocess.run(
+        ["Rscript", str(script), *(f"--{label}_nwk={tree}" for label in labels)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    pdf = (tmp_path / "species_trees.pdf").read_bytes()
+    assert pdf.startswith(b"%PDF-") and pdf.rstrip().endswith(b"%%EOF")
+    assert len(re.findall(rb"/Type\s*/Page\b", pdf)) == pages
+    assert not (tmp_path / "Rplots.pdf").exists()
+
+
+def test_plot_only_rejects_changed_recorded_tree(tmp_path):
+    core = CORE_PATH.read_text()
+    start = core.index("verify_species_tree_plot_inputs() {")
+    end = core.index("\ncase ", start)
+    validator = core[start:end]
+    tree = "output/species_tree"
+    for name, step, relative in (
+        ("concat_iqtree_pep_root", "species_tree_root_concat_iqtree_pep",
+         f"{tree}/concatenated_iqtree_pep/concat.pep.rooted.nwk"),
+        ("undated_summary", "species_tree_select_undated_summary",
+         f"{tree}/species_tree_summary/undated_species_tree.nwk"),
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True)
+        body = b"(A:1,B:1);\n"
+        path.write_bytes(body)
+        provenance = tmp_path / "output/artifact_provenance/genome_evolution"
+        provenance.mkdir(parents=True, exist_ok=True)
+        (provenance / f"species_tree.{name}.json").write_text(json.dumps({
+            "schema_version": 1, "step": step, "family_id": "all_buscos", "inputs": [],
+            "outputs": [{"scope": "workspace", "path": relative, "artifact_type": "file",
+                         "size_bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}],
+        }))
+    script = (
+        'gg_support_dir=$1; gg_workspace_dir=$2; input_sequence_mode=protein\n'
+        + validator + "\nverify_species_tree_plot_inputs"
+    )
+    cmd = ["bash", "-c", script, "--", str(WORKFLOW_DIR / "support"), str(tmp_path)]
+    valid = subprocess.run(cmd, capture_output=True, text=True)
+    assert valid.returncode == 0, valid.stderr
+    assert "Verified 2 stored species-tree artifacts" in valid.stdout
+    path.write_bytes(b"(A:1,C:1);\n")
+    invalid = subprocess.run(cmd, capture_output=True, text=True)
+    assert invalid.returncode == 3
+    assert "recorded tree changed" in invalid.stderr

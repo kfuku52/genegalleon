@@ -37,6 +37,16 @@ def test_source_bound_unchanged_science_is_proven(producer):
     assert str(source/'workflow/support/rescue_raw_validation.py') in proof['source_files']
 
 
+def test_cdskit_attribute_validator_change_rejects_reuse(producer):
+    source, plan = producer
+    hashes = plan['request']['tools']['source_hashes']
+    module = sys.modules[rescue.validate_gff.__module__]
+    assert hashes[module.__name__] == rescue.digest(module.__file__)
+    hashes[module.__name__] = '0' * 64
+    with pytest.raises(ValueError, match='coding runtime/tool identity changed'):
+        reuse.prove_contract(plan, source)
+
+
 def test_unused_gpu_launcher_change_does_not_replace_frozen_prediction_evidence(producer):
     source, plan = producer
     path = source/'workflow/support/oriongeno_runtime.py'

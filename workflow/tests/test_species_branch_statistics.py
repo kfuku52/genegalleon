@@ -62,7 +62,7 @@ def fixture(tmp_path, *, hidden_loss=False):
     return family, root, species, gene, lca, xp, producer
 
 
-def publish_fixture(tmp_path, hidden_loss=False):
+def publish_fixture(tmp_path, hidden_loss=False, provenance_layout="optional"):
     family, root, species, gene, lca, xp, producer = fixture(tmp_path, hidden_loss=hidden_loss)
     bundle_path = root / "reconciliation_events" / (family + "_reconciliation.json")
     stats_path = root / "stat_species_branch" / (family + "_stat.species_branch.tsv")
@@ -88,15 +88,15 @@ def publish_fixture(tmp_path, hidden_loss=False):
             str(stats_path),
         ]
     )
-    metadata = dict(
-        family_id=family,
-        step="summary_statistics",
-        outputs=[
-            dict(label=n, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
-            for n, p in [("reconciliation_events", bundle_path), ("stat_species_branch", stats_path)]
-        ],
-    )
-    (root / "artifact_provenance" / (family + ".summary_statistics.json")).write_text(json.dumps(metadata))
+    import artifact_provenance as provenance
+    flag = "--optional-output" if provenance_layout == "optional" else "--output"
+    assert provenance.dispatch([
+        "record", "--family-id", family, "--step", "summary_statistics",
+        "--workspace-root", str(tmp_path), "--logical-root", str(root),
+        "--manifest", str(root / "artifact_provenance" / (family + ".summary_statistics.json")),
+        flag, "reconciliation_events=" + str(bundle_path),
+        flag, "stat_species_branch=" + str(stats_path),
+    ]) == 0
     return family, root, species, bundle_path, stats_path
 
 
@@ -200,8 +200,9 @@ def test_invalid_lca_preserves_existing_outputs(tmp_path, fault):
 
 
 @pytest.mark.parametrize("layout", ["raw", "zip"])
-def test_db_import_and_downstream_use_common_source_and_keep_legacy_xml(tmp_path, layout):
-    family, root, species, _, _ = publish_fixture(tmp_path, hidden_loss=True)
+@pytest.mark.parametrize("provenance_layout", ["required", "optional"])
+def test_db_import_and_downstream_use_common_source_and_keep_legacy_xml(tmp_path, layout, provenance_layout):
+    family, root, species, _, _ = publish_fixture(tmp_path, hidden_loss=True, provenance_layout=provenance_layout)
     if layout == "zip":
         convert_storage_to_zip(root, "orthogroup", [family], lambda name: name.split("_")[0])
     dbpath = tmp_path / "families.db"
@@ -265,3 +266,25 @@ test "$run_reconciliation$run_summary" = 11
     )
     result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("fault", ["absent", "missing_state", "duplicate", "changed", "wrong_size", "missing_label"])
+def test_producer_optional_outputs_remain_strict(tmp_path, fault):
+    from workflow.support.reconciliation_database import validate_producer_output
+    family, root, _, bundle_path, _ = publish_fixture(tmp_path)
+    producer = json.loads((root / "artifact_provenance" / (family + ".summary_statistics.json")).read_text())
+    target = next(v for v in producer["optional_outputs"] if v["label"] == "reconciliation_events")
+    if fault == "absent":
+        target["state"] = "absent"
+    elif fault == "missing_state":
+        target.pop("state")
+    elif fault == "duplicate":
+        producer["outputs"].append(dict(target))
+    elif fault == "changed":
+        target["sha256"] = "0" * 64
+    elif fault == "wrong_size":
+        target["size_bytes"] += 1
+    else:
+        producer["optional_outputs"].remove(target)
+    with pytest.raises(ValueError):
+        validate_producer_output(producer, "reconciliation_events", bundle_path.read_bytes(), family)

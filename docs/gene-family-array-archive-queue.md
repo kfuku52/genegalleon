@@ -222,3 +222,34 @@ remains, collection returns `conversion-pending` and new enqueue requests fail.
 Resume the conversion before resuming normal collection. A completed raw
 conversion cancels all earlier ZIP requests so later progress checks cannot
 silently turn the raw output back into ZIP storage.
+
+
+### Concurrent temporary-directory housekeeping
+
+`cleanup-tmp` coalesces cleaners with one output-root-scoped, nonblocking
+namespace lock. An array task skips a cleanup already running instead of
+walking the same workspace. The cleaner measures one idle family at a time;
+it releases that family before reading unrelated trees. Before deleting a
+selected directory, it reacquires the family lock and checks the complete
+non-symlink entry metadata again. New writers, replacements, and changed
+contents defer deletion to a later pass. Age, count, byte, and file limits are
+unchanged. Manual directories and symlink targets remain excluded.
+
+A local synthetic comparison used three cleaners and one unrelated writer,
+256 temporary families with 16 files each, a controlled 100 ms pause at the
+first directory scan, one warmup and three measured runs. Baseline 0.8.485
+versus the candidate retained the same 1,024 files with identical content
+manifest SHA. Median cleaner-call latency changed from 0.241 s to 0.000372 s,
+and the unrelated writer's lock wait from 0.106 s to 0.00276 s. The complete
+cleanup plus a quiescent verification pass was slower locally, 0.612 s versus
+1.295 s, because deletion candidates are rechecked. This is a lock-contention
+benchmark, not a whole-workflow speedup claim. Shared-filesystem measurements
+must be reported separately.
+
+```bash
+python workflow/benchmarks/benchmark_tmp_cleanup.py --source /path/to/source \
+  --workers 4 --families 256 --files 16 --repeats 3 --writer-probe
+```
+
+Cleanup ownership follows the same explicit stopped-owner recovery protocol
+as other namespace locks; elapsed time does not permit stealing a lock.

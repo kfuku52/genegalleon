@@ -80,14 +80,17 @@ def test_program_source_defaults_are_moving_branches_not_commit_pins():
     assert "GG_SOURCE_IQTREE_REPO_REF=master" in branches
     assert set(branch_assignments) <= {"main", "master"}
 
+    build_common = (REPO_ROOT / "container/build_common.sh").read_text()
+    assert 'source "${script_dir}/build_common.sh"' in buildx
+    assert 'source "${script_dir}/build_common.sh"' in apptainer
     for sha_var in PROGRAM_SHA_VARS:
         assert f'ARG {sha_var}=""' in dockerfile
-        assert f"{sha_var}=${{{sha_var}:-}}" in buildx
-        assert f"{sha_var}=${{{sha_var}:-}}" in apptainer
+        assert f"{sha_var}=${{{sha_var}:-}}" in build_common
 
     policy_files = [
         REPO_ROOT / "container" / "Dockerfile",
         REPO_ROOT / "container" / "buildx.sh",
+        REPO_ROOT / "container" / "build_common.sh",
         REPO_ROOT / "container" / "apptainer_local_build.sh",
         REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh",
         REPO_ROOT / ".github" / "workflows" / "container-ghcr.yml",
@@ -114,6 +117,33 @@ def test_all_container_build_paths_resolve_one_snapshot_per_build():
     installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
     assert "> /opt/pg/logs/source_revisions.tsv" in installer
     assert "install_source_artifacts.sh" in dockerfile
+
+
+def test_buildx_passes_each_external_cache_importer_as_one_argument(tmp_path):
+    docker = tmp_path / "docker"
+    docker.write_text('''#!/bin/sh
+case "$1:$2" in
+    buildx:ls) exit 0 ;;
+    buildx:inspect) printf 'Driver: docker-container\\n' ;;
+    buildx:build) printf '%s\\n' "$@" > "$BUILD_ARGS" ;;
+    *) exit 1 ;;
+esac
+''')
+    docker.chmod(0o755)
+    args_path = tmp_path / "build-args"
+    cache_sources = ["type=registry,ref=ghcr.io/example/genegalleon:latest", "type=gha,scope=container-linux-amd64"]
+    result = subprocess.run(
+        ["bash", "container/buildx.sh"], cwd=REPO_ROOT,
+        env=os.environ | {var: f"{index:040x}" for index, var in enumerate(PROGRAM_SHA_VARS, start=1)} | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}", "MODE": "push", "BUILD_ARGS": str(args_path),
+            "CACHE_FROM": "\n\n".join(cache_sources) + "\n", "CACHE_TO": "type=inline",
+            "PRINT_BUILD_INPUT_HASH": "0",
+        }, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = args_path.read_text().splitlines()
+    assert [args[index + 1] for index, arg in enumerate(args) if arg == "--cache-from"] == cache_sources
+    assert args[args.index("--cache-to") + 1] == "type=inline"
 
 
 def test_container_build_paths_share_python_compatibility_constraints():
@@ -161,9 +191,10 @@ def test_container_build_paths_refresh_system_security_packages_daily():
     assert 'io.genegalleon.security-refresh-epoch="${SECURITY_REFRESH_EPOCH}"' in dockerfile
     assert '"security_refresh_epoch=${security_refresh_epoch}"' in build_hash
     assert 'hash_mode="runtime"' in build_hash
-    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in buildx
+    build_common = (REPO_ROOT / "container/build_common.sh").read_text()
+    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in build_common
     assert '--build-arg SECURITY_REFRESH_EPOCH="${SECURITY_REFRESH_EPOCH}"' in buildx
-    assert 'SECURITY_REFRESH_EPOCH="$(date -u +%F)"' in apptainer_build
+    assert 'source "${script_dir}/build_common.sh"' in apptainer_build
     assert "s|@@SECURITY_REFRESH_EPOCH@@|" in apptainer_build
     assert "io.genegalleon.security-refresh-epoch @@SECURITY_REFRESH_EPOCH@@" in apptainer_template
     assert "security_refresh_epoch.txt" in dockerfile
@@ -407,9 +438,10 @@ def test_standard_container_builds_iqtree_cli_library_and_matching_nwkit_worker(
     builder = (REPO_ROOT / "container/scripts/build_iqtree_artifact.sh").read_text()
     installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
     validator = (REPO_ROOT / "container/scripts/validate_runtime.sh").read_text()
-    assert "FROM source-builder AS iqtree-build" in dockerfile
+    assert "FROM system AS iqtree-build" in dockerfile
     assert "FROM iqtree-build AS iqtree-worker-build" in dockerfile
-    assert "--mount=from=nwkit-build" in dockerfile
+    assert "--mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact" in dockerfile
+    assert "--mount=from=nwkit-build,source=/opt/conda,target=/opt/conda,rw" in dockerfile
     assert "--mount=from=iqtree-worker-build" in dockerfile
     for path in (dockerfile, native):
         assert "build_iqtree_artifact.sh library" in path

@@ -7,13 +7,23 @@ suppressPackageStartupMessages(library(ggtree, quietly = TRUE))
 
 options(stringsAsFactors = FALSE)
 
+source_paths <- Filter(function(x) is.character(x) && length(x) == 1L && nzchar(x),
+                       lapply(sys.frames(), function(frame) frame$ofile))
 script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
-script_dir <- if (length(script_arg) > 0) {
-  dirname(normalizePath(sub("^--file=", "", script_arg[[1]]), winslash = "/", mustWork = FALSE))
-} else {
-  getwd()
+script_path <- if (exists(".gg_presence_script_path", inherits = FALSE)) {
+  .gg_presence_script_path
+} else if (length(source_paths)) tail(source_paths, 1L)[[1L]] else sub("^--file=", "", script_arg[[1L]])
+script_dir <- dirname(normalizePath(script_path, mustWork = TRUE))
+cli_args <- if (exists(".gg_presence_args", inherits = FALSE)) .gg_presence_args else commandArgs(trailingOnly = TRUE)
+if (identical(head(cli_args, 1L), "--batch")) {
+  source(file.path(script_dir, "presence_absence_batch.R"), local = TRUE)
+  gg_render_presence_batch(cli_args[-1L], script_path)
+  quit(save = "no", status = 0L)
 }
+gg_read_shared_input <- if (exists(".gg_presence_read", inherits = FALSE)) .gg_presence_read else function(path, kind, reader, retain = TRUE) reader(path)
+
 source(file.path(script_dir, "species_label_utils.r"), local = TRUE)
+source(file.path(script_dir, "tree_topology_helpers.R"), local = TRUE)
 
 font_size_pt <- 8
 font_size_mm <- font_size_pt * 0.352777778
@@ -257,96 +267,11 @@ has_nonempty_file <- function(file_path) {
   !is.na(file_info$size[[1]]) && file_info$size[[1]] > 0
 }
 
-descendant_tips <- function(tree, node) {
-  n_tip <- length(tree[["tip.label"]])
-  children <- tree[["edge"]][tree[["edge"]][, 1] == node, 2]
-  tips <- children[children <= n_tip]
-  internal_children <- children[children > n_tip]
-  for (child in internal_children) {
-    tips <- c(tips, descendant_tips(tree, child))
-  }
-  tips
-}
-
-descendant_tip_labels <- function(tree, node, tip_set = NULL) {
-  labels <- tree[["tip.label"]][descendant_tips(tree, node)]
-  if (!is.null(tip_set)) {
-    labels <- labels[labels %in% tip_set]
-  }
-  labels
-}
-
-node_clade_key <- function(tree, node, tip_set = NULL) {
-  tips <- sort(descendant_tip_labels(tree, node, tip_set = tip_set))
-  if (length(tips) < 2) {
-    return(NA_character_)
-  }
-  paste(tips, collapse = "\t")
-}
-
-node_split_key <- function(tree, node, tip_set = NULL) {
-  if (is.null(tip_set)) {
-    tip_set <- tree[["tip.label"]]
-  }
-  tip_set <- sort(unique(tip_set))
-  tips <- sort(descendant_tip_labels(tree, node, tip_set = tip_set))
-  if (length(tips) == 0 || length(tips) == length(tip_set)) {
-    return(NA_character_)
-  }
-  other <- sort(setdiff(tip_set, tips))
-  if (length(other) < length(tips)) {
-    tips <- other
-  } else if (length(other) == length(tips)) {
-    tip_key <- paste(tips, collapse = "\t")
-    other_key <- paste(other, collapse = "\t")
-    if (other_key < tip_key) {
-      tips <- other
-    }
-  }
-  paste(tips, collapse = "\t")
-}
-
+descendant_tips <- gg_descendant_tips
+descendant_tip_labels <- gg_descendant_tip_labels
+node_clade_key <- gg_node_clade_key
 transfer_internal_labels <- function(target_tree, source_tree) {
-  target_tips <- target_tree[["tip.label"]]
-  if (length(setdiff(target_tips, source_tree[["tip.label"]])) > 0) {
-    warning("Cannot transfer support values: support tree does not contain all target tips.")
-    return(target_tree)
-  }
-
-  source_nodes <- seq.int(
-    length(source_tree[["tip.label"]]) + 1,
-    length(source_tree[["tip.label"]]) + source_tree[["Nnode"]]
-  )
-  source_labels <- source_tree[["node.label"]]
-  if (is.null(source_labels) || length(source_labels) == 0) {
-    return(target_tree)
-  }
-  label_by_split <- list()
-  for (idx in seq_along(source_nodes)) {
-    if (idx > length(source_labels)) {
-      next
-    }
-    label <- source_labels[[idx]]
-    if (is.na(label) || !nzchar(label)) {
-      next
-    }
-    split_key <- node_split_key(source_tree, source_nodes[[idx]], tip_set = target_tips)
-    if (!is.na(split_key) && nzchar(split_key)) {
-      label_by_split[[split_key]] <- label
-    }
-  }
-
-  n_tip <- length(target_tree[["tip.label"]])
-  target_nodes <- seq.int(n_tip + 1, n_tip + target_tree[["Nnode"]])
-  target_labels <- rep("", target_tree[["Nnode"]])
-  for (idx in seq_along(target_nodes)) {
-    split_key <- node_split_key(target_tree, target_nodes[[idx]], tip_set = target_tips)
-    if (!is.na(split_key) && nzchar(split_key) && !is.null(label_by_split[[split_key]])) {
-      target_labels[[idx]] <- label_by_split[[split_key]]
-    }
-  }
-  target_tree[["node.label"]] <- target_labels
-  target_tree
+  gg_transfer_internal_labels(target_tree, source_tree, allow_subset = TRUE)
 }
 
 transfer_species_mapping_labels <- function(target_tree, mapping_tree) {
@@ -486,8 +411,9 @@ read_time_ci_table <- function(tree_ci_path, tree_mean) {
   if (!has_nonempty_file(tree_ci_path)) {
     return(data.frame())
   }
-  ci_tree_text <- paste(readLines(tree_ci_path, warn = FALSE), collapse = "\n")
-  ci_parsed <- extract_ci_table(ci_tree_text)
+  ci_parsed <- gg_read_shared_input(tree_ci_path, "ci", function(path) {
+    extract_ci_table(paste(readLines(path, warn = FALSE), collapse = "\n"))
+  })
   ci_table <- map_ci_nodes_to_mean_tree(ci_parsed$tree_ci, tree_mean, ci_parsed$ci_table)
   if (nrow(ci_table) == 0) {
     warning("No mappable 95% node-age intervals were found in: ", tree_ci_path)
@@ -717,7 +643,7 @@ read_busco_full_table_dir <- function(busco_dir_path, tip_y_by_species) {
     if (!species %in% names(tip_y_by_species)) {
       next
     }
-    all_lines <- readLines(file_path, warn = FALSE)
+    all_lines <- gg_read_shared_input(file_path, "busco_lines", function(path) readLines(path, warn = FALSE), retain = FALSE)
     if (!any(grepl("^# Busco id", all_lines))) {
       next
     }
@@ -854,7 +780,9 @@ read_busco_summary_table <- function(busco_table_path, tip_y_by_species) {
     return(empty_busco_plot_table())
   }
 
-  busco <- read.table(busco_table_path, sep = "\t", header = TRUE, quote = "", comment.char = "", check.names = FALSE)
+  busco <- gg_read_shared_input(busco_table_path, "busco", function(path) {
+    read.table(path, sep = "\t", header = TRUE, quote = "", comment.char = "", check.names = FALSE)
+  }, retain = FALSE)
   count_summary <- read_busco_count_summary_table(busco, tip_y_by_species)
   if (nrow(count_summary) > 0) {
     return(count_summary)
@@ -862,7 +790,7 @@ read_busco_summary_table <- function(busco_table_path, tip_y_by_species) {
   read_busco_wide_gene_table(busco, busco_table_path, tip_y_by_species)
 }
 
-args <- parse_args(commandArgs(trailingOnly = TRUE))
+args <- parse_args(cli_args)
 tree_path <- get_arg(args, "species_tree")
 tree_ci_path <- get_arg(args, "species_tree_ci")
 support_tree_path <- get_arg(args, "support_tree")
@@ -953,10 +881,10 @@ if (!is.finite(plot_width) || plot_width <= 0) {
   stop("Invalid --width: ", plot_width)
 }
 
-tree <- ape::read.tree(tree_path)
+tree <- gg_read_shared_input(tree_path, "tree", ape::read.tree)
 tree_for_plot <- tree
 if (has_nonempty_file(support_tree_path)) {
-  tree_for_plot <- transfer_internal_labels(tree_for_plot, ape::read.tree(support_tree_path))
+  tree_for_plot <- transfer_internal_labels(tree_for_plot, gg_read_shared_input(support_tree_path, "tree", ape::read.tree))
 }
 tree_for_species_mapping <- tree
 if (glyph_mode && nzchar(species_mapping_tree_path)) {
@@ -965,7 +893,7 @@ if (glyph_mode && nzchar(species_mapping_tree_path)) {
   }
   tree_for_species_mapping <- transfer_species_mapping_labels(
     tree,
-    ape::read.tree(species_mapping_tree_path)
+    gg_read_shared_input(species_mapping_tree_path, "tree", ape::read.tree)
   )
 }
 
@@ -2065,7 +1993,11 @@ if (glyph_mode) {
 }
 
 max_label_width <- max(nchar(as.character(label_df$species_display), type = "width"))
-busco_df <- read_busco_summary_table(busco_table_path, tip_y_by_species)
+busco_df <- if (nzchar(busco_table_path) && file.exists(busco_table_path)) {
+  # Keep the compact species counts, rather than every BUSCO gene record.
+  kind <- paste("busco_counts", paste(names(tip_y_by_species), tip_y_by_species, collapse = ";"))
+  gg_read_shared_input(busco_table_path, kind, function(path) read_busco_summary_table(path, tip_y_by_species))
+} else empty_busco_plot_table()
 
 tree_width <- 10.5
 tree_left <- 0

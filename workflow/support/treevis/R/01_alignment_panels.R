@@ -121,7 +121,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     if (!is.null(seqs_untrim) && !is.null(seqs_untrim[[seqname]])) {
       seq_untrim_vec = as.character(seqs_untrim[[seqname]])
       if (length(seq_untrim_vec) > 0) {
-        mapped_untrim_nt = map_trimmed_to_untrimmed_nongap_index(seq_trim = seq_vec, seq_untrim = seq_untrim_vec, gap_code = '04')
+        mapped_untrim_nt <- map_trimmed_to_untrimmed_nongap_index(seq_vec, seq_untrim_vec)
       }
     }
 

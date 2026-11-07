@@ -11,37 +11,10 @@ It is robust to field order changes across ASTRAL versions.
 """
 
 import argparse
-import re
 import sys
 
-
-def parse_annotation(annotation):
-    parsed = {}
-    for field in annotation.split(";"):
-        if "=" not in field:
-            continue
-        key, value = field.split("=", 1)
-        parsed[key.strip()] = value.strip()
-    return parsed
-
-
-def extract_support_labels(text, label_key):
-    missing_count = 0
-
-    def repl(match):
-        nonlocal missing_count
-        annotation = match.group(1)
-        parsed = parse_annotation(annotation)
-        value = parsed.get(label_key)
-        if value is None:
-            missing_count += 1
-            return match.group(0)
-        return value
-
-    # ASTRAL can emit comments quoted as '[...]' in Newick labels.
-    pattern = re.compile(r"'?\[([^\[\]]*)\]'?")
-    converted = pattern.sub(repl, text)
-    return converted, missing_count
+from nwkit.astral import extract_support_labels as extract_support_labels
+from nwkit.astral import parse_annotation as parse_annotation
 
 
 def main():

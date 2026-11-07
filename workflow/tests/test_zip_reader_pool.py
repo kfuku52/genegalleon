@@ -19,6 +19,26 @@ def write_zip(path, payload=b'old'):
         archive.writestr('entry', payload)
 
 
+def test_snapshot_content_phase_reopens_paths_and_never_closes_active_readers(tmp_path):
+    path = tmp_path / 'payload.zip'
+    write_zip(path)
+    store = store_module.GeneFamilyOutputStore(tmp_path)
+    with store.read_snapshot():
+        with store._snapshot_zip_reader(path) as old:
+            with pytest.raises(store_module.ArchiveStoreError, match='still active'):
+                store._close_snapshot_zip_readers()
+            assert old.read('entry') == b'old'
+        replacement = tmp_path / 'new.zip'
+        write_zip(replacement, b'new')
+        os.replace(replacement, path)
+        store._close_snapshot_zip_readers()
+        assert old.fp is None
+        with store._snapshot_zip_reader(path) as current:
+            assert current.read('entry') == b'new'
+            assert current is not old
+    assert current.fp is None
+
+
 def test_alternating_zip_readers_reuse_and_reset_close_every_reader(tmp_path, monkeypatch):
     paths = [tmp_path / f'{number}.zip' for number in range(2)]
     for path in paths:

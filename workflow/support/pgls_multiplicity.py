@@ -6,9 +6,9 @@ Never combine it with the native RSC bundle (which would count tests twice).
 
 import numpy as np
 import pandas as pd
+from association_statistics import adjust_association_p_values as _adjust_association_p_values
+from association_statistics import association_rows as _association_rows
 from species_tree_pgls import (
-    _adjust_association_p_values,
-    _association_rows,
     _usable_association_rows,
     read_pgls_results,
 )

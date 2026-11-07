@@ -10,7 +10,6 @@ import io
 import json
 import re
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 from Bio import Phylo
 
@@ -24,6 +23,24 @@ def canonical(value):
 
 def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def validate_producer_output(producer, label, content, family):
+    """Match one required or present optional output to its exact producer."""
+    matches = []
+    for collection in ("outputs", "optional_outputs"):
+        entries = producer.get(collection, [])
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            raise ValueError("Invalid producer output collection: " + family)
+        matches.extend((collection, entry) for entry in entries if entry.get("label") == label)
+    if len(matches) != 1:
+        raise ValueError("Missing or duplicate producer output: " + family + ": " + label)
+    collection, entry = matches[0]
+    if collection == "optional_outputs" and entry.get("state") != "present":
+        raise ValueError("Producer optional output is not present: " + family + ": " + label)
+    if (entry.get("sha256") != hashlib.sha256(content).hexdigest()
+            or ("size_bytes" in entry and entry["size_bytes"] != len(content))):
+        raise ValueError("Species-branch output differs from its producer: " + family)
 
 
 def tag(element):
@@ -54,24 +71,23 @@ def branch_id(taxa):
 
 def reference_branches(data):
     tree = Phylo.read(io.StringIO(data.decode("utf-8")), "newick")
-    rows = []
-    seen_tips, seen_clades = set(), set()
-
-    def visit(node, parent=None):
-        taxa = sorted(tip.name for tip in node.get_terminals())
-        if any(not name for name in taxa) or len(taxa) != len(set(taxa)):
-            raise ValueError("Species tree requires unique nonempty tip names")
+    from nwkit.tree_features import descendant_sets
+    _root, order, descendants = descendant_sets(tree)
+    labels = [node.name for node in order if not node.clades]
+    if any(not name for name in labels) or len(labels) != len(set(labels)):
+        raise ValueError("Species tree requires unique nonempty tip names")
+    parents = {child: node for node in order for child in node.clades}
+    keys, rows, seen_clades = {}, [], set()
+    for node in order:
+        taxa = sorted(descendants[node])
         key = branch_id(taxa)
         if key in seen_clades:
             raise ValueError("Species tree contains unary or repeated clades")
         seen_clades.add(key)
-        if not node.clades:
-            seen_tips.add(node.name)
-        rows.append((key, parent, node.name, canonical(taxa), int(not node.clades)))
-        for child in node.clades:
-            visit(child, key)
-
-    visit(tree.root)
+        keys[node] = key
+        parent = parents.get(node)
+        rows.append((key, keys[parent] if parent is not None else None,
+                     node.name, canonical(taxa), int(not node.clades)))
     topology = digest(sorted(row[0] for row in rows))
     return rows, topology
 
@@ -104,44 +120,28 @@ def xml_species_map(root, reference):
 
 
 def parse_family(data, family, reference):
-    root = ET.fromstring(data)
-    if tag(root) != "recPhylo":
-        raise ValueError("Expected recPhyloXML")
-    mapping = xml_species_map(root, reference)
+    from nwkit.recphyloxml_records import read_event_records
+    species_taxa, records = read_event_records(data.decode("utf-8") if isinstance(data, bytes) else data,
+                                               expected_clades=[json.loads(row[3]) for row in reference])
+    mapping = {label: branch_id(taxa) for label, taxa in species_taxa.items()}
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("Repeated XML species clade")
+    if set(mapping.values()) != {row[0] for row in reference}:
+        raise ValueError("XML species topology/taxa differ from the reference tree")
     tips = {row[0]: json.loads(row[3])[0] for row in reference if row[4]}
-    gene_root = one(one(one(root, "recGeneTree"), "phylogeny"), "clade")
-    clades, events, genes, seen_genes = [], [], [], set()
-
-    pending = [(gene_root, None)]
-    while pending:
-        node, parent = pending.pop()
-        ordinal = len(clades)
-        label = text_name(node)
-        clades.append((family, ordinal, parent, label))
-        descendants = children(node, "clade")
-        node_events = list(one(node, "eventsRec"))
-        if not node_events:
-            raise ValueError("Gene clade has no reconciliation event")
-        leaf_events = []
-        for order, event in enumerate(node_events):
-            kind = tag(event)
+    clades, events, genes = [], [], []
+    for row in records:
+        ordinal = row["ordinal"]
+        clades.append((family, ordinal, row["parent"], row["label"]))
+        for order, event in enumerate(row["events"]):
+            kind, location = event["type"], event["species"]
             if kind not in EVENTS:
                 raise ValueError("Unsupported reconciliation event: " + kind)
-            attr = "destinationSpecies" if kind == "transferBack" else "speciesLocation"
-            location = event.get(attr)
-            if location not in mapping:
-                raise ValueError(f"Unmapped {kind} species: {location}")
-            events.append((family, ordinal, order, kind, location, mapping[location], canonical(event.attrib)))
+            events.append((family, ordinal, order, kind, location, mapping[location], canonical(event["attributes"])))
             if kind == "leaf":
-                leaf_events.append(mapping[location])
-        if leaf_events:
-            if descendants or len(leaf_events) != 1 or leaf_events[0] not in tips or label in seen_genes:
-                raise ValueError("Invalid or duplicate extant gene leaf: " + label)
-            seen_genes.add(label)
-            genes.append((label, family, tips[leaf_events[0]], ordinal))
-        elif not descendants and not any(tag(event) == "loss" for event in node_events):
-            raise ValueError("Terminal gene clade is neither a leaf nor a loss")
-        pending.extend((child, ordinal) for child in reversed(descendants))
+                if mapping[location] not in tips:
+                    raise ValueError("Invalid or duplicate extant gene leaf: " + row["label"])
+                genes.append((row["label"], family, tips[mapping[location]], ordinal))
     return clades, events, genes
 
 
@@ -213,9 +213,7 @@ def write_tables(engine, store, species_tree, method_manifest=""):
                 if summary_producer.get("family_id") != family or summary_producer.get("step") != "summary_statistics":
                     raise ValueError("Species-branch producer identity mismatch: " + family)
                 for label, content in (("reconciliation_events", bundle_data), ("stat_species_branch", stats_data)):
-                    declared = [e for e in summary_producer.get("outputs", []) if e.get("label") == label]
-                    if len(declared) != 1 or declared[0].get("sha256") != hashlib.sha256(content).hexdigest():
-                        raise ValueError("Species-branch output differs from its producer: " + family)
+                    validate_producer_output(summary_producer, label, content, family)
                 bundle = validate_bundle(json.loads(bundle_data), family, reference)
                 import_bundle(conn, bundle, stats_data)
             elif stats_name in stats_names:

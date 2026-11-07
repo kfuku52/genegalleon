@@ -19,6 +19,16 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Iterator, Sequence
 
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
+
+
 SCHEMA_VERSION = 1
 COMMENT_PREFIX = b"GeneGalleon species-tree directory archive\n"
 MANAGED_DIRECTORIES = (
@@ -120,19 +130,6 @@ def _cleanup_stale_partials(root: Path, name: str) -> None:
                 shutil.rmtree(path)
             elif path.exists():
                 path.unlink()
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        directory_fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(directory_fd)
-    except OSError:
-        pass
-    finally:
-        os.close(directory_fd)
 
 
 def _compression_for(path: Path, compression: str) -> int:

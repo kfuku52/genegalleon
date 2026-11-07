@@ -393,9 +393,13 @@ are enabled, so new marker names must be registered in `pyproject.toml`.
 Adding `@pytest.mark.runtime` to a function does not change its file's lane.
 Keep tests that execute container tools in a separate file registered under
 `runtime_python_files`, leaving dependency-light unit tests in the fast lane.
-The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
-uses the same default; override it with `GG_PYTEST_WORKERS=N` or
-`GG_PYTEST_WORKERS=auto`.
+The fast and integration CI lanes use two pytest-xdist workers. The daily
+publisher uses four workers for the main runtime Python lane and two for its
+additional HGT and download checks in Docker and SIF. The combined runtime
+suite defaults to serial execution in `bash ./dev`. Set `GG_PYTEST_WORKERS=N`
+or `GG_PYTEST_WORKERS=auto` to opt in. The additional checks use at most two
+workers because each HGT case can use two CPUs. R checks run serially.
+Other parallel Python lanes default to two workers.
 
 For timing feedback, append `--durations=25 --durations-min=0.5` to a focused
 `dev check` command. Keep regression fixtures small while preserving the failure
@@ -629,6 +633,85 @@ Use `--body-group-size 8` for shared bodies and `--body-group-size 1` as a uniqu
 control; `--scope partial` also exercises ordered partial references. Fixture
 creation and result hashing are excluded from the timed read. RSS includes all
 retained records and the bounded caches; it is not a whole-analysis memory claim.
+
+## Archive index publication
+
+`workflow/benchmarks/benchmark_archive_index.py` measures native index publication
+for 2,500 synthetic families, 29 output subdirectories and 100 changed families.
+Fixture creation is outside the timed section. After each run it verifies all
+72,500 logical payloads through the native reader, hashes all index views and
+checks that every ZIP body is unchanged. This measures index publication rather
+than compression or a full workflow.
+
+Run through the container wrapper, using a new process and fixture for each
+repetition:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python -B \
+  workflow/benchmarks/benchmark_archive_index.py
+```
+
+Use `--module-root /mounted/baseline/workflow/support` for a saved baseline and
+`--work-dir /mounted/scratch` to choose fixture storage. Alternate at least three
+baseline/current pairs on the same runtime and storage. Compare both
+`index_manifest_sha256` and `logical_payload_sha256`, then report median elapsed
+time and peak RSS. The RSS includes fixture preparation. Filesystem and runtime
+differences can substantially change the timings; do not extrapolate an index
+comparison to whole-analysis speed.
+
+The 0.8.495 comparison against `6ad798b3` used three fresh-process pairs with the
+fixture above. All 286 index files and 72,500 logical payloads matched, and the
+ZIP bodies stayed unchanged within each run:
+
+| Runtime and fixture storage | Baseline median | Current median | Median process peak RSS, baseline/current |
+| --- | ---: | ---: | ---: |
+| Docker, container temporary filesystem | 5.25 s | 0.69 s | 170.2 / 129.4 MiB |
+| SHIROKANE SIF, scheduler `TMPDIR` | 10.20 s | 0.95 s | 176.7 / 127.5 MiB |
+
+The same candidate passed 307 affected archive, queue, integrity and database
+tests in both runtimes. The SIF fixture used scheduler scratch; these timings do
+not measure the production Lustre collector or predict its total runtime.
+
+The same driver also measures full index publication (`--operation write-index`)
+and native ZIP finalization (`--operation finalize`). For a metadata-heavy
+comparison with 2,500 families, five subdirectories and 12,500 small members:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python -B \
+  workflow/benchmarks/benchmark_archive_index.py \
+  --operation finalize --families 2500 --subdirs 5
+```
+
+Finalization includes per-family exclusion, the shared maintenance gate, ZIP
+CRC/SHA verification, index publication, source retirement and the final status
+table. Compare the index and logical payload digests above and, for finalization,
+`zip_manifest_sha256`. This last digest covers every member, including the native
+manifest with a fixed creation date; incidental ZIP-header creation dates are
+excluded. Full index publication must leave existing ZIP bodies unchanged.
+Peak RSS includes fixture preparation. These small-payload fixtures isolate
+metadata overhead and do not estimate compression throughput on large results.
+
+Full index publication shares ZIP-path mappings only within its existing
+transaction and revalidates them before commit. Finalization/status/repair
+resolve each distinct ZIP path afresh at every observation. Multi-family
+operations hold one shared maintenance-gate owner for the batch and retain all
+individual family locks, so unrelated families can still proceed and exclusive
+maintenance remains blocked until the batch leaves.
+
+Against `8b054aec`, three alternating fresh-process pairs gave:
+
+| Operation and runtime | Baseline median | Current median | Median process peak RSS, baseline/current |
+| --- | ---: | ---: | ---: |
+| Full index, Docker temporary filesystem | 1.284 s | 0.098 s | 54.8 / 55.2 MiB |
+| Finalize, Docker temporary filesystem | 5.855 s | 4.175 s | 61.2 / 59.7 MiB |
+| Full index, SHIROKANE SIF scheduler `TMPDIR` | 2.338 s | 0.121 s | 55.5 / 54.0 MiB |
+| Finalize, SHIROKANE SIF scheduler `TMPDIR` | 4.344 s | 2.823 s | 57.0 / 58.5 MiB |
+
+All 12,500 logical payloads, 262 index views and final ZIP-member manifests
+matched between implementations. The SIF comparison passed 462 affected cases.
+The SIF finalization peak increased by 1.5 MiB; this change targets metadata
+work, not a general memory reduction. Existing running jobs keep their pinned
+source, and these scratch measurements are not production Lustre timings.
 
 ## Reference annotation comparisons
 

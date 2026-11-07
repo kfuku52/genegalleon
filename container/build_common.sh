@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Shared build source defaults and engine discovery; no workflow bootstrap dependencies.
+
+gg_initialize_build_source_defaults() {
+  KFU52_REPO_REF=${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}
+  KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
+  KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
+  KFU52_AMALGKIT_REPO_REF=${KFU52_AMALGKIT_REPO_REF:-${GG_SOURCE_AMALGKIT_REPO_REF}}
+  KFU52_CDSKIT_REPO_REF=${KFU52_CDSKIT_REPO_REF:-${GG_SOURCE_CDSKIT_REPO_REF}}
+  KFU52_CSUBST_REPO_REF=${KFU52_CSUBST_REPO_REF:-${GG_SOURCE_CSUBST_REPO_REF}}
+  KFU52_NWKIT_REPO_REF=${KFU52_NWKIT_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}
+  KFU52_AMALGKIT_REPO_SHA=${KFU52_AMALGKIT_REPO_SHA:-}
+  KFU52_CDSKIT_REPO_SHA=${KFU52_CDSKIT_REPO_SHA:-}
+  KFU52_CSUBST_REPO_SHA=${KFU52_CSUBST_REPO_SHA:-}
+  KFU52_NWKIT_REPO_SHA=${KFU52_NWKIT_REPO_SHA:-}
+  BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
+  BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
+  BUSCO_REPO_REF=${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}
+  BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-}
+  PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+  IQTREE_REPO_URL=${IQTREE_REPO_URL:-https://github.com/iqtree/iqtree3.git}
+  ASTER_REPO_URL=${ASTER_REPO_URL:-https://github.com/chaoszhang/ASTER.git}
+  PAML_REPO_REF=${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}
+  IQTREE_REPO_REF=${IQTREE_REPO_REF:-${GG_SOURCE_IQTREE_REPO_REF}}
+  ASTER_REPO_REF=${ASTER_REPO_REF:-${GG_SOURCE_ASTER_REPO_REF}}
+  PAML_REPO_SHA=${PAML_REPO_SHA:-}
+  IQTREE_REPO_SHA=${IQTREE_REPO_SHA:-}
+  ASTER_REPO_SHA=${ASTER_REPO_SHA:-}
+  KFFRACTBIAS_REPO_URL=${KFFRACTBIAS_REPO_URL:-https://github.com/kfuku52/kfFractBias.git}
+  KFFRACTBIAS_REPO_REF=${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}
+  KFFRACTBIAS_REPO_SHA=${KFFRACTBIAS_REPO_SHA:-}
+  KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
+  RKFTOOLS_REPO_URL=${RKFTOOLS_REPO_URL:-https://github.com/kfuku52/rkftools.git}
+  KFTOOLS_REPO_REF=${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}
+  RKFTOOLS_REPO_REF=${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}
+  KFTOOLS_REPO_SHA=${KFTOOLS_REPO_SHA:-}
+  RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
+  FASTK_REPO_URL=${FASTK_REPO_URL:-https://github.com/thegenemyers/FASTK.git}
+  FASTK_REPO_REF=${FASTK_REPO_REF:-${GG_SOURCE_FASTK_REPO_REF}}
+  FASTK_REPO_SHA=${FASTK_REPO_SHA:-}
+  RAPIDNJ_REPO_URL=${RAPIDNJ_REPO_URL:-https://github.com/somme89/rapidNJ.git}
+  RAPIDNJ_REPO_REF=${RAPIDNJ_REPO_REF:-${GG_SOURCE_RAPIDNJ_REPO_REF}}
+  RAPIDNJ_REPO_SHA=${RAPIDNJ_REPO_SHA:-}
+  RAPIDNJ_ARM_REPO_URL=${RAPIDNJ_ARM_REPO_URL:-https://github.com/johnlees/rapidNJ-M1.git}
+  RAPIDNJ_ARM_REPO_REF=${RAPIDNJ_ARM_REPO_REF:-${GG_SOURCE_RAPIDNJ_ARM_REPO_REF}}
+  RAPIDNJ_ARM_REPO_SHA=${RAPIDNJ_ARM_REPO_SHA:-}
+  SMUDGEPLOT_REPO_URL=${SMUDGEPLOT_REPO_URL:-https://github.com/KamilSJaron/smudgeplot.git}
+  KMC_REPO_URL=${KMC_REPO_URL:-https://github.com/refresh-bio/KMC.git}
+  GENOMESCOPE_REPO_URL=${GENOMESCOPE_REPO_URL:-https://github.com/tbenavi1/genomescope2.0.git}
+  SMUDGEPLOT_REPO_REF=${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}
+  KMC_REPO_REF=${KMC_REPO_REF:-${GG_SOURCE_KMC_REPO_REF}}
+  GENOMESCOPE_REPO_REF=${GENOMESCOPE_REPO_REF:-${GG_SOURCE_GENOMESCOPE_REPO_REF}}
+  SMUDGEPLOT_REPO_SHA=${SMUDGEPLOT_REPO_SHA:-}
+  KMC_REPO_SHA=${KMC_REPO_SHA:-}
+  GENOMESCOPE_REPO_SHA=${GENOMESCOPE_REPO_SHA:-}
+  TESTNH_TARBALL_SHA256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
+  CAFE5_TARBALL_SHA256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
+  if [[ -z "${SECURITY_REFRESH_EPOCH:-}" ]]; then
+    SECURITY_REFRESH_EPOCH="$(date -u +%F)"
+  fi
+
+  if [[ ! "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "SECURITY_REFRESH_EPOCH must use YYYY-MM-DD format: ${SECURITY_REFRESH_EPOCH}"
+    exit 1
+  fi
+}
+
+gg_resolve_container_engine() {
+  local missing_message=${1:-Requested container engine not found}
+  if [[ "${ENGINE}" == "apptainer" || "${ENGINE}" == "singularity" ]]; then
+    if command -v "${ENGINE}" >/dev/null 2>&1; then
+      echo "${ENGINE}"
+      return 0
+    fi
+    echo "${missing_message}: ${ENGINE}" >&2
+    return 1
+  fi
+  if command -v apptainer >/dev/null 2>&1; then
+    echo apptainer
+    return 0
+  fi
+  if command -v singularity >/dev/null 2>&1; then
+    echo singularity
+    return 0
+  fi
+  echo "Neither apptainer nor singularity was found on PATH." >&2
+  return 1
+}

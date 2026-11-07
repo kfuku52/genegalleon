@@ -1349,3 +1349,75 @@ def test_protein_family_query_ortholog_tables_match_cds_labels(weak_duplication_
         pandas.testing.assert_frame_equal(
             pandas.read_csv(tmp_path / "cds_summary" / name, sep="\t"),
             pandas.read_csv(tmp_path / "protein_summary" / name, sep="\t"))
+
+
+def batch_arguments(fixture, out_dir, basis):
+    return SimpleNamespace(
+        basis=basis, dir_gene_family=str(fixture['output_root']), dir_query_gene=str(fixture['query_dir']),
+        family_file='', reference_species='Reference_species', dup_conf_score_threshold=0.05,
+        **{f'out_{role}': str(out_dir / f'{role}.tsv') for role in
+           ('columns', 'glyphs', 'tree', 'synteny', 'ufboot', 'dup_conf', 'query_map')},
+    )
+
+
+def test_related_views_share_one_family_and_match_separate_publication(weak_duplication_fixture, tmp_path, monkeypatch):
+    fixture = weak_duplication_fixture
+    # The cache must be released between families, while both views retain their own ordering.
+    for subdir, suffix in [('stat_branch', '_stat.branch.tsv'), ('cds_fasta', '_cds.fasta')]:
+        source = fixture['output_root'] / subdir / ('FAM' + suffix)
+        shutil.copyfile(source, source.with_name('FAM2' + suffix))
+    shutil.copyfile(fixture['query_dir'] / 'FAM', fixture['query_dir'] / 'FAM2')
+    mod = load_module('query_gene_orthologs.py')
+    bases = ('reference_species', 'query_gene')
+    expected = [batch_arguments(fixture, tmp_path / ('separate_' + basis), basis) for basis in bases]
+    for args in expected:
+        mod.run(args)
+    counts = {}
+    for name in ('_read_stat_branch', '_read_family_cds_fasta_ids', '_build_tree_index'):
+        original = getattr(mod, name)
+
+        def counted(*args, _name=name, _original=original, **kwargs):
+            counts[_name] = counts.get(_name, 0) + 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(mod, name, counted)
+    actual = [batch_arguments(fixture, tmp_path / ('batch_' + basis), basis) for basis in bases]
+    mod.run_many(actual)
+    assert counts == dict.fromkeys(counts, 2)
+    assert mod._FAMILY_INPUTS.get() is None
+    for before, after in zip(expected, actual, strict=True):
+        for name, path in vars(before).items():
+            if name.startswith('out_') and Path(path).exists():
+                assert Path(path).read_bytes() == Path(getattr(after, name)).read_bytes()
+
+
+@pytest.mark.parametrize('failure', ['write', 'source'])
+def test_batch_failure_preserves_every_view(weak_duplication_fixture, tmp_path, monkeypatch, failure):
+    fixture = weak_duplication_fixture
+    mod = load_module('query_gene_orthologs.py')
+    jobs = [batch_arguments(fixture, tmp_path / basis, basis) for basis in ('reference_species', 'query_gene')]
+    mod.run_many(jobs)
+    outputs = {Path(path): Path(path).read_bytes() for args in jobs for name, path in vars(args).items()
+               if name.startswith('out_') and Path(path).exists()}
+    original = mod.write_tsv
+
+    def failed(path, fields, rows):
+        original(path, fields, rows)
+        if failure == 'write':
+            raise OSError('injected batch failure')
+        source = fixture['output_root'] / 'stat_branch/FAM_stat.branch.tsv'
+        source.write_bytes(source.read_bytes() + b'\n')
+
+    monkeypatch.setattr(mod, 'write_tsv', failed)
+    with pytest.raises((ValueError, OSError)):
+        mod.run_many(jobs)
+    assert all(path.read_bytes() == content for path, content in outputs.items())
+
+
+def test_batch_rejects_output_alias_between_views(weak_duplication_fixture, tmp_path):
+    mod = load_module('query_gene_orthologs.py')
+    jobs = [batch_arguments(weak_duplication_fixture, tmp_path / basis, basis)
+            for basis in ('reference_species', 'query_gene')]
+    jobs[1].out_columns = jobs[0].out_columns
+    with pytest.raises(ValueError):
+        mod.run_many(jobs)

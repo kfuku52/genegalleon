@@ -301,7 +301,9 @@ jobs:
             GENOMESCOPE_REPO_SHA=${{ needs.prepare-release.outputs.genomescope_repo_sha }}
           # Consume the regular image-build cache, but do not block the release
           # SIF on a new cache export.
-          cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}
+          cache-from: |
+            type=registry,ref=${{ needs.prepare-release.outputs.image }}:latest
+            type=gha,scope=container-${{ steps.platform.outputs.pair }}
 
       - name: Validate release runtime contracts
         shell: bash

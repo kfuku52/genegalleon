@@ -197,7 +197,7 @@ species after ancient duplications or polyploidy.
 - `GG_COMMON_INPUT_SEQUENCE_MODE` (default `cds`)
 - `GG_COMMON_REPRESENTATIVE_INPUTS` (default empty; verified CDS/protein/GFF/genome manifest from [gene-model refinement](gene-model-refinement.md))
 - `GG_COMMON_CSUBST_NONSYN_RECODE` (default `no`)
-- `GG_COMMON_SPECIES_LABEL_PARSER` (default `taxonomic`)
+- `GG_COMMON_SPECIES_LABEL_PARSER` (default `extended-taxonomic`; NWKIT option preserving cultivar groups, subgroups and hybrids; `legacy` and `taxonomic` remain available)
 - `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)
 - `GG_COMMON_SPECIES_LABEL_MAP_TSV` (default empty)
 - `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` (default `zip`; `zip`, `files`, or the `raw` alias for `files`; see [large-array ZIP collection](gene-family-array-archive-queue.md))

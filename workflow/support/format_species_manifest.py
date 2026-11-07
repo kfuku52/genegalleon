@@ -98,8 +98,13 @@ def build_direct_catalog_lookup_from_xlsx(records):
     for record in records:
         for key in ("choice", "id"):
             value = str(record.get(key, "") or "").strip()
-            if value != "" and value not in lookup:
-                lookup[value] = record
+            if value != "":
+                if value not in lookup:
+                    lookup[value] = record
+                elif lookup[value] != record:
+                    # A bare ID may name several species. Full choices remain
+                    # usable, but an ambiguous selection must not pick the first.
+                    lookup[value] = None
     return lookup
 
 
@@ -112,6 +117,11 @@ def apply_direct_catalog_xlsx_defaults(rows, catalog_lookup):
         provider = str(updated.get("provider", "") or "").strip().lower()
         source_id = str(updated.get("id", "") or "").strip()
         record = catalog_lookup.get(source_id)
+        if (provider == "direct" and source_id in catalog_lookup and record is None
+                and not manifest_has_usable_source_bundle(
+                    updated.get("cds_url", ""), updated.get("gff_url", ""),
+                    updated.get("gbff_url", ""), updated.get("genome_url", ""))):
+            raise ValueError(f"Ambiguous direct catalog selection: {source_id}; select a unique full catalog choice or provide explicit source URLs.")
         if (
             provider == "direct"
             and record is not None

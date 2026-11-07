@@ -182,9 +182,14 @@ def test_split_runtime_commands_preserve_the_complete_validation_contract():
     python = run_checks.commands_for("runtime-python", "2", [])
     extra = run_checks.commands_for("runtime-extra", "2", [])
     r = run_checks.commands_for("r", "2", [])
-    assert python[0][python[0].index("-n"):python[0].index("-n") + 4] == ["-n", "2", "--dist", "load"]
-    serial_python = [argument for argument in python[0] if argument not in ("-n", "2", "--dist", "load")]
-    assert [serial_python] + extra + r == complete
+    worker_index = python[0].index("-n")
+    assert python[0][worker_index:worker_index + 4] == ["-n", "2", "--dist", "load"]
+    extra_parallel = extra[0][:5] + ["-n", "2", "--dist", "load"] + extra[0][5:]
+    assert python + [extra_parallel] + r == complete
+    assert run_checks.commands_for("runtime", "4", [])[1] == extra_parallel
+    assert run_checks.commands_for("runtime", "1", [])[1] == extra[0]
+    serial_python = python[0][:worker_index] + python[0][worker_index + 4:]
+    assert [serial_python] + extra + r == run_checks.commands_for("runtime", None, [])
     assert run_checks.commands_for("runtime-python", "2", ["--gg-shard", "3/8"])[0] == (
         python[0] + ["--gg-shard", "3/8"]
     )

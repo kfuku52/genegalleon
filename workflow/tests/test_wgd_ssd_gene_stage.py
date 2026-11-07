@@ -239,9 +239,16 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     enqueue_family_archive(output_root, "query2family", "OGstage", "stage-test")
     drain_archive_queue(output_root, "query2family", query_id_extractor(["OGstage"]))
     assert not result_zip.exists()
-    assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == manifest_state
+    assert not manifest.exists()
     assert archive_queue_status(output_root)["pending_families"] == 0
     logical = GeneFamilyOutputStore(output_root)
+    # Provenance is collected with the family; retain its bytes and timestamp
+    # through the logical store, then check raw materialization below as well.
+    with logical.open_binary("artifact_provenance", manifest.name) as handle:
+        assert handle.read() == manifest_state[0]
+    manifest_artifact = logical.source_artifact("artifact_provenance", manifest.name)
+    assert manifest_artifact is not None and not manifest_artifact.is_live
+    assert manifest_artifact.mtime_ns == manifest_state[1]
     assert logical.file_names("wgd_ssd") == [result_zip.name]
     with logical.open_binary("wgd_ssd", result_zip.name) as handle:
         assert handle.read() == payload

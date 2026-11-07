@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import csv
 import json
 import re
 import subprocess
@@ -11,15 +10,40 @@ from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request
 
-try:
-    from openpyxl import load_workbook
-except Exception:  # pragma: no cover
-    load_workbook = None
-
 SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from download_catalog import (
+    DIRECT_CATALOG_FIELDS as DIRECT_CATALOG_FIELDS,
+)
+from download_catalog import (
+    ID_EXAMPLES_BY_PROVIDER as ID_EXAMPLES_BY_PROVIDER,
+)
+from download_catalog import (
+    MANIFEST_FIELDNAMES as MANIFEST_FIELDNAMES,
+)
+from download_catalog import (
+    build_direct_catalog_from_manifest_rows as build_direct_catalog_from_manifest_rows,
+)
+from download_catalog import (
+    dedupe_preserve_order as dedupe_preserve_order,
+)
+from download_catalog import (
+    load_manifest_rows as load_manifest_rows,
+)
+from download_catalog import (
+    load_snapshot_payload as load_snapshot_payload,
+)
+from download_catalog import (
+    parse_direct_catalog_entries as parse_direct_catalog_entries,
+)
+from download_catalog import (
+    parse_snapshot_entries as parse_snapshot_entries,
+)
+from download_catalog import (
+    species_label_from_species_key as species_label_from_species_key,
+)
 from format_species_network import guarded_urlopen as urlopen  # noqa: E402
 from format_species_provider_config import (  # noqa: E402
     DEFAULT_INPUT_RELATIVE_DIRS,
@@ -30,120 +54,8 @@ from format_species_provider_config import (  # noqa: E402
 PROVIDERS = DOWNLOAD_MANIFEST_BUILDER_PROVIDERS
 FETCH_PROVIDERS = ID_OPTIONS_FETCH_PROVIDERS
 
-MANIFEST_FIELDNAMES = (
-    "provider",
-    "id",
-    "species_key",
-    "cds_url",
-    "gff_url",
-    "gbff_url",
-    "genome_url",
-    "cds_archive_member",
-    "gff_archive_member",
-    "gbff_archive_member",
-    "genome_archive_member",
-    "cds_filename",
-    "gff_filename",
-    "gbff_filename",
-    "genome_filename",
-    "cds_url_template",
-    "gff_url_template",
-    "genome_url_template",
-    "local_cds_path",
-    "local_gff_path",
-    "local_gbff_path",
-    "local_genome_path",
-)
-DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field not in ("provider", "id"))
-
-ID_EXAMPLES_BY_PROVIDER = {
-    "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
-    "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
-    "ensemblmetazoa": (("anopheles_gambiae", "Anopheles gambiae"),),
-    "ensemblprotists": (("phytophthora_parasitica", "Phytophthora parasitica"),),
-    "ncbi": (
-        ("GCF_000001405.40", "Homo sapiens"),
-        ("GCA_000001635.9", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCA_000001215.4", "Drosophila melanogaster"),
-        ("GCF_000002985.6", "Caenorhabditis elegans"),
-    ),
-    "ddbj": (
-        ("PRJDB15739", "Triphyophyllum peltatum"),
-        ("BAAHMP000000000", "Triphyophyllum peltatum WGS master"),
-    ),
-    "coge": (
-        ("24739", "Arabidopsis thaliana"),
-        ("29177", "Oryza sativa"),
-        ("42091", "Zea mays"),
-        ("78085", "Drosophila melanogaster"),
-        ("72417", "Caenorhabditis elegans"),
-    ),
-    "cngb": (
-        ("CNA0012345", "Homo sapiens"),
-        ("GCF_000001405.40", "Homo sapiens"),
-        ("GCA_000001635.9", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCA_000001215.4", "Drosophila melanogaster"),
-    ),
-    "gwh": (
-        ("GWHIGRM00000000.1", "Medicago sativa"),
-        ("GWHCBHY00000000", "Allium sativum"),
-    ),
-    "citrusgenomedb": (
-        ("https://www.citrusgenomedb.org/organism/5799", "Citrus australasica (CGD organism page)"),
-        ("https://www.citrusgenomedb.org/Analysis/2530647", "Citrus australasica cv. AZM genome v1.0 (CGD analysis)"),
-    ),
-    "figshare": (
-        (
-            "https://figshare.com/articles/dataset/Construction_of_the_super_pan-genome_for_the_genus_Actinidia_reveals_structural_variations_linked_to_phenotypic_diversity/28759280",
-            "Actinidia super pan-genome (figshare article)",
-        ),
-    ),
-    "plantgarden": (
-        ("https://plantgarden.jp/en/list/t64480/genome/t64480.G001", "Actinidia polygama (PlantGARDEN assembly page)"),
-        ("https://plantgarden.jp/en/list/t385388/genome/t385388.G001", "Camellia oleifera (PlantGARDEN assembly page)"),
-    ),
-    "plantaedb": (
-        (
-            "https://plantaedb.com/taxa/phylum/angiosperms/order/asterales/family/asteraceae/subfamily/asteroideae/tribe/astereae/subtribe/conyzinae/genus/erigeron/species/erigeron-breviscapus",
-            "Erigeron breviscapus (PlantaeDB page)",
-        ),
-        (
-            "https://plantaedb.com/taxa/phylum/angiosperms/order/ranunculales/family/berberidaceae/genus/berberis/species/berberis-thunbergii",
-            "Berberis thunbergii (PlantaeDB page)",
-        ),
-    ),
-    "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
-    "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
-    "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
-    "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
-    "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
-    "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
-    "insectbase": (("IBG_00001", "Abrostola tripartita"),),
-    "oryza_minuta": (("gramene_tetraploids", "Oryza minuta Gramene tetraploids"),),
-    "direct": (("direct_example_species", "Direct URL manifest row"),),
-    "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
-}
 
 DEFAULT_TIMEOUT_SECONDS = 45.0
-
-
-def species_label_from_species_key(species_key):
-    text = str(species_key or "").strip()
-    if text == "":
-        return ""
-    parts = text.replace("_", " ").split()
-    normalized = []
-    for idx, part in enumerate(parts):
-        if re.fullmatch(r"[a-z]+", part):
-            if idx == 0:
-                normalized.append(part.capitalize())
-            else:
-                normalized.append(part.lower())
-        else:
-            normalized.append(part)
-    return " ".join(normalized)
 
 
 def dedupe_options(options):
@@ -162,67 +74,6 @@ def dedupe_options(options):
     return out
 
 
-def parse_snapshot_entries(raw_entries):
-    entries = raw_entries
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        return []
-    out = []
-    for entry in entries:
-        source_id = ""
-        species_label = ""
-        if isinstance(entry, str):
-            source_id = entry
-        elif isinstance(entry, dict):
-            source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
-            species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
-        elif isinstance(entry, (tuple, list)) and len(entry) > 0:
-            source_id = str(entry[0] or "").strip()
-            if len(entry) > 1:
-                species_label = str(entry[1] or "").strip()
-        if source_id == "":
-            continue
-        out.append((source_id, species_label))
-    return dedupe_options(out)
-
-
-def parse_direct_catalog_entries(raw_entries):
-    entries = raw_entries
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        return []
-    out = []
-    seen = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
-        if source_id == "":
-            continue
-        species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
-        species_key = str(entry.get("species_key") or "").strip()
-        key = (source_id, species_key, species_label)
-        if key in seen:
-            continue
-        seen.add(key)
-        record = {"id": source_id, "species": species_label}
-        for field in DIRECT_CATALOG_FIELDS:
-            record[field] = str(entry.get(field) or "").strip()
-        out.append(record)
-    return out
-
-
-def load_snapshot_payload(path):
-    with open(path, "rt", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    providers_blob = payload.get("providers", payload)
-    if not isinstance(providers_blob, dict):
-        raise ValueError("snapshot must contain object key 'providers'")
-    return providers_blob
-
-
 def load_snapshot_provider_options(path):
     providers_blob = load_snapshot_payload(path)
     out = {}
@@ -234,65 +85,6 @@ def load_snapshot_provider_options(path):
 def load_snapshot_direct_catalog(path):
     providers_blob = load_snapshot_payload(path)
     return parse_direct_catalog_entries(providers_blob.get("direct", []))
-
-
-def load_manifest_rows(path):
-    suffix = str(path.suffix or "").lower()
-    if suffix == ".xlsx":
-        if load_workbook is None:
-            raise RuntimeError("openpyxl is required to read .xlsx direct catalog manifests")
-        workbook = load_workbook(path, read_only=True, data_only=False)
-        try:
-            sheet = workbook.active
-            values = list(sheet.iter_rows(values_only=True))
-        finally:
-            workbook.close()
-        if len(values) == 0:
-            return []
-        headers = [str(value or "").strip() for value in values[0]]
-        rows = []
-        for row_values in values[1:]:
-            if row_values is None:
-                continue
-            record = {}
-            nonempty = False
-            for idx, field in enumerate(headers):
-                if field == "":
-                    continue
-                value = row_values[idx] if idx < len(row_values) else ""
-                text = str(value or "").strip()
-                if text != "":
-                    nonempty = True
-                record[field] = text
-            if nonempty:
-                rows.append(record)
-        return rows
-    delimiter = "\t" if suffix == ".tsv" else ","
-    with open(path, "rt", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle, delimiter=delimiter))
-
-
-def build_direct_catalog_from_manifest_rows(rows):
-    out = []
-    seen = set()
-    for row in rows:
-        provider = str(row.get("provider", "") or "").strip().lower()
-        if provider != "direct":
-            continue
-        source_id = str(row.get("id", "") or "").strip()
-        if source_id == "":
-            continue
-        species_key = str(row.get("species_key", "") or "").strip()
-        species_label = species_label_from_species_key(species_key)
-        key = (source_id, species_key, species_label)
-        if key in seen:
-            continue
-        seen.add(key)
-        record = {"id": source_id, "species": species_label}
-        for field in DIRECT_CATALOG_FIELDS:
-            record[field] = str(row.get(field, "") or "").strip()
-        out.append(record)
-    return sorted(out, key=lambda record: (str(record.get("id", "")).lower(), str(record.get("species_key", "")).lower()))
 
 
 def fetch_text(url, timeout):

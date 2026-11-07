@@ -231,6 +231,87 @@ gg_require_versions_dump fixture
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
+def test_version_cache_hit_preserves_live_publisher_and_cold_publication_waits(tmp_path):
+    sys.path.insert(0, str(GG_UTIL_PATH.parent))
+    import metadata_store
+    import shared_namespace_lock
+    image = tmp_path / "fixture.sif"
+    image.write_text("fixture identity")
+    runtime = tmp_path / "runtime"
+    runtime.write_text("#!/bin/sh\nexit 0\n")
+    runtime.chmod(0o755)
+    workspace = tmp_path / "workspace"
+    calls = tmp_path / "calls"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+gg_support_dir={shlex.quote(str(GG_UTIL_PATH.parent))}
+gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}
+gg_workspace_dir={shlex.quote(str(workspace))}
+gg_container_image_path={shlex.quote(str(image))}
+gg_container_shell_command_is_set() {{ return 0; }}
+gg_container_shell_command_runtime_bin() {{ echo {shlex.quote(str(runtime))}; }}
+gg_container_bind_destination_exists() {{ return 0; }}
+gg_print_version_summary() {{ :; }}
+gg_run_container_shell_script() {{ echo called >> {shlex.quote(str(calls))}; echo 'fixture versions'; }}
+gg_require_versions_dump fixture
+"""
+    def run():
+        return subprocess.run(["bash", "-c", script], cwd=REPO_ROOT,
+                              env={**os.environ, "GG_LOCK_ACQUIRE_TIMEOUT_SECONDS": "1"},
+                              capture_output=True, text=True, timeout=20)
+    first = run()
+    assert first.returncode == 0, first.stdout + first.stderr
+    cache = workspace / "downloads/version_inventory"
+    metadata_store.pack(cache, writers_stopped=True, delete_originals=True)
+    lock = cache / ".versions-cache.lock"
+    with shared_namespace_lock.namespace_lock(lock, exclusive=True):
+        owner = Path(str(lock) + ".namespace-v1/gate/owner.json")
+        before = owner.read_bytes()
+        hit = run()
+        assert hit.returncode == 0 and "reused verified" in hit.stdout, hit.stdout + hit.stderr
+        assert owner.read_bytes() == before
+        image.write_text("new fixture identity")
+        cold = run()
+        assert cold.returncode != 0 and "Timed out" in cold.stderr, cold.stdout + cold.stderr
+        assert owner.read_bytes() == before
+    assert calls.read_text().splitlines() == ["called", "called"]
+    assert len(list((workspace / "output/versions").glob("run.*.log"))) == 3
+
+    # Slow inventory probing must leave the publisher guard available to other
+    # contexts. Its successful payload is still published under that guard.
+    collecting, release = tmp_path / "collecting", tmp_path / "release-collection"
+    pause = (f"touch {shlex.quote(str(collecting))}; "
+             f"while [[ ! -e {shlex.quote(str(release))} ]]; do sleep 0.02; done; ")
+    delayed = script.replace("echo 'fixture versions';", pause + "echo 'fixture versions';")
+    process = subprocess.Popen(["bash", "-c", delayed], cwd=REPO_ROOT,
+                               env={**os.environ, "GG_LOCK_ACQUIRE_TIMEOUT_SECONDS": "1"},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 15
+        while not collecting.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert collecting.exists(), "inventory collector did not start"
+        with shared_namespace_lock.namespace_lock(lock, exclusive=True, nonblocking=True) as acquired:
+            assert acquired, "slow inventory probing holds the publisher guard"
+            owner = Path(str(lock) + ".namespace-v1/gate/owner.json")
+            before = owner.read_bytes()
+            release.touch()
+            time.sleep(0.2)
+            assert process.poll() is None and owner.read_bytes() == before
+    finally:
+        release.touch(exist_ok=True)
+        try:
+            stdout, stderr = process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+    assert process.returncode == 0, stdout + stderr
+    assert calls.read_text().splitlines() == ["called"] * 3
+    assert not list(cache.rglob("gate/owner.json"))
+
+
 @pytest.mark.parametrize("copied_shim", [False, True])
 def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path, copied_shim):
     workspace = tmp_path / "workspace"
@@ -3002,3 +3083,90 @@ def test_explicit_launch_storage_rejects_unknown_policy_and_writable_members(tmp
                       f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation", tmp_path)
     assert result.returncode != 0
     assert "storage policy" in result.stderr or "file changed: VERSION" in result.stderr
+
+
+@pytest.mark.parametrize('policy', ['', 'readonly-hardlinks-v1'])
+@pytest.mark.parametrize('mutation', ['link', 'inode', 'body', 'mtime'])
+def test_runtime_open_race_retains_policy_and_reports_identity_changes(tmp_path, policy, mutation):
+    release = tmp_path / 'release'
+    snapshot = _write_runtime_release_contract(release, 'gg_input_generation', launch_storage=policy)
+    original_mtime_ns = (release / 'VERSION').stat().st_mtime_ns
+    wrapper = tmp_path / 'python-open-race'
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os,sys\nfrom pathlib import Path\n'
+        'code=sys.stdin.read();sys.argv=sys.argv[1:];_race_open=os.open;_race_fired=False\n'
+        f'_race_root=Path({str(release)!r})\n'
+        'def racing_open(path,*args,**kwargs):\n'
+        ' global _race_fired\n'
+        ' if str(path)=="VERSION" and kwargs.get("dir_fd") is not None and not _race_fired:\n'
+        '  _race_fired=True;p=_race_root/"VERSION";info=p.stat();body=p.read_bytes()\n'
+        + ('  os.link(p,_race_root.parent/"peer-link")\n' if mutation == 'link' else
+           ('  os.utime(p,ns=(info.st_atime_ns,info.st_mtime_ns+1000000000))\n' if mutation == 'mtime' else
+            ('  p.rename(_race_root.parent/"retained-VERSION");p.write_bytes(body)\n'
+            '  assert p.stat().st_ino != info.st_ino\n' if mutation == 'inode' else
+            '  p.chmod(0o600);p.write_bytes(b"X"*len(body))\n')
+            + '  p.chmod(info.st_mode & 0o777);os.utime(p,ns=(info.st_atime_ns,info.st_mtime_ns))\n'))
+        + ' return _race_open(path,*args,**kwargs)\n'
+        'os.open=racing_open;exec(compile(code,"<runtime-open-race>","exec"))\n'
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / 'workflow/support/gg_entrypoint_bootstrap.sh'
+    command = (f'source {shlex.quote(str(bootstrap))}; '
+               f'export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; '
+               f'export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; '
+               f'gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation')
+    result = run_bash(command, tmp_path)
+    assert (result.returncode == 0) is (mutation == 'link' and bool(policy)), result.stderr
+    if mutation == 'link' and not policy:
+        assert 'identity changed between stat and open: VERSION' in result.stderr
+        assert 'links' in result.stderr
+    elif mutation != 'link':
+        assert 'Explicit runtime release file' in result.stderr
+    if mutation == 'mtime':
+        assert f'mtime_ns={original_mtime_ns}->{original_mtime_ns + 1000000000}' in result.stderr
+
+
+@pytest.mark.parametrize('policy', ['', 'readonly-hardlinks-v1'])
+@pytest.mark.parametrize('persistent', [False, True])
+@pytest.mark.parametrize('timing', ['open', 'final'])
+def test_runtime_mtime_cache_disagreement_restarts_complete_observation(tmp_path, policy, persistent, timing):
+    release = tmp_path / 'release'
+    snapshot = _write_runtime_release_contract(release, 'gg_input_generation', launch_storage=policy)
+    wrapper = tmp_path / 'python-stale-metadata'
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os,sys,types,hashlib\n'
+        'code=sys.stdin.read();sys.argv=sys.argv[1:];real_stat=os.stat;real_hash=hashlib.sha256;seen=0;hashed=False\n'
+        f'root={str(release)!r};persistent={persistent!r};timing={timing!r}\n'
+        'def stale_stat(path,*args,**kwargs):\n'
+        ' global seen,hashed\n'
+        ' value=real_stat(path,*args,**kwargs)\n'
+        ' match=(str(path)=="VERSION" and kwargs.get("dir_fd")is not None)if timing=="open"else(str(path)==root+"/VERSION" and hashed)\n'
+        ' if match and (persistent or seen==0):\n'
+        '  seen+=1;hashed=False\n'
+        '  fields={name:getattr(value,name)for name in dir(value)if name.startswith("st_")}\n'
+        '  fields["st_mtime_ns"]+=1000000000\n'
+        '  return types.SimpleNamespace(**fields)\n'
+        ' return value\n'
+        'class Hasher:\n'
+        ' def __init__(self,data=b""):self.inner=real_hash(data)\n'
+        ' def update(self,data):\n'
+        '  global hashed\n'
+        '  hashed=True;self.inner.update(data)\n'
+        ' def hexdigest(self):return self.inner.hexdigest()\n'
+        'os.stat=stale_stat;hashlib.sha256=Hasher;exec(compile(code,"<stale-metadata>","exec"))\n'
+    )
+    wrapper.chmod(0o755)
+    bootstrap = release / 'workflow/support/gg_entrypoint_bootstrap.sh'
+    result = run_bash(f'source {shlex.quote(str(bootstrap))}; export GG_BOOTSTRAP_PYTHON={shlex.quote(str(wrapper))}; '
+                      f'export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; '
+                      f'gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation', tmp_path)
+    expected = bool(policy) and not persistent
+    assert (result.returncode == 0) is expected, result.stderr
+    if policy:
+        assert result.stderr.count('restarting complete verification') == (2 if persistent else 1)
+    else:
+        assert 'restarting complete verification' not in result.stderr
+    if expected:
+        assert result.stdout.strip() == str(release / 'workflow')

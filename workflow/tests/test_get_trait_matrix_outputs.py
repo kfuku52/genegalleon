@@ -354,3 +354,34 @@ def test_shared_index_keeps_extension_types_with_nonunique_named_index(tmp_path,
         for _ in range(2):
             actual = read_subset(source, identifiers, loader, cache)
             pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_trait_queue_keeps_workers_busy_behind_a_slow_first_species(tmp_path, monkeypatch):
+    import threading
+
+    import pandas
+
+    from workflow.support import get_trait_matrix as module
+
+    traits = tmp_path / 'traits'
+    traits.mkdir()
+    species = [f'Species{i:02d}_plant' for i in range(12)]
+    fasta = tmp_path / 'genes.fa'
+    fasta.write_text(''.join(f'>{name}_gene1\nATG\n' for name in species))
+    for name in species:
+        (traits / f'{name}.tsv').touch()
+    last_started = threading.Event()
+
+    def process(trait_path, search_ids, id_map, cache_dir):
+        if Path(trait_path).stem == species[0]:
+            assert last_started.wait(5), 'A slow first species must not stop admission of unrelated work'
+        if Path(trait_path).stem == species[-1]:
+            last_started.set()
+        return pandas.DataFrame({'gene_id': [id_map['gene1']], 'value': [1]})
+
+    output = tmp_path / 'result.tsv'
+    monkeypatch.setattr(module, 'process_trait_file', process)
+    monkeypatch.setattr(sys, 'argv', [str(SCRIPT), '--dir_trait', str(traits), '--seqfile', str(fasta),
+                                    '--outfile', str(output), '--ncpu', '2'])
+    module.main()
+    assert pandas.read_csv(output, sep='\t').gene_id.tolist() == [name + '_gene1' for name in species]

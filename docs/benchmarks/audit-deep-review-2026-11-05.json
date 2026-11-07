@@ -1,0 +1,1134 @@
+{
+  "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+  "sqlite_version": "3.53.4",
+  "platform": "Linux-7.0.14-linuxkit-aarch64-with-glibc2.39",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "runtime": "sha256:26b45fd605ee344383dea0621b20cbc932029bb6646759edf17ba7a9809ad2ab",
+  "docker_memory_bytes": 8214519808,
+  "cache_condition": "fresh processes; one discarded warmup per implementation/case and three alternating trials; OS caches not forcibly cleared",
+  "large_identities": [
+    {
+      "label": "candidate",
+      "iteration": -1,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/candidate-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.9160455420000062,
+      "verification_seconds": 0.9366170010000587,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 26040
+    },
+    {
+      "label": "baseline",
+      "iteration": -1,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.917803916999901,
+      "verification_seconds": 0.9317166260000249,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 157112
+    },
+    {
+      "label": "baseline",
+      "iteration": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.8834902090000014,
+      "verification_seconds": 0.9154800420000129,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 157168
+    },
+    {
+      "label": "candidate",
+      "iteration": 0,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/candidate-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.9266646669999545,
+      "verification_seconds": 0.9375573760000862,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 25900
+    },
+    {
+      "label": "candidate",
+      "iteration": 1,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/candidate-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.9120875009999736,
+      "verification_seconds": 0.9899161679999224,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 25824
+    },
+    {
+      "label": "baseline",
+      "iteration": 1,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.8943539169999895,
+      "verification_seconds": 0.9197352920000412,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 157048
+    },
+    {
+      "label": "baseline",
+      "iteration": 2,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.9372266259999833,
+      "verification_seconds": 0.9283294169999863,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 156920
+    },
+    {
+      "label": "candidate",
+      "iteration": 2,
+      "command": [
+        "/opt/conda/bin/python",
+        "-B",
+        "/Users/kf/repos/genegalleon/workflow/benchmarks/benchmark_guard_spill.py",
+        "--support-root",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/candidate-support",
+        "--guards",
+        "2048",
+        "--inventory-members",
+        "1",
+        "--identity-bytes",
+        "131072"
+      ],
+      "seconds": 0.9278443340000422,
+      "verification_seconds": 0.9527582079999775,
+      "inventory_members": 1,
+      "kind": "guards",
+      "identity_bytes": 131072,
+      "database_bytes": 269819904,
+      "initial_database_bytes": 16384,
+      "distinct_guards": 2049,
+      "identity_set_sha256": "c5ebbbfc06fafea0b7db35d580a7b7f5ebcc2eca7a953718252dd7c7518987c7",
+      "identities_and_readers_verified": true,
+      "io_delta": {
+        "rchar": 102509,
+        "syscr": 27,
+        "wchar": 269922304,
+        "syscw": 65899
+      },
+      "peak_rss_kib": 25952
+    }
+  ],
+  "pipelines": {
+    "narrow": {
+      "command": [
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_audited_database.py",
+        "--baseline-support",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--families",
+        "128",
+        "--files-per-family",
+        "10",
+        "--plot-arguments",
+        "--samples",
+        "3",
+        "--warmups",
+        "1",
+        "--layout",
+        "packed",
+        "--output",
+        "/tmp/gg-deep-narrow.json"
+      ],
+      "families": 128,
+      "files_per_family": 10,
+      "plot_arguments": true,
+      "layout": "packed",
+      "workers": 4,
+      "samples": 3,
+      "warmups": 1,
+      "measurements": [
+        {
+          "label": "baseline",
+          "iteration": 0,
+          "seconds": 2.2771013760000187,
+          "cpu_seconds": 2.43911,
+          "peak_rss_kib_linux": 133388,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 12,
+            "zip_open_ns": 4748249,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 0.9379802500000096
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.0029777919999105507
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0007520830000657952
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.29963824999992994
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.8897950420000598
+            },
+            {
+              "phase": "report",
+              "seconds": 0.0034706669999877704
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 0,
+          "seconds": 2.490394709000043,
+          "cpu_seconds": 2.700824,
+          "peak_rss_kib_linux": 134220,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 24,
+            "zip_open_ns": 10684875,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 0.9952396669999644
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.002877000000012231
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0007662500000833461
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.3273786669999481
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 1.0277338749999672
+            },
+            {
+              "phase": "report",
+              "seconds": 0.004882667000060792
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 1,
+          "seconds": 2.5704243760000054,
+          "cpu_seconds": 2.771632,
+          "peak_rss_kib_linux": 134336,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 24,
+            "zip_open_ns": 9099918,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 1.057722791999936
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.0030730000000858126
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0008361669999885635
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.3666293329999917
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 1.0123762929999884
+            },
+            {
+              "phase": "report",
+              "seconds": 0.0067190409999966505
+            }
+          ]
+        },
+        {
+          "label": "baseline",
+          "iteration": 1,
+          "seconds": 2.3644355010000027,
+          "cpu_seconds": 2.476776,
+          "peak_rss_kib_linux": 133356,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 12,
+            "zip_open_ns": 4761627,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 1.042551292999974
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.002994499999999789
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0007659999999987122
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.2992968749999818
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.8907155000000557
+            },
+            {
+              "phase": "report",
+              "seconds": 0.004171416999952271
+            }
+          ]
+        },
+        {
+          "label": "baseline",
+          "iteration": 2,
+          "seconds": 2.348193001000027,
+          "cpu_seconds": 2.498355,
+          "peak_rss_kib_linux": 133472,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 12,
+            "zip_open_ns": 4775583,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 0.9205479999999397
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.0030622499999708452
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.000841000000036729
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.3667776250000543
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.9240084589999924
+            },
+            {
+              "phase": "report",
+              "seconds": 0.008960958999978175
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 2,
+          "seconds": 2.5700752099999136,
+          "cpu_seconds": 2.772645,
+          "peak_rss_kib_linux": 134192,
+          "logical_sha256": "dea2da4b4f799e753ed5ad335d8ca2ebe9622dff4e32291b7eb3101808e8da5c",
+          "table_rows": {
+            "branch": 128,
+            "pgls_association": 0,
+            "tree": 128
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 24,
+            "zip_open_ns": 8659543,
+            "index_epochs": 57
+          },
+          "audit_sha256": "2affe87b62563cb1ed4ca7ee73c186eaec93fd7c0687afa3a141719c77ecd3de",
+          "inventory_sha256": "1504b3790d6fe46370a19a2c6ba220074de1a0908312b9d23aa5e27b3a0a9821",
+          "status_counts": {
+            "current": 640,
+            "legacy_untracked": 128
+          },
+          "audit_metrics": {
+            "cache_entries": 1666,
+            "digest_bytes_read": 1764392,
+            "digest_cache_hits": 6655,
+            "digest_revalidation_reads": 1666,
+            "digest_spilled_entries": 0,
+            "progress_write_ns": 0,
+            "source_guard_count": 2318,
+            "source_guard_spilled": 0,
+            "unique_digest_reads": 1666
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 1.0758966250000412
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.003945292000025802
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0008060410000325646
+            },
+            {
+              "phase": "database_build",
+              "seconds": 0.3325496259999454
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 1.0087248329999738
+            },
+            {
+              "phase": "report",
+              "seconds": 0.004356625000013992
+            }
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "seconds": 2.348193001000027,
+          "peak_rss_kib_linux": 133388
+        },
+        "candidate": {
+          "seconds": 2.5700752099999136,
+          "peak_rss_kib_linux": 134220
+        }
+      }
+    },
+    "wide": {
+      "command": [
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_audited_database.py",
+        "--baseline-support",
+        "/var/folders/xc/pydw8plj6vvf7mddh20v09sw0000gn/T/gg-audit-deep-qmciffbn/baseline-support",
+        "--families",
+        "512",
+        "--files-per-family",
+        "32",
+        "--plot-arguments",
+        "--samples",
+        "3",
+        "--warmups",
+        "1",
+        "--layout",
+        "packed",
+        "--output",
+        "/tmp/gg-deep-wide.json"
+      ],
+      "families": 512,
+      "files_per_family": 32,
+      "plot_arguments": true,
+      "layout": "packed",
+      "workers": 4,
+      "samples": 3,
+      "warmups": 1,
+      "measurements": [
+        {
+          "label": "baseline",
+          "iteration": 0,
+          "seconds": 74.2383511590001,
+          "cpu_seconds": 76.138464,
+          "peak_rss_kib_linux": 254844,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 32232,
+            "zip_open_ns": 47523259249,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 36.19312685099999
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.010968791000095734
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0030632499999683205
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.0314255839998623
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 35.60523539100018
+            },
+            {
+              "phase": "report",
+              "seconds": 0.010303208999857816
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 0,
+          "seconds": 27.36557551199985,
+          "cpu_seconds": 29.879956999999994,
+          "peak_rss_kib_linux": 261236,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 68,
+            "zip_open_ns": 77001296,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 14.042353423999884
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.014337832999899547
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0032530000000861037
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.333394793000025
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 10.559233670999902
+            },
+            {
+              "phase": "report",
+              "seconds": 0.008990875000108645
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 1,
+          "seconds": 27.437278846000027,
+          "cpu_seconds": 29.866509000000004,
+          "peak_rss_kib_linux": 261484,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 68,
+            "zip_open_ns": 79580792,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 14.835312466000005
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.012022291999983281
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.003513124999926731
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.301039542000126
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 9.876065462999804
+            },
+            {
+              "phase": "report",
+              "seconds": 0.01017883300005451
+            }
+          ]
+        },
+        {
+          "label": "baseline",
+          "iteration": 1,
+          "seconds": 79.68859970200015,
+          "cpu_seconds": 81.38157499999998,
+          "peak_rss_kib_linux": 254452,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 31735,
+            "zip_open_ns": 50477250420,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 36.80375518300002
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.011857958000064173
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.003166500000133965
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.165114375999792
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 40.21415506000017
+            },
+            {
+              "phase": "report",
+              "seconds": 0.10704666699984955
+            }
+          ]
+        },
+        {
+          "label": "baseline",
+          "iteration": 2,
+          "seconds": 77.30855207700006,
+          "cpu_seconds": 79.416225,
+          "peak_rss_kib_linux": 256704,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 32006,
+            "zip_open_ns": 49513502836,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 39.42766181000002
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.011579166000046826
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.003065958999968643
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.2502739169999586
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 35.16232143299999
+            },
+            {
+              "phase": "report",
+              "seconds": 0.008617791999995461
+            }
+          ]
+        },
+        {
+          "label": "candidate",
+          "iteration": 2,
+          "seconds": 26.700265970000146,
+          "cpu_seconds": 29.237316000000003,
+          "peak_rss_kib_linux": 261400,
+          "logical_sha256": "e74c8b658c7a7c7cf12f9f8fb2e27a7aaa35e5ca961ae96dce51adeea97e43be",
+          "table_rows": {
+            "branch": 512,
+            "pgls_association": 0,
+            "tree": 512
+          },
+          "counts": {
+            "metadata_headers": 13,
+            "zip_opens": 68,
+            "zip_open_ns": 83018119,
+            "index_epochs": 145
+          },
+          "audit_sha256": "3296cfc6129bcad8a2ff336030a1872cacef2635a8bedb5c0bfb5f9cc4c99e4d",
+          "inventory_sha256": "ce84947914467da42ec0c80f6b80c4c7fe5c52ec629fda56b8a474d26d380ca4",
+          "status_counts": {
+            "current": 2560,
+            "legacy_untracked": 512
+          },
+          "audit_metrics": {
+            "cache_entries": 16384,
+            "digest_bytes_read": 22065704,
+            "digest_cache_hits": 71679,
+            "digest_revalidation_reads": 17922,
+            "digest_spilled_entries": 17922,
+            "progress_write_ns": 0,
+            "source_guard_count": 20516,
+            "source_guard_spilled": 1,
+            "unique_digest_reads": 17922
+          },
+          "phases": [
+            {
+              "phase": "manifest_hash",
+              "seconds": 13.826043381999852
+            },
+            {
+              "phase": "legacy_inventory",
+              "seconds": 0.011802542000168614
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 0.0031100409998998657
+            },
+            {
+              "phase": "database_build",
+              "seconds": 2.3648596259999977
+            },
+            {
+              "phase": "source_revalidation",
+              "seconds": 10.096066171000075
+            },
+            {
+              "phase": "report",
+              "seconds": 0.010395749999815962
+            }
+          ]
+        }
+      ],
+      "medians": {
+        "baseline": {
+          "seconds": 77.30855207700006,
+          "peak_rss_kib_linux": 254844
+        },
+        "candidate": {
+          "seconds": 27.36557551199985,
+          "peak_rss_kib_linux": 261400
+        }
+      }
+    }
+  },
+  "source_sha256": {
+    "baseline": {
+      "artifact_audit_guards.py": "e8b957a6d3ea0b7613e7b390837e4e8e8967f7187233544c5b5b52e531949e4e",
+      "artifact_provenance.py": "12a2f62dd64f5cb184adfc48fdebbb12414d2236dcbf6e1708289539f85c35a5",
+      "gene_family_database_pipeline.py": "9ce5fa08074f57081ea0a67a096c83a290b303c619dee00c3ec3930bda797309",
+      "gene_family_output_store.py": "b235dca7d8377341c5382189b65eb85e7ed59645029a5a4dcc6777aa97be0190"
+    },
+    "candidate": {
+      "artifact_audit_guards.py": "92691a9904853de9d42157ed8f8f911bc13ebcfced17d4c36cf84d0e0f036960",
+      "artifact_provenance.py": "ae8f1f41947c0ebc604cf5fee9d9c6f5e4ff66f16f880ead12d75258aea61ea5",
+      "gene_family_database_pipeline.py": "0e01a6777d852b0fe3f04177cc7358405912dbfb51d945c5642b5ff0c84dc3b6",
+      "gene_family_output_store.py": "27a103bfbdd65a89635d41a2fa3fb01734dcd247d13a35146b5b34375f5fc1d7"
+    }
+  },
+  "runner_sha256": {
+    "workflow/benchmarks/benchmark_guard_spill.py": "8140ae36735d4a8df72bb3829f646de368ccc90c31a540714bf5501698b2d514",
+    "workflow/tests/benchmark_audited_database.py": "2eabf92c450c976936b5ae635db52f09ebf88eb68410f3569a82bb83d4680489"
+  },
+  "support_tree_sha256": {
+    "baseline": "3507851406c0428a52f93e1b42242b78e13c867f8fa5ad307341527337aaef6d",
+    "candidate": "9586bf6fa7c68b8aac21991f3e6a7a6b00f6cb95e25050e6dd3dd0fc40d9fdfc"
+  }
+}

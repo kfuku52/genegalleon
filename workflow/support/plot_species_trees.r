@@ -3,6 +3,14 @@ suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(ggtree))
 suppressPackageStartupMessages(library(rkftools))
 
+script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(script_arg) > 0) {
+  dirname(normalizePath(sub("^--file=", "", script_arg[[1]]), winslash = "/", mustWork = FALSE))
+} else {
+  getwd()
+}
+source(file.path(script_dir, "tree_topology_helpers.R"), local = TRUE)
+
 cli_args = commandArgs(trailingOnly = TRUE)
 cat('Arguments:\n')
 args = cli_args
@@ -143,66 +151,9 @@ infer_iqtree_support_nwk <- function(rooted_nwk) {
   return(NA_character_)
 }
 
-descendant_tips <- function(tree, node) {
-  n_tip <- length(tree[['tip.label']])
-  children <- tree[['edge']][tree[['edge']][, 1] == node, 2]
-  tips <- children[children <= n_tip]
-  internal_children <- children[children > n_tip]
-  for (child in internal_children) {
-    tips <- c(tips, descendant_tips(tree, child))
-  }
-  tips
-}
-
-node_split_key <- function(tree, node) {
-  n_tip <- length(tree[['tip.label']])
-  tips <- sort(tree[['tip.label']][descendant_tips(tree, node)])
-  if (length(tips) == 0 || length(tips) == n_tip) {
-    return(NA_character_)
-  }
-  other <- sort(setdiff(tree[['tip.label']], tips))
-  if (length(other) < length(tips)) {
-    tips <- other
-  } else if (length(other) == length(tips)) {
-    tip_key <- paste(tips, collapse = "\t")
-    other_key <- paste(other, collapse = "\t")
-    if (other_key < tip_key) {
-      tips <- other
-    }
-  }
-  paste(tips, collapse = "\t")
-}
-
+descendant_tips <- gg_descendant_tips
 transfer_internal_labels <- function(target_tree, source_tree) {
-  n_tip <- length(target_tree[['tip.label']])
-  if (!setequal(target_tree[['tip.label']], source_tree[['tip.label']])) {
-    warning('Cannot transfer support values: target and source trees have different tip labels.')
-    return(target_tree)
-  }
-  source_nodes <- seq.int(length(source_tree[['tip.label']]) + 1, length(source_tree[['tip.label']]) + source_tree[['Nnode']])
-  source_labels <- source_tree[['node.label']]
-  label_by_split <- list()
-  for (idx in seq_along(source_nodes)) {
-    label <- source_labels[[idx]]
-    if (is.na(label) || !nzchar(label)) {
-      next
-    }
-    split_key <- node_split_key(source_tree, source_nodes[[idx]])
-    if (!is.na(split_key) && nzchar(split_key)) {
-      label_by_split[[split_key]] <- label
-    }
-  }
-
-  target_nodes <- seq.int(n_tip + 1, n_tip + target_tree[['Nnode']])
-  target_labels <- rep('', target_tree[['Nnode']])
-  for (idx in seq_along(target_nodes)) {
-    split_key <- node_split_key(target_tree, target_nodes[[idx]])
-    if (!is.na(split_key) && nzchar(split_key) && !is.null(label_by_split[[split_key]])) {
-      target_labels[[idx]] <- label_by_split[[split_key]]
-    }
-  }
-  target_tree[['node.label']] <- target_labels
-  target_tree
+  gg_transfer_internal_labels(target_tree, source_tree, allow_subset = FALSE)
 }
 
 tree_specs = list(
@@ -280,6 +231,21 @@ plot_ncol = min(2, length(plots))
 plot_nrow = ceiling(length(plots) / plot_ncol)
 panel_height = max(2.6, 0.95 + max_tip_count * font_size / 72 * 1.03)
 pdf_height = 0.5 + plot_nrow * panel_height
-out = plot_list(gglist = plots, ncol = plot_ncol)
-ggsave('species_trees.pdf', plot = out, width = 7.2, height = pdf_height, units = 'in')
-out
+if (pdf_height <= 50) {
+  out = plot_list(gglist = plots, ncol = plot_ncol)
+  ggsave('species_trees.pdf', plot = out,
+         width = 7.2, height = pdf_height, units = 'in')
+} else {
+  # Keep whole trees and their original label size on each page. When a
+  # single row needs more than 50 inches, the PDF device retains its height.
+  rows_per_page = max(1L, floor((50 - 0.5) / panel_height))
+  plots_per_page = rows_per_page * plot_ncol
+  grDevices::pdf('species_trees.pdf', width = 7.2,
+                 height = 0.5 + rows_per_page * panel_height, onefile = TRUE)
+  tryCatch({
+    for (first in seq.int(1L, length(plots), by = plots_per_page)) {
+      last = min(first + plots_per_page - 1L, length(plots))
+      print(plot_list(gglist = plots[first:last], ncol = plot_ncol))
+    }
+  }, finally = invisible(grDevices::dev.off()))
+}

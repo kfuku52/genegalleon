@@ -270,17 +270,13 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
 
 
 def test_published_build_cache_excludes_intermediate_layers():
-    writers = [
-        step["with"]["cache-to"]
-        for step in workflow_steps(load_workflow("container-ghcr.yml"))
-        if "cache-to" in step.get("with", {})
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    build = named_step(jobs["build-and-push"], "Build and push platform image by digest")["with"]
+    assert build["cache-to"] == "type=inline"
+    assert build["cache-from"].splitlines() == [
+        "type=registry,ref=${{ needs.prepare-build.outputs.image }}:latest",
+        "type=gha,scope=container-${{ steps.platform.outputs.pair }}",
     ]
-    assert writers
-    for writer in writers:
-        options = dict(part.split("=", 1) for part in writer.split(","))
-        assert options["type"] == "gha"
-        assert options["mode"] == "min"
-        assert options["scope"] == "container-${{ steps.platform.outputs.pair }}"
 
 
 @pytest.mark.parametrize(
@@ -380,7 +376,10 @@ def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_cur
     assert "FORCE_LOAD_IN_CI=1" in build_run
     assert "bash ./gg_container_build_entrypoint.sh" in build_run
     assert "validation-image.outputs.source == 'local'" in build_step["if"]
-    assert build_step["env"]["CACHE_FROM"] == "type=gha,scope=container-linux-amd64"
+    assert build_step["env"]["CACHE_FROM"].splitlines() == [
+        "type=registry,ref=${{ steps.runtime-input.outputs.published_image }}:latest",
+        "type=gha,scope=container-linux-amd64",
+    ]
     assert "type=gha,mode=min,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
     assert "event_name != 'pull_request'" in build_step["env"]["CACHE_TO"]
     assert named_step(sif_job, "Expose GitHub runtime for BuildKit cache")["uses"].startswith(
@@ -495,6 +494,9 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     for path in ("/opt/ghc", "/usr/local/lib/android", "/usr/share/dotnet"):
         assert path in runner_cleanup
     assert "docker buildx prune --all --force" in buildkit_cleanup
+    assert named_step(sif_job, "Reclaim BuildKit cache before SIF conversion")["if"] == (
+        "steps.validation-image.outputs.source == 'local'"
+    )
     assert "docker image inspect --format '{{.Size}}' local/genegalleon:ci" in buildkit_cleanup
     assert "Insufficient disk space for SIF conversion" in buildkit_cleanup
     assert_pinned_singularity_runtime(runtime_install)
@@ -509,6 +511,37 @@ def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     assert "sif-cache.outputs.cache-hit != 'true'" in disk_report["if"]
     assert "df -h /" in disk_report["run"]
     assert "singularity-transport-tmp" in disk_report["run"]
+
+
+@pytest.mark.parametrize("prepared, available_gib, should_clean", [
+    (True, 86, False),
+    (True, 32, False),
+    (True, 31, True),
+    (False, 86, True),
+])
+def test_prepared_registry_sif_skips_cleanup_only_with_disk_headroom(tmp_path, prepared, available_gib, should_clean):
+    job = load_workflow("container-ghcr.yml")["jobs"]["prime-sif-cache"]
+    calls = tmp_path / "calls"
+    for name, script in {
+        "df": 'printf "Available\\n%s\\n" "$FREE_BYTES"',
+        "sudo": 'printf "sudo %s\\n" "$*" >> "$CALLS"',
+        "docker": 'printf "docker %s\\n" "$*" >> "$CALLS"',
+    }.items():
+        path = tmp_path / name
+        path.write_text("#!/bin/sh\n" + script + "\n")
+        path.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", step_run(job, "Reclaim runner disk space for SIF conversion")],
+        cwd=tmp_path, env=os.environ | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}", "CALLS": str(calls),
+            "RUNNER_TEMP": str(tmp_path), "FREE_BYTES": str(available_gib * 1024**3),
+            "PREPARED_IMAGE_REF": "ghcr.io/example/genegalleon:20261106-a7c6893-0123456789ab" if prepared else "",
+        }, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls.exists() == should_clean
+    if should_clean:
+        assert "docker system prune --all --force --volumes" in calls.read_text()
 
 
 def test_release_sif_conversion_has_matching_disk_safeguards():
@@ -719,7 +752,7 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "upstream source resolution failed during preflight" in decision
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
-    assert "workflow/tests/run_checks.py runtime" in runtime_contracts
+    assert "workflow/tests/run_checks.py runtime --workers=4" in runtime_contracts
     assert '"${IMAGE}@${DIGEST}"' in runtime_contracts
 
 
@@ -731,6 +764,7 @@ def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks()
     assert prepared["uses"] == "./.github/actions/validate-sif"
     assert "immutable_tag" in prepared["with"]["image-ref"]
     assert prepared["with"]["runtime-input"] == "${{ needs.build-and-push.outputs.runtime_input }}"
+    assert prepared["with"]["workers"] == "4"
     assert "steps.build-input.outputs.runtime_value" in daily["build-and-push"]["outputs"]["runtime_input"]
     assert named_step(prime, "Restore exact validation SIF")["with"] == named_step(
         commit, "Restore exact validation SIF"
@@ -832,8 +866,12 @@ def test_shared_sif_snapshot_is_verified_without_resolving_new_sources(tmp_path,
         assert output.read_text() == "value=" + "a" * 64 + "\n"
 
 
-def test_sif_python_worker_budget_reaches_the_existing_validation_runner(tmp_path):
-    job = load_workflow("tests.yml")["jobs"]["sif-python"]
+@pytest.mark.parametrize("workflow, job_name, suite, shard", [
+    ("tests.yml", "sif-python", "runtime-python", "2/4"),
+    ("container-ghcr.yml", "prime-sif-cache", "runtime", ""),
+])
+def test_sif_python_worker_budget_reaches_the_existing_validation_runner(tmp_path, workflow, job_name, suite, shard):
+    job = load_workflow(workflow)["jobs"][job_name]
     wrapper = tmp_path / "workflow/tests/run_in_sif.sh"
     wrapper.parent.mkdir(parents=True)
     wrapper.write_text('printf "%s\\n" "$@" > "$CAPTURE"\n')
@@ -841,14 +879,15 @@ def test_sif_python_worker_budget_reaches_the_existing_validation_runner(tmp_pat
     result = subprocess.run(
         ["bash", "-e", "-c", step_run(job, "Run SIF validation checks")],
         cwd=tmp_path, env=os.environ | {
-            "VALIDATION_SUITE": "runtime-python", "VALIDATION_SHARD": "2/4",
+            "VALIDATION_SUITE": suite, "VALIDATION_SHARD": shard,
             "VALIDATION_WORKERS": "4", "CAPTURE": str(output),
         }, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
     command = output.read_text().splitlines()
-    assert command[:3] == ["python", "workflow/tests/run_checks.py", "runtime-python"]
-    assert "--workers=4" in command and "--gg-shard=2/4" in command
+    assert command[:3] == ["python", "workflow/tests/run_checks.py", suite]
+    assert "--workers=4" in command
+    assert [arg for arg in command if arg.startswith("--gg-shard=")] == ([f"--gg-shard={shard}"] if shard else [])
 
 
 def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():

@@ -40,17 +40,13 @@ except ImportError:
     sqlalchemy = None
 
 
-def _fsync_directory(path):
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
+
+
+from boolean_values import strtobool as strtobool
 
 
 def csubst_site_archive_is_complete(path):
@@ -202,19 +198,6 @@ def cleanup_materialization_metadata(parent):
         pass
     except OSError:
         return
-
-
-try:
-    from distutils.util import strtobool
-except ModuleNotFoundError:
-
-    def strtobool(val):
-        val = str(val).strip().lower()
-        if val in ("y", "yes", "t", "true", "on", "1"):
-            return 1
-        if val in ("n", "no", "f", "false", "off", "0"):
-            return 0
-        raise ValueError("invalid truth value {!r}".format(val))
 
 
 try:

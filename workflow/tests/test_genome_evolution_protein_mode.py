@@ -452,7 +452,6 @@ from pathlib import Path
 import sys
 
 if len(sys.argv) > 1 and (sys.argv[1] in ("convert", "validate") or (sys.argv[1] == "label" and "s" in sys.argv)):
-    sys.path = [entry for entry in sys.path if Path(entry).name != "python_stubs"]
     from nwkit.cli import main
     main(sys.argv[1:])
     sys.exit(0)
@@ -749,77 +748,6 @@ if __name__ == "__main__":
 """,
     )
 
-    nwkit_package = tmp_path / "python_stubs" / "nwkit"
-    nwkit_package.mkdir(parents=True, exist_ok=True)
-    (nwkit_package / "__init__.py").write_text("", encoding="utf-8")
-    (nwkit_package / "species_parser.py").write_text(
-        r"""import csv
-import re
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class ParsedSpecies:
-    species_label: str | None = None
-    taxonomy_query: str | None = None
-
-
-def _normalized(value):
-    return re.sub(r"_+", "_", re.sub(r"\s+", "_", str(value or "").strip())).strip("_")
-
-
-class SpeciesParser:
-    def __init__(self, preset, species_regex, species_map_tsv):
-        self.preset = preset
-        self.pattern = re.compile(species_regex or r"^([^_]+_[^_]+)(?:_|$)")
-        self.overrides = {}
-        if species_map_tsv:
-            with open(species_map_tsv, encoding="utf-8", newline="") as handle:
-                for row in csv.DictReader(handle, delimiter="\t"):
-                    self.overrides[row["leaf_name"]] = ParsedSpecies(
-                        species_label=_normalized(row.get("species_label")) or None,
-                        taxonomy_query=str(row.get("taxonomy_query") or "").strip() or None,
-                    )
-
-    def parse(self, label):
-        label = str(label or "")
-        if self.preset == "legacy":
-            match = self.pattern.search(label)
-            species_label = _normalized(match.group(1)) if match else None
-            parsed = ParsedSpecies(
-                species_label=species_label,
-                taxonomy_query=species_label.replace("_", " ") if species_label else None,
-            )
-        elif self.preset == "taxonomic":
-            parts = [part for part in _normalized(label).split("_") if part]
-            if len(parts) < 2:
-                parsed = ParsedSpecies()
-            elif parts[1].lower().rstrip(".") in {"sp", "spp"}:
-                species_label = "_".join(parts[:3] if len(parts) >= 3 else parts[:2])
-                parsed = ParsedSpecies(species_label=species_label, taxonomy_query=parts[0])
-            elif len(parts) >= 3 and parts[1].lower().rstrip(".") in {"cf", "aff", "nr"}:
-                parsed = ParsedSpecies(species_label="_".join(parts[:3]), taxonomy_query=f"{parts[0]} {parts[2]}")
-            elif len(parts) >= 3 and parts[2].lower().rstrip(".") in {"cf", "aff", "nr"}:
-                parsed = ParsedSpecies(species_label="_".join(parts[:3]), taxonomy_query=f"{parts[0]} {parts[1]}")
-            else:
-                parsed = ParsedSpecies(species_label="_".join(parts[:2]), taxonomy_query=f"{parts[0]} {parts[1]}")
-        else:
-            raise ValueError("unsupported parser")
-        override = self.overrides.get(label)
-        if override is None:
-            return parsed
-        return ParsedSpecies(
-            species_label=override.species_label or parsed.species_label,
-            taxonomy_query=override.taxonomy_query or parsed.taxonomy_query,
-        )
-
-
-def get_species_parser(*, species_parser, species_regex=None, species_map_tsv=None):
-    return SpeciesParser(species_parser, species_regex, species_map_tsv)
-""",
-        encoding="utf-8",
-    )
-
     return bin_dir
 
 
@@ -863,9 +791,6 @@ def _run_core(
         key: value for key, value in os.environ.items() if not key.startswith("CONDA") and not key.startswith("_CE_")
     }
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    python_stub_dir = tmp_path / "python_stubs"
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(python_stub_dir) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
     env["gg_workspace_dir"] = str(workspace)
     env["GG_TASK_CPUS"] = "1"
     env["GG_MEM_PER_CPU_GB"] = "1"
@@ -2179,7 +2104,12 @@ def test_genome_evolution_adapts_tree_labels_for_selection_and_all_runs(tmp_path
     original = "( ('Ficus_sp'[source=Ficus_sp]:0.1234567890123456789,Oryza_sativa)98.7654321:1e-8,Arabidopsis_thaliana:0)Ficus_sp;\n"
     source = trees / "undated_species_tree.nwk"
     source.write_text(original)
-    completed = _run_core(tmp_path, {"max_orthofinder_core_species": str(core_limit)})
+    labels = tmp_path / "species_labels.tsv"
+    labels.write_text("leaf_name\tspecies_label\nFicus_sp\tFicus_sp_unknown\n", encoding="utf-8")
+    completed = _run_core(tmp_path, {
+        "max_orthofinder_core_species": str(core_limit),
+        "species_label_map_tsv": str(labels),
+    })
     assert completed.returncode == 0, completed.stdout + completed.stderr
     expected = original.replace("'Ficus_sp'", "Ficus_sp_unknown")
     assert source.read_text() == original

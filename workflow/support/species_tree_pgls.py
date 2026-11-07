@@ -28,6 +28,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from association_statistics import association_rows as _association_rows
+
 METHODS = ("rsc", "species-nwkit")
 AGGREGATIONS = ("sum", "mean", "max")
 MISSING_STRINGS = {"", "NA", "NaN", "nan", "?", "missing", "unknown", "."}
@@ -81,6 +83,8 @@ PGLS_IDENTITY_COLUMNS = (
     "tree_id", "analysis_method", "aggregation", "analysis_id", "model_id",
     "response", "source_term", "term", "term_test", "response_level", "predictor_level",
 )
+
+
 
 
 def read_pgls_results(source) -> pandas.DataFrame:
@@ -454,20 +458,6 @@ def _write_tree(tree: Any, path: Path) -> None:
     )
 
 
-def _association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
-    """Exclude intercept-only rows from association status and ranking."""
-    if frame.empty:
-        return frame
-    mask = pandas.Series(True, index=frame.index, dtype=bool)
-    intercept_labels = {"intercept", "(intercept)"}
-    if "predictor_type" in frame:
-        mask &= ~frame["predictor_type"].astype(str).str.strip().str.lower().isin(intercept_labels)
-    for column in ("term", "source_term"):
-        if column in frame:
-            mask &= ~frame[column].astype(str).str.strip().str.lower().isin(intercept_labels)
-    return frame.loc[mask]
-
-
 def _usable_association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
     """Return converged, successful predictor-association rows."""
     selected = _association_rows(frame)
@@ -488,29 +478,6 @@ def _usable_association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
         failed = selected[convergence_column].astype(str).str.lower().isin(false_values)
         mask &= ~(estimated & failed)
     return selected.loc[mask]
-
-
-def _adjust_association_p_values(
-    values: pandas.Series,
-) -> tuple[numpy.ndarray, numpy.ndarray]:
-    """Return Holm family-wise and Benjamini-Hochberg adjusted p-values."""
-    raw = numpy.asarray(values, dtype=float)
-    count = len(raw)
-    order = numpy.argsort(raw, kind="stable")
-    ranked = raw[order]
-    holm_ranked = numpy.minimum(
-        1.0,
-        numpy.maximum.accumulate((count - numpy.arange(count)) * ranked),
-    )
-    bh_ranked = numpy.minimum(
-        1.0,
-        numpy.minimum.accumulate((count / numpy.arange(count, 0, -1)) * ranked[::-1])[::-1],
-    )
-    holm = numpy.empty(count, dtype=float)
-    bh = numpy.empty(count, dtype=float)
-    holm[order] = holm_ranked
-    bh[order] = bh_ranked
-    return holm, bh
 
 
 def aggregate_species_expression(
@@ -695,8 +662,8 @@ def _read_trait_inputs(
     ordered: Iterable[str] = (),
     categorical_policy: str = "latent",
 ):
-    from nwkit.contrast import _read_mixed_replicate_traits
-    from nwkit.ordinary_regression import _ordinary_predictor_values
+    from nwkit.contrast import read_mixed_replicate_traits
+    from nwkit.ordinary_regression import ordinary_predictor_values
     from nwkit.replicates import TIP_SUMMARY_COLUMNS, ReplicateEstimates
 
     arguments = _replicate_arguments(
@@ -712,7 +679,7 @@ def _read_trait_inputs(
     discrete = set(categorical) | set(ordered)
     replicate_requested = bool(biological_id) or within_variance == "known-se"
     if replicate_requested:
-        return _read_mixed_replicate_traits(
+        return read_mixed_replicate_traits(
             arguments,
             tree,
             list(traits),
@@ -722,7 +689,7 @@ def _read_trait_inputs(
             option_name="GeneGalleon species-PGLS input",
         )
     return ReplicateEstimates(
-        values_by_trait=_ordinary_predictor_values(
+        values_by_trait=ordinary_predictor_values(
             arguments,
             tree,
             list(traits),
@@ -736,18 +703,14 @@ def _read_trait_inputs(
     )
 
 
-
-
 def _sampling_table(
     covariance_by_trait: dict[str, Any], leaf_names: Sequence[str], aggregation: str
 ) -> pandas.DataFrame:
-    from nwkit.ordinary_regression import _sampling_covariance_table
+    from nwkit.ordinary_regression import sampling_covariance_table
 
-    table = _sampling_covariance_table(covariance_by_trait, list(leaf_names))
+    table = sampling_covariance_table(covariance_by_trait, list(leaf_names))
     table.insert(0, "aggregation", aggregation)
     return table
-
-
 
 
 def _native_status(
@@ -790,8 +753,6 @@ def _native_status(
             }
         )
     return rows
-
-
 
 
 def _comparison_table(

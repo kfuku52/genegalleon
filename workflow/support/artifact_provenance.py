@@ -32,7 +32,6 @@ from typing import BinaryIO, Iterable
 
 from metadata_store import archived_bytes, archived_exists, archived_info
 from metadata_store import read_snapshot as metadata_read_snapshot
-from metadata_store import snapshot_reader as metadata_snapshot_reader
 from metadata_store import writer as metadata_writer
 from shared_namespace_lock import NamespaceLockError, namespace_lock
 
@@ -45,7 +44,6 @@ from artifact_audit_runtime import signature as physical_audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
-from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
 from gene_family_output_store import (
     ArchiveStoreError,
     GeneFamilyOutputStore,
@@ -53,6 +51,7 @@ from gene_family_output_store import (
     query_id_from_name,
     query_id_matchers,
     read_only_observation,
+    record_family_output_inventory,
 )
 from orthofinder_output_store import logical_directory_exists as managed_directory_exists
 from orthofinder_output_store import logical_directory_records as orthofinder_directory_records
@@ -135,7 +134,7 @@ def digest_observation(*, workers=1, progress=None, spill_guards=False):
     if existing is not None:
         yield existing
         return
-    memo = AuditDigests(spill_guards=spill_guards)
+    memo = AuditDigests(spill_guards=spill_guards, spill_digests=spill_guards)
     previous = digest_cache()
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
@@ -304,7 +303,12 @@ def declared_output_fasta_contracts(args: argparse.Namespace) -> list[tuple[str,
 
 
 def output_fasta_contract_failure(args: argparse.Namespace) -> str:
-    for label, path, expected in declared_output_fasta_contracts(args):
+    contracts = declared_output_fasta_contracts(args)
+    if not contracts:
+        return ""
+    from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
+
+    for label, path, expected in contracts:
         if not declared_path_exists(path):
             continue
         try:
@@ -1066,6 +1070,10 @@ def _write_manifest_atomic(path: Path, payload: dict[str, object]) -> None:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        family_id = payload.get("family_id")
+        if path.parent.name == "artifact_provenance" and isinstance(family_id, str) and family_id:
+            root = path.parent.parent.resolve()
+            record_family_output_inventory(root, family_id, root / "artifact_provenance" / path.name)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -1814,7 +1822,7 @@ def branch_identity_rows(
 def audit(args: argparse.Namespace) -> int:
     workers = getattr(args, "workers", 1)
     interval = getattr(args, "progress_interval", 10)
-    memo = AuditDigests(spill_guards=True)
+    memo = AuditDigests(spill_guards=True, spill_digests=True)
     source_sha256 = source_identity(SCRIPT_DIR)
     previous_cache = digest_cache()
     previous_path = previous_cache.database if previous_cache is not None else None
@@ -1887,8 +1895,17 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         names = store.file_names(MANIFEST_SUBDIR)
         memo.guard((str(logical_root), "manifest_inventory"), tuple(names),
                    scoped_digest_reader(lambda: tuple(store.file_names(MANIFEST_SUBDIR))))
+        # Renderer argument snapshots are declared outputs of FAMILY.tree_plot.json,
+        # not standalone manifests. Keep them visible to the store and its inventory
+        # fence; the real manifest still verifies their bytes and presence.
+        names = [name for name in names if not name.endswith('.tree_plot.args.json')]
         progress.phase("manifest_hash", len(names))
-        inspect_in_context = metadata_snapshot_reader(inspect_manifest)
+        context = contextvars.copy_context()
+
+        def inspect_in_context(name):
+            # Preserve fixed runtime paths and read-only observation as well
+            # as the metadata fence. Each joined worker needs its own copy.
+            return context.copy().run(inspect_manifest, name)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for offset in range(0, len(names), workers * 8):
                 batch = names[offset:offset + workers * 8]
@@ -1923,6 +1940,10 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
     progress.phase("source_revalidation")
     try:
         if revalidate:
+            # Cached descriptors can still refer to an unlinked old ZIP after
+            # replacement while a shared filesystem serves cached attributes.
+            # Reopen current paths for the independent final content fence.
+            store._close_snapshot_zip_readers()
             memo.validate(workers=workers, progress=progress)
     except (OSError, ValueError) as exc:
         rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from Bio import SeqIO
 from Bio.Data import CodonTable
-from Bio.Seq import Seq
+from cdskit.translate import translate_sequence_string
 
 try:
     from fasta_sequence_store import fasta_records
@@ -38,6 +38,7 @@ def ds_tool_identity():
         import cdskit.backalign
         import cdskit.codonutil
         import cdskit.dnds
+        import cdskit.translate
         import cdskit.tsvio
         import cdskit.util
         import numpy
@@ -45,7 +46,7 @@ def ds_tool_identity():
         raise RuntimeError("dS coloring requires the CDSKIT dnds command; update CDSKIT and the GeneGalleon runtime") from exc
     files = (Path(__file__), Path(__file__).with_name("fasta_sequence_store.py"),
              Path(__file__).with_name("parallel_io.py"), *(Path(module.__file__) for module in (
-        cdskit.dnds, cdskit.codonutil, cdskit.backalign, cdskit.tsvio, cdskit.util, cdskit.atomicio)))
+        cdskit.dnds, cdskit.codonutil, cdskit.backalign, cdskit.tsvio, cdskit.util, cdskit.atomicio, cdskit.translate)))
     mafft = shutil.which("mafft")
     if mafft is None:
         raise RuntimeError("dS coloring requires MAFFT in the GeneGalleon runtime")
@@ -68,7 +69,7 @@ def load_cds(path, analysis, side, species, code):
         sequence = sequence.upper().replace("U", "T")
         if not sequence or len(sequence) % 3:
             raise ValueError(f"Invalid CDS frame: {identifier}")
-        protein = str(Seq(sequence).translate(table=code))
+        protein = translate_sequence_string(sequence, code, False)
         if protein.endswith("*"):
             sequence, protein = sequence[:-3], protein[:-1]
         if not protein or "*" in protein:

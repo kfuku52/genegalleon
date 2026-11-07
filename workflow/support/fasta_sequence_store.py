@@ -42,24 +42,11 @@ def open_text(path: Path) -> TextIO:
 
 
 def fasta_records(path: Path) -> Iterator[tuple[str, str, str]]:
-    header = ""
-    sequence: list[str] = []
-    with open_text(path) as handle:
-        for raw_line in handle:
-            line = raw_line.rstrip("\r\n")
-            if line.startswith(">"):
-                if header:
-                    identifier = header.split(None, 1)[0]
-                    yield identifier, header, "".join(sequence)
-                header = line[1:]
-                sequence = []
-            elif header:
-                sequence.append(line.strip())
-            elif line.strip():
-                raise SequenceStoreError(f"FASTA sequence data precedes the first header: {path}")
-    if header:
-        identifier = header.split(None, 1)[0]
-        yield identifier, header, "".join(sequence)
+    from cdskit.sequence_selection import fasta_records as records
+    try:
+        yield from records(path, opener=open_text)
+    except ValueError as exc:
+        raise SequenceStoreError(str(exc)) from exc
 
 
 def read_sources(path: Path) -> list[tuple[Path, str]]:

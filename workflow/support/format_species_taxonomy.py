@@ -13,6 +13,7 @@ from format_species_constants import (
     TAXONOMIC_INFRASPECIFIC_RANK_ALIASES,
     TAXONOMIC_PROXIMITY_QUALIFIERS,
 )
+from species_labeling import species_prefix_token_count as _species_prefix_token_count
 
 
 def blank_species_taxonomy_metadata():
@@ -178,24 +179,10 @@ def taxonomic_name_lookup_candidates(text):
     return candidates
 
 
+
+
 def species_prefix_token_count(tokens):
-    if len(tokens) < 2:
-        return 0
-    second = taxonomic_token_key(tokens[1])
-    third = taxonomic_token_key(tokens[2]) if len(tokens) >= 3 else ""
-    if is_hybrid_connector_token(tokens[1]):
-        return 3 if len(tokens) >= 3 else 2
-    if second == "sp":
-        return 3 if len(tokens) >= 3 else 2
-    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return 3 if len(tokens) >= 3 else 2
-    if is_hybrid_binomial_connector(tokens, 2):
-        return 5
-    if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return 3
-    if third in TAXONOMIC_INFRASPECIFIC_RANK_ALIASES:
-        return 4 if len(tokens) >= 4 else 3
-    return 2
+    return _species_prefix_token_count(tokens)
 
 
 def invalid_species_key_reason(value):

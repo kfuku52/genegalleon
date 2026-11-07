@@ -20,12 +20,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import numpy
 import pandas
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from association_statistics import association_rows as _association_results
 from species_trait_contract import (
     metadata_path,
     select_species_traits,
@@ -257,6 +257,8 @@ STAT_TREE_RESULT_COLUMNS = (
     "between_tree_variance",
     "tree_support_fraction",
 )
+
+
 
 
 def _read_header(path: Path) -> list[str]:
@@ -1104,45 +1106,6 @@ def _usable_result_mask(results: pandas.DataFrame) -> pandas.Series:
         failed = results[convergence_column].astype(str).str.lower().isin(false_values)
         mask &= ~(estimated & failed)
     return mask
-
-
-def _association_results(results: pandas.DataFrame) -> pandas.DataFrame:
-    """Return predictor-association rows, excluding model intercepts."""
-    if results.empty:
-        return results
-    mask = pandas.Series(True, index=results.index, dtype=bool)
-    intercept_labels = {"intercept", "(intercept)"}
-    if "predictor_type" in results:
-        mask &= ~results["predictor_type"].astype(str).str.strip().str.lower().isin(intercept_labels)
-    for column in ("term", "source_term"):
-        if column in results:
-            mask &= ~results[column].astype(str).str.strip().str.lower().isin(intercept_labels)
-    return results.loc[mask]
-
-
-def _adjust_association_p_values(
-    values: pandas.Series,
-) -> tuple[numpy.ndarray, numpy.ndarray]:
-    """Return Holm family-wise and Benjamini-Hochberg adjusted p-values."""
-    raw = numpy.asarray(values, dtype=float)
-    count = len(raw)
-    order = numpy.argsort(raw, kind="stable")
-    ranked = raw[order]
-    holm_ranked = numpy.minimum(
-        1.0,
-        numpy.maximum.accumulate((count - numpy.arange(count)) * ranked),
-    )
-    bh_ranked = numpy.minimum(
-        1.0,
-        numpy.minimum.accumulate(
-            (count / numpy.arange(count, 0, -1)) * ranked[::-1]
-        )[::-1],
-    )
-    holm = numpy.empty(count, dtype=float)
-    bh = numpy.empty(count, dtype=float)
-    holm[order] = holm_ranked
-    bh[order] = bh_ranked
-    return holm, bh
 
 
 def _write_bundle_frames(

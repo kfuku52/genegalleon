@@ -102,7 +102,9 @@ def test_origin_review_sources_invalidate_focus_even_without_plotting():
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
     text = read_text(GENE_EVOLUTION_CORE)
-    assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in text
+    assert 'gg_annotate_uniprot_proteins uniprot.query.pep.fas "${gg_workspace_dir}"' in text
+    shared = read_text(REPO_ROOT / "workflow/support/gg_util/10_reference_databases.sh")
+    assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in shared
     assert '--synteny "${file_og_synteny}"' in text
     assert 'summary_untrimmed_fasta="${og_id}.summary.untrimmed.fasta"' in text
     assert (
@@ -133,7 +135,9 @@ def test_gene_evolution_hgt_profile_is_wired_as_a_preset():
 
 def test_genome_annotation_core_passes_uniprot_metadata_to_reformatter():
     text = GENOME_ANNOTATION_CORE.read_text(encoding="utf-8")
-    assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in text
+    assert 'gg_annotate_uniprot_proteins uniprot.query.pep.fas "${gg_workspace_dir}"' in text
+    shared = read_text(REPO_ROOT / "workflow/support/gg_util/10_reference_databases.sh")
+    assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in shared
 
 
 def test_hgt_core_uses_optional_direct_contamination_input_directory():

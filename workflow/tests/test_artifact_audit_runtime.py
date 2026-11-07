@@ -315,6 +315,101 @@ def arguments(root, logical, report, workers=4):
         "--workers", str(workers), "--progress-interval", "0"])
 
 
+@pytest.mark.parametrize('workers', [1, 4])
+def test_full_audit_preserves_fixed_runtime_mapping_in_manifest_workers(tmp_path, workers):
+    logical = fixture(tmp_path, families=8)
+    support = tmp_path / 'fixed-runtime/support'
+    support.mkdir(parents=True)
+    source = support / 'audit_unique_runtime_source.py'
+    source.write_bytes(b'fixed runtime source\n')
+    for path in (logical / 'artifact_provenance').iterdir():
+        payload = json.loads(path.read_text())
+        payload['inputs'] = [dict(label='runtime', scope='absolute',
+            path='/script/support/' + source.name, artifact_type='file',
+            sha256=hashlib.sha256(source.read_bytes()).hexdigest(), size_bytes=source.stat().st_size)]
+        path.write_text(json.dumps(payload))
+    report = tmp_path / 'audit.tsv'
+    with provenance.runtime_support_root(support):
+        assert provenance.audit(arguments(tmp_path, logical, report, workers)) == 0
+    assert '\tmissing_input\t' not in report.read_text()
+    assert report.read_text().count('\tcurrent\t') == 8
+
+
+def test_final_audit_reopens_replaced_zip_even_with_cached_filesystem_attributes(tmp_path, monkeypatch):
+    import zipfile
+    logical = collection_fixture(tmp_path, 'zip', families=8)
+    store = GeneFamilyOutputStore(logical)
+    source = store.source_artifact('artifact_provenance', 'OG0000000.example.json').zip_path
+    original_signature = runtime.signature
+    frozen = original_signature(source)
+    def cached_attributes(path):
+        return frozen if Path(path) == source else original_signature(path)
+    monkeypatch.setattr(runtime, 'signature', cached_attributes)
+    monkeypatch.setattr(provenance, 'physical_audit_signature', cached_attributes)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    validate = AuditDigests.validate
+    def replace_before_validation(memo, *args, **kwargs):
+        with zipfile.ZipFile(source) as archive:
+            members = [(item.filename, archive.read(item.filename)) for item in archive.infolist()]
+        replacement = source.with_suffix('.replacement')
+        with zipfile.ZipFile(replacement, 'w') as archive:
+            for name, body in members:
+                if name.endswith('OG0000000.example.json'):
+                    body = body.replace(b'example', b'changed')
+                archive.writestr(name, body)
+        os.replace(replacement, source)
+        return validate(memo, *args, **kwargs)
+    monkeypatch.setattr(AuditDigests, 'validate', replace_before_validation)
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) != 0
+    assert '\taudit_error\t' in report.read_text()
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'packed'])
+@pytest.mark.parametrize('family', ['OG0000000', 'query.with.dots'])
+def test_plot_arguments_are_outputs_not_manifests(tmp_path, layout, family):
+    from gene_tree_plot_config import record as record_arguments
+
+    logical = tmp_path / 'output/families'
+    manifest = logical / f'artifact_provenance/{family}.tree_plot.json'
+    snapshot = manifest.with_name(f'{family}.tree_plot.args.json')
+    record_arguments(snapshot, logical, ['--panel1=tree'], 'taxonomic')
+    assert provenance.dispatch(['record', '--workspace-root', str(tmp_path), '--logical-root', str(logical),
+        '--family-id', family, '--step', 'tree_plot', '--manifest', str(manifest),
+        '--output', 'tree_plot_arguments=' + str(snapshot)]) == 0
+    store = GeneFamilyOutputStore(logical)
+    if layout == 'zip':
+        store_module.archive_completed_outputs(logical, 'orthogroup' if family.startswith('OG') else 'query2family',
+            {family}, lambda _name: family, include_incomplete=True)
+    elif layout == 'packed':
+        import metadata_store
+        metadata_store.pack(manifest.parent, writers_stopped=True, delete_originals=True)
+    report = tmp_path / 'audit.tsv'
+    args = arguments(tmp_path, logical, report)
+    args.mode = 'orthogroup' if family.startswith('OG') else 'query2family'
+    assert provenance.audit(args) == 0
+    assert store.file_names('artifact_provenance') == [snapshot.name, manifest.name]
+    rows = report.read_text().splitlines()
+    assert len(rows) == 2 and '\ttree_plot\tcurrent\t' in rows[1]
+    # A live override must still invalidate the real manifest, including after packing.
+    snapshot.parent.mkdir(exist_ok=True)
+    snapshot.write_text('{"arguments": ["changed"]}')
+    assert provenance.audit(args) == 1
+    assert '\tchanged_output\t' in report.read_text()
+    assert '\tinvalid_manifest\t' not in report.read_text()
+    store.delete('artifact_provenance/' + snapshot.name, family_id=family)
+    assert provenance.audit(args) == 1
+    assert '\tmissing_output\t' in report.read_text()
+
+
+def test_missing_identity_in_real_manifest_is_not_ignored(tmp_path):
+    logical = fixture(tmp_path, families=1)
+    (logical / 'artifact_provenance/OG0000000.example.json').write_text('{"schema_version": 1}')
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) == 1
+    assert '\tinvalid_manifest\tfamily_id and step are required\t' in report.read_text()
+
+
 def test_digest_reuse_single_flight_and_final_change_fence(tmp_path):
     path = tmp_path / "shared"
     path.write_bytes(b"abc")
@@ -578,7 +673,7 @@ def test_large_spilled_inventory_does_not_amplify_unrelated_guard_reads():
         values = list(spill.values())
         assert len(values) == 513
         assert all(expected == encode(reader()) for expected, reader in values)
-        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] == 131072
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] > 262144
         with pytest.raises(ValueError, match='changed during'):
             spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), (), lambda: ())
     finally:
@@ -630,6 +725,215 @@ def test_digest_capacity_fails_closed_even_for_concurrent_first_reads(tmp_path):
     assert sum(isinstance(value, str) and "bounded capacity" in value for value in outcomes) == 1
     assert len(memo.entries) == 1
     memo.validate()
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+def test_digest_spill_retains_reuse_and_every_final_content_read(tmp_path, workers):
+    paths = [tmp_path / str(index) for index in range(19)]
+    calls = []
+    memo = AuditDigests(limit=2, spill_digests=True)
+    try:
+        for index, path in enumerate(paths):
+            path.write_text(str(index))
+            def read(path=path):
+                calls.append(path.name)
+                data = path.read_bytes()
+                return hashlib.sha256(data).hexdigest(), len(data)
+            memo.read(path, read)
+        # Revisit a cold source. Neither its bytes nor its original identity may be rebound.
+        assert memo.read(paths[0], lambda: pytest.fail('cold cache hit rehashed content'))[1] == 1
+        assert len(calls) == len(paths)
+        assert len(memo.entries) <= 2
+        assert memo.metrics()['digest_spilled_entries'] == len(paths)
+        memo.validate(workers=workers)
+        assert sorted(calls) == sorted([path.name for path in paths] * 2)
+        directory = Path(memo.digest_spill.directory.name)
+        with pytest.raises(ValueError, match='changed during'):
+            paths[0].write_text('changed')
+            memo.read(paths[0], lambda: ('unexpected', 7))
+    finally:
+        memo.close()
+    assert not directory.exists()
+
+
+def test_digest_spill_rechecks_content_with_unchanged_file_signatures(tmp_path, monkeypatch):
+    path = tmp_path / 'source'
+    path.write_bytes(b'abc')
+    fixed = runtime.signature(path)
+    monkeypatch.setattr(runtime, 'signature', lambda _path: fixed)
+    memo = AuditDigests(limit=1, spill_digests=True)
+    try:
+        for member in ('one', 'two'):
+            memo.read(path, lambda: (hashlib.sha256(path.read_bytes()).hexdigest(), 3), member=member)
+        path.write_bytes(b'xyz')
+        with pytest.raises(ValueError, match='content changed before publication'):
+            memo.validate(workers=4)
+    finally:
+        memo.close()
+
+
+def test_digest_spill_preserves_directory_result_types_and_constraints(tmp_path):
+    directory = tmp_path / 'directory'
+    directory.mkdir()
+    (directory / 'child').write_bytes(b'abc')
+    memo = AuditDigests(limit=1, spill_digests=True)
+    try:
+        for constraint in (('directory', None), ('logical_directory', 1)):
+            assert memo.read(directory, lambda: provenance._directory_digest(directory),
+                             directory=True, constraint=constraint)[2] == 1
+        memo.validate()
+        assert memo.metrics()['digest_revalidation_reads'] == 2
+        (directory / 'extra').write_bytes(b'xyz')
+        with pytest.raises(ValueError, match='changed before publication'):
+            memo.validate()
+    finally:
+        memo.close()
+
+
+def test_digest_spill_inventory_loss_fails_closed(tmp_path):
+    path = tmp_path / 'source'
+    path.write_bytes(b'abc')
+    memo = AuditDigests(limit=1, spill_digests=True)
+    try:
+        for member in ('one', 'two'):
+            memo.read(path, lambda: ('expected', 3), member=member)
+        memo.digest_spill.database.execute('DELETE FROM guards WHERE reader=0')
+        with pytest.raises(ValueError, match='inventory changed'):
+            memo.validate()
+    finally:
+        memo.close()
+
+
+def test_digest_spill_storage_failure_is_one_audit_error(tmp_path, monkeypatch):
+    logical = fixture(tmp_path, families=2)
+    for index in range(2):
+        path = logical / f'artifact_provenance/OG{index:07d}.example.json'
+        payload = json.loads(path.read_bytes())
+        source = tmp_path / f'source-{index}'
+        source.write_text(str(index))
+        payload['inputs'] = [dict(label='source', scope='workspace', path=source.name, artifact_type='file',
+                                  sha256=hashlib.sha256(source.read_bytes()).hexdigest(), size_bytes=1)]
+        path.write_text(json.dumps(payload))
+    original = AuditDigests
+    monkeypatch.setattr(provenance, 'AuditDigests', lambda **kwargs: original(limit=1, **kwargs))
+    from artifact_audit_guards import DigestSpill
+    def fail(spill, *args):
+        raise runtime.AuditCapacityError('Audit digest spill failed: no space')
+    monkeypatch.setattr(DigestSpill, 'guard', fail)
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) == 1
+    assert report.read_text().count('\taudit_error\t') == 1
+    assert 'invalid_manifest' not in report.read_text()
+
+
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+def test_spill_grows_beyond_old_application_limits(kind):
+    import artifact_audit_guards as guards
+    spill = getattr(guards, kind)()
+    try:
+        # Check the effective SQLite ceiling without allocating a GiB in every
+        # regression run. Large capacity qualification uses the benchmark.
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] > 262144
+        spill.guard('key', ('original', 1), lambda: ('original', 1))
+        assert list(spill.values())[0][0] == guards.encode(('original', 1))
+    finally:
+        spill.close()
+
+
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+@pytest.mark.parametrize('stage', ['directory', 'connect', 'schema'])
+def test_spill_initialization_failure_is_a_clean_audit_error(tmp_path, monkeypatch, kind, stage):
+    import artifact_audit_guards as guards
+    original = guards.sqlite3.connect
+    if stage == 'directory':
+        def fail(**kwargs):
+            raise OSError('temporary disk is full')
+        monkeypatch.setattr(guards.tempfile, 'TemporaryDirectory', fail)
+    else:
+        monkeypatch.setattr(guards.tempfile, 'tempdir', str(tmp_path))
+        def connect(*args, **kwargs):
+            if stage == 'connect':
+                raise guards.sqlite3.OperationalError('unable to open database file')
+            connection = original(*args, **kwargs)
+            connection.execute('PRAGMA query_only=ON')
+            return connection
+        monkeypatch.setattr(guards.sqlite3, 'connect', connect)
+    with pytest.raises(runtime.AuditCapacityError, match='spill failed.*TMPDIR'):
+        getattr(guards, kind)()
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('kind', ['GuardSpill', 'DigestSpill'])
+def test_spill_sqlite_capacity_failure_is_explicit_and_cannot_be_reused(kind):
+    import artifact_audit_guards as guards
+    spill = getattr(guards, kind)()
+    directory = Path(spill.directory.name)
+    try:
+        spill.guard('original', 1, lambda: 1)
+        spill.database.execute('PRAGMA max_page_count=16')
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed.*full.*TMPDIR'):
+            spill.guard('key', 'x' * 65536, lambda: None)
+        # SQLite may have rolled back all previously registered rows. Even
+        # after space is restored this audit must restart, never lose fences.
+        spill.database.execute('PRAGMA max_page_count=262144')
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+            spill.guard('retry', 2, lambda: 2)
+        with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+            list(spill.values())
+        if kind == 'DigestSpill':
+            with pytest.raises(runtime.AuditCapacityError, match='spill failed'):
+                spill.get('original')
+    finally:
+        spill.close()
+    assert not directory.exists()
+
+
+def test_spilled_digest_reads_remain_single_flight_with_cold_cache(tmp_path):
+    source = tmp_path / 'source'
+    source.write_bytes(b'abc')
+    reads = []
+    memo = AuditDigests(limit=1, spill_digests=True)
+    try:
+        def compute():
+            reads.append(1)
+            return hashlib.sha256(source.read_bytes()).hexdigest(), 3
+        memo.read(source, compute, member='cold')
+        memo.read(source, compute, member='hot')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            assert len(set(executor.map(lambda _: memo.read(source, compute, member='cold'), range(40)))) == 1
+        assert len(reads) == 2
+        memo.validate(workers=4)
+        assert len(reads) == 4
+    finally:
+        memo.close()
+
+
+@pytest.mark.parametrize('spilled', [False, True])
+def test_duplicate_guard_keeps_original_active_store_snapshot(tmp_path, monkeypatch, spilled):
+    logical = tmp_path / 'families'
+    source = logical / 'data/OG0000000.tsv'
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'abc')
+    original, later = GeneFamilyOutputStore(logical), GeneFamilyOutputStore(logical)
+    memo = AuditDigests(limit=1, spill_guards=spilled)
+    def identity(store):
+        return provenance._audit_artifact_identity(store.source_artifact('data', source.name))
+    try:
+        with original.read_snapshot():
+            memo.guard('source', identity(original), lambda: identity(original))
+            if spilled:
+                memo.guard('other', (), lambda: ())
+            with later.read_snapshot():
+                memo.guard('source', identity(later), lambda: identity(later))
+            def reject_epoch():
+                pytest.fail('final reader lost the original active snapshot')
+            monkeypatch.setattr(later, '_read_index_epoch', reject_epoch)
+            memo.validate(workers=4)
+            source.write_bytes(b'changed')
+            with pytest.raises(ValueError, match='changed before publication'):
+                memo.validate(workers=4)
+    finally:
+        memo.close()
 
 
 def test_workspace_mutation_between_manifest_reads_cannot_rebind_digest(tmp_path, monkeypatch):

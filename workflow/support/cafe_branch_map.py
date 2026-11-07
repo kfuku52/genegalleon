@@ -95,10 +95,8 @@ def map_branch(old_path, new_path, target):
     missing = wanted - new_species
     candidates = []
     if not missing:
-        for row in new_rows:
-            tips = set(row['descendants'])
-            if not row['is_root'] and tips & common == wanted:
-                candidates.append({**row, 'added_descendants': sorted(tips - old_species)})
+        from nwkit.tree_features import projected_clade_candidates
+        candidates = projected_clade_candidates(wanted, new_rows, common, old_species)
     candidates.sort(key=lambda row: row['native_key'])
     eligible = len(candidates) == 1 and not missing
     state = ('missing_target_species' if missing else 'unmapped_clade' if not candidates

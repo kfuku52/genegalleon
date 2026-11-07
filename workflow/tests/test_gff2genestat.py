@@ -1518,3 +1518,30 @@ def test_gtf_gene_coordinates_cli_retains_gene_instead_of_cds_span(tmp_path):
     assert pandas.read_csv(output, sep="\t").to_dict("records") == [
         dict(gene_id="Species_a_g1", chromosome="chr1", start=100, end=500,
              strand="-", coordinate_source="gene")]
+
+
+def test_parallel_gff_queue_preserves_species_order_coordinates_and_error_context(tmp_path):
+    directory = tmp_path / 'gff'
+    directory.mkdir()
+    fasta = tmp_path / 'genes.fa'
+    fasta.write_text('>Species_a_g1\nATG\n>Species_b_g1\nATG\n')
+    for species, start in [('Species_a', 10), ('Species_b', 100)]:
+        (directory / f'{species}.gff').write_text(f'chr1\ts\tgene\t{start}\t{start + 20}\t.\t+\t.\tID=gene:g1\n')
+    command = [sys.executable, str(SCRIPT_PATH), '--mode', 'gene_coordinates', '--dir_gff', str(directory),
+               '--seqfile', str(fasta), '--require-matches']
+    outputs = []
+    for workers in (1, 2):
+        output = tmp_path / f'genes{workers}.tsv'
+        result = subprocess.run([*command, '--ncpu', str(workers), '--outfile', str(output)],
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        outputs.append(output.read_bytes())
+    assert outputs[0] == outputs[1]
+    frame = pandas.read_csv(tmp_path / 'genes2.tsv', sep='\t')
+    assert frame.gene_id.tolist() == ['Species_a_g1', 'Species_b_g1']
+    assert frame.start.tolist() == [10, 100]
+    (directory / 'Species_b.gff').write_text('chr1\ts\tgene\t100\t99\t.\t+\t.\tID=gene:g1\n')
+    result = subprocess.run([*command, '--ncpu', '2', '--outfile', str(tmp_path / 'failed.tsv')],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert 'Failed processing Species_b.gff' in result.stderr

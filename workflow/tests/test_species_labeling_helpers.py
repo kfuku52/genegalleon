@@ -343,7 +343,8 @@ def test_species_labeling_preserves_basename_and_path_labels(value, expected, st
 ])
 def test_species_labeling_preserves_windows_path_labels(monkeypatch, value):
     mod = load_module("species_labeling.py", "species_labeling_windows_path_module")
-    monkeypatch.setattr(mod, "Path", PureWindowsPath)
+    import nwkit.taxonomic_labels
+    monkeypatch.setattr(nwkit.taxonomic_labels, "Path", PureWindowsPath)
     assert mod.extract_species_label(value) == "Genus_species"
 
 

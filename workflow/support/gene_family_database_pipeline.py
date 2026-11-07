@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import artifact_provenance as provenance
@@ -56,6 +58,79 @@ def catalog_store(root, record, mode):
     return CatalogStore(root, families), ((str(path.absolute()), 'family_catalog'), before, identity)
 
 
+def validate_destinations(audit, record, destination):
+    report = audit.output_tsv
+    paths = [destination, record.manifest, report, report.with_suffix(report.suffix + '.progress.json'),
+             report.with_suffix(report.suffix + '.result.json')]
+    for index, path in enumerate(paths):
+        if path.is_symlink() or path.exists() and not path.is_file():
+            raise ValueError('Database publication requires regular output paths: ' + str(path))
+        for other in paths[:index]:
+            if path.resolve() == other.resolve() or path.exists() and other.exists() and os.path.samefile(path, other):
+                raise ValueError('Database, provenance and audit output paths must be distinct')
+
+
+def publish_database(build, record, payload):
+    """Publish the validated pair, restoring both files on a caught failure.
+
+    The caller holds the database and manifest writer locks. Back up the large
+    closed SQLite file with a hard link; copy the small manifest so metadata
+    readers never observe a multiply-linked source. Packed old manifests need
+    no copy: removing a failed live override exposes the unchanged packed body.
+    """
+    private, final, mode, publish = build
+    final, manifest = Path(final), record.manifest
+    directories, backups, installed = [], {}, []
+    preserve = False
+    with provenance.metadata_writer(manifest):
+        try:
+            for target in ([final] if publish else []) + [manifest]:
+                if target.is_symlink() or target.exists() and not target.is_file():
+                    raise ValueError('Database publication requires regular output paths: ' + str(target))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                directory = Path(tempfile.mkdtemp(prefix='.' + target.name + '.publish-', dir=target.parent))
+                directories.append(directory)
+                backups[target] = None
+                if target.exists():
+                    backup = directory / 'original'
+                    if target == final:
+                        os.link(target, backup, follow_symlinks=False)
+                    else:
+                        shutil.copy2(target, backup)
+                    backups[target] = backup
+            try:
+                if publish:
+                    if mode == 'create':
+                        os.link(private, final)
+                    else:
+                        os.replace(private, final)
+                    installed.append(final)
+                # The writer can fail after replacing its target (e.g. during
+                # lock cleanup); include the manifest in rollback before entry.
+                installed.append(manifest)
+                provenance.write_manifest_atomic(manifest, payload)
+            except BaseException as exc:
+                failures = []
+                for target in reversed(installed):
+                    try:
+                        backup = backups[target]
+                        if backup is None:
+                            target.unlink(missing_ok=True)
+                        else:
+                            os.replace(backup, target)
+                    except OSError as failure:
+                        failures.append(str(target) + ': ' + str(failure))
+                if failures:
+                    preserve = True
+                    raise RuntimeError('Database publication rollback needs recovery; backups retained in '
+                                       + ', '.join(map(str, directories)) + '; ' + '; '.join(failures)) from exc
+                raise
+        finally:
+            if not preserve:
+                for directory in directories:
+                    shutil.rmtree(directory)
+
+
 def run(audit_argv, database_argv, record_argv):
     audit = provenance.build_parser().parse_args(['audit', *audit_argv])
     parser = database.build_parser()
@@ -71,6 +146,7 @@ def run(audit_argv, database_argv, record_argv):
             or record.optional_output or record.output_logical_directory
             or audit.workspace_root.resolve() != record.workspace_root.resolve()):
         raise ValueError('Audit, database and record must describe the same workspace, store and sole database output')
+    validate_destinations(audit, record, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     inventory = hashlib.sha256()
@@ -113,17 +189,12 @@ def run(audit_argv, database_argv, record_argv):
                     if os.environ.get('GG_OBSERVATION_ATTEMPT_DIR'):
                         payload['diagnostics']['observation_attempt_id'] = Path(os.environ['GG_OBSERVATION_ATTEMPT_DIR']).name
                 # Content and archive epoch fences both precede publication.
+                store._close_snapshot_zip_readers()
             provenance._publish_audit(audit, memo, progress, rows, inventory)
             if build is None:
                 print('Skipping database prep because required logical statistics are absent.')
                 return 0
-            if publish:
-                if mode == 'create':
-                    os.link(private, final)
-                    os.unlink(private)
-                else:
-                    os.replace(private, final)
-            provenance.write_manifest_atomic(record.manifest, payload)
+            publish_database(build, record, payload)
             if os.environ.get('GG_OBSERVATION_ATTEMPT_DIR'):
                 record_contract_result(record, 0)
             print(f'Recorded audited database: {destination}')

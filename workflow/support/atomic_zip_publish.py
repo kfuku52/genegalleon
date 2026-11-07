@@ -23,17 +23,10 @@ class ZipPublishError(RuntimeError):
     """Raised when a source ZIP cannot be safely published."""
 
 
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from .filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
 
 
 def _signature(path: Path) -> tuple[int, int, int, int, int]:

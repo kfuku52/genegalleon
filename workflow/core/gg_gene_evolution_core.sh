@@ -19,7 +19,7 @@ representative_map_args=()
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
-species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
+species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-extended-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
 reconciliation_duplication_cost="${reconciliation_duplication_cost:-1.5}"
@@ -182,73 +182,8 @@ gene_family_run_succeeded=0
 gene_family_materialization_receipt=""
 gene_family_run_lock_path=""
 gene_family_run_lock_heartbeat_pid=""
-gene_family_output_storage=$(printf '%s' "${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
 gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}"
-gene_family_zip_compression=$(printf '%s' "${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
-gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}"
-gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}"
-gene_family_final_zip_max_bytes="${gene_family_final_zip_max_bytes:-${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:-0}}"
-gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}"
-gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}"
-gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}"
-gene_family_tmp_max_files="${gene_family_tmp_max_files:-${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:-100000}}"
-case "${gene_family_output_storage}" in
-  zip|files)
-    ;;
-  raw)
-    gene_family_output_storage="files"
-    ;;
-  *)
-    echo "Invalid gene_family_output_storage: ${gene_family_output_storage}; expected zip, files, or raw." >&2
-    exit 1
-    ;;
-esac
-if [[ ! "${gene_family_zip_min_batch_files}" =~ ^[0-9]+$ || ${gene_family_zip_min_batch_files} -lt 1 ]]; then
-  echo "Invalid gene_family_zip_min_batch_files: ${gene_family_zip_min_batch_files}; expected a positive integer." >&2
-  exit 1
-fi
-case "${gene_family_zip_compression}" in
-  adaptive|deflate|store)
-    ;;
-  *)
-    echo "Invalid gene_family_zip_compression: ${gene_family_zip_compression}; expected adaptive, deflate, or store." >&2
-    exit 1
-    ;;
-esac
-if [[ ! "${gene_family_zip_compression_level}" =~ ^[0-9]+$ || ${gene_family_zip_compression_level} -gt 9 ]]; then
-  echo "Invalid gene_family_zip_compression_level: ${gene_family_zip_compression_level}; expected an integer from 0 through 9." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_zip_workers}" =~ ^[0-9]+$ || ${gene_family_zip_workers} -lt 1 || ${gene_family_zip_workers} -gt 4 ]]; then
-  echo "Invalid gene_family_zip_workers: ${gene_family_zip_workers}; expected an integer from 1 through 4." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_final_zip_max_bytes}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_final_zip_max_bytes: ${gene_family_final_zip_max_bytes}; expected a non-negative integer." >&2
-  exit 1
-fi
-gene_family_archive_write_args=(
-  --compression "${gene_family_zip_compression}"
-  --compression-level "${gene_family_zip_compression_level}"
-  --workers "${gene_family_zip_workers}"
-  --max-final-zip-bytes "${gene_family_final_zip_max_bytes}"
-)
-if [[ ! "${gene_family_tmp_retention_days}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_retention_days: ${gene_family_tmp_retention_days}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_dirs}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_dirs: ${gene_family_tmp_max_dirs}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_bytes}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_bytes: ${gene_family_tmp_max_bytes}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_files}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_files: ${gene_family_tmp_max_files}; expected a non-negative integer." >&2
-  exit 1
-fi
+gg_normalize_gene_family_storage_config "${gene_family_zip_min_batch_files}"
 
 # Named stage functions for gg_gene_evolution_core.sh.
 # This file is sourced by workflow/core/gg_gene_evolution_core.sh.
@@ -2993,60 +2928,8 @@ if [[ ${uniprot_annotation_needs_update} -eq 1 && ${run_uniprot_annotation} -eq 
         > uniprot.query.pep.fas
   fi
 
-  if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"; then
-      echo "Invalid UniProt Swiss-Prot BLASTP DB prefix. Exiting."
-      exit 1
-    fi
-
-    blastp \
-      -query uniprot.query.pep.fas \
-      -num_threads "${GG_TASK_CPUS}" \
-      -db "${uniprot_db_prefix}" \
-      -out uniprot.search.tsv \
-      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
-      -max_target_seqs 1 \
-      -evalue 1e-2
-  else
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"; then
-      echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
-      exit 1
-    fi
-
-    mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
-    mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-      --threads "${GG_TASK_CPUS}" \
-      --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
-      --max-seqs 1 \
-      -e 1e-2 \
-      -s 7.5
-    mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-      --threads "${GG_TASK_CPUS}" \
-      --format-output "query,target,pident,alnlen,evalue,bits,qlen"
-    rm -f -- uniprot.queryDB* uniprot.resultDB*
-    rm -rf -- "tmp_mmseqs2_uniprot"
-  fi
-
-  uniprot_meta_tsv=""
-  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_db_prefix}" 2>/dev/null); then
-    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
-    uniprot_meta_tsv=""
-  fi
-
-  python "${gg_support_dir}/reformat_uniprot_diamond.py" \
-    --diamond_tsv uniprot.search.tsv \
-    --query_fasta uniprot.query.pep.fas \
-    --uniprot_fasta "${uniprot_db_prefix}.pep" \
-    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
-    --outfile uniprot.annotation.tsv
+  gg_annotate_uniprot_proteins uniprot.query.pep.fas "${gg_workspace_dir}" \
+    "${uniprot_annotation_method}" "${GG_TASK_CPUS}" "${GG_MEM_TOOL_GB}" uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_og_uniprot_annotation}"
   gg_artifact_record "${uniprot_annotation_provenance_args[@]}"
@@ -3610,32 +3493,8 @@ else
   gg_step_skip "${task}"
 fi
 
-gene_nwkit_identity=$(python - <<'PY_NWKIT_IDENTITY'
-import hashlib
-import importlib.metadata
-import importlib.util
-from pathlib import Path
+gene_nwkit_identity=$(python "${gg_support_dir}/python_source_identity.py" nwkit /opt/pg/logs/source_revisions.tsv) || exit $?
 
-spec = importlib.util.find_spec("nwkit")
-if spec is None or spec.origin is None:
-    print("unavailable")
-else:
-    try:
-        version = importlib.metadata.version("nwkit")
-    except importlib.metadata.PackageNotFoundError:
-        version = "unpackaged"
-    root = Path(spec.origin).parent
-    digest = hashlib.sha256()
-    for path in sorted(root.rglob("*.py")):
-        digest.update(str(path.relative_to(root)).encode() + b"\0")
-        digest.update(path.read_bytes())
-    print(f"nwkit {version} source_sha256={digest.hexdigest()}")
-PY_NWKIT_IDENTITY
-) || exit $?
-if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
-  gene_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
-  gene_nwkit_identity+=" ${gene_nwkit_revision}"
-fi
 
 task="Gene tree rooting"
 disable_if_no_input_file "run_tree_root" "${file_og_unrooted_tree_analysis}"

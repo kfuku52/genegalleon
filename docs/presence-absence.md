@@ -8,6 +8,30 @@ The default remains `presence_absence_ortholog_basis=reference_species`, with
 all original queries retained when the query-gene basis is selected. Species
 and gene identifiers in scientific tables are never changed by display labels.
 
+When `presence_absence_ortholog_basis=both`, related table views share one
+Python process and one family's parsed inputs at a time. All view tables are
+published together after their input checks succeed. Related plots share one R
+process and parsed species trees, CI data and compact BUSCO counts; each view
+keeps its own selection, layout and output files. A single plot uses the ordinary
+R CLI.
+
+Support-label transfer delegates to NWKIT's `transfer_properties` with split
+matching and the `equal-only` root-edge policy. Conflicting or ambiguous values
+stop the plot instead of choosing a value by input order. The adapter returns
+labels only, preserving the R tree's tip order, edge indices and branch lengths.
+
+The standalone helpers also accept related jobs without changing their existing
+single-job arguments:
+
+```bash
+python workflow/support/query_gene_orthologs.py --batch REF_ARGS --next-job QUERY_ARGS
+Rscript workflow/support/plot_query2family_presence_absence.R --batch VIEW_ARGS --next-plot VIEW_ARGS
+```
+
+Replace each `*_ARGS` placeholder with that job's usual arguments. Plot batches
+accept at most three views, stage all outputs, and preserve previous outputs if
+a render or input check fails.
+
 ## Prefer nearer query-source species
 
 Set these parameters in `workflow/gg_gene_summary_entrypoint.sh`, or use their

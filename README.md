@@ -134,6 +134,7 @@ Detailed guides are split by topic:
 - [Compression and FASTA Handling Policy](docs/compression-and-fasta-handling-policy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development and Tests](docs/development-and-tests.md)
+- [Shared NWKIT and CDSKIT APIs](docs/upstream-shared-apis.md)
 
 ## License
 

@@ -4,3 +4,6 @@ openpyxl
 numpy<2
 pandas
 biopython
+# The end-to-end input generation smoke test uses taxonomy and GFF helpers.
+nwkit @ git+https://github.com/kfuku52/nwkit.git@master
+cdskit @ git+https://github.com/kfuku52/cdskit.git@master

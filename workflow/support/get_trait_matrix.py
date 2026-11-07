@@ -4,7 +4,7 @@ import argparse
 import gzip
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas
@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from line_comment_stream import LineCommentStream
+from parallel_io import bounded_results
 from species_labeling import extract_species_label, strip_species_label
 from trait_table_index import read_subset
 
@@ -112,21 +113,17 @@ def main():
             print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
     else:
         max_workers = min(args.ncpu, len(tasks))
+        def process(index, trait_file, trait_path, id_map):
+            result = process_trait_file(trait_path, set(id_map), id_map, args.table_cache)
+            return index, trait_file, result
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(process_trait_file, trait_path, set(id_map), id_map, args.table_cache): (idx, trait_file)
-                for idx, (trait_file, trait_path, id_map) in enumerate(tasks)
-            }
             ordered_results = {}
-            for future in as_completed(futures):
-                idx, trait_file = futures[future]
-                trait2 = future.result()
-                ordered_results[idx] = trait2
+            for index, trait_file, trait2 in bounded_results(
+                executor, process, ((i, *task) for i, task in enumerate(tasks)), max_pending=2 * max_workers):
+                ordered_results[index] = trait2
                 print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
-            for idx in sorted(ordered_results.keys()):
-                trait2 = ordered_results[idx]
-                if trait2.shape[0] > 0:
-                    frames.append(trait2)
+            frames.extend(ordered_results[i] for i in sorted(ordered_results) if ordered_results[i].shape[0] > 0)
 
     if len(frames) > 0:
         df_trait_all = pandas.concat(frames, ignore_index=True)
