@@ -231,6 +231,20 @@ plot_ncol = min(2, length(plots))
 plot_nrow = ceiling(length(plots) / plot_ncol)
 panel_height = max(2.6, 0.95 + max_tip_count * font_size / 72 * 1.03)
 pdf_height = 0.5 + plot_nrow * panel_height
-out = plot_list(gglist = plots, ncol = plot_ncol)
-ggsave('species_trees.pdf', plot = out, width = 7.2, height = pdf_height, units = 'in')
-out
+if (pdf_height <= 50) {
+  ggsave('species_trees.pdf', plot = plot_list(gglist = plots, ncol = plot_ncol),
+         width = 7.2, height = pdf_height, units = 'in')
+} else {
+  # Keep whole trees and their original label size on each page. When a
+  # single row needs more than 50 inches, the PDF device retains its height.
+  rows_per_page = max(1L, floor((50 - 0.5) / panel_height))
+  plots_per_page = rows_per_page * plot_ncol
+  grDevices::pdf('species_trees.pdf', width = 7.2,
+                 height = 0.5 + rows_per_page * panel_height, onefile = TRUE)
+  tryCatch({
+    for (first in seq.int(1L, length(plots), by = plots_per_page)) {
+      last = min(first + plots_per_page - 1L, length(plots))
+      print(plot_list(gglist = plots[first:last], ncol = plot_ncol))
+    }
+  }, finally = invisible(grDevices::dev.off()))
+}
