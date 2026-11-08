@@ -161,6 +161,41 @@ def test_maintenance_gate_excludes_new_families(tmp_path):
             assert not acquired
 
 
+@pytest.mark.parametrize("nonblocking", [False, True])
+def test_batch_family_locks_share_one_gate_and_preserve_exclusion(tmp_path, nonblocking):
+    from workflow.support.shared_namespace_lock import inspect_lock
+
+    root = tmp_path / ".gg_store"
+    families = [f"OG{i:07d}" for i in range(20)]
+    with store.lock_available_family_ids(root, families + families, nonblocking=nonblocking) as acquired:
+        assert acquired == set(families)
+        assert len(inspect_lock(store.family_gate_path(root))["shared"]) == 1
+        with store._bucket_lock(store.family_gate_path(root), exclusive=True, nonblocking=True) as maintenance:
+            assert not maintenance
+        with store.family_bucket_lock(root, families[0], exclusive=False, nonblocking=True) as same:
+            assert not same
+        with store.family_bucket_lock(root, "unrelated", exclusive=True, nonblocking=True) as unrelated:
+            assert unrelated
+    with store.all_family_bucket_locks(root):
+        with store.lock_available_family_ids(root, families, nonblocking=True) as acquired:
+            assert not acquired
+
+
+def test_batch_family_locks_defer_busy_family_and_release_after_exception(tmp_path):
+    root = tmp_path / ".gg_store"
+    with store.family_bucket_lock(root, "busy", exclusive=False):
+        with pytest.raises(RuntimeError, match="injected"):
+            with store.lock_available_family_ids(root, ["busy", "free"], nonblocking=True) as acquired:
+                assert acquired == {"free"}
+                raise RuntimeError("injected")
+        with store.family_bucket_lock(root, "free", exclusive=True, nonblocking=True) as released:
+            assert released
+    with store.all_family_bucket_locks(root):
+        # An empty batch must not attempt to acquire the held gate.
+        with store.lock_available_family_ids(root, [], nonblocking=False) as acquired:
+            assert not acquired
+
+
 def _publish_from_process(args):
     root, index = args
     return queued(root, f"OG{index:07d}")

@@ -617,6 +617,7 @@ if [[ "${artifact_stale_policy:-stop}" == "rebuild" ]]; then
   python "${gg_support_dir}/cds_resolution.py" --backup-family "${sp_ub}" --workspace "${gg_workspace_dir}"
 fi
 # Publish a separate, provenance-bound analysis input; retain original inputs.
+file_sp_cds_catalogue="${file_sp_cds}"
 cds_resolution_dir="${gg_workspace_output_dir}/species_cds_resolved"
 [[ -z "${representative_annotation_cache}" ]] || \
   cds_resolution_dir="${representative_annotation_cache}/species_cds_resolved"
@@ -819,60 +820,8 @@ if [[ ${uniprot_needs_update} -eq 1 && ${run_uniprot_annotation} -eq 1 ]]; then
     seqkit translate --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
       > uniprot.query.pep.fas
 
-  if [[ "${uniprot_annotation_method}" == "blastp" ]]; then
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"; then
-      echo "Invalid UniProt Swiss-Prot BLASTP DB prefix. Exiting."
-      exit 1
-    fi
-
-    blastp \
-      -query uniprot.query.pep.fas \
-      -num_threads "${GG_TASK_CPUS}" \
-      -db "${uniprot_db_prefix}" \
-      -out uniprot.search.tsv \
-      -outfmt "6 qseqid sseqid pident length evalue bitscore qlen" \
-      -max_target_seqs 1 \
-      -evalue 1e-2
-  else
-    if ! uniprot_db_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}"); then
-      echo "Failed to prepare UniProt Swiss-Prot MMseqs2 DB. Exiting."
-      exit 1
-    fi
-    if ! validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"; then
-      echo "Invalid UniProt Swiss-Prot MMseqs2 DB prefix. Exiting."
-      exit 1
-    fi
-
-    mmseqs createdb "uniprot.query.pep.fas" "uniprot.queryDB"
-    mmseqs search "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "tmp_mmseqs2_uniprot" \
-      --threads "${GG_TASK_CPUS}" \
-      --split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \
-      --max-seqs 1 \
-      -e 1e-2 \
-      -s 7.5
-    mmseqs convertalis "uniprot.queryDB" "${uniprot_db_prefix}.mmseqs" "uniprot.resultDB" "uniprot.search.tsv" \
-      --threads "${GG_TASK_CPUS}" \
-      --format-output "query,target,pident,alnlen,evalue,bits,qlen"
-    rm -f -- uniprot.queryDB* uniprot.resultDB*
-    rm -rf -- "tmp_mmseqs2_uniprot"
-  fi
-
-  uniprot_meta_tsv=""
-  if ! uniprot_meta_tsv=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_db_prefix}" 2>/dev/null); then
-    echo "Warning: UniProt Swiss-Prot metadata TSV is unavailable for prefix: ${uniprot_db_prefix}" >&2
-    uniprot_meta_tsv=""
-  fi
-
-  python "${gg_support_dir}/reformat_uniprot_diamond.py" \
-    --diamond_tsv uniprot.search.tsv \
-    --query_fasta uniprot.query.pep.fas \
-    --uniprot_fasta "${uniprot_db_prefix}.pep" \
-    --uniprot_meta_tsv "${uniprot_meta_tsv}" \
-    --outfile uniprot.annotation.tsv
+  gg_annotate_uniprot_proteins uniprot.query.pep.fas "${gg_workspace_dir}" \
+    "${uniprot_annotation_method}" "${GG_TASK_CPUS}" "${GG_MEM_TOOL_GB}" uniprot.annotation.tsv
 
   cp_out uniprot.annotation.tsv "${file_sp_uniprot_annotation}"
   gg_artifact_record "${uniprot_provenance_args[@]}"
@@ -902,6 +851,7 @@ cdskit_localize_provenance_args+=(
   --parameter "include_features=${cdskit_localize_include_features}"
   --parameter "no_model_download=${cdskit_localize_no_model_download}"
   --parameter "genetic_code=${genetic_code}"
+  --parameter "cds_mask_policy=internal-stop-only"
 )
 gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
 if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then
@@ -1106,12 +1056,15 @@ else
 fi
 
 task="Merge annotations"
-disable_if_no_input_file "run_annotation" "${file_sp_cds}"
+disable_if_no_input_file "run_annotation" "${file_sp_cds_catalogue}"
 annotation_needs_update=0
 gg_artifact_contract_init annotation_provenance_args "genome_annotation_merge" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.annotation.json"
 annotation_provenance_args+=(
   --input "cds=${file_sp_cds}"
+  --input "cds_catalogue=${file_sp_cds_catalogue}"
+  --input "cds_resolution=${file_sp_cds_resolution_report}"
   --output "annotation=${file_sp_annotation}"
+  --output "annotation_scope=${file_sp_annotation}.scope.json"
   --parameter "scientific_name=${sp_ub}"
 )
 gg_artifact_add_input_if_present annotation_provenance_args "uniprot" "${file_sp_uniprot_annotation}"
@@ -1136,7 +1089,10 @@ if [[ ${annotation_needs_update} -eq 1 && ${run_annotation} -eq 1 ]]; then
   ensure_parent_dir "${file_sp_annotation}"
   python "${gg_support_dir}/merge_cds_annotation.py" \
     --scientific_name "${sp_ub}" \
-    --cds_fasta "${file_sp_cds}" \
+    --cds_fasta "${file_sp_cds_catalogue}" \
+    --resolved_cds_fasta "${file_sp_cds}" \
+    --cds_resolution_json "${file_sp_cds_resolution_report}" \
+    --scope_json "tmp.annotation.scope.json" \
     --uniprot_tsv "${file_sp_uniprot_annotation}" \
     --busco_tsv "${file_sp_cds_busco_full}" \
     --cdskit_localize_tsv "${file_sp_cdskit_localize}" \
@@ -1149,6 +1105,7 @@ if [[ ${annotation_needs_update} -eq 1 && ${run_annotation} -eq 1 ]]; then
     --out_tsv "tmp.annotation.tsv"
   if [[ -s "tmp.annotation.tsv" ]]; then
     mv_out "tmp.annotation.tsv" "${file_sp_annotation}"
+    mv_out "tmp.annotation.scope.json" "${file_sp_annotation}.scope.json"
   fi
   gg_artifact_record "${annotation_provenance_args[@]}"
 else

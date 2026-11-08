@@ -57,7 +57,11 @@ def test_existing_quality_and_identifier_imports_keep_the_same_implementations()
         for consumer in consumers:
             function = getattr(consumer, name)
             assert inspect.getsource(function) == inspect.getsource(getattr(quality, name))
-            assert Path(function.__globals__["__file__"]).resolve() == Path(quality.__file__).resolve()
+            if name == "patristic_distances":
+                from nwkit.tree_features import patristic_distances as shared_distances
+                assert function is shared_distances
+            else:
+                assert Path(function.__globals__["__file__"]).resolve() == Path(quality.__file__).resolve()
 
 
 @pytest.mark.parametrize('packed', [False, True])

@@ -2,7 +2,9 @@
 import argparse
 import fcntl
 import importlib
+import os
 import shlex
+import stat
 import subprocess
 from pathlib import Path
 
@@ -52,6 +54,50 @@ def test_existing_runtime_copy_is_retained_until_explicit_migration(tmp_path):
     assert result.returncode == 0, result.stderr
     assert target.stat().st_ino == shared_inode
     assert len(list(pool.glob("[0-9a-f]*"))) == 1
+
+
+def test_runtime_pool_recovers_inherited_acl_without_changing_parent_or_source(tmp_path):
+    source, target, pool = tmp_path / "source", tmp_path / "target", tmp_path / "pool"
+    source.write_bytes(b"immutable code\n")
+    source.chmod(0o755)
+    pool.mkdir()
+    pool.chmod(0o777)
+    parent_mode = tmp_path.stat().st_mode
+    result = shell(source, target, pool)
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(pool.stat().st_mode) == 0o700
+    assert target.read_bytes() == source.read_bytes()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o555
+    assert stat.S_IMODE(source.stat().st_mode) == 0o755
+    assert tmp_path.stat().st_mode == parent_mode
+
+
+def test_new_runtime_pool_enforces_mode_after_mkdir_acl_override(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT))
+    module = importlib.import_module("runtime_snapshot_storage")
+    original = os.mkdir
+    pool = tmp_path / "pool"
+
+    def inherited(path, mode=0o777, **kwargs):
+        original(path, mode, **kwargs)
+        if Path(path) == pool:
+            os.chmod(path, 0o777)
+
+    monkeypatch.setattr(os, "mkdir", inherited)
+    module.prepare_pool(pool)
+    assert stat.S_IMODE(pool.stat().st_mode) == 0o700
+
+
+def test_runtime_pool_symlink_is_rejected_without_changing_its_target(tmp_path):
+    source, target, pool = tmp_path / "source", tmp_path / "target", tmp_path / "pool"
+    source.write_bytes(b"code\n")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir(mode=0o755)
+    pool.symlink_to(foreign, target_is_directory=True)
+    before = foreign.stat().st_mode
+    assert shell(source, target, pool).returncode != 0
+    assert foreign.stat().st_mode == before
+    assert not target.exists()
 
 
 def test_snapshot_sharing_rejects_redirected_and_writable_pool_objects(tmp_path):

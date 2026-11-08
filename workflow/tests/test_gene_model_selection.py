@@ -176,9 +176,12 @@ def test_pair_cache_reuses_one_lazy_aligner_and_preserves_canonical_direction(mo
     bounded = selection._PairScores(1, False, 2)
     bounded_inputs = [(candidate("one", "M"), candidate("two", "M")),
                       (candidate("one", "MM"), candidate("two", "MM"))]
-    assert bounded.get(*bounded_inputs[0]).score == 1.0
     assert bounded.get(*bounded_inputs[1]).bounded
     assert not created and bounded.aligner is None
+    assert bounded.get(*bounded_inputs[0]).score == 1.0
+    # An unbounded comparison checks the actual scoring before taking a shortcut.
+    assert len(created) == 1 and bounded.aligner is created[0]
+    created.clear()
     cache = selection._PairScores(25_000_000, False, 2)
     # The cache belongs to one frozen selection invocation, which retains its
     # catalog candidates throughout the call. Keep that same ownership here.

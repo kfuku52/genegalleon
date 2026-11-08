@@ -11,6 +11,7 @@ from pathlib import Path
 
 from Bio import Phylo, SeqIO
 from Bio.Phylo.NewickIO import NewickError
+from cdskit.sequence_selection import iter_records, select_records
 
 
 def read_tree(path):
@@ -24,21 +25,13 @@ def read_tree(path):
     return tree, set(labels)
 
 
-def split_set(tree, taxa):
-    """Unrooted, nontrivial splits, optionally restricted to a partial backbone."""
-    result = set()
-    for clade in tree.find_clades():
-        left = frozenset(tip.name for tip in clade.get_terminals()) & taxa
-        right = frozenset(taxa - left)
-        if min(len(left), len(right)) >= 2:
-            result.add(min((left, right), key=lambda x: (len(x), sorted(x))))
-    return result
+from nwkit.tree_features import unrooted_splits as split_set
 
 
 def alignment(path):
     opener = gzip.open if path.suffix == '.gz' else open
     with opener(path, 'rt') as handle:
-        records = list(SeqIO.parse(handle, 'fasta'))
+        records = list(iter_records(handle))
     labels = [record.id for record in records]
     if not records or len(labels) != len(set(labels)):
         raise ValueError('Alignment must have unique, nonempty sequence IDs')
@@ -54,7 +47,7 @@ def _alignment_axes(path):
     labels, count = set(), 0
     length, unequal_lengths = None, False
     with opener(path, 'rt') as handle:
-        for record in SeqIO.parse(handle, 'fasta'):
+        for record in iter_records(handle):
             labels.add(record.id)
             count += 1
             row_length = len(record.seq)
@@ -143,7 +136,7 @@ def run(args):
                            (target.exists() and target.samefile(source))):
                 raise ValueError('Output overlaps an input')
         with target.open('w') as handle:
-            SeqIO.write((record for record in records if record.id in taxa), handle, 'fasta')
+            SeqIO.write(select_records(records, taxa), handle, 'fasta')
     print(json.dumps(report, sort_keys=True))
 
 

@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -108,6 +109,29 @@ gg_run_cdskit_localize input protein output "$3" unknown 0 1 2 1
         args = result.stdout.splitlines()
         assert args[args.index("--model") + 1] == expected
         assert args[args.index("--model_download") + 1] == "no"
+
+
+def test_localize_cds_preparation_preserves_terminal_stop(tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    source, output = tmp_path / "source.fa", tmp_path / "localize.fa"
+    # Stops in both alternate frames keep pad in the annotated frame.
+    prefix = "ATGATGTCTAAA" * 3
+    source.write_text(f">candidate\n{prefix}TGATCTAAACTTTGA\n")
+    script = """
+set -eo pipefail
+source "$1/workflow/support/gg_util.sh"
+cdskit_python="$4"
+seqkit() { if [[ $1 == seq ]]; then cat -- "${@: -1}"; else cat; fi; }
+cdskit() { "${cdskit_python}" -m cdskit.cli "$@"; }
+gg_prepare_cdskit_localize_cds_input "$2" "$3" 1 1
+"""
+    subprocess.run(
+        ["bash", "-c", script, "test", str(repo), str(source), str(output), sys.executable],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert output.read_text() == f">candidate\n{prefix}NNNTCTAAACTTTGA\n"
 
 
 def test_concurrent_first_requests_download_once(tmp_path):

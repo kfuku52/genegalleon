@@ -151,12 +151,31 @@ continues to inspect the entire store. Changing the catalog during a build
 prevents publication of the database and its provenance.
 
 Full audits use the allocated CPU count. Above 4,096 source identity guards,
-their identities spill into a private temporary SQLite index, bounded to
-512 MiB and two million readers. Every guard is still rechecked before
-publication; no previous-run digest or guard is reused. Disk exhaustion,
+their identities spill into a private temporary SQLite index, with a bounded
+page cache and two million readers. Digest inventories spill above 16,384
+entries. Both indexes grow with the data within SQLite/filesystem limits;
+the former 512 MiB guard and 1 GiB digest ceilings no longer apply. Every guard
+is still rechecked before publication; no previous-run digest or guard is reused. Disk exhaustion,
 identity changes and the remaining explicit capacity bounds stop the audit.
 The index is removed on success and failure, and progress reports the total
 guard count and whether spilling occurred.
+
+Provide sufficient free space and quota in the runtime's temporary filesystem
+(`TMPDIR`). Storage errors name the failing location and stop the whole audit,
+preserving any previously published database. Existing outputs need no deletion
+or conversion. See [capacity qualification and performance measurements](provenance-audit-performance.md#spill-capacity-and-write-amplification-2026-11-05).
+
+The audit carries fixed runtime path mappings and read-only observation into
+every manifest worker. ZIP readers are shared within a snapshot, with limits on
+open readers, central-directory bytes and member counts. They close before the
+independent final content pass, which opens current ZIP paths again even when
+filesystem attributes are cached.
+
+Database and provenance publication restores the previous pair on caught write
+failures, including packed provenance. If filesystem recovery itself fails,
+backups are retained and their paths reported. Database, provenance and audit
+outputs must name distinct files, including hard-link aliases. This rollback
+protects caught publication failures; it is not a crash-atomic multi-file commit.
 
 Raw file listings use directory-entry file types without following symlinks,
 avoiding two metadata requests per selected name on shared filesystems. Actual
@@ -205,7 +224,11 @@ materializes only that family's archived artifacts at their historical paths,
 preserves their mtimes, and then applies the normal stage skip/staleness tests.
 ZIP headers represent years 1980–2107; timestamps outside that range are clamped
 only in the ZIP header. The manifest retains the original nanosecond mtime for
-restoration. Publication stays inside the reader lock so maintenance cannot
+restoration. If the destination filesystem rejects or silently rounds that
+time, materialization fails before publication and retains the archived member
+and any previously published destination. Use a filesystem that supports the
+recorded timestamp to restore it; the logical ZIP reader still exposes its bytes.
+Publication stays inside the reader lock so maintenance cannot
 commit a newer result before an older restored snapshot is published.
 Consequently, a legacy run converted after MAFFT, for example, can resume from
 the later stages instead of starting over. A controlled failure records
@@ -250,10 +273,19 @@ views; `repair` then rebuilds every view from the ZIP manifests. Family-bucket
 and subdirectory indexes, plus an epoch used to invalidate long-lived reader
 caches, avoid opening every ZIP manifest for normal listing, status, and
 task-level materialization.
-Repeated transparent reads reuse one ZIP reader per worker thread until that
-worker moves to another archive. This avoids reparsing a large central
-directory once per member in summaries and database generation; an index
-epoch change closes the cached readers before refreshed artifacts are used.
+New family provenance manifests are registered in the workflow's explicitly
+enabled output inventory before publication, including manifests created by a
+provenance check. This lets queue collection include them with the other family
+outputs. For an older workspace with unqueued live manifests, stop its writers
+and run `archive-completed` with the original family catalog before finalization.
+The native command preserves those live overrides and automatically finalizes a
+fully completed orthogroup catalog. Direct `finalize` continues to reject
+uncollected live outputs.
+Repeated transparent reads use bounded ZIP reader pools to avoid reparsing a
+central directory per member. Full read snapshots share readers between joined
+workers; other reads retain up to eight readers per worker and check their
+signatures. Index epoch changes close cached readers before refreshed artifacts
+are used.
 
 Temporary task data remains under the historical
 `workspace/output/{query2family,orthogroup}/tmp/` roots, avoiding an
@@ -372,6 +404,25 @@ bash workflow/gg_gene_family_archive.sh delete \
   --path stat_branch/2_WOX_stat.branch.tsv
 ```
 
+For a large explicit retirement, use `delete-batch` rather than starting one
+transaction per file. Its JSON manifest is a list of objects such as
+`[{"path":"stat_tree/OG0000001_stat.tree.tsv","family_id":"OG0000001"}]`:
+
+```bash
+bash workflow/gg_gene_family_archive.sh delete-batch \
+  --root workspace/output/orthogroup --manifest deletion.json
+```
+
+`GeneFamilyOutputStore.delete_many(paths, family_ids=...)` provides the same
+operation in Python. It validates the complete plan and family ownership before
+deleting payloads, fences producers only in that store, and appends one durable
+generation for the batch. A partially completed earlier plan can be submitted
+again without restoring deleted members. The operation does not create backups.
+Physical ZIP retirement remains a separate scoped `purge --subdirs` operation.
+Other subdirectories and their tombstones remain intact. The synthetic
+`workflow/benchmarks/benchmark_family_delete_batch.py` compares both APIs and
+checks the retained payload manifest; it does not use biological inputs.
+
 The operation can be reversed, or the archived artifact can be restored as a
 normal file:
 
@@ -458,6 +509,14 @@ Repair also checks finalized ZIP identities retained in readable family or
 subdirectory indexes. If one of those ZIPs is missing or corrupt, repair stops
 before replacing the indexes; restore the ZIP bytes before retrying. Repair
 reconstructs metadata from valid ZIPs, not damaged ZIP contents.
+
+Index publication shares physical ZIP path resolutions within one update and
+rechecks those paths before the update can commit or remove live sources.
+Logical records retain their own size, CRC, SHA-256, generation and timestamps.
+Index decoding also reuses bounded, purely lexical ZIP path validation across
+records; it does not cache filesystem identity or skip member validation.
+See [the archive index benchmark](development-and-tests.md#archive-index-publication)
+for a reproducible synthetic comparison.
 
 Add `--remove-orphans` only after reviewing the reported orphan paths.
 Both explicit `repair` and `finalize` commands emit the same periodic progress

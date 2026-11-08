@@ -133,7 +133,7 @@ for species_tree_path_variable in species_tree_topology_constraint species_tree_
   fi
 done
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
-species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
+species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-extended-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
 reconciliation_duplication_cost="${reconciliation_duplication_cost:-1.5}"
@@ -476,10 +476,7 @@ resolve_busco_lineage_for_species_set() {
 }
 
 trim_ascii_whitespace() {
-  local s=$1
-  s="${s#"${s%%[![:space:]]*}"}"
-  s="${s%"${s##*[![:space:]]}"}"
-  printf '%s' "${s}"
+  gg_trim_ascii_whitespace "$1"
 }
 
 species_tree_rooting_looks_like_label_list() {
@@ -499,181 +496,19 @@ species_tree_rooting_looks_like_label_list() {
 }
 
 species_genetic_code_table_path() {
-  echo "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"
+  gg_species_genetic_code_table_path "${gg_workspace_input_dir}"
 }
 
 species_protein_input_dir_path() {
-  echo "${gg_workspace_input_dir}/species_protein"
+  gg_species_protein_input_dir_path "${gg_workspace_input_dir}"
 }
 
 prepare_species_genetic_code_table() {
-  local cds_dir=$1
-  local default_code=$2
-  local outfile=$3
-  local input_table
-  input_table=${4:-$(species_genetic_code_table_path)}
-  python - "${cds_dir}" "${default_code}" "${outfile}" "${input_table}" <<'PY'
-import csv
-import gzip
-import os
-import sys
-from pathlib import Path
-
-
-def species_from_filename(path: Path) -> str:
-    name = path.name
-    suffixes = (
-        ".derived.cds.fa.gz",
-        "_derived.cds.fa.gz",
-        ".cds.all.fa.gz",
-        "_cds.all.fa.gz",
-        ".cds.fa.gz",
-        "_cds.fa.gz",
-        ".cds.fna.gz",
-        "_cds.fna.gz",
-        ".genome.fa.gz",
-        "_genome.fa.gz",
-        ".genomic.fna.gz",
-        "_genomic.fna.gz",
-        ".pep.fa.gz",
-        "_pep.fa.gz",
-        ".protein.fa.gz",
-        "_protein.fa.gz",
-        ".fa.gz",
-        ".fas.gz",
-        ".fasta.gz",
-        ".fna.gz",
-        ".fa",
-        ".fas",
-        ".fasta",
-        ".fna",
-    )
-    lowered = name.lower()
-    for suffix in sorted(suffixes, key=len, reverse=True):
-        if lowered.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    parts = [part for part in name.split("_") if part]
-    if len(parts) < 2:
-        return path.stem
-    def token_key(token):
-        lowered_token = token.rstrip(".").lower()
-        return {
-            "spp": "sp",
-            "ssp": "subsp",
-            "subspecies": "subsp",
-            "variety": "var",
-            "form": "forma",
-        }.get(lowered_token, lowered_token)
-    def prefix_part(token):
-        key = token_key(token)
-        if key in {
-            "sp", "cf", "aff", "nr", "subsp", "var", "forma", "f",
-            "strain", "substrain", "serovar", "serotype", "serogroup",
-            "pathovar", "pv", "biovar", "biotype", "chemovar", "morphovar",
-            "cultivar", "cv", "isolate", "group", "subgroup", "complex",
-            "clade", "lineage", "section", "series", "ecotype", "breed",
-        }:
-            return token
-        return token.split(".", 1)[0]
-    second = token_key(parts[1])
-    third = token_key(parts[2]) if len(parts) >= 3 else ""
-    if second == "sp":
-        count = 3 if len(parts) >= 3 else 2
-    elif second in {"cf", "aff", "nr"}:
-        count = 3 if len(parts) >= 3 else 2
-    elif third in {"cf", "aff", "nr"}:
-        count = 3
-    elif third in {
-        "subsp", "var", "forma", "f", "strain", "substrain", "serovar",
-        "serotype", "serogroup", "pathovar", "pv", "biovar", "biotype",
-        "chemovar", "morphovar", "cultivar", "cv", "isolate", "group",
-        "subgroup", "complex", "clade", "lineage", "section", "series",
-        "ecotype", "breed",
-    }:
-        count = 4 if len(parts) >= 4 else 3
-    else:
-        count = 2
-    return "_".join(prefix_part(part) for part in parts[:count] if prefix_part(part))
-
-
-cds_dir = Path(sys.argv[1])
-default_code = sys.argv[2].strip()
-outfile = Path(sys.argv[3])
-input_table = Path(sys.argv[4])
-fasta_suffixes = (".fa", ".fa.gz", ".fas", ".fas.gz", ".fasta", ".fasta.gz", ".fna", ".fna.gz")
-
-species = sorted(
-    species_from_filename(path)
-    for path in cds_dir.iterdir()
-    if path.is_file() and not path.name.startswith(".") and path.name.endswith(fasta_suffixes)
-)
-if not species:
-    sys.stderr.write(f"No species CDS files were found in: {cds_dir}\n")
-    sys.exit(1)
-
-overrides = {}
-if input_table.exists():
-    with input_table.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(
-            (line for line in handle if line.strip() and not line.lstrip().startswith("#")),
-            delimiter="\t",
-        )
-        if reader.fieldnames is None or "species" not in reader.fieldnames or "genetic_code" not in reader.fieldnames:
-            sys.stderr.write(
-                f"{input_table} must be a tab-delimited file with at least species and genetic_code columns.\n"
-            )
-            sys.exit(1)
-        for row in reader:
-            sp = (row.get("species") or "").strip().replace(" ", "_")
-            code = (row.get("genetic_code") or "").strip()
-            if not sp or not code:
-                sys.stderr.write(f"Empty species or genetic_code entry was detected in {input_table}.\n")
-                sys.exit(1)
-            try:
-                code_int = int(code)
-            except ValueError:
-                sys.stderr.write(f"Invalid genetic_code for {sp}: {code}\n")
-                sys.exit(1)
-            if code_int <= 0:
-                sys.stderr.write(f"genetic_code must be a positive integer for {sp}: {code}\n")
-                sys.exit(1)
-            if sp in overrides:
-                sys.stderr.write(f"Duplicate species entry in {input_table}: {sp}\n")
-                sys.exit(1)
-            overrides[sp] = str(code_int)
-
-outfile.parent.mkdir(parents=True, exist_ok=True)
-with outfile.open("w", encoding="utf-8", newline="") as handle:
-    writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-    writer.writerow(["species", "genetic_code", "source"])
-    for sp in species:
-        if sp in overrides:
-            writer.writerow([sp, overrides[sp], "species_genetic_code.tsv"])
-        else:
-            writer.writerow([sp, default_code, "default"])
-
-unknown = sorted(sp for sp in overrides if sp not in set(species))
-if unknown:
-    sys.stderr.write(
-        "Warning: species_genetic_code.tsv entries were ignored because no matching species_cds file was found: "
-        + ", ".join(unknown)
-        + "\n"
-    )
-PY
+  gg_prepare_species_genetic_code_table "$1" "$2" "$3" "${4:-$(species_genetic_code_table_path)}"
 }
 
 lookup_species_genetic_code() {
-  local species_name=$1
-  local table_path=$2
-  local code=""
-  if [[ -s "${table_path}" ]]; then
-    code=$(awk -F'\t' -v sp="${species_name}" 'NR>1 && $1==sp {print $2; exit}' "${table_path}")
-  fi
-  if [[ -z "${code}" ]]; then
-    code="${genetic_code}"
-  fi
-  printf '%s' "${code}"
+  gg_lookup_species_genetic_code "$1" "$2" "${genetic_code}"
 }
 
 parse_species_tree_rooting() {
@@ -2970,32 +2805,8 @@ fi
 file_go_enrichment_significant="${dir_go_enrichment}/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 genome_evolution_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_evolution"
 # Moving dependency revisions are part of the artifact contract, never defaults.
-genome_nwkit_identity=$(python - <<'PY_NWKIT_IDENTITY'
-import hashlib
-import importlib.metadata
-import importlib.util
-from pathlib import Path
+genome_nwkit_identity=$(python "${gg_support_dir}/python_source_identity.py" nwkit /opt/pg/logs/source_revisions.tsv) || exit $?
 
-spec = importlib.util.find_spec("nwkit")
-if spec is None or spec.origin is None:
-    print("unavailable")
-else:
-    try:
-        version = importlib.metadata.version("nwkit")
-    except importlib.metadata.PackageNotFoundError:
-        version = "unpackaged"
-    root = Path(spec.origin).parent
-    digest = hashlib.sha256()
-    for path in sorted(root.rglob("*.py")):
-        digest.update(str(path.relative_to(root)).encode() + b"\0")
-        digest.update(path.read_bytes())
-    print(f"nwkit {version} source_sha256={digest.hexdigest()}")
-PY_NWKIT_IDENTITY
-) || exit $?
-if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
-  genome_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
-  genome_nwkit_identity+=" ${genome_nwkit_revision}"
-fi
 
 
 # Runtime helpers
@@ -3125,6 +2936,162 @@ cleanup_genome_evolution_on_exit() {
 
 
 
+
+run_species_tree_plots() {
+  task="Species tree plotting"
+  run_species_tree_comparison_plot=${run_plot_species_trees}
+  if [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then
+    if [[ "${input_sequence_mode}" == "protein" ]]; then
+      disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"
+    else
+      disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
+    fi
+  fi
+  species_tree_plot_needs_update=0
+  gg_artifact_contract_init species_tree_plot_provenance_args "species_tree_comparison_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.comparison_plot.json"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna" "${file_concat_iqtree_dna_root}"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep" "${file_concat_iqtree_pep_root}"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna_log" "${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep_log" "${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna" "${file_astral_tree_dna}"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep" "${file_astral_tree_pep}"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna_log" "${file_astral_log_dna}"
+  gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep_log" "${file_astral_log_pep}"
+  species_tree_plot_provenance_args+=(--output "plot=${file_plot_species_trees}")
+  gg_artifact_prepare_stage species_tree_plot_needs_update run_species_tree_comparison_plot "${species_tree_plot_provenance_args[@]}" || exit $?
+  if [[ ${species_tree_plot_needs_update} -eq 1 && ${run_species_tree_comparison_plot} -eq 1 ]]; then
+    gg_step_start "${task}"
+
+    Rscript "${gg_support_dir}/plot_species_trees.r" \
+      --iqtree_dna_nwk="${file_concat_iqtree_dna_root}" \
+      --iqtree_pep_nwk="${file_concat_iqtree_pep_root}" \
+      --iqtree_dna_log="${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log" \
+      --iqtree_pep_log="${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log" \
+      --astral_dna_nwk="${file_astral_tree_dna}" \
+      --astral_pep_nwk="${file_astral_tree_pep}" \
+      --astral_dna_log="${file_astral_log_dna}" \
+      --astral_pep_log="${file_astral_log_pep}"
+
+    if [[ -s "species_trees.pdf" ]]; then
+      echo "Output file found for the task: ${task}"
+      mv_out "species_trees.pdf" "${file_plot_species_trees}"
+    fi
+    gg_artifact_record "${species_tree_plot_provenance_args[@]}"
+  else
+    gg_step_skip "${task}"
+  fi
+
+  task="BUSCO stacked bar species tree plotting"
+  run_species_tree_busco_plot=${run_plot_species_trees}
+  disable_if_no_input_file "run_species_tree_busco_plot" "${file_undated_species_tree}"
+  disable_if_no_matching_input_file "run_species_tree_busco_plot" "${dir_species_busco_full}" "*busco.full.tsv"
+  species_tree_busco_plot_needs_update=0
+  gg_artifact_contract_init species_tree_busco_plot_provenance_args "species_tree_busco_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.busco_plot.json"
+  species_tree_busco_plot_provenance_args+=(
+    --input "undated_tree=${file_undated_species_tree}"
+    --input "busco_directory=${dir_species_busco_full}"
+    --input "adapter=${gg_support_dir}/annotation_summary.r"
+    --input "busco_plot_metadata=${gg_support_dir}/busco_plot_metadata.r"
+    --output "pdf=${file_species_tree_busco_cds_pdf}"
+    --output "svg=${file_species_tree_busco_cds_svg}"
+    --output "summary=${file_species_tree_busco_summary}"
+    --parameter "min_og_species=auto"
+  )
+  gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
+  if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_species_tree_busco_plot} -eq 1 ]]; then
+    gg_step_start "${task}"
+    ensure_dir "${dir_species_tree_summary}"
+    cd "${dir_species_tree_summary}" || exit 1
+
+    Rscript "${gg_support_dir}/annotation_summary.r" \
+      --dir_species_tree="${dir_species_tree}" \
+      --dir_species_cds_busco="${dir_species_busco_full}" \
+      --dir_species_genome_busco="" \
+      --dir_species_annotation="" \
+      --dir_species_cds_fx2tab="" \
+      --dir_species_genome_fx2tab="" \
+      --file_species_trait="" \
+      --file_orthogroup_gene_count="" \
+      --min_og_species='auto'
+
+    if [[ -e "Rplots.pdf" ]]; then
+      rm -f -- "Rplots.pdf"
+    fi
+    cd "${dir_tmp}" || exit 1
+
+    if [[ -s "${file_species_tree_busco_cds_pdf}" && -s "${file_species_tree_busco_cds_svg}" ]]; then
+      echo "Output file found for the task: ${task}"
+    fi
+    gg_artifact_record "${species_tree_busco_plot_provenance_args[@]}"
+  else
+    gg_step_skip "${task}"
+  fi
+}
+
+verify_species_tree_plot_inputs() {
+  python - "${gg_support_dir}" "${gg_workspace_dir}" "${input_sequence_mode}" <<'PY_PLOT'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from artifact_provenance import ProvenanceError, SCHEMA_VERSION, load_manifest, sha256_path
+
+workspace = Path(sys.argv[2])
+provenance = workspace / "output/artifact_provenance/genome_evolution"
+tree = Path("output/species_tree")
+candidates = {
+    "concat_iqtree_pep_root": ("species_tree_root_concat_iqtree_pep", tree / "concatenated_iqtree_pep/concat.pep.rooted.nwk"),
+    "astral_pep": ("species_tree_astral_pep", tree / "single_copy_astral_pep/single_copy.astral.pep.optimized.nwk"),
+}
+if sys.argv[3] != "protein":
+    candidates.update({
+        "concat_iqtree_dna_root": ("species_tree_root_concat_iqtree_dna", tree / "concatenated_iqtree_dna/concat.dna.rooted.nwk"),
+        "astral_dna": ("species_tree_astral_dna", tree / "single_copy_astral_dna/single_copy.astral.dna.optimized.nwk"),
+    })
+try:
+    candidates = {k: v for k, v in candidates.items() if (workspace / v[1]).is_file()
+                  and (workspace / v[1]).stat().st_size > 0}
+    if not candidates:
+        raise ValueError("no candidate species trees to plot")
+    candidates["undated_summary"] = ("species_tree_select_undated_summary", tree / "species_tree_summary/undated_species_tree.nwk")
+    for name, (step, relative) in candidates.items():
+        manifest = load_manifest(provenance / ("species_tree." + name + ".json"))
+        if (manifest.get("schema_version"), manifest.get("step"), manifest.get("family_id")) != (
+                SCHEMA_VERSION, step, "all_buscos"):
+            raise ValueError(f"unexpected producer identity: {name}")
+        entries = [entry for entry in manifest["outputs"] + manifest.get("optional_outputs", [])
+                   if entry.get("scope") == "workspace" and entry.get("path") == relative.as_posix()]
+        if len(entries) != 1:
+            raise ValueError(f"expected one recorded output for {relative}")
+        entry = entries[0]
+        digest, size, kind = sha256_path(workspace / relative)
+        if kind != "file" or size <= 0 or (kind, size, digest) != (
+                entry.get("artifact_type"), entry.get("size_bytes"), entry.get("sha256")):
+            raise ValueError(f"recorded tree changed: {relative}")
+except (OSError, ValueError, KeyError, TypeError, ProvenanceError) as exc:
+    print(f"Cannot plot from existing species trees: {exc}", file=sys.stderr)
+    raise SystemExit(3) from exc
+print(f"Verified {len(candidates)} stored species-tree artifacts for plotting.")
+PY_PLOT
+}
+
+case "${species_tree_plot_only:-0}" in
+  0) ;;
+  1)
+    if [[ "${genome_evolution_mode}" != species_tree || ${run_plot_species_trees} -ne 1 ]]; then
+      echo "species_tree_plot_only requires genome_evolution_mode=species_tree and run_plot_species_trees=1." >&2
+      exit 2
+    fi
+    verify_species_tree_plot_inputs || exit $?
+    ensure_dir "${dir_species_tree_summary}"
+    ensure_dir "${dir_tmp}"
+    cd "${dir_tmp}" || exit 1
+    run_species_tree_plots
+    echo "$(date): end"
+    exit 0
+    ;;
+  *) echo "species_tree_plot_only must be 0 or 1." >&2; exit 2 ;;
+esac
 
 trap cleanup_genome_evolution_on_exit EXIT
 
@@ -4310,94 +4277,7 @@ else
   gg_step_skip "${task}"
 fi
 
-task="Species tree plotting"
-run_species_tree_comparison_plot=${run_plot_species_trees}
-if [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then
-  if [[ "${input_sequence_mode}" == "protein" ]]; then
-    disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_pep_root}" "${file_astral_tree_pep}"
-  else
-    disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"
-  fi
-fi
-species_tree_plot_needs_update=0
-gg_artifact_contract_init species_tree_plot_provenance_args "species_tree_comparison_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.comparison_plot.json"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna" "${file_concat_iqtree_dna_root}"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep" "${file_concat_iqtree_pep_root}"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_dna_log" "${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "iqtree_pep_log" "${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna" "${file_astral_tree_dna}"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep" "${file_astral_tree_pep}"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_dna_log" "${file_astral_log_dna}"
-gg_artifact_add_input_if_present species_tree_plot_provenance_args "astral_pep_log" "${file_astral_log_pep}"
-species_tree_plot_provenance_args+=(--output "plot=${file_plot_species_trees}")
-gg_artifact_prepare_stage species_tree_plot_needs_update run_species_tree_comparison_plot "${species_tree_plot_provenance_args[@]}" || exit $?
-if [[ ${species_tree_plot_needs_update} -eq 1 && ${run_species_tree_comparison_plot} -eq 1 ]]; then
-  gg_step_start "${task}"
-
-  Rscript "${gg_support_dir}/plot_species_trees.r" \
-    --iqtree_dna_nwk="${file_concat_iqtree_dna_root}" \
-    --iqtree_pep_nwk="${file_concat_iqtree_pep_root}" \
-    --iqtree_dna_log="${dir_concat_iqtree_dna}/tmp.concat.cds.input.fasta.log" \
-    --iqtree_pep_log="${dir_concat_iqtree_pep}/tmp.concat.pep.input.fasta.log" \
-    --astral_dna_nwk="${file_astral_tree_dna}" \
-    --astral_pep_nwk="${file_astral_tree_pep}" \
-    --astral_dna_log="${file_astral_log_dna}" \
-    --astral_pep_log="${file_astral_log_pep}"
-
-  if [[ -s "species_trees.pdf" ]]; then
-    echo "Output file found for the task: ${task}"
-    mv_out "species_trees.pdf" "${file_plot_species_trees}"
-  fi
-  gg_artifact_record "${species_tree_plot_provenance_args[@]}"
-else
-  gg_step_skip "${task}"
-fi
-
-task="BUSCO stacked bar species tree plotting"
-run_species_tree_busco_plot=${run_plot_species_trees}
-disable_if_no_input_file "run_species_tree_busco_plot" "${file_undated_species_tree}"
-disable_if_no_matching_input_file "run_species_tree_busco_plot" "${dir_species_busco_full}" "*busco.full.tsv"
-species_tree_busco_plot_needs_update=0
-gg_artifact_contract_init species_tree_busco_plot_provenance_args "species_tree_busco_plot" "all_buscos" "${genome_evolution_provenance_dir}/species_tree.busco_plot.json"
-species_tree_busco_plot_provenance_args+=(
-  --input "undated_tree=${file_undated_species_tree}"
-  --input "busco_directory=${dir_species_busco_full}"
-  --input "adapter=${gg_support_dir}/annotation_summary.r"
-  --input "busco_plot_metadata=${gg_support_dir}/busco_plot_metadata.r"
-  --output "pdf=${file_species_tree_busco_cds_pdf}"
-  --output "svg=${file_species_tree_busco_cds_svg}"
-  --output "summary=${file_species_tree_busco_summary}"
-  --parameter "min_og_species=auto"
-)
-gg_artifact_prepare_stage species_tree_busco_plot_needs_update run_species_tree_busco_plot "${species_tree_busco_plot_provenance_args[@]}" "${frozen_species_tree_plot_args[@]}" || exit $?
-if [[ ${species_tree_busco_plot_needs_update} -eq 1 && ${run_species_tree_busco_plot} -eq 1 ]]; then
-  gg_step_start "${task}"
-  ensure_dir "${dir_species_tree_summary}"
-  cd "${dir_species_tree_summary}" || exit 1
-
-  Rscript "${gg_support_dir}/annotation_summary.r" \
-    --dir_species_tree="${dir_species_tree}" \
-    --dir_species_cds_busco="${dir_species_busco_full}" \
-    --dir_species_genome_busco="" \
-    --dir_species_annotation="" \
-    --dir_species_cds_fx2tab="" \
-    --dir_species_genome_fx2tab="" \
-    --file_species_trait="" \
-    --file_orthogroup_gene_count="" \
-    --min_og_species='auto'
-
-  if [[ -e "Rplots.pdf" ]]; then
-    rm -f -- "Rplots.pdf"
-  fi
-  cd "${dir_tmp}" || exit 1
-
-  if [[ -s "${file_species_tree_busco_cds_pdf}" && -s "${file_species_tree_busco_cds_svg}" ]]; then
-    echo "Output file found for the task: ${task}"
-  fi
-  gg_artifact_record "${species_tree_busco_plot_provenance_args[@]}"
-else
-  gg_step_skip "${task}"
-fi
+run_species_tree_plots
 
 task="Time-constrained tree preparation"
 if [[ "${run_mcmctree_calibration_diagnostics}" != "0" && "${run_mcmctree_calibration_diagnostics}" != "1" ]]; then

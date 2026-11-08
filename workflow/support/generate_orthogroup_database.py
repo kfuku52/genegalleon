@@ -6,6 +6,7 @@ import atexit
 import csv
 import datetime
 import glob
+import hashlib
 import io
 import logging
 import math
@@ -40,6 +41,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from csubst_scan_support import calculate_bh_fdr
 from gene_family_output_store import LEGACY_SUBDIR_ALIASES, GeneFamilyOutputStore
 from pgls_multiplicity import write_association_table
+from reconciliation_database import write_tables as write_reconciliation_tables
 from shared_namespace_lock import namespace_lock
 
 try:
@@ -282,7 +284,7 @@ def create_indexes(engine, tables):
     require_sqlalchemy()
     with engine.begin() as conn:
         for table in tables:
-            if table == "aa_change_fdr_metadata":
+            if table in ("aa_change_fdr_metadata", "reconciliation_meta", "reconciliation_species_branch"):
                 continue
             try:
                 # Association rows are keyed by tree_id, not orthogroup. This
@@ -690,6 +692,8 @@ def build_parser():
     )
     parser.add_argument("--mode", choices=("create", "replace", "append"), help="Explicit write mode; append rejects families already present in each table.")
     parser.add_argument("--dbpath", metavar="PATH", default="", type=str, help="Path to the SQLite database.")
+    parser.add_argument("--reconciliation_species_tree", default="", help="Import GeneRax XML against this complete rooted Newick species tree.")
+    parser.add_argument("--reconciliation_method_manifest", default="", help="Optional JSON with default method metadata, family overrides and gene-model contract SHA.")
     parser.add_argument("--dir_stat_tree", metavar="PATH", default="", type=str, help="Directory for stat_tree files.")
     parser.add_argument(
         "--dir_stat_branch", metavar="PATH", default="", type=str, help="Directory for stat_branch files."
@@ -766,7 +770,10 @@ def populate_database(args, parser):
     with ExitStack() as stack:
         if output_store is not None:
             stack.enter_context(output_store.read_snapshot())
+        inputs = reconciliation_input_identities(args)
         db_path, final_db_path, mode, publish = _populate_database(args, parser, output_store)
+        if reconciliation_input_identities(args) != inputs:
+            raise ValueError("Reconciliation inputs changed during database construction")
     if publish:
         if mode == "create":
             os.link(db_path, final_db_path)
@@ -775,6 +782,25 @@ def populate_database(args, parser):
             os.replace(db_path, final_db_path)
         logger.info("Published completed database atomically: %s", final_db_path)
     logger.info("All database operations completed and engine disposed.")
+
+
+def reconciliation_input_identities(args):
+    result = {}
+    for name in ("reconciliation_species_tree", "reconciliation_method_manifest"):
+        value = getattr(args, name, "")
+        if value:
+            path = Path(value)
+            before = path.stat()
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            after = path.stat()
+            def token(stat):
+                return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+            if token(before) != token(after):
+                raise ValueError("Reconciliation input changed while reading: " + value)
+            result[name] = (str(path.resolve()), token(after), sha)
+    if "reconciliation_method_manifest" in result and "reconciliation_species_tree" not in result:
+        raise ValueError("Method manifest requires a reconciliation species tree")
+    return result
 
 
 def _populate_database(args, parser, output_store):
@@ -792,6 +818,8 @@ def _populate_database(args, parser, output_store):
     if params["overwrite"] and params["mode"] not in (None, "replace"):
         parser.error("--overwrite 1 conflicts with --mode create/append")
     params["mode"] = params["mode"] or ("replace" if params["overwrite"] else "create")
+    if params["mode"] == "append" and params.get("reconciliation_species_tree"):
+        parser.error("Reconciliation append is unsupported; rebuild the complete audited database")
     try:
         params["cutoff_stat"] = parse_cutoff_stat(params["cutoff_stat"])
     except ValueError as exc:
@@ -1184,6 +1212,9 @@ def _populate_database(args, parser, output_store):
 
     add_analytical_aa_change_fdr(engine)
     write_association_table(engine, output_store, append=params["mode"] == "append")
+    if params.get("reconciliation_species_tree"):
+        write_reconciliation_tables(engine, output_store, params["reconciliation_species_tree"],
+                                    params.get("reconciliation_method_manifest", ""))
 
     with engine.begin() as conn:
         try:

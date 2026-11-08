@@ -97,6 +97,13 @@ run_csubst_scan_candidate_sites
 run_csubst_site_convergence_summary
 run_family_completion_summary
 run_gene_family_database_build
+gene_family_database_reconciliation
+run_gene_annotation_database
+gene_annotation_manifest
+reconciliation_species_tree
+reconciliation_method_manifest
+run_reconciliation_summary
+reconciliation_summary_config
 run_hgt_candidate_summary
 run_hgt_summary_plots
 run_hgt_trait_focus
@@ -136,6 +143,7 @@ generax_model
 generax_rec_model
 gene_evolution_profile
 gene_evolution_plot_only
+gene_evolution_statistics_only
 gene_family_output_storage
 gene_family_tmp_max_dirs
 gene_family_tmp_max_bytes
@@ -538,6 +546,7 @@ run_individual_iqtree_dna
 run_astral_pep
 run_astral_dna
 run_plot_species_trees
+species_tree_plot_only
 run_constrained_tree
 run_plot_constrained_tree
 run_mcmctree1

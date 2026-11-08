@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-from ete4 import Tree
+from nwkit.tool_trees import topology_newick
 
 
 def main() -> None:
@@ -25,8 +25,7 @@ def main() -> None:
     if not tree_text:
         raise SystemExit(f"Input Newick file is empty: {args.infile}")
 
-    tree = Tree(tree_text, parser=args.parser)
-    Path(args.outfile).write_text(tree.write(parser=9) + "\n", encoding="utf-8")
+    Path(args.outfile).write_text(topology_newick(tree_text, args.parser), encoding="utf-8")
 
 
 if __name__ == "__main__":

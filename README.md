@@ -106,6 +106,7 @@ Detailed guides are split by topic:
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
 - [Gene-Tree Dating and OU Shifts](docs/gene-tree-dating.md)
 - [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
+- [Reconciliation Database and Downstream Evidence](docs/gene-reconciliation-summary.md)
 - [Presence/Absence Plots, Query Selection and Saved OG/HOG Anchors](docs/presence-absence.md)
 - [Species-Tree Stage ZIP Storage](docs/species-tree-stage-zip-storage.md)
 - [Migrating Legacy Unzipped Workspaces to ZIP Storage (audit, conversion, and rollback)](docs/workspace-storage-management.md)
@@ -133,6 +134,7 @@ Detailed guides are split by topic:
 - [Compression and FASTA Handling Policy](docs/compression-and-fasta-handling-policy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development and Tests](docs/development-and-tests.md)
+- [Shared NWKIT and CDSKIT APIs](docs/upstream-shared-apis.md)
 
 ## License
 

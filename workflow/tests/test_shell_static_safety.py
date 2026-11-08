@@ -101,7 +101,8 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
 
 def test_core_bootstrap_uses_selected_private_pycache():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
-    body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
+    assert "gg_set_python_pycacheprefix" in _function_body(text, "gg_configure_python_pycacheprefix_from_core")
+    body = _function_body(_read_text(WORKFLOW_DIR / "support" / "gg_tmp_storage.sh"), "gg_set_python_pycacheprefix")
     assert 'selected=$(gg_resolve_tmp_root)' in body
     assert 'runtime_tmp=$(gg_private_runtime_tmp "${selected}")' in body
     assert 'export PYTHONPYCACHEPREFIX="${runtime_tmp}/pycache"' in body
@@ -744,19 +745,21 @@ def test_gene_family_zip_storage_is_common_default_and_remains_configurable():
         'gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}"'
         in entrypoint
     )
-    assert "zip|files)" in core
-    assert "raw)" in core
-    assert 'gene_family_output_storage="files"' in core
+    storage = _read_text(WORKFLOW_DIR / "support" / "gg_util" / "01_runtime_config.sh")
+    assert "gg_normalize_gene_family_storage_config" in core
+    assert "zip|files)" in storage
+    assert "raw)" in storage
+    assert 'gene_family_output_storage="files"' in storage
     assert "gene_family_output_storage" in config_vars
     assert "gene_family_zip_min_batch_files" in config_vars
     assert "gene_family_zip_compression" in config_vars
     assert "gene_family_zip_compression_level" in config_vars
     assert "gene_family_zip_workers" in config_vars
     assert "gene_family_final_zip_max_bytes" in config_vars
-    assert '--compression "${gene_family_zip_compression}"' in core
-    assert '--compression-level "${gene_family_zip_compression_level}"' in core
-    assert '--workers "${gene_family_zip_workers}"' in core
-    assert '--max-final-zip-bytes "${gene_family_final_zip_max_bytes}"' in core
+    assert '--compression "${gene_family_zip_compression}"' in storage
+    assert '--compression-level "${gene_family_zip_compression_level}"' in storage
+    assert '--workers "${gene_family_zip_workers}"' in storage
+    assert '--max-final-zip-bytes "${gene_family_final_zip_max_bytes}"' in storage
     assert "gene_family_tmp_retention_days" in config_vars
     assert "gene_family_tmp_max_dirs" in config_vars
     assert "gene_family_tmp_max_bytes" in config_vars
@@ -1186,20 +1189,20 @@ def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
     rooting_helper = _read_text(WORKFLOW_DIR / "support" / "species_tree_guided_gene_tree_rooting.py")
     treevis_core = _read_text(WORKFLOW_DIR / "support" / "treevis" / "R" / "00_core.R")
 
-    assert ': "${GG_COMMON_SPECIES_LABEL_PARSER:=taxonomic}"' in common
+    assert ': "${GG_COMMON_SPECIES_LABEL_PARSER:=extended-taxonomic}"' in common
     assert ': "${GG_COMMON_SPECIES_LABEL_REGEX:=}"' in common
     assert ': "${GG_COMMON_SPECIES_LABEL_MAP_TSV:=}"' in common
     assert "species_label_parser" in config_vars
     assert config_vars.count("species_label_regex") >= 2
     assert config_vars.count("species_label_map_tsv") >= 2
-    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in genome_core
+    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-extended-taxonomic}}"' in genome_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in genome_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in genome_core
     assert '--species-parser "${species_label_parser}" \\' in genome_core
-    assert '"--species-parser", args.species_parser' in rooting_helper
-    assert 'parser.add_argument("--species-parser", default="taxonomic")' in rooting_helper
-    assert '"rootcompare", "--infile"' in rooting_helper
-    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in gene_core
+    assert 'parser.add_argument("--species-parser", default="extended-taxonomic")' in rooting_helper
+    assert "from nwkit.root_candidates import select_eligible_root" in rooting_helper
+    assert "nwkit.species_parser" in treevis_core
+    assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-extended-taxonomic}}"' in gene_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in gene_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in gene_core
     assert 'TREEVIS_SPECIES_PARSER="${species_label_parser}" \\' in gene_core
@@ -1637,8 +1640,10 @@ def test_memory_limited_tool_invocations_use_tool_budget():
         assert token not in genome_core
 
     for text in (gene_core, annotation_core):
-        assert 'mmseqs search "uniprot.queryDB"' in text
-        assert '--split-memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)G" \\' in text
+        assert "gg_annotate_uniprot_proteins" in text
+    uniprot = _read_text(WORKFLOW_DIR / "support" / "gg_util" / "10_reference_databases.sh")
+    assert 'mmseqs search "uniprot.queryDB"' in uniprot
+    assert '--split-memory-limit "$(gg_memory_fraction_gb "${memory_gb}" 3 4)G"' in uniprot
 
     assert '-mem "${assembly_mem_gb}" \\' in transcriptome_core
     assert '--memory "${assembly_mem_gb}" \\' in transcriptome_core

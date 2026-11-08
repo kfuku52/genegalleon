@@ -169,6 +169,9 @@ def test_summary_contract_invalidates_old_sister_semantics(tmp_path):
     end = core.index('disable_if_no_input_file "run_summary"', start)
     env = dict(os.environ, dir_output_active=str(output_dir), gg_workspace_dir=str(tmp_path),
         dir_tmp=str(tmp_path), file_og_stat_branch=str(branch), file_og_stat_tree=str(summary),
+        file_og_stat_species_branch=str(output_dir / 'stat_species_branch' / 'OG0001_stat.species_branch.tsv'),
+        file_og_reconciliation_events=str(output_dir / 'reconciliation_events' / 'OG0001_reconciliation.json'),
+        gg_support_dir=str(SUPPORT),
         file_og_summary_provenance=str(output_dir / 'artifact_provenance' / 'OG0001.summary_statistics.json'),
         treevis_clade_ortholog_prefix='singlecopy', mode_gene_evolution='orthogroup', treevis_query_marker='0',
         query_blast_coverage='0.5', artifact_legacy_policy='adopt')

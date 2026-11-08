@@ -188,6 +188,8 @@ def identities():
     modules = ("nwkit.sample", "kffractbias.io", "kffractbias.selfscan", "kffractbias.selfevidence", "jcvi.compara.catalog",
                "jcvi.compara.synteny", "jcvi.compara.blastfilter", "jcvi.apps.align")
     versions["source_hashes"] = {name: digest(importlib.util.find_spec(name).origin) for name in modules}
+    attribute_syntax = sys.modules[validate_gff.__module__]
+    versions["source_hashes"][attribute_syntax.__name__] = digest(attribute_syntax.__file__)
     for package in ("kffractbias", "jcvi"):
         versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
@@ -202,7 +204,8 @@ def identities():
     from Bio.Align import _pairwisealigner
     versions['annevo_pairwise_aligner_sha256'] = digest(_pairwisealigner.__file__)
     versions["prediction_search_contract"] = prediction_search_contract()
-    versions["attribute_syntax_implementation"] = digest(sys.modules[validate_gff.__module__].__file__)
+    # Replay also binds the compatibility module in the archived checkout.
+    versions["attribute_syntax_implementation"] = digest(Path(__file__).with_name("gff_attribute_syntax.py"))
     versions["ownership_attribute_parser_implementation"] = digest(Path(__file__).with_name("format_species_annotation") / "common.py")
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
     versions["anchor_admission_implementation"] = digest(sys.modules[prepare_rescue_genome.__module__].__file__)

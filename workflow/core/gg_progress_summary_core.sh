@@ -13,68 +13,7 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 
 mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}"
 ncpu_progress_summary="${ncpu_progress_summary:-${GG_TASK_CPUS:-1}}"
-gene_family_output_storage=$(printf '%s' "${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
-gene_family_zip_compression=$(printf '%s' "${gene_family_zip_compression:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
-gene_family_zip_compression_level="${gene_family_zip_compression_level:-${GG_COMMON_GENE_FAMILY_ZIP_COMPRESSION_LEVEL:-6}}"
-gene_family_zip_workers="${gene_family_zip_workers:-${GG_COMMON_GENE_FAMILY_ZIP_WORKERS:-1}}"
-gene_family_final_zip_max_bytes="${gene_family_final_zip_max_bytes:-${GG_COMMON_GENE_FAMILY_FINAL_ZIP_MAX_BYTES:-0}}"
-gene_family_tmp_retention_days="${gene_family_tmp_retention_days:-${GG_COMMON_GENE_FAMILY_TMP_RETENTION_DAYS:-7}}"
-gene_family_tmp_max_dirs="${gene_family_tmp_max_dirs:-${GG_COMMON_GENE_FAMILY_TMP_MAX_DIRS:-100}}"
-gene_family_tmp_max_bytes="${gene_family_tmp_max_bytes:-${GG_COMMON_GENE_FAMILY_TMP_MAX_BYTES:-107374182400}}"
-gene_family_tmp_max_files="${gene_family_tmp_max_files:-${GG_COMMON_GENE_FAMILY_TMP_MAX_FILES:-100000}}"
-case "${gene_family_output_storage}" in
-  zip|files)
-    ;;
-  raw)
-    gene_family_output_storage="files"
-    ;;
-  *)
-    echo "Invalid gene_family_output_storage: ${gene_family_output_storage}; expected zip, files, or raw." >&2
-    exit 1
-    ;;
-esac
-case "${gene_family_zip_compression}" in
-  adaptive|deflate|store)
-    ;;
-  *)
-    echo "Invalid gene_family_zip_compression: ${gene_family_zip_compression}; expected adaptive, deflate, or store." >&2
-    exit 1
-    ;;
-esac
-if [[ ! "${gene_family_zip_compression_level}" =~ ^[0-9]+$ || ${gene_family_zip_compression_level} -gt 9 ]]; then
-  echo "Invalid gene_family_zip_compression_level: ${gene_family_zip_compression_level}; expected an integer from 0 through 9." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_zip_workers}" =~ ^[0-9]+$ || ${gene_family_zip_workers} -lt 1 || ${gene_family_zip_workers} -gt 4 ]]; then
-  echo "Invalid gene_family_zip_workers: ${gene_family_zip_workers}; expected an integer from 1 through 4." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_final_zip_max_bytes}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_final_zip_max_bytes: ${gene_family_final_zip_max_bytes}; expected a non-negative integer." >&2
-  exit 1
-fi
-gene_family_archive_write_args=(
-  --compression "${gene_family_zip_compression}"
-  --compression-level "${gene_family_zip_compression_level}"
-  --workers "${gene_family_zip_workers}"
-  --max-final-zip-bytes "${gene_family_final_zip_max_bytes}"
-)
-if [[ ! "${gene_family_tmp_retention_days}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_retention_days: ${gene_family_tmp_retention_days}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_dirs}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_dirs: ${gene_family_tmp_max_dirs}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_bytes}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_bytes: ${gene_family_tmp_max_bytes}; expected a non-negative integer." >&2
-  exit 1
-fi
-if [[ ! "${gene_family_tmp_max_files}" =~ ^[0-9]+$ ]]; then
-  echo "Invalid gene_family_tmp_max_files: ${gene_family_tmp_max_files}; expected a non-negative integer." >&2
-  exit 1
-fi
+gg_normalize_gene_family_storage_config
 
 gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir}")
 gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir}")

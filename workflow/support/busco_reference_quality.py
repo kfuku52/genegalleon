@@ -4,7 +4,6 @@ These helpers do not require the optional genome-rescue/synteny toolchain.
 """
 import math
 import re
-from collections import defaultdict
 from pathlib import Path
 
 COMPARABLE_QUALITY = ("lineage", "version", "mode", "lineage_date", "markers")
@@ -30,26 +29,7 @@ def busco_quality(path):
 
 
 
-def patristic_distances(tree):
-    """All tip distances in O(N^2), without repeated whole-tree LCA scans."""
-    graph = defaultdict(list)
-    for parent in tree.find_clades():
-        for child in parent.clades:
-            length = child.branch_length or 0.0
-            graph[parent].append((child, length))
-            graph[child].append((parent, length))
-    leaves = {tip: tip.name for tip in tree.get_terminals()}
-    result = {}
-    for tip, name in leaves.items():
-        row, stack = {}, [(tip, None, 0.0)]
-        while stack:
-            node, previous, distance = stack.pop()
-            if node in leaves:
-                row[leaves[node]] = distance
-            stack.extend((child, node, distance + length) for child, length in graph[node] if child is not previous)
-        result[name] = row
-    return result
-
+from nwkit.tree_features import patristic_distances as patristic_distances
 
 
 def safe_token(value, label):

@@ -9,6 +9,32 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "merge_cds_annotation.py"
 
 
+@pytest.mark.parametrize('fault', ['catalogue', 'resolved', 'missing_decision', 'duplicate_decision', 'bad_count'])
+def test_annotation_scope_rejects_changed_sequences_and_incomplete_evidence(tmp_path, monkeypatch, fault):
+    import json
+
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from workflow.support import cds_resolution
+    from workflow.support.cds_annotation_scope import load_scope
+    raw = tmp_path / 'Species.fa'
+    raw.write_text('>valid\nATGAAATAA\n>excluded\nATGNNNTAA\n')
+    resolved, _, report = cds_resolution.resolve(raw, None, None, tmp_path / 'resolved')
+    if fault in {'catalogue', 'resolved'}:
+        path = raw if fault == 'catalogue' else resolved
+        path.write_text(path.read_text().replace('ATGAAA', 'ATGCCC'))
+    else:
+        value = json.loads(report.read_text())
+        if fault == 'missing_decision':
+            value['decisions'].pop()
+        elif fault == 'duplicate_decision':
+            value['decisions'].append(value['decisions'][0])
+        else:
+            value['accepted_count'] += 1
+        report.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        load_scope(raw, resolved, report)
+
+
 def load_module():
     spec = spec_from_file_location("merge_cds_annotation", SCRIPT_PATH)
     module = module_from_spec(spec)

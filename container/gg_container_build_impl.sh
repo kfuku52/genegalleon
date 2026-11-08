@@ -3,6 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
+# shellcheck source=build_common.sh
+source "${script_dir}/build_common.sh"
 buildx_script="${script_dir}/buildx.sh"
 apptainer_script="${script_dir}/apptainer_from_docker.sh"
 apptainer_local_build_script="${script_dir}/apptainer_local_build.sh"
@@ -100,24 +102,7 @@ if [[ "${BUILD_SIF}" != "0" && "${BUILD_SIF}" != "1" ]]; then
 fi
 
 resolve_container_engine() {
-  if [[ "${ENGINE}" == "apptainer" || "${ENGINE}" == "singularity" ]]; then
-    if command -v "${ENGINE}" >/dev/null 2>&1; then
-      echo "${ENGINE}"
-      return 0
-    fi
-    echo "Requested container engine not found on PATH: ${ENGINE}" >&2
-    return 1
-  fi
-  if command -v apptainer >/dev/null 2>&1; then
-    echo apptainer
-    return 0
-  fi
-  if command -v singularity >/dev/null 2>&1; then
-    echo singularity
-    return 0
-  fi
-  echo "Neither apptainer nor singularity was found on PATH." >&2
-  return 1
+  gg_resolve_container_engine "Requested container engine not found on PATH"
 }
 
 docker_buildx_available() {

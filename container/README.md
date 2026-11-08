@@ -219,6 +219,8 @@ GitHub Actions now publishes GHCR images and release SIF assets:
     `latest` image; missing or stale published metadata triggers a rebuild
   - advances the security-refresh epoch daily, so cached system-package layers
     cannot indefinitely retain superseded Ubuntu security packages
+  - embeds the final-layer BuildKit cache in the published image; builds can
+    read it from `latest` alongside the existing Actions cache
   - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
 - `.github/workflows/release-sif.yml`
   - trigger: Release `published`

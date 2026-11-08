@@ -233,11 +233,12 @@ validate_uniprot_sprot_db_prefix "{db_prefix}" mmseqs2
 
 
 def test_uniprot_db_prefixes_are_validated_after_capture():
-    for script in [
-        CORE_DIR / "gg_genome_annotation_core.sh",
-        CORE_DIR / "gg_gene_evolution_core.sh",
+    for name in ("gg_genome_annotation_core.sh", "gg_gene_evolution_core.sh"):
+        assert "gg_annotate_uniprot_proteins" in _read_text(CORE_DIR / name)
+    for script in (
+        WORKFLOW_DIR / "support" / "gg_util" / "10_reference_databases.sh",
         CORE_DIR / "gg_genome_evolution_core.sh",
-    ]:
+    ):
         text = _read_text(script)
         assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "blastp"' in text
         assert 'validate_uniprot_sprot_db_prefix "${uniprot_db_prefix}" "mmseqs2"' in text

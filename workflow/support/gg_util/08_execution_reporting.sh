@@ -22,6 +22,7 @@ gg_trigger_versions_dump() {
   local singularity_bin
   local container_runtime_bin
   local versions_exit_code=0
+  local cache_copy_status=0
   local block_exit_code=0
   local had_errexit=0
 
@@ -98,9 +99,10 @@ gg_trigger_versions_dump() {
     image_file_hash=$(GG_PERFORMANCE_DIR="${versions_dir}/performance" "${identity_python}" "${identity_helper}" image --image "${gg_container_image_path}") || return 1
     container_key_seed="${container_key_seed};image_identity=${image_file_hash}"
   fi
-  environment_hash=$("${identity_python}" "${identity_helper}" environment) || return 1
   command_context=$(gg_container_shell_command_display || true)
-  container_key_seed="${container_key_seed};environment=${environment_hash};command=${command_context}"
+  environment_hash=$("${identity_python}" "${identity_helper}" context \
+    --command "${command_context}" --versions-script-sha256 "${versions_script_hash}") || return 1
+  container_key_seed="${container_key_seed};version_context=${environment_hash}"
   inspect_snapshot=""
   if inspect_snapshot=$("${container_runtime_bin}" inspect "${gg_container_image_path}" 2>/dev/null); then
     if [[ -n "${inspect_snapshot}" ]]; then
@@ -125,7 +127,7 @@ gg_trigger_versions_dump() {
   cache_dir="${GG_VERSIONS_CACHE_DIR:-$(workspace_downloads_root "${gg_workspace_dir}")/version_inventory}"
   "${identity_python}" "${identity_helper}" private-cache --cache-file "${cache_dir}" || return 1
   cache_file="${cache_dir}/${container_key_hash}.log"
-  lock_file=$("${identity_python}" "${identity_helper}" cache-lock --cache-file "${cache_file}") || return 1
+  lock_file=$("${identity_python}" "${identity_helper}" collection-lock --cache-file "${cache_file}") || return 1
   # Preserve per-invocation host/time provenance even on an inventory cache hit.
   {
     echo "$(date): ${trigger_name}; image_identity=${image_file_hash:-unavailable}; context=${container_key_hash}"
@@ -133,8 +135,24 @@ gg_trigger_versions_dump() {
     uname -a
   } > "${versions_dir}/run.$$.${container_key_hash}.log"
 
-  # Keep version/runtime environment setup in the caller; isolate only lock
-  # ownership and its EXIT cleanup from the caller's traps.
+  # Reading a verified immutable inventory does not require the publisher's
+  # singleton lock. Cold publication still rechecks under that lock below.
+  if "${identity_python}" "${identity_helper}" copy-cache --cache-file "${cache_file}" \
+    --key "${container_key_hash}" --destination "${tmp_log_file}" --if-ready; then
+    mv_out "${tmp_log_file}" "${log_file}" || return 1
+    echo "gg_trigger_versions_dump: reused verified ${log_file}"
+    return 0
+  else
+    cache_copy_status=$?
+    # Only the explicit cache miss may collect again. Output/I/O errors remain
+    # errors and must not be hidden by a second collection attempt.
+    [[ ${cache_copy_status} -eq 3 ]] || return "${cache_copy_status}"
+  fi
+
+  # Collections of different contexts may run concurrently. Fixed lock stripes
+  # bound lock metadata and coalesce equivalent requests; publication acquires
+  # the separate cache writer guard only after the inventory has been collected.
+  # Keep environment setup in the caller and isolate EXIT cleanup ownership.
   (
   lock_python=$(gg_shared_lock_python) || return 1
   lock_helper="${gg_support_dir}/shared_namespace_lock.py"
@@ -233,7 +251,8 @@ gg_trigger_versions_dump() {
   fi
 
   if [[ -s "${tmp_log_file}" ]]; then
-    "${identity_python}" "${identity_helper}" publish-cache --source "${tmp_log_file}" --cache-file "${cache_file}" --key "${container_key_hash}" || return 1
+    "${identity_python}" "${identity_helper}" publish-cache --source "${tmp_log_file}" --cache-file "${cache_file}" --key "${container_key_hash}" \
+      --lock-publication --lock-timeout "$(gg_lock_acquire_timeout_seconds)" || return 1
     mv_out "${tmp_log_file}" "${log_file}"
   fi
   echo "gg_trigger_versions_dump: wrote ${log_file}"

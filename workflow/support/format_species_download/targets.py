@@ -182,17 +182,10 @@ def pick_ncbi_datasets_member_name(member_names, label, source_id=""):
     return matches[0]
 
 
-def _fsync_directory(path):
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+try:
+    from ..filesystem_io import fsync_directory as _fsync_directory
+except ImportError:  # direct script execution
+    from filesystem_io import fsync_directory as _fsync_directory
 
 
 def write_download_stream(destination, source):

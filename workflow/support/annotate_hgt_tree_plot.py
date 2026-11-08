@@ -25,6 +25,16 @@ BRANCH_PREFIX_COLUMNS = [
 ]
 
 
+import sys
+from pathlib import Path
+
+SUPPORT_DIR = Path(__file__).resolve().parent
+if str(SUPPORT_DIR) not in sys.path:
+    sys.path.insert(0, str(SUPPORT_DIR))
+
+from boolean_values import parse_boolish as parse_boolish
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description="Annotate a stat_branch table with HGT-specific branch and tip evidence columns."
@@ -52,17 +62,6 @@ def safe_read_tsv(path: str) -> pandas.DataFrame:
         return pandas.read_csv(path, sep="\t", low_memory=False)
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
-
-
-def parse_boolish(value):
-    if pandas.isna(value):
-        return pandas.NA
-    text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y"}:
-        return True
-    if text in {"0", "false", "f", "no", "n"}:
-        return False
-    return pandas.NA
 
 
 def bool_to_numeric(value):

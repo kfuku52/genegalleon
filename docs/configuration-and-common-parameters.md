@@ -197,7 +197,7 @@ species after ancient duplications or polyploidy.
 - `GG_COMMON_INPUT_SEQUENCE_MODE` (default `cds`)
 - `GG_COMMON_REPRESENTATIVE_INPUTS` (default empty; verified CDS/protein/GFF/genome manifest from [gene-model refinement](gene-model-refinement.md))
 - `GG_COMMON_CSUBST_NONSYN_RECODE` (default `no`)
-- `GG_COMMON_SPECIES_LABEL_PARSER` (default `taxonomic`)
+- `GG_COMMON_SPECIES_LABEL_PARSER` (default `extended-taxonomic`; NWKIT option preserving cultivar groups, subgroups and hybrids; `legacy` and `taxonomic` remain available)
 - `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)
 - `GG_COMMON_SPECIES_LABEL_MAP_TSV` (default empty)
 - `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` (default `zip`; `zip`, `files`, or the `raw` alias for `files`; see [large-array ZIP collection](gene-family-array-archive-queue.md))
@@ -433,6 +433,11 @@ their dependent stages; a plot-only run cannot regenerate upstream trees or
 summary tables. Branch tables encode a sister ID only for binary parents;
 children of unary or multifurcating parents use `-999`, with the complete
 topology retained in `parent`.
+
+Primary CDS FASTA regeneration also replaces an existing FASTA when the selected
+family or its sequence inputs change. Older primary-FASTA manifests require one
+rebuild because they could record new inputs while retaining old CDS sequences;
+the corrected producer contract then permits normal unchanged-input reuse.
 
 The `orthogroups` and `orthogroup_selection` modes do not request new species
 trees. They retain a tracked historical concatenated tree's original output
@@ -872,6 +877,10 @@ For retired NOTUNG switches, candidate outputs, and reconciliation statistics,
 see [NOTUNG replacement](notung-replacement.md).
 
 ## CDSKIT localization model
+
+For CDS inputs, GeneGalleon masks internal stop codons before localization
+and preserves the terminal stop so the protein keeps its original C terminus.
+The localization provenance records this preprocessing policy.
 
 Both genome annotation and gene evolution default to `cdskit_localize_model=latest`.
 On the first download, GeneGalleon queries the official CDSKIT GitHub releases and

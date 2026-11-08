@@ -10,7 +10,7 @@ import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -26,8 +26,10 @@ try:
     from gff_source_contract import source_bound_gff_names
     from input_generation_array_state import FreshDigestBatch
     from line_comment_stream import LineCommentStream
+    from parallel_io import bounded_results
     from representative_selection import load_representative_map, matching_identifier
     from species_labeling import extract_species_label, strip_species_label
+    from species_labeling import species_prefix_token_count as species_prefix_token_count
     from trait_table_index import read_subset
 except ImportError:  # pragma: no cover - package import path used in tests
     from .content_digest_cache import cached_sha256_file
@@ -38,8 +40,10 @@ except ImportError:  # pragma: no cover - package import path used in tests
     from .gff_source_contract import source_bound_gff_names
     from .input_generation_array_state import FreshDigestBatch
     from .line_comment_stream import LineCommentStream
+    from .parallel_io import bounded_results
     from .representative_selection import load_representative_map, matching_identifier
     from .species_labeling import extract_species_label, strip_species_label
+    from .species_labeling import species_prefix_token_count as species_prefix_token_count
     from .trait_table_index import read_subset
 
 pandas.options.mode.chained_assignment = None
@@ -171,20 +175,6 @@ def read_fasta_seqname(file_path):
     return pandas.Series(seqnames)
 
 
-def species_prefix_token_count(parts):
-    if len(parts) < 2:
-        return 0
-    second = parts[1].lower()
-    third = parts[2].lower() if len(parts) >= 3 else ""
-    if second == "sp":
-        return 3 if len(parts) >= 3 else 2
-    if second in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return 3 if len(parts) >= 3 else 2
-    if third in TAXONOMIC_PROXIMITY_QUALIFIERS:
-        return 3
-    if third in TAXONOMIC_INFRASPECIFIC_RANKS:
-        return 4 if len(parts) >= 4 else 3
-    return 2
 
 
 def trim_species_prefix(seq_name):
@@ -1882,37 +1872,21 @@ def main():
                 frames.append(df_tmp)
     else:
         max_workers = min(args.ncpu, len(tasks))
+        def process(index, gff_file, seq_sp_values):
+            try:
+                frame = process_single_gff(
+                    gff_file, args.dir_gff, seq_sp_values, args.feature, args.multiple_hits,
+                    gff_cols, out_cols, args.phase_policy, args.structure_policy, representative_map,
+                    coordinate_mode, args.nonlocal_gene_policy,
+                )
+            except Exception as exc:
+                raise RuntimeError("Failed processing {}: {}".format(gff_file, exc)) from exc
+            return index, frame
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    process_single_gff,
-                    gff_file,
-                    args.dir_gff,
-                    seq_sp_values,
-                    args.feature,
-                    args.multiple_hits,
-                    gff_cols,
-                    out_cols,
-                    args.phase_policy,
-                    args.structure_policy,
-                    representative_map,
-                    coordinate_mode,
-                    args.nonlocal_gene_policy,
-                ): (idx, gff_file)
-                for idx, (gff_file, seq_sp_values) in enumerate(tasks)
-            }
-            ordered_results = {}
-            for future in as_completed(futures):
-                idx, gff_file = futures[future]
-                try:
-                    df_tmp = future.result()
-                    ordered_results[idx] = df_tmp
-                except Exception as exc:
-                    raise RuntimeError("Failed processing {}: {}".format(gff_file, exc)) from exc
-            for idx in sorted(ordered_results.keys()):
-                df_tmp = ordered_results[idx]
-                if df_tmp.shape[0] > 0:
-                    frames.append(df_tmp)
+            ordered_results = dict(bounded_results(
+                executor, process, ((i, *task) for i, task in enumerate(tasks)), max_pending=2 * max_workers))
+            frames.extend(ordered_results[i] for i in sorted(ordered_results) if ordered_results[i].shape[0] > 0)
 
     if args.require_matches and not frames:
         raise ValueError(f"No GFF IDs matched {len(seq_names)} input sequences; check source pairing and identifiers")

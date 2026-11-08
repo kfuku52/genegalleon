@@ -121,38 +121,12 @@ add_sequence_similarity_column = function(g, args, path_alignment, sequence_mode
         if (length(genetic_code)!=1 || !is.finite(genetic_code) || genetic_code<1 || genetic_code!=as.integer(genetic_code)) {
             stop('Genetic code must be a positive integer.')
         }
-        fasta = tempfile(fileext='.fa'); translated = tempfile(fileext='.fa')
-        log = tempfile(fileext='.log')
-        on.exit(unlink(c(fasta,translated,log)),add=TRUE)
-        translation_input = vapply(seqs,function(x) {
-            starts = seq.int(1,nchar(x),by=3)
-            codons = substring(x,starts,starts+2)
-            codons[!grepl('^[ACGT]{3}$',codons)] = 'NNN'
-            paste0(codons,collapse='')
-        },character(1))
-        writeLines(as.vector(rbind(paste0('>',names(seqs)),translation_input)),fasta)
-        status = system2('seqkit',c('translate','--allow-unknown-codon',
-            '--transl-table',as.character(genetic_code),'--out-file',shQuote(translated),shQuote(fasta)),
-            stdout=log,stderr=log)
-        if (status!=0) stop(paste('CDS translation failed:',paste(readLines(log,warn=FALSE),collapse='\n')))
-        protein = treevis_similarity_fasta(translated)
-        if (!identical(names(protein),names(seqs)) || any(nchar(protein)!=nchar(seqs)/3)) {
-            stop('CDS translation did not preserve alignment IDs and codon lengths.')
-        }
-        chars = lapply(protein,function(x) strsplit(x,'',fixed=TRUE)[[1]])
-    } else {
-        chars = lapply(seqs, function(x) strsplit(x,'',fixed=TRUE)[[1]])
     }
-    alphabet = strsplit('ACDEFGHIKLMNPQRSTVWY','')[[1]]
-    valid_chars = lapply(chars,function(x) x %in% alphabet)
     pairs = utils::combn(as.character(tips[['label']]),2)
-    values = vapply(seq_len(ncol(pairs)),function(k) {
-        a = chars[[pairs[1,k]]]; b = chars[[pairs[2,k]]]
-        if (is.null(a) || is.null(b)) return(NA_real_)
-        valid = valid_chars[[pairs[1,k]]] & valid_chars[[pairs[2,k]]]
-        if (!any(valid)) return(NA_real_)
-        mean(a[valid] == b[valid])
-    },numeric(1))
+    values <- treevis_cdskit_request(list(operation="identity",sequences=as.list(seqs),
+        pairs=lapply(seq_len(ncol(pairs)),function(k) as.list(pairs[,k])),mode=sequence_mode,
+        genetic_code=genetic_code))
+    values <- vapply(values,function(x) if (is.null(x)) NA_real_ else as.numeric(x),numeric(1))
     treevis_pairwise_column(g,args,tips,values,'sequence_similarity',
         'Sequence\nidentity\n(amino acid)',width_mm)
 }

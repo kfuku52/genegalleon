@@ -65,6 +65,8 @@ def main():
             raise ValueError("NWKIT returned an incorrect duplication count.")
         if sum(int(row["implied_losses"]) for row in rows) != 2:
             raise ValueError("NWKIT returned an incorrect implied-loss count.")
+        if sum(len(json.loads(row["implied_loss_species_clade_ids"])) for row in rows) != 2:
+            raise ValueError("NWKIT must export branch-resolved implied-loss locations.")
         check_mul_reconciliation(work)
     print("NWKIT optimal roots, LCA losses and exact MUL reconciliation verified.")
 

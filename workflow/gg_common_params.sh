@@ -14,7 +14,7 @@
 : "${GG_COMMON_REFERENCE_SPECIES:=auto}" # Reference species, or "auto" to detect a model species from the dataset.
 : "${GG_COMMON_INPUT_SEQUENCE_MODE:=cds}" # Shared default input sequence mode for workflows that consume CDS/protein inputs.
 : "${GG_COMMON_CSUBST_NONSYN_RECODE:=no}" # Shared CSUBST nonsynonymous-state recoding scheme for search and site-level summaries.
-: "${GG_COMMON_SPECIES_LABEL_PARSER:=taxonomic}" # Shared species-label parser used when downstream tools need to recover species names from gene/tree labels.
+: "${GG_COMMON_SPECIES_LABEL_PARSER:=extended-taxonomic}" # Shared species-label parser used when downstream tools need to recover species names from gene/tree labels.
 : "${GG_COMMON_SPECIES_LABEL_REGEX:=}" # Optional regex for downstream tools that support parser-driven species extraction from nonstandard labels.
 : "${GG_COMMON_SPECIES_LABEL_MAP_TSV:=}" # Optional mapping table for downstream tools that support parser-driven species extraction.
 : "${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:=zip}" # zip|files|raw; raw is an alias for the historical files layout, while ZIP mode uses transparent per-subdirectory shards.

@@ -2,7 +2,6 @@
 
 import argparse
 import csv
-import json
 import re
 import sys
 from pathlib import Path
@@ -28,6 +27,36 @@ if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
 import format_species_common as species_common
+from download_catalog import (
+    DIRECT_CATALOG_FIELDS as DIRECT_CATALOG_FIELDS,
+)
+from download_catalog import (
+    ID_EXAMPLES_BY_PROVIDER as ID_EXAMPLES_BY_PROVIDER,
+)
+from download_catalog import (
+    MANIFEST_FIELDNAMES as MANIFEST_FIELDNAMES,
+)
+from download_catalog import (
+    build_direct_catalog_from_manifest_rows as build_direct_catalog_from_manifest_rows,
+)
+from download_catalog import (
+    dedupe_preserve_order as dedupe_preserve_order,
+)
+from download_catalog import (
+    load_manifest_rows as load_manifest_rows,
+)
+from download_catalog import (
+    load_snapshot_payload as load_snapshot_payload,
+)
+from download_catalog import (
+    parse_direct_catalog_entries as parse_direct_catalog_entries,
+)
+from download_catalog import (
+    parse_snapshot_entries as parse_snapshot_entries,
+)
+from download_catalog import (
+    species_label_from_species_key as species_label_from_species_key,
+)
 from format_species_accessions import GWH_ACCESSION_SEARCH, select_ncbi_bundle
 from format_species_provider_config import (
     DEFAULT_INPUT_RELATIVE_DIRS,
@@ -54,33 +83,7 @@ NCBI_MERGED_INPUT_RELATIVE_DIRS = (
     DEFAULT_INPUT_RELATIVE_DIRS["genbank"],
 )
 
-MANIFEST_FIELDNAMES = (
-    "provider",
-    "id",
-    "species_key",
-    "cds_url",
-    "gff_url",
-    "gbff_url",
-    "genome_url",
-    "cds_archive_member",
-    "gff_archive_member",
-    "gbff_archive_member",
-    "genome_archive_member",
-    "cds_filename",
-    "gff_filename",
-    "gbff_filename",
-    "genome_filename",
-    "cds_url_template",
-    "gff_url_template",
-    "genome_url_template",
-    "local_cds_path",
-    "local_gff_path",
-    "local_gbff_path",
-    "local_genome_path",
-    FERNBASE_CONFIDENCE_MODE_FIELD,
-)
 
-DIRECT_CATALOG_FIELDS = tuple(field for field in MANIFEST_FIELDNAMES if field not in ("provider", "id"))
 DIRECT_CATALOG_SNAPSHOT_FIELDS = ("id", "species") + DIRECT_CATALOG_FIELDS
 
 HEADER_COMMENTS = {
@@ -394,94 +397,6 @@ SNAPSHOT_FULL_ID_PROVIDERS = (
 EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 DDBJ_WGS_MASTER_ACCESSION_PATTERN = re.compile(r"([A-Z]{4,6})0{8,9}(?:\.[0-9]+)?", re.IGNORECASE)
 
-ID_EXAMPLES_BY_PROVIDER = {
-    "onekp": (("BMJR", "Adiantum raddianum (1KP BMJR)"),),
-    "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
-    "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
-    "ensemblmetazoa": (("anopheles_gambiae", "Anopheles gambiae"),),
-    "ensemblprotists": (("phytophthora_parasitica", "Phytophthora parasitica"),),
-    "ncbi": (
-        ("GCF_000001405.40", "Homo sapiens"),
-        ("GCA_000001635.9", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCA_000001215.4", "Drosophila melanogaster"),
-        ("GCF_000002985.6", "Caenorhabditis elegans"),
-    ),
-    "ddbj": (
-        ("PRJDB15739", "Triphyophyllum peltatum"),
-        ("BAAHMP000000000", "Triphyophyllum peltatum WGS master"),
-    ),
-    "coge": (
-        ("24739", "Arabidopsis thaliana"),
-        ("29177", "Oryza sativa"),
-        ("42091", "Zea mays"),
-        ("78085", "Drosophila melanogaster"),
-        ("72417", "Caenorhabditis elegans"),
-    ),
-    "cngb": (
-        ("CNA0012345", "Homo sapiens"),
-        ("GCF_000001405.40", "Homo sapiens"),
-        ("GCA_000001635.9", "Mus musculus"),
-        ("GCF_049306965.1", "Danio rerio"),
-        ("GCA_000001215.4", "Drosophila melanogaster"),
-    ),
-    "gwh": (
-        ("GWHIGRM00000000.1", "Medicago sativa"),
-        ("GWHCBHY00000000", "Allium sativum"),
-    ),
-    "citrusgenomedb": (
-        ("https://www.citrusgenomedb.org/organism/5799", "Citrus australasica (CGD organism page)"),
-        ("https://www.citrusgenomedb.org/Analysis/2530647", "Citrus australasica cv. AZM genome v1.0 (CGD analysis)"),
-    ),
-    "figshare": (
-        (
-            "https://figshare.com/articles/dataset/Construction_of_the_super_pan-genome_for_the_genus_Actinidia_reveals_structural_variations_linked_to_phenotypic_diversity/28759280",
-            "Actinidia super pan-genome (figshare article)",
-        ),
-    ),
-    "plantgarden": (
-        ("https://plantgarden.jp/en/list/t64480/genome/t64480.G001", "Actinidia polygama (PlantGARDEN assembly page)"),
-        ("https://plantgarden.jp/en/list/t385388/genome/t385388.G001", "Camellia oleifera (PlantGARDEN assembly page)"),
-    ),
-    "plantaedb": (
-        (
-            "https://plantaedb.com/taxa/phylum/angiosperms/order/asterales/family/asteraceae/subfamily/asteroideae/tribe/astereae/subtribe/conyzinae/genus/erigeron/species/erigeron-breviscapus",
-            "Erigeron breviscapus (PlantaeDB page)",
-        ),
-        (
-            "https://plantaedb.com/taxa/phylum/angiosperms/order/ranunculales/family/berberidaceae/genus/berberis/species/berberis-thunbergii",
-            "Berberis thunbergii (PlantaeDB page)",
-        ),
-    ),
-    "flybase": (("dmel_r6.61", "Drosophila melanogaster"),),
-    "wormbase": (("celegans_prjna13758_ws290", "Caenorhabditis elegans"),),
-    "vectorbase": (("anopheles_gambiae_pest", "Anopheles gambiae"),),
-    "fernbase": (("Azolla_filiculoides", "Azolla filiculoides"), ("Salvinia_cucullata_v2", "Salvinia cucullata v2")),
-    "veupathdb": (("EnuttalliP19", "Entamoeba nuttalli"),),
-    "dictybase": (("Dictyostelium_discoideum", "Dictyostelium discoideum"),),
-    "insectbase": (("IBG_00001", "Abrostola tripartita"),),
-    "oryza_minuta": (("gramene_tetraploids", "Oryza minuta Gramene tetraploids"),),
-    "direct": (("direct_example_species", "Direct URL manifest row"),),
-    "local": (("/absolute/path/to/local/species_dir", "Local species directory"),),
-}
-
-
-def species_label_from_species_key(species_key: str) -> str:
-    text = str(species_key or "").strip()
-    if text == "":
-        return ""
-    parts = text.replace("_", " ").split()
-    normalized = []
-    for idx, part in enumerate(parts):
-        if re.fullmatch(r"[a-z]+", part):
-            if idx == 0:
-                normalized.append(part.capitalize())
-            else:
-                normalized.append(part.lower())
-        else:
-            normalized.append(part)
-    return " ".join(normalized)
-
 
 def format_id_choice(source_id: str, species_label: str) -> str:
     sid = str(source_id or "").strip()
@@ -491,78 +406,6 @@ def format_id_choice(source_id: str, species_label: str) -> str:
     if label == "":
         return sid
     return "{} ({})".format(sid, label)
-
-
-def dedupe_preserve_order(items):
-    out = []
-    seen = set()
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        out.append(item)
-    return out
-
-
-def parse_snapshot_entries(raw_entries):
-    out = []
-    entries = raw_entries
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        return out
-    for entry in entries:
-        source_id = ""
-        species_label = ""
-        if isinstance(entry, str):
-            source_id = entry
-        elif isinstance(entry, dict):
-            source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
-            species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
-        elif isinstance(entry, (tuple, list)) and len(entry) > 0:
-            source_id = str(entry[0] or "").strip()
-            if len(entry) > 1:
-                species_label = str(entry[1] or "").strip()
-        source_id = str(source_id or "").strip()
-        if source_id == "":
-            continue
-        out.append((source_id, species_label))
-    return dedupe_preserve_order(out)
-
-
-def parse_direct_catalog_entries(raw_entries):
-    out = []
-    entries = raw_entries
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        return out
-    seen = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        source_id = str(entry.get("id") or entry.get("source_id") or "").strip()
-        species_label = str(entry.get("species") or entry.get("species_label") or entry.get("label") or "").strip()
-        if source_id == "":
-            continue
-        key = (source_id, species_label)
-        if key in seen:
-            continue
-        seen.add(key)
-        record = {"id": source_id, "species": species_label}
-        for field in DIRECT_CATALOG_FIELDS:
-            record[field] = str(entry.get(field) or "").strip()
-        out.append(record)
-    return out
-
-
-def load_snapshot_payload(path: Path):
-    with open(path, "rt", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    providers_blob = payload.get("providers", payload)
-    if not isinstance(providers_blob, dict):
-        raise ValueError("id options snapshot must contain object key 'providers'")
-    return providers_blob
 
 
 def load_id_options_snapshot(path: Path):
@@ -576,67 +419,6 @@ def load_id_options_snapshot(path: Path):
 def load_direct_catalog_snapshot(path: Path):
     providers_blob = load_snapshot_payload(path)
     return parse_direct_catalog_entries(providers_blob.get("direct", []))
-
-
-def load_manifest_rows(path: Path):
-    suffix = str(path.suffix or "").lower()
-    if suffix == ".xlsx":
-        if Workbook is None:
-            raise RuntimeError("openpyxl is required to read .xlsx direct catalog manifests")
-        from openpyxl import load_workbook
-
-        workbook = load_workbook(path, read_only=True, data_only=False)
-        try:
-            sheet = workbook.active
-            values = list(sheet.iter_rows(values_only=True))
-        finally:
-            workbook.close()
-        if len(values) == 0:
-            return []
-        headers = [str(value or "").strip() for value in values[0]]
-        rows = []
-        for row_values in values[1:]:
-            if row_values is None:
-                continue
-            record = {}
-            nonempty = False
-            for idx, field in enumerate(headers):
-                if field == "":
-                    continue
-                value = row_values[idx] if idx < len(row_values) else ""
-                text = str(value or "").strip()
-                if text != "":
-                    nonempty = True
-                record[field] = text
-            if nonempty:
-                rows.append(record)
-        return rows
-    delimiter = "\t" if suffix == ".tsv" else ","
-    with open(path, "rt", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle, delimiter=delimiter))
-
-
-def build_direct_catalog_from_manifest_rows(rows):
-    out = []
-    seen = set()
-    for row in rows:
-        provider = str(row.get("provider", "") or "").strip().lower()
-        if provider != "direct":
-            continue
-        source_id = str(row.get("id", "") or "").strip()
-        if source_id == "":
-            continue
-        species_key = str(row.get("species_key", "") or "").strip()
-        species_label = species_label_from_species_key(species_key)
-        key = (source_id, species_key, species_label)
-        if key in seen:
-            continue
-        seen.add(key)
-        record = {"id": source_id, "species": species_label}
-        for field in DIRECT_CATALOG_FIELDS:
-            record[field] = str(row.get(field, "") or "").strip()
-        out.append(record)
-    return sorted(out, key=lambda record: (str(record.get("id", "")).lower(), str(record.get("species_key", "")).lower()))
 
 
 def infer_coge_genome_id_from_files(species_key: str, files: List[Path], warnings: List[str]) -> str:
@@ -766,7 +548,8 @@ def direct_catalog_formula(catalog_column_letter, catalog_row_end, sheet_row):
     return (
         '=IF($A{row}<>"direct","",'
         'IFERROR(INDEX({value_range},MATCH($B{row},{choice_range},0)),'
-        'IFERROR(INDEX({value_range},MATCH($B{row},{id_range},0)),"")))'
+        'IF(COUNTIF({id_range},$B{row})=1,'
+        'IFERROR(INDEX({value_range},MATCH($B{row},{id_range},0)),""),"")))'
     ).format(
         row=sheet_row,
         value_range=value_range,
@@ -1185,6 +968,12 @@ def write_manifest_xlsx(rows: List[Dict[str, str]], output_path: Path, id_option
 
     direct_catalog_entries = list(direct_catalog_entries or [])
     if len(direct_catalog_entries) > 0:
+        choices = {}
+        for entry in direct_catalog_entries:
+            choice = build_direct_catalog_choice(entry)
+            if choice in choices and choices[choice] != entry:
+                raise ValueError("Direct catalog choices must be unique; give distinct species labels or source IDs to different entries.")
+            choices[choice] = entry
         direct_sheet = workbook.create_sheet("_direct_catalog")
         direct_headers = ["choice", "id", "species"] + list(DIRECT_CATALOG_FIELDS)
         direct_sheet.append(direct_headers)

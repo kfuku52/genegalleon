@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 SUPPORT_DIR = Path(__file__).resolve().parent
@@ -22,6 +21,10 @@ from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS, gff_mapping_
 from input_validation_reuse import add_arguments as add_reuse_arguments
 from input_validation_reuse import implementation_identity, partition
 from species_labeling import extract_species_label
+from species_validation import has_known_suffix as has_known_suffix
+from species_validation import list_nonhidden_files as list_nonhidden_files
+from species_validation import resolve_nthreads as resolve_nthreads
+from species_validation import run_validation_tasks as schedule_validation
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -45,6 +48,8 @@ GFF_EXTENSIONS = (
 
 TAXONOMIC_PROXIMITY_QUALIFIERS = frozenset(("cf", "aff", "nr"))
 TAXONOMIC_INFRASPECIFIC_RANKS = frozenset(("subsp", "ssp", "var", "forma", "f"))
+
+
 
 
 def build_arg_parser():
@@ -92,23 +97,6 @@ def build_arg_parser():
     )
     add_reuse_arguments(parser)
     return parser
-
-
-def has_known_suffix(name, suffixes):
-    lower = name.lower()
-    return any(lower.endswith(suffix) for suffix in suffixes)
-
-
-def list_nonhidden_files(directory, suffixes):
-    out = []
-    for path in sorted(Path(directory).iterdir()):
-        if not path.is_file():
-            continue
-        if path.name.startswith("."):
-            continue
-        if has_known_suffix(path.name, suffixes):
-            out.append(path)
-    return out
 
 
 def gff_candidate_sort_key(path):
@@ -173,14 +161,6 @@ def symlink_or_copy(src, dst):
         os.symlink(src, dst)
     except OSError:
         shutil.copy2(src, dst)
-
-
-def resolve_nthreads(args):
-    if args.nthreads is not None:
-        return max(1, int(args.nthreads))
-    if args.ncpu is not None:
-        return max(1, int(args.ncpu))
-    return 1
 
 
 def run_gff2genestat(cds_file, gff_file, feature="CDS", *, annotation_policy="strict"):
@@ -427,38 +407,23 @@ def validate_single_species(task, missing_limit):
         }
 
 
-def run_validation_tasks(tasks, missing_limit, nthreads):
-    if len(tasks) == 0:
-        return []
-    if nthreads <= 1 or len(tasks) <= 1:
-        return [validate_single_species(task=task, missing_limit=missing_limit) for task in tasks]
+def _executor_error(task, exc):
+    return {
+        "index": task["index"],
+        "species_prefix": task["species_prefix"],
+        "ok": False,
+        "stats_ready": False,
+        "error": "[{}] Unexpected executor error for CDS={} GFF={}: {}".format(
+            task["species_prefix"],
+            task["cds_file"].name,
+            task["gff_file"].name,
+            exc,
+        ),
+    }
 
-    ordered_results = {}
-    max_workers = min(nthreads, len(tasks))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_task = {
-            executor.submit(validate_single_species, task, missing_limit): task
-            for task in tasks
-        }
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                result = future.result()
-            except Exception as exc:
-                result = {
-                    "index": task["index"],
-                    "species_prefix": task["species_prefix"],
-                    "ok": False,
-                    "stats_ready": False,
-                    "error": "[{}] Unexpected executor error for CDS={} GFF={}: {}".format(
-                        task["species_prefix"],
-                        task["cds_file"].name,
-                        task["gff_file"].name,
-                        exc,
-                    ),
-                }
-            ordered_results[result["index"]] = result
-    return [ordered_results[index] for index in sorted(ordered_results)]
+
+def run_validation_tasks(tasks, missing_limit, nthreads):
+    return schedule_validation(tasks, missing_limit, nthreads, validate_single_species, _executor_error)
 
 
 def main(argv=None, *, verification_session=None):

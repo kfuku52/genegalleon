@@ -217,6 +217,21 @@ Main outputs:
 - `workspace/output/species_genome_busco_full`, `species_genome_busco_short`
 - `workspace/output/species_dnaseq_smudgeplot/<species>_smudgeplot.zip` (optional)
 
+Annotation tables retain every original CDS ID. `cds_qc_*` columns preserve the
+existing resolution decision, rejected-candidate reasons and selected source;
+`functional_annotation_status=not_assessed_cds_qc_excluded` means no functional
+prediction was assessed for that CDS, not gene absence or a demonstrated pseudogene.
+Predictors continue to use only QC-accepted resolved CDS. The adjacent
+`<species>_annotation.tsv.scope.json` binds the original catalogue and resolved
+sequence hashes, policy, ID digests and accepted/excluded counts separately.
+The native `merge_cds_annotation.py --existing_annotation_tsv` mode can reuse
+accepted annotations exactly, with `--cds_fasta` (original),
+`--resolved_cds_fasta`, `--cds_resolution_json` and `--scope_json`; the saved
+table must contain exactly the accepted IDs. An optional `cds_scope` object per
+annotation-DB manifest source records this contract in `gene_annotation_source`.
+DB import checks exact reconciliation membership before staging the source DB
+and independently checks complete coverage again during import.
+
 Notable defaults:
 
 - most heavy tasks default to `0`,
@@ -724,6 +739,17 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- `run_gene_annotation_database=1` with `gene_annotation_manifest` adds native
+  per-gene product, GO and localisation columns, GO tuples and source provenance
+  to `gg_orthogroup.annotated.db`. Existing tree/event tables are copied intact;
+  later summaries use that DB without repeating searches or reconciliation.
+- `gene_family_database_reconciliation=1` imports existing GeneRax XML events,
+  species branches, exact gene membership and method provenance as separate
+  tables. `run_reconciliation_summary=1` reads that DB without modifying it and
+  compares configured branches with optional CAFE, expression and proteome
+  evidence. Both options default to 0; see
+  [Reconciliation Database and Downstream Evidence](gene-reconciliation-summary.md)
+  for the input contracts, interpretation limits and fixed-size output layout,
 - direct `generate_orthogroup_database.py` calls default to creating a new DB
   and refuse an existing destination. Use `--overwrite 1` (or `--mode replace`)
   for a full rebuild. Intentional incremental imports require `--mode append`

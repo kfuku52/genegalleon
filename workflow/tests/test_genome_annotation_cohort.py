@@ -244,6 +244,17 @@ def test_unique_frozen_membership_and_exact_lineage(tmp_path):
         cohort.select(manifest, 2)
 
 
+@pytest.mark.parametrize('name,expected', [
+    ('Plant_one.cds.fa', True), ('Plant_one.cds.fa.gz', True), ('Plant_one.FASTA', True),
+    ('Plant_one.extra.cds.fa', False), ('Plant_one_two.cds.fa', False),
+    ('Other_species.cds.fa', False), ('Plant_one.cds.fa.audit.json', False),
+])
+def test_cohort_uses_the_entire_frozen_id_for_cds_handoffs(name, expected):
+    assert cohort.matches_formatted_cds(name, 'Plant_one') is expected
+    assert cohort.matches_formatted_cds('Oryza_sativa_Indica_Group.cds.fa.gz',
+                                       'Oryza_sativa_Indica_Group')
+
+
 def test_annotation_phases_bound_every_public_run_flag():
     entrypoint = (SUPPORT.parent / 'gg_genome_annotation_entrypoint.sh').read_text()
     declared = {name.upper() for name in re.findall(r'^(run_[a-z0-9_]+)=', entrypoint, re.MULTILINE)}

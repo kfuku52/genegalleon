@@ -20,8 +20,8 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pandas as pd
-from Bio.Data import CodonTable
 from Bio.Seq import Seq
+from cdskit.codonutil import get_codon_table_components
 from cdskit.pad import process_record_padding
 from content_digest_cache import cached_sha256_file
 from fasta_sequence_store import fasta_records
@@ -49,9 +49,9 @@ def evaluate(sequence, code=1, phase=None):
     sequence = re.sub(r'\s+', '', sequence).upper()
     if not sequence or re.search(r'[^ACGTRYSWKMBDHVN]', sequence):
         return {'accepted': False, 'reason': 'empty_or_invalid_nucleotide', 'sequence': sequence}
-    table = CodonTable.unambiguous_dna_by_id[int(code)]
-    stops = set(table.stop_codons) - set(table.forward_table)
-    dual = set(table.stop_codons) & set(table.forward_table)
+    table = get_codon_table_components(int(code))
+    stops = set(table["stop_codons"]) - set(table["forward_table"])
+    dual = set(table["stop_codons"]) & set(table["forward_table"])
     if phase is None:
         # CDSKit chooses padding. GeneGalleon independently evaluates whether
         # that result meets the scientific admission policy; padding is not

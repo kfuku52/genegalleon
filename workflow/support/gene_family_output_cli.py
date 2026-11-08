@@ -180,6 +180,11 @@ def build_parser(
     delete_parser.add_argument("--keep-live", action="store_true")
     delete_parser.add_argument("--family-id")
 
+    batch_delete_parser = subparsers.add_parser("delete-batch", help="Retire explicit path/family_id JSON records in one durable batch.")
+    add_root(batch_delete_parser)
+    batch_delete_parser.add_argument("--manifest", required=True, type=Path)
+    batch_delete_parser.add_argument("--keep-live", action="store_true")
+
     undelete_parser = subparsers.add_parser("undelete")
     add_root(undelete_parser)
     undelete_parser.add_argument("--path", required=True)
@@ -269,6 +274,7 @@ def build_parser(
     add_family_context(purge_parser)
     purge_parser.add_argument("--max-files-per-shard", type=int, default=5000)
     purge_parser.add_argument("--drop-unlisted", action="store_true")
+    purge_parser.add_argument("--subdirs", help="Purge only these comma-separated logical subdirectories; preserve other archives and tombstones.")
     add_zip_write_options(purge_parser)
 
     cleanup_tmp_parser = subparsers.add_parser("cleanup-tmp")
