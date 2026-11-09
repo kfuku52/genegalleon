@@ -812,7 +812,6 @@ add_localization_column = function(g, args) {
     columns = paste0('cdskit_localize_p_', targeting)
     has_targeting = all(columns %in% names(tips))
     has_perox = 'cdskit_localize_p_peroxisome' %in% names(tips)
-    if (!has_targeting && !has_perox) return(g)
     validate = function(values) {
         known = values[!is.na(values)]
         if (any(!is.finite(known) | known < 0 | known > 1)) {
@@ -820,6 +819,40 @@ add_localization_column = function(g, args) {
         }
         values
     }
+
+    # CDSKIT's multilabel scores are independent. Preserve their common
+    # 0–1 scale and render one pixel per tip and compartment.
+    compartments = c(
+        nucleus='Nucleus', cytoplasm='Cytoplasm', extracellular='Extracellular',
+        mitochondrion='Mitochondrion', cell_membrane='Cell membrane',
+        endoplasmic_reticulum='Endoplasmic reticulum', chloroplast='Chloroplast',
+        golgi_apparatus='Golgi apparatus', lysosome_vacuole='Lysosome / vacuole',
+        peroxisome='Peroxisome')
+    scores = paste0('cdskit_localize_p_', names(compartments))
+    names(scores) = unname(compartments)
+    available = scores[scores %in% names(tips)]
+    if (nrow(tips) && any(available != 'cdskit_localize_p_peroxisome')) {
+        tiles = data.frame(
+            label=rep(tips$label, length(available)),
+            compartment=factor(rep(names(available), each=nrow(tips)), levels=names(available)),
+            score=unlist(lapply(tips[, available, drop=FALSE], function(x) validate(as.numeric(x))),
+                         use.names=FALSE))
+        p = ggplot(tiles, aes(x=.data[['compartment']], y=.data[['label']], fill=.data[['score']])) +
+            geom_raster(interpolate=FALSE) +
+            scale_fill_viridis_c(limits=c(0,1), breaks=c(0,0.5,1), na.value='grey85', name='Localization score') +
+            labs(x=NULL, y=NULL) +
+            theme_minimal(base_size=args[['font_size']]) +
+            theme(axis.text.y=element_blank(), axis.ticks=element_blank(),
+                  panel.grid=element_blank(),
+                  axis.text.x=element_text(colour='black', angle=90, hjust=1, vjust=0.5),
+                  legend.position='bottom', legend.title.position='top',
+                  plot.margin=unit(args[['margins']]/4,'cm'))
+        attr(p, 'treevis_width_mm') = 3 * length(available)
+        g[['localization']] = p
+        return(g)
+    }
+    if (!has_targeting && !has_perox) return(g)
+
     rectangles = list()
     if (has_targeting) {
         probabilities = as.matrix(tips[, columns, drop=FALSE])

@@ -72,3 +72,25 @@ stopifnot(!is.null(only_perox$localization))
 for (key in c('noTP','SP','mTP','cTP','lTP')) input$data[[paste0('cdskit_localize_p_',key)]] <- NULL
 stopifnot(is.null(add_localization_column(list(tree=input),args)$localization))
 cat('Combined localization probabilities and missing-data tests passed.\n')
+
+# Multilabel values share a fixed color scale and remain independent per tip.
+input <- tree
+prefix <- 'cdskit_localize_p_'
+keys <- c('nucleus', 'cytoplasm', 'extracellular', 'mitochondrion', 'cell_membrane',
+          'endoplasmic_reticulum', 'chloroplast', 'golgi_apparatus', 'lysosome_vacuole')
+for (key in keys) input$data[[paste0(prefix,key)]] <- c(0.1, 0.8, 0.9, NA, 0.5)
+p <- add_localization_column(list(tree=input),args)$localization
+stopifnot(inherits(p$layers[[1]]$geom, 'GeomRaster'),
+          identical(as.character(p$data$label[1:4]), c('one','half','missing','zero')),
+          length(levels(p$data$compartment)) == 10L,
+          nrow(p$data) == 40L,
+          identical(p$data$score[p$data$compartment == 'Nucleus'], c(0.9,0.8,NA,0.1)),
+          identical(p$data$score[p$data$compartment == 'Peroxisome'], c(1,0.5,NA,0)))
+b <- ggplot_build(p)
+stopifnot(identical(b$plot$scales$get_scales('fill')$limits, c(0,1)),
+          b$data[[1]]$fill[3] == 'grey85')
+input$data[[paste0(prefix,'peroxisome')]] <- NULL
+stopifnot(nrow(add_localization_column(list(tree=input),args)$localization$data) == 36L)
+input$data[[paste0(prefix,'nucleus')]][1] <- 1.1
+stopifnot(inherits(try(add_localization_column(list(tree=input),args), silent=TRUE), 'try-error'))
+cat('Multilabel localization tests passed.\n')

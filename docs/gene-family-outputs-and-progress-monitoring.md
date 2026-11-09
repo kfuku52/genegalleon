@@ -928,7 +928,13 @@ without rerunning candidate scoring with
 then atomically replaces each individual file. The three replacements are not
 a single filesystem transaction; retain a backup when migrating valuable outputs.
 
-The default `localization` panel combines two adjacent square bars per tip:
+The `localization` panel shows current CDSKIT multilabel scores as a heatmap,
+with one column per compartment and a common 0–1 color scale. Each score is
+shown independently, and missing values are gray. The heatmap uses one raster
+cell per tip and compartment while keeping text and tree branches in vector
+form.
+
+For legacy CDSKIT output, the panel combines two adjacent square bars per tip:
 targeting probabilities on the left and independent peroxisome probability on
 the right. The gap is 40% of one square's width. Both use a 0-1 scale; the
 peroxisome probability is never added to the targeting stack. Colors and a
@@ -991,8 +997,8 @@ synteny TSV's `evalue_cutoff` column, including the effective value when
 `query_blast_evalue=auto`. Older tables without this metadata display
 `E-value cutoff: unavailable`; regenerate the synteny input to record it.
 
-The **Syntenic similarity** triangle appears to the right of the ortholog panel
-by default (`treevis_synteny_similarity=1`). Its fixed width is 15 mm
+Enable the **Syntenic similarity** triangle with `treevis_synteny_similarity=1`.
+Its fixed width is 15 mm
 (`treevis_synteny_similarity_width_mm`), added to the PDF width so existing
 columns are not squeezed. It uses viridis on a fixed 0–1 scale without cell
 numbers. Each cell compares a pair of tips; its vertical position is their
@@ -1032,12 +1038,12 @@ Missing, nonnumeric, or out-of-range q-values in hit rows are errors, not
 evidence of no hits. Motif and synteny-group IDs are retained as exact strings,
 including numeric-looking IDs with leading zeroes.
 
-Both columns are enabled by default (`treevis_sequence_similarity=1` and
-`treevis_cis_similarity=1`). Each adds 15 mm to the PDF, controlled by
-`treevis_sequence_similarity_width_mm` and `treevis_cis_similarity_width_mm`.
-Like syntenic similarity, they use viridis from 0 to 1 and no cell numbers.
-The default order after ortholog is synteny, promoter cis similarity, then
-amino-acid sequence identity. Set the respective flag to zero to omit a column.
+Enable the sequence identity triangle with `treevis_sequence_similarity=1`.
+Promoter cis similarity is enabled by default (`treevis_cis_similarity=1`).
+Each adds 15 mm to the PDF, controlled by `treevis_sequence_similarity_width_mm`
+and `treevis_cis_similarity_width_mm`. Like syntenic similarity, they use
+viridis from 0 to 1 and no cell numbers. When enabled and available, the order
+after ortholog is synteny, promoter cis similarity, then amino-acid sequence identity.
 An 8 mm label column appears immediately before the first available triangle,
 showing each tip as `...` plus the literal last three characters of its gene ID.
 It appears only once, even when several triangles are shown, and follows the
