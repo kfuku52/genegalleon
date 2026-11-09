@@ -6,6 +6,7 @@ from collections import defaultdict
 from urllib.parse import quote
 
 from format_species_writers import apply_common_replacements, open_text
+from genome_sequence_identity import mask_genome_sequence
 from gff_feature_structure import has_trans_splicing_exception, ordered_annotated_blocks
 
 try:
@@ -38,7 +39,7 @@ from .source_identity import source_annotation_path, task_annotation_path
 def iter_genome_records_from_gbff(path):
     for record in iter_genbank_records(path):
         record_id = extract_seqrecord_id(record)
-        sequence = re.sub(r"\s+", "", str(record.seq or "")).upper()
+        sequence = mask_genome_sequence(re.sub(r"\s+", "", str(record.seq or "")))
         if sequence == "":
             continue
         yield record_id, sequence
@@ -507,7 +508,9 @@ def derive_cds_records_from_gff_and_genome(task):
             if not feature["gene_token"]:
                 feature["gene_token"] = inferred
     factory = task.get("_genome_interval_context")
-    context = factory() if factory else genome_intervals(genome_path, cds_intervals(cds_features_by_transcript))
+    context = factory() if factory else genome_intervals(
+        genome_path, cds_intervals(cds_features_by_transcript), mask_invalid=True,
+    )
     with context as genome_sequences:
         rescued_gene_tokens = grouping_index["transcript_gene_tokens"]
         required_gff_seqids = {

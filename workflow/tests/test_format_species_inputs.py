@@ -1715,7 +1715,8 @@ def test_format_species_inputs_strict_mode_accepts_cds_only_inputs(tmp_path):
     assert rows[0]["genome_status"] == "missing"
 
 
-def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missing(tmp_path):
+@pytest.mark.parametrize("contains_gap", [False, True])
+def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missing(tmp_path, contains_gap):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
     species_dir.mkdir(parents=True, exist_ok=True)
@@ -1737,10 +1738,9 @@ def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missi
         ),
         encoding="utf-8",
     )
-    genome_path.write_text(
-        ">chr1\nATGAAATTT\n>chr2\nTTTAAACAT\n",
-        encoding="utf-8",
-    )
+    chr2 = "T-TAAACAT" if contains_gap else "TTTAAACAT"
+    raw_genome = f">chr1\nATGAAATTT\n>chr2\n{chr2}\n"
+    genome_path.write_text(raw_genome, encoding="utf-8")
 
     out_cds = tmp_path / "species_cds"
     out_gff = tmp_path / "species_gff"
@@ -1769,7 +1769,10 @@ def test_format_species_inputs_derives_cds_from_gff_and_genome_when_cds_is_missi
     assert text.count(">Arabidopsis_thaliana_gene1") == 1
     assert text.count(">Arabidopsis_thaliana_gene2") == 1
     assert "ATGTTT" in text
-    assert "ATGAAA" in text
+    assert ("ATGANA" if contains_gap else "ATGAAA") in text
+    with gzip.open(out_genome / "Arabidopsis_thaliana_genome.fa.gz", "rt") as handle:
+        assert handle.read() == raw_genome.replace("-", "N")
+    assert genome_path.read_text() == raw_genome
 
     with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
@@ -5355,8 +5358,8 @@ FT                   /locus_tag="gene1"
 FT                   /gene="gene1"
 FT                   /protein_id="gene1.t1"
 XX
-SQ   Sequence 9 BP; 3 A; 1 C; 1 G; 4 T; 0 other;
-     atgaaattt                                                               9
+SQ   Sequence 9 BP; 3 A; 0 C; 1 G; 4 T; 1 other;
+     atga-attt                                                               9
 //
 """,
         encoding="utf-8",
@@ -5385,7 +5388,7 @@ SQ   Sequence 9 BP; 3 A; 1 C; 1 G; 4 T; 0 other;
     assert ">Picea_abies_gene1" in cds_text
     assert "ATGTTT" in cds_text
     with gzip.open(next(out_genome.glob("*.fa.gz")), "rt", encoding="utf-8") as handle:
-        assert "ATGAAATTT" in handle.read()
+        assert "ATGANATTT" in handle.read()
     validation = run_validate_mapping_script(
         "--species-cds-dir",
         str(out_cds),
@@ -6077,8 +6080,8 @@ def test_streamed_genome_matches_record_writer_across_transport_and_edge_cases(t
         import format_species_writers
         monkeypatch.setattr(format_species_writers.shutil, "which", lambda _: None)
     else:
-        assert shutil.which("seqkit"), "Qualified runtime must contain real seqkit"
-    contents = ("ignored before header\r\n>chr:1 description\r\na c\tgt\u2003nß\r\n\r\n"
+        assert shutil.which("seqkit") and shutil.which("pigz"), "Require the runtime's real FASTA writers"
+    contents = ("ignored before header\r\n>chr:1 description\r\na c\tgt\u2003nß-.x?uRyswkmbdhv\r\n\r\n"
                 ">cp chloroplast\nacgt\n>other OriSeqID=cp;\nACGT\n>lcl|cp\nACGT\n"
                 ">empty\n>\nacg\n>duplicate\nACT\n>duplicate\nGTT\n"
                 ">long " + "header " * 150000 + "\n" + "a cgt\t" * 400000 + "\n>last\ntt")
@@ -6108,7 +6111,8 @@ def test_streamed_genome_matches_record_writer_across_transport_and_edge_cases(t
         original = extract_header_tag_value(header, "OriSeqID").rstrip(";")
         if record_id in organelles or record_id.removeprefix("lcl|") in organelles or apply_common_replacements(original) in organelles:
             continue
-        expected_records.append((record_id, re.sub(r"\s+", "", sequence).upper()))
+        sequence = re.sub(r"\s+", "", sequence)
+        expected_records.append((record_id, re.sub(r"[^ACGTRYSWKMBDHVNacgtryswkmbdhvn]", "N", sequence).upper()))
     out = tmp_path / "out"
     out.mkdir()
     expected = out / "expected.fa.gz"
@@ -6125,6 +6129,8 @@ def test_streamed_genome_read_failure_preserves_published_output(tmp_path, monke
     if compression == "python":
         import format_species_writers
         monkeypatch.setattr(format_species_writers.shutil, "which", lambda _: None)
+    else:
+        assert shutil.which("pigz"), "Require the runtime's real compressor"
     path = tmp_path / "Species_one.genome.fa"
     path.write_text(">chr1\nATGAAA\n")
     out = tmp_path / "out"

@@ -313,8 +313,8 @@ def test_busco_import_rejects_changed_scientific_contract(busco_pair, change):
     assert not (target / "artifact_provenance/busco.S.json").exists()
 
 
-def test_parent_reference_repair_runs_through_standard_formatter_and_strict_validator(tmp_path):
-    from format_species_annotation.reference import validate_gff_genome_references
+def test_parent_reference_repair_runs_through_standard_formatter_and_strict_validator(tmp_path, monkeypatch):
+    from format_species_annotation import reference
     from format_species_inputs import format_cds, format_gff
 
     (genome, gff) = (tmp_path / "genome.fa", tmp_path / "source.gff")
@@ -332,8 +332,18 @@ def test_parent_reference_repair_runs_through_standard_formatter_and_strict_vali
         format_strict=True,
     )
     cds = format_cds(task, tmp_path, False, False)
-    formatted = format_gff(task, tmp_path, False, False, formatted_cds_path=cds["output_path"])
-    assert validate_gff_genome_references(formatted["output_path"], genome) == 3
+    reads = []
+    open_genome = reference.genome_text_handles
+
+    def count_reads(path):
+        reads.append(path)
+        yield from open_genome(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reference, "genome_text_handles", count_reads)
+        formatted = format_gff(task, tmp_path, False, False, formatted_cds_path=cds["output_path"])
+    assert reads == [genome]
+    assert reference.validate_gff_genome_references(formatted["output_path"], genome) == 3
     with gzip.open(formatted["output_path"], "rt") as h:
         assert h.read() == raw.replace("wrong\t", "right\t")
     audit = json.loads(Path(str(formatted["output_path"]) + ".repair.json").read_text())

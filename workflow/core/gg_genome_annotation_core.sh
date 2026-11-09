@@ -182,6 +182,7 @@ digest.update(("annevo-formatted-inputs-v1\0" + sys.argv[3]).encode())
 support = Path(sys.argv[4])
 files = [Path(sys.argv[1]), Path(sys.argv[2])]
 files += sorted(support.glob("format_species*.py"))
+files.append(support / "genome_sequence_identity.py")
 for package in ("format_species_annotation", "format_species_download"):
     files += sorted((support / package).rglob("*.py"))
 for path in files:

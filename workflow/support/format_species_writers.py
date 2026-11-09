@@ -14,10 +14,10 @@ COMMON_REPLACEMENTS = (
 )
 
 
-def output_gzip_compresslevel():
+def output_gzip_compresslevel(default=9):
     raw = os.environ.get("GG_INPUT_GZIP_LEVEL", "").strip()
     if raw == "":
-        return 9
+        return default
     try:
         level = int(raw)
     except ValueError as exc:
@@ -240,6 +240,26 @@ def write_fasta_stream_gzip(output_path, writer):
             "-",
         ],
         output_via_stdout=False,
+    )
+
+
+def write_genome_stream_gzip(output_path, writer):
+    """Compress already formatted genome text without buffering chromosomes."""
+    # Keep the decoded layout previously produced by seqkit and the fallback.
+    width = 60 if shutil.which("seqkit") else 80
+
+    def write(handle):
+        writer(handle, width)
+
+    pigz = shutil.which("pigz")
+    if pigz is None:
+        write_text_output_directly(output_path, write)
+        return
+    write_text_output_via_command(
+        output_path, write,
+        lambda _: [pigz, f"-{output_gzip_compresslevel(default=4)}",
+                   "-p", str(output_compression_threads()), "-c"],
+        output_via_stdout=True,
     )
 
 

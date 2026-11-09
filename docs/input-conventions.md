@@ -900,13 +900,19 @@ Notes:
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,
+- ordinary genome formatting (FASTA or GenBank/EMBL) uppercases IUPAC DNA
+  bases and replaces each other sequence character (such as `-`, `.`, `?`,
+  `X`, or `U`) with one `N` after stripping whitespace. Coordinates and raw
+  source files are preserved. CDS reconstructed from a FASTA and GFF uses
+  the same normalized genomic bases. Explicit byte-preserving paired-curation
+  inputs are unchanged,
 - with a paired GFF and genome, ordinary formatting automatically repairs
   evidenced UTR contamination and incorrectly exported partial-CDS frames before
   selecting the longest isoform. It uses the same transcript's genomic CDS,
   exon boundaries and coherent phase recurrence; a stop-free alternative frame
   alone cannot establish a correction. Partial-frame corrections trim the
-  corresponding GFF CDS boundaries and recompute standard GFF3 phases. Genome
-  sequence and downloaded sources remain unchanged. This runs independently of
+  corresponding GFF CDS boundaries and recompute standard GFF3 phases. These
+  CDS repairs do not edit the genome or source files. This runs independently of
   `GG_INPUT_RUN_GENE_MODEL_RESCUE`, including provided and GFF-derived CDS,
 - a uniquely bound CDS model with complementary or inconsistent numeric phase
   fields is converted to standard GFF3 phases under the genomic sequence and

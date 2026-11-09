@@ -27,6 +27,7 @@ from .common import (
     sanitize_identifier,
 )
 from .genbank import _coge_export_transcript, duplicate_coge_model_ids
+from .genome_intervals import stat_identity
 from .grouping import build_gff_cds_grouping_index
 from .organelle import (
     count_organelle_gff_features,
@@ -384,7 +385,7 @@ def canonicalize_coge_cds_attributes(parts, features, names):
     return ";".join(rewritten), changed
 
 
-def gene_reference_repairs(gff_path, genome_path):
+def gene_reference_repairs(gff_path, genome_path, *, reference_index=None):
     """Repair parent seqids with unanimous exact RNA and coding-child evidence.
 
     Keep all coordinates and identifiers. Duplicate IDs, different strands/spans,
@@ -407,7 +408,7 @@ def gene_reference_repairs(gff_path, genome_path):
                 rna_ids[identifier].append(parts)
             for parent in attrs.get("Parent", ()):
                 children[parent].append(parts)
-    index = genome_reference_index(genome_path)
+    index = genome_reference_index(genome_path) if reference_index is None else reference_index
     repairs = {}
     for identifier, rows in genes.items():
         if len(rows) != 1 or not children[identifier]:
@@ -582,8 +583,13 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     organelle_features_excluded = count_organelle_gff_features(annotation_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     overlap_inputs = source_overlap_input_fingerprints(source_task)
-    reference_mapping = gff_reference_mapping(annotation_path, (source_task or {}).get("genome_path"))
-    gene_references = gene_reference_repairs(annotation_path, (source_task or {}).get("genome_path")) if mode != "off" else {}
+    genome_path = (source_task or {}).get("genome_path")
+    genome_identity = stat_identity(genome_path) if genome_path is not None else None
+    reference_index = genome_reference_index(genome_path) if genome_path is not None else None
+    reference_mapping = gff_reference_mapping(annotation_path, genome_path, reference_index=reference_index)
+    gene_references = gene_reference_repairs(
+        annotation_path, genome_path, reference_index=reference_index,
+    ) if mode != "off" else {}
     normalisation = paired_audit(source_task, cds_path) if source_task else None
     cds_updates = (normalisation or {}).get("gff_updates", {})
     confirmed_overlaps, overlap_audit = audit_source_overlaps(annotation_path, source_task or {})
@@ -638,6 +644,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     }
     attribute_changes = []
     empty_intergenic = empty_intergenic_regions(annotation_path) if mode != "off" else {}
+    if genome_path is not None and stat_identity(genome_path) != genome_identity:
+        raise OSError("Genome FASTA changed while repairing GFF references: " + str(genome_path))
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
         validated_lines(normalize_gff_reference_lines(iter_repaired_gff_lines(
