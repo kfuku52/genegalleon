@@ -2955,6 +2955,9 @@ cdskit_localize_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "busco_lineage=${busco_lineage}"
 )
+if [[ "${input_sequence_mode}" == "cds" ]]; then
+  cdskit_localize_provenance_args+=(--parameter "cds_mask_policy=internal-stop-only")
+fi
 gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
 if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then
   gg_step_start "${task}"

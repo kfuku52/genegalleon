@@ -257,15 +257,41 @@ Metadata fields use one JSON read per group and NUL-delimited shell assignments,
 with no `eval`; null/missing fields and error propagation retain their behavior.
 The native worker's 18 individual field reads become four grouped reads.
 
-FASTA genome formatting reads bounded sequence chunks and writes through the
-existing seqkit compressor and atomic publisher. Header normalization, organelle
-exclusion, empty/duplicate IDs, Unicode whitespace, archive member selection and
-80-column input wrapping are preserved. CDS selection and the GBFF path retain
-their existing record interface. Seqkit still retains a chromosome internally.
+FASTA genome formatting reads bounded sequence chunks, normalizes bases and
+streams the formatted text directly to `pigz` (or Python gzip without `pigz`).
+It no longer asks seqkit to read and buffer a complete chromosome before
+compression. Header normalization, organelle exclusion, empty and duplicate
+records, archive member selection, decoded line wrapping and atomic publishing
+are preserved. The GenBank/EMBL parser still reads one record at a time. CDS
+compression retains its existing backend.
 
-A 2026-10-05 comparison against v0.8.139 (`1140bbd`) used the immutable Docker
-runtime above, Linux arm64 / Python 3.12.14, warm filesystem caches, one warmup
-and three alternating fresh processes. No other tests/builds ran concurrently.
+Genome `pigz` compression defaults to level 4 and accepts an explicit
+`GG_INPUT_GZIP_LEVEL`. In a comparison against `21468308` using the same
+Linux arm64 Docker image with Python 3.12.15, a 262 MiB single-chromosome
+fixture made from repeated *Nepenthes gracilis* reference excerpts had
+identical decoded FASTA. With four threads, one warmup and three alternating
+trials, median sampled process-tree peak RSS fell from 1,026 to 66 MiB.
+Wall time went from 1.53 to 1.42 s and compressed size from 80.9 to 83.4 MiB.
+Level 1 took 1.33 s but produced an 89.6 MiB file. On the separate 256 MiB
+benchmark fixture made from a repeated 4 KiB sequence, single-threaded wall
+time rose from 1.71 to 5.96 s and compressed size from 22.5 to 85.4 MiB, while
+peak RSS fell from 1,022 to 66 MiB. Decoded FASTA again matched. These results
+describe formatting only; throughput and compression ratio depend on the
+sequence and thread count.
+
+GFF formatting shares one contig-name and length index between reference
+mapping and gene reference repair. It checks the genome's identity again
+before writing the GFF. A `write_repaired_gff` comparison against `78b2dfe0`
+used 12,000 gene models (including one parent-reference repair), a 262 MiB
+genome from the same reference excerpts in a 90 MiB gzip file, and the arm64
+Docker runtime with four threads. Across three alternating trials after one
+warmup, genome scans fell from two to one and median wall time from 3.18 to
+2.10 s. Sampled process-tree peak RSS stayed near 83 MiB. The decoded GFF and
+audit content matched, excluding the output file's path and stat metadata.
+
+A historical 2026-10-05 comparison against v0.8.139 (`1140bbd`) used a Linux
+arm64 Docker image with Python 3.12.14, warm filesystem caches, one warmup and
+three alternating fresh processes. No other tests/builds ran concurrently.
 All compared outputs matched; worker fingerprints cover genome/CDS/GFF,
 fx2tab/BUSCO outputs and complete worker QC results. The implementation identity
 field deliberately changes with code and is excluded from scientific QC parity.

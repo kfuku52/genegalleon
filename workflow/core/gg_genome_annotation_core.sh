@@ -182,6 +182,7 @@ digest.update(("annevo-formatted-inputs-v1\0" + sys.argv[3]).encode())
 support = Path(sys.argv[4])
 files = [Path(sys.argv[1]), Path(sys.argv[2])]
 files += sorted(support.glob("format_species*.py"))
+files.append(support / "genome_sequence_identity.py")
 for package in ("format_species_annotation", "format_species_download"):
     files += sorted((support / package).rglob("*.py"))
 for path in files:
@@ -851,6 +852,7 @@ cdskit_localize_provenance_args+=(
   --parameter "include_features=${cdskit_localize_include_features}"
   --parameter "no_model_download=${cdskit_localize_no_model_download}"
   --parameter "genetic_code=${genetic_code}"
+  --parameter "cds_mask_policy=internal-stop-only"
 )
 gg_artifact_prepare_stage cdskit_localize_needs_update run_cdskit_localize "${cdskit_localize_provenance_args[@]}" || exit $?
 if [[ ${cdskit_localize_needs_update} -eq 1 && ${run_cdskit_localize} -eq 1 ]]; then

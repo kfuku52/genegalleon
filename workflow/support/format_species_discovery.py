@@ -75,10 +75,12 @@ from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from format_species_writers import (
     apply_common_replacements,
+    write_fasta_record,
     write_fasta_records_gzip,
-    write_fasta_stream_gzip,
+    write_genome_stream_gzip,
     write_gff_lines_gzip,
 )
+from genome_sequence_identity import mask_genome_sequence
 from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
 
 CDS_GFF_GROUPING_AUDIT_VERSION = 17
@@ -968,16 +970,22 @@ def format_genome(task, output_dir, overwrite, dry_run):
 
     written = 0
 
-    def write_genome_stream(handle):
+    def write_genome_stream(handle, width):
         nonlocal written
         from format_species_annotation.reference import genome_fragments
         organelles = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
-        retained, tail = False, ""
+        retained, has_sequence, tail = False, False, ""
+
+        def finish_record():
+            if tail:
+                handle.write(tail + "\n")
+            elif retained and not has_sequence and width == 60:
+                handle.write("\n")
+
         for kind, text in genome_fragments(genome_path, strict=False):
             if kind == "header":
-                if tail:
-                    handle.write(tail + "\n")
-                    tail = ""
+                finish_record()
+                tail, has_sequence = "", False
                 record_id = first_token(apply_common_replacements(text)) or "unnamed"
                 original_id = extract_header_tag_value(text, "OriSeqID").rstrip(";")
                 retained = not (record_id in organelles or record_id.removeprefix("lcl|") in organelles
@@ -986,25 +994,25 @@ def format_genome(task, output_dir, overwrite, dry_run):
                     handle.write(">" + record_id + "\n")
                     written += 1
             elif retained:
-                sequence = tail + text.upper()
-                end = len(sequence) // 80 * 80
+                has_sequence = True
+                sequence = tail + mask_genome_sequence(text)
+                end = len(sequence) // width * width
                 if end:
-                    handle.write("\n".join(sequence[pos:pos + 80] for pos in range(0, end, 80)) + "\n")
+                    handle.write("\n".join(sequence[pos:pos + width] for pos in range(0, end, width)) + "\n")
                 tail = sequence[end:]
-        if tail:
-            handle.write(tail + "\n")
+        finish_record()
 
     if genome_path is not None:
-        write_fasta_stream_gzip(output_path, write_genome_stream)
+        write_genome_stream_gzip(output_path, write_genome_stream)
         return {"status": "write", "output_path": output_path, "written": written}
 
-    def iter_genome_output_records():
+    def write_genbank_genome(handle, width):
         nonlocal written
         for record_id, sequence in iter_genome_records_from_gbff(gbff_path):
             written += 1
-            yield record_id, sequence
+            write_fasta_record(handle, record_id, sequence, width)
 
-    write_fasta_records_gzip(output_path, iter_genome_output_records())
+    write_genome_stream_gzip(output_path, write_genbank_genome)
     return {"status": "write", "output_path": output_path, "written": written}
 
 

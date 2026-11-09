@@ -3,9 +3,23 @@ import gzip
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
-_DNA = str.maketrans('', '', 'ACGTRYSWKMBDHVN')
+_DNA_SYMBOLS = 'ACGTRYSWKMBDHVN'
+_DNA = str.maketrans('', '', _DNA_SYMBOLS)
+_DNA_MASK = {code: chr(code).upper() if chr(code).upper() in _DNA_SYMBOLS else 'N'
+             for code in range(128)}
+_NON_DNA = re.compile(f'[^{_DNA_SYMBOLS}{_DNA_SYMBOLS.lower()}]')
+
+
+def mask_genome_sequence(sequence):
+    """Uppercase IUPAC DNA and replace each other sequence symbol with one N."""
+    if sequence.isascii():
+        return sequence.translate(_DNA_MASK)
+    # Mask before uppercasing: Unicode case expansion can change coordinates.
+    return _NON_DNA.sub('N', sequence).upper()
+
 
 def genome_sequence_digest(path, *, contig_lengths=None):
     path = Path(path)

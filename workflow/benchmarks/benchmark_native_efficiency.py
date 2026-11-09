@@ -129,7 +129,7 @@ def worker(args):
         proof = original(plan)
     elif args.mode == "genome":
         from format_species_discovery import format_genome
-        assert shutil.which("seqkit"), "Require real seqkit from the qualified runtime"
+        assert shutil.which("seqkit") and shutil.which("pigz"), "Require real seqkit and pigz from the runtime"
         path = root / "Example_species.genome.fa"
         fragment = "".join(random.Random(82431).choices("ACGT", k=4096))
         with path.open("w") as handle:
@@ -140,6 +140,7 @@ def worker(args):
         output = format_genome({"species_prefix": "Example_species", "genome_path": path}, root, True, False)
         seconds = time.perf_counter() - stamp
         proof = fingerprint([output["output_path"]])
+        compressed_bytes = output["output_path"].stat().st_size
     else:
         # Shared fixture utilities drive each variant's own core/support files,
         # so the baseline QC has a baseline implementation identity as well.
@@ -222,6 +223,7 @@ def worker(args):
             proof = hashlib.sha256(json.dumps([data_sha, payloads], sort_keys=True).encode()).hexdigest()
     print(json.dumps({"seconds": seconds, "logical_sha256": proof, "sha256_calls": len(reads),
                       "sha256_bytes": sum(reads), "process_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                      **({"compressed_bytes": compressed_bytes} if args.mode == "genome" else {}),
                       **({"metadata_fence_path_checks": sum(fence_sizes), "cpu_seconds": cpu_seconds}
                          if args.mode == "receipt" else {})}))
 
@@ -279,7 +281,7 @@ def main():
                "platform": platform.platform(), "python": sys.version, "warmups": 1, "trials": samples,
                "medians": {name: {key: statistics.median(row[key] for row in rows) for key in rows[0] if key != "logical_sha256"}
                            for name, rows in samples.items()}, "equivalent": True,
-               "scope": "Warm filesystem, alternating fresh processes; synthetic fixtures only. Genome uses real seqkit, "
+               "scope": "Warm filesystem, alternating fresh processes; synthetic fixtures only. Genome uses native compressors, "
                         "one thread, process-tree RSS sampled at 10 ms. Final QC timing excludes fixture setup and module imports, "
                         "includes full scientific species_results, and recomputes baseline identity per validator. "
                         "Worker timing uses real core/validators but fake BUSCO/seqkit/Rscript and local taxonomy. "

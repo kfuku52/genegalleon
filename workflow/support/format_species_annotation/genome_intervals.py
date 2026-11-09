@@ -10,6 +10,8 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
+from genome_sequence_identity import mask_genome_sequence
+
 from .reference import (
     GenomeReferenceIndex,
     add_genome_reference,
@@ -52,7 +54,7 @@ class SequenceSlice:
 
 
 class GenomeIntervals:
-    def __init__(self, path, intervals, *, scratch_dir=None):
+    def __init__(self, path, intervals, *, scratch_dir=None, mask_invalid=False):
         self.path = Path(path)
         self.identity = stat_identity(self.path)
         self.index = GenomeReferenceIndex()
@@ -61,12 +63,12 @@ class GenomeIntervals:
         self.starts = {}
         self.scratch = tempfile.TemporaryFile(dir=scratch_dir)
         try:
-            self._scan(intervals)
+            self._scan(intervals, mask_invalid=mask_invalid)
         except BaseException:
             self.close()
             raise
 
-    def _scan(self, intervals):
+    def _scan(self, intervals, *, mask_invalid):
         requested = defaultdict(list)
         for seqid, start, end in intervals:
             requested[str(seqid)].append((int(start), int(end)))
@@ -89,7 +91,7 @@ class GenomeIntervals:
             elif text:
                 if header is None:
                     raise ValueError("Genome sequence precedes its FASTA header")
-                if not text.isascii():
+                if not mask_invalid and not text.isascii():
                     raise ValueError("Genome FASTA sequence must contain ASCII characters")
                 end = length + len(text)
                 while cursor < len(selected):
@@ -101,7 +103,9 @@ class GenomeIntervals:
                         if start >= length:
                             self.regions[token].append((start, stop, self.scratch.tell()))
                             self.starts[token].append(start)
-                        self.scratch.write(text[a - length:b - length].upper().encode("ascii"))
+                        fragment = text[a - length:b - length]
+                        sequence = mask_genome_sequence(fragment) if mask_invalid else fragment.upper()
+                        self.scratch.write(sequence.encode("ascii"))
                     if stop > end:
                         break
                     cursor += 1
@@ -154,8 +158,8 @@ class GenomeIntervals:
 
 
 @contextlib.contextmanager
-def genome_intervals(path, intervals, *, scratch_dir=None):
-    reader = GenomeIntervals(path, intervals, scratch_dir=scratch_dir)
+def genome_intervals(path, intervals, *, scratch_dir=None, mask_invalid=False):
+    reader = GenomeIntervals(path, intervals, scratch_dir=scratch_dir, mask_invalid=mask_invalid)
     try:
         yield reader
         if stat_identity(path) != reader.identity:

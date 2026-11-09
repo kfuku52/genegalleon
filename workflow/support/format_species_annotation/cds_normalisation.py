@@ -158,7 +158,8 @@ def iter_normalised_cds_records(task, state=None):
             regions = ((row["seqid"], row["start"], row["end"]) for row in normaliser.features
                        if row["feature"] in {"CDS", "exon"})
             readers.append(genome_scope.enter_context(genome_intervals(
-                task["genome_path"], regions, scratch_dir=task.get("_normalisation_scratch", tempfile.gettempdir()))))
+                task["genome_path"], regions, scratch_dir=task.get("_normalisation_scratch", tempfile.gettempdir()),
+                mask_invalid=True)))
         return contextlib.nullcontext(readers[0])
     def attribute_parser(text):
         return {key: ",".join(values) for key, values in parse_gff_attributes(text).items()}
