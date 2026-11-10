@@ -292,6 +292,39 @@ def test_plot_taxonomy_flow_uses_precomputed_phylum_columns_without_taxonomy_db(
     assert set(captured["frame"]["besthit_label"]) == {"Pseudomonadota", "Bacillota"}
 
 
+def test_taxonomy_flow_reuses_labels_with_nullable_taxids(tmp_path, monkeypatch):
+    gene_df = pandas.DataFrame({
+        "gene_taxon": ["Arabidopsis_thaliana"] * 3,
+        "besthit_organism": ["Escherichia_coli"] * 3,
+        "besthit_taxid": pandas.array([562, pandas.NA, 562], dtype="Int64"),
+        "recipient_phylum": ["precomputed recipient"] * 3,
+        "donor_phylum": ["precomputed donor"] * 3,
+    }, index=[4, 4, 2])
+    calls, flows = [], []
+    resolve_rank_label = plotter.resolve_rank_label
+
+    def resolve(name, taxid, resolver, rank):
+        calls.append((name, taxid, rank))
+        return resolve_rank_label(name, taxid, resolver, rank)
+
+    def capture(flow, *args, **kwargs):
+        flows.append(flow.copy())
+        return flow
+
+    monkeypatch.setattr(plotter, "resolve_rank_label", resolve)
+    monkeypatch.setattr(plotter, "collapse_to_top_categories", capture)
+    plotter.plot_taxonomy_flow(gene_df, str(tmp_path / "flow.pdf"), plotter.TaxonomyResolver(""), " Class ", 8)
+
+    assert calls == [
+        ("Arabidopsis_thaliana", None, "class"),
+        ("Escherichia_coli", 562, "class"),
+        ("Escherichia_coli", None, "class"),
+    ]
+    assert flows[0].to_dict("records") == [{
+        "recipient_label": "Arabidopsis thaliana", "besthit_label": "Escherichia coli", "count": 3,
+    }]
+
+
 def test_plot_transfer_tree_aggregates_directed_counts_and_limits_display_edges(tmp_path: Path):
     species_tree = tmp_path / "species_tree.nwk"
     species_tree.write_text("((A:1,B:1)n1:1,(C:1,D:1)n2:1)n0;\n", encoding="utf-8")
