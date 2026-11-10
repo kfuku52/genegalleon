@@ -162,7 +162,10 @@ def test_expression_stream_unchanged_by_retention_and_input_order(tmp_path):
         7, "x", "metric", "G", "A", "B", "leaf", "permutation")
 
 
-@pytest.mark.parametrize("weights", [[0, 0, 0], [3, -3, 6, 0], [2, -1, 4, 2, -3, 1]])
+@pytest.mark.parametrize("weights", [
+    [0, 0, 0], [3, -3, 6, 0], [2, -1, 4, 2, -3, 1],
+    [6, -6, 6, 6, 0, -6, 6, 6], [2, -2, 4, -4, 0],
+])
 def test_integer_dp_matches_independent_exhaustive_null(weights):
     observed = abs(sum(weights))
     expected = sum(abs(sum(s * w for s, w in zip(signs, weights, strict=True))) >= observed

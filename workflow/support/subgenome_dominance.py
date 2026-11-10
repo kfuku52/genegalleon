@@ -177,18 +177,31 @@ def sign_flip(sums, rng, replicates, exact_max_states):
         weights = [abs(int(s)) for s in sums if s]
         divisor = math.gcd(*weights) if weights else 1
         weights = [w // divisor for w in weights]
-        if sum(weights) + 1 <= exact_max_states:
+        total = sum(weights)
+        if total + 1 <= exact_max_states:
             observed = abs(sum(int(s) for s in sums))
-            counts = {0: 1}
-            for weight in weights:
-                updated = counts.copy()
-                for subtotal, count in counts.items():
-                    updated[subtotal + weight] = updated.get(subtotal + weight, 0) + count
-                counts = updated
-            total = sum(weights)
-            extreme = sum(count for subtotal, count in counts.items()
-                          if abs(2 * subtotal - total) * divisor >= observed)
-            return {"p_value": extreme / (1 << len(weights)), "test_method": "exact_integer_dp",
+            assignments = 1 << len(weights)
+            if observed == 0:
+                extreme = assignments
+            elif total == len(weights):
+                # All nonzero weights reduce to one. The two binomial tails
+                # have equal counts; accumulate one with exact coefficients.
+                cutoff = (total - observed // divisor) // 2
+                coefficient = tail = 1
+                for selected in range(1, cutoff + 1):
+                    coefficient = coefficient * (total - selected + 1) // selected
+                    tail += coefficient
+                extreme = 2 * tail
+            else:
+                counts = {0: 1}
+                for weight in weights:
+                    updated = counts.copy()
+                    for subtotal, count in counts.items():
+                        updated[subtotal + weight] = updated.get(subtotal + weight, 0) + count
+                    counts = updated
+                extreme = sum(count for subtotal, count in counts.items()
+                              if abs(2 * subtotal - total) * divisor >= observed)
+            return {"p_value": extreme / assignments, "test_method": "exact_integer_dp",
                     "null_draws": 1 << n}
     # Scale before summation to avoid overflow; relative tolerance preserves
     # near-ties without turning all small effects into null statistics of zero.
