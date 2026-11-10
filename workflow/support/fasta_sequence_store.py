@@ -16,6 +16,7 @@ import sys
 import tempfile
 import textwrap
 import zlib
+from itertools import chain
 from pathlib import Path
 from typing import Iterator, TextIO
 
@@ -563,17 +564,16 @@ def extract(args: argparse.Namespace) -> int:
     if not patterns:
         args.output.write_text("", encoding="utf-8")
         return 0
+    normalize = (lambda value: value.lower()) if args.ignore_case else (lambda value: value)
+    missing = {normalize(pattern) for pattern in patterns} if args.require_all else None
+    record_count = 0
     connection = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    rows: list[sqlite3.Row] = []
     try:
         connection.execute("CREATE TEMP TABLE requested(pattern TEXT PRIMARY KEY)")
         requested = patterns
         if args.query_variants:
             species = [str(row[0]) for row in connection.execute("SELECT DISTINCT species FROM sequences")]
-            requested = list(patterns)
-            requested.extend(f"{sp}_{pattern}" for sp in species for pattern in patterns if sp)
-        normalize = (lambda value: value.lower()) if args.ignore_case else (lambda value: value)
+            requested = chain(patterns, (f"{sp}_{pattern}" for sp in species if sp for pattern in patterns))
         connection.executemany(
             "INSERT OR IGNORE INTO requested(pattern) VALUES (?)",
             ((normalize(pattern),) for pattern in requested),
@@ -584,41 +584,41 @@ def extract(args: argparse.Namespace) -> int:
         # original join-order choice; matching and output ordering are unchanged.
         from_clause = ("requested AS r CROSS JOIN sequences AS s" if requested_count <= 1024
                        else "sequences AS s JOIN requested AS r")
-        rows = list(
-            connection.execute(
-                f"""
-                SELECT s.identifier, s.header, s.sequence, s.species
-                FROM {from_clause} ON s.{identifier_column}=r.pattern
-                ORDER BY s.source_order, s.record_order
-                """
-            )
+        # Keep compressed sequence payloads in the cursor until they are written.
+        rows = connection.execute(
+            f"""
+            SELECT s.identifier, s.header, s.sequence, s.species
+            FROM {from_clause} ON s.{identifier_column}=r.pattern
+            ORDER BY s.source_order, s.record_order
+            """
         )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("w", encoding="utf-8") as handle:
+            for identifier, header, sequence, species in rows:
+                if missing is not None:
+                    missing.discard(normalize(str(identifier)))
+                if args.prefix_species:
+                    species = str(species)
+                    identifier = str(identifier)
+                    for separator in ("_", "-", "."):
+                        prefix = f"{species}{separator}"
+                        if species and identifier.startswith(prefix):
+                            identifier = identifier[len(prefix) :]
+                            break
+                    header = f"{species}_{identifier}" if species else identifier
+                write_record(handle, str(header), decode_sequence(sequence))
+                record_count += 1
     finally:
         connection.close()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            header = str(row["header"])
-            if args.prefix_species:
-                species = str(row["species"])
-                identifier = str(row["identifier"])
-                for separator in ("_", "-", "."):
-                    prefix = f"{species}{separator}"
-                    if species and identifier.startswith(prefix):
-                        identifier = identifier[len(prefix) :]
-                        break
-                header = f"{species}_{identifier}" if species else identifier
-            write_record(handle, header, decode_sequence(row["sequence"]))
-    if args.require_all and len(rows) != len(patterns):
-        found = {str(row["identifier"]).lower() if args.ignore_case else str(row["identifier"]) for row in rows}
-        missing = [pattern for pattern in patterns if normalize(pattern) not in found]
+    if missing is not None and record_count != len(patterns):
+        missing_patterns = [pattern for pattern in patterns if normalize(pattern) in missing]
         print(
-            f"Expected {len(patterns)} indexed FASTA records but extracted {len(rows)}; missing: "
-            + ", ".join(missing[:20]),
+            f"Expected {len(patterns)} indexed FASTA records but extracted {record_count}; missing: "
+            + ", ".join(missing_patterns[:20]),
             file=sys.stderr,
         )
         return 3
-    print(f"Extracted {len(rows)} indexed FASTA record(s) to {args.output}")
+    print(f"Extracted {record_count} indexed FASTA record(s) to {args.output}")
     return 0
 
 
