@@ -11,13 +11,14 @@ import io
 import json
 import re
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 
 from Bio import Phylo
 from cafe_branch_map import branch_inventory, first_newick
 
 
-def read_table(path, family_column="FamilyID"):
+def _read_table(path, family_column="FamilyID", *, keep_values=True):
     with Path(path).open(newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader, [])
@@ -34,8 +35,8 @@ def read_table(path, family_column="FamilyID"):
                 continue
             if len(row) != len(header) or not row[index].strip() or row[index] in rows:
                 raise ValueError(f"Malformed or duplicate CAFE family row: {path}")
-            rows[row[index]] = dict(zip(header, row, strict=True))
-    return header, rows
+            rows[row[index]] = row if keep_values else None
+    return {name: i for i, name in enumerate(header)}, rows
 
 
 def count(value, signed=False):
@@ -53,15 +54,17 @@ def clades(tree):
 
 
 def validate(copy_number, tree_path, output_dir):
-    columns, inputs = read_table(copy_number)
+    columns, inputs = _read_table(copy_number)
     input_species = set(columns) - {"Desc", "besthit_0.95", "FamilyID"}
     tree = Phylo.read(tree_path, "newick")
     tips = [t.name for t in tree.get_terminals()]
     if any(not tip for tip in tips) or len(tips) != len(set(tips)) or set(tips) != input_species:
         raise ValueError("CAFE copy-number species do not match the dated species tree")
+    input_columns = [columns[species] for species in input_species]
+    read_count = lru_cache(maxsize=256)(count)
     for row in inputs.values():
-        for species in input_species:
-            count(row[species])
+        for index in input_columns:
+            read_count(row[index])
     root = Path(output_dir)
     species, inventory = branch_inventory(root / "Gamma_asr.tre")
     if species != input_species:
@@ -72,14 +75,14 @@ def validate(copy_number, tree_path, output_dir):
     if clades(reconstructed_tree) != clades(tree):
         raise ValueError("Saved CAFE topology does not match the dated species tree")
     branch_keys = {r["native_key"] for r in inventory}
-    count_columns, counts = read_table(root / "Gamma_count.tab")
-    change_columns, changes = read_table(root / "Gamma_change.tab")
+    count_columns, counts = _read_table(root / "Gamma_count.tab")
+    change_columns, changes = _read_table(root / "Gamma_change.tab")
     if set(count_columns) - {"FamilyID"} != branch_keys or set(change_columns) - {"FamilyID"} != branch_keys:
         raise ValueError("Saved CAFE count/change branches do not match the reconstructed tree")
-    if not counts or set(counts) != set(changes):
+    if not counts or counts.keys() != changes.keys():
         raise ValueError("Saved CAFE count/change family identities disagree or are empty")
     leaf_keys = {r["descendants"][0]: r["native_key"] for r in inventory if len(r["descendants"]) == 1}
-    if not set(counts) <= set(inputs):
+    if not counts.keys() <= inputs.keys():
         raise ValueError("Saved CAFE reconstruction contains families outside the current copy-number input")
     tree_families = set()
     with (root / "Gamma_asr.tre").open() as handle:
@@ -92,20 +95,24 @@ def validate(copy_number, tree_path, output_dir):
                 tree_families.add(family)
     if not tree_families:
         raise ValueError("Saved CAFE ancestral tree has no named family reconstructions")
+    branch_columns = [(count_columns[key], change_columns[key]) for key in branch_keys]
+    leaf_columns = [(taxon, count_columns[key], columns[taxon]) for taxon, key in leaf_keys.items()]
     for family, row in counts.items():
-        for key in branch_keys:
-            count(row[key])
-            count(changes[family][key], signed=True)
-        for taxon, key in leaf_keys.items():
-            if count(row[key]) != count(inputs[family][taxon]):
+        change_row = changes[family]
+        for count_index, change_index in branch_columns:
+            read_count(row[count_index])
+            read_count(change_row[change_index], True)
+        input_row = inputs[family]
+        for taxon, count_index, input_index in leaf_columns:
+            if read_count(row[count_index]) != read_count(input_row[input_index]):
                 raise ValueError(f"Saved CAFE extant count does not match input: {family}/{taxon}")
     for name, field in [("Gamma_branch_probabilities.tab", "FamilyID"),
                         ("Gamma_family_results.txt", "#FamilyID")]:
-        _, rows = read_table(root / name, field)
-        if not set(rows) <= set(inputs):
+        _, rows = _read_table(root / name, field, keep_values=False)
+        if not rows.keys() <= inputs.keys():
             raise ValueError(f"Saved CAFE output contains foreign family identities: {name}")
     return {"validated": True, "species": len(species), "reconstructed_families": len(counts),
-            "input_families_without_reconstruction": len(set(inputs) - set(counts)),
+            "input_families_without_reconstruction": len(inputs) - len(counts),
             "scope": "current taxa, topology, unique families and observed extant counts; historical fit settings require provenance"}
 
 
