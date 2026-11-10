@@ -800,6 +800,15 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     assert mod.archive_matches_source(archive, summary)
 
     original_archive = archive.read_bytes()
+    with zipfile.ZipFile(archive, "a") as zipped:
+        original_manifest = zipped.read(zipped_manifest_info.filename)
+        zipped.writestr(f"{candidate_prefix}/csubst_sites-other/csubst.outputs.tsv", original_manifest)
+    assert mod.archive_matches_source(archive, summary)
+    with zipfile.ZipFile(archive, "a") as zipped:
+        zipped.writestr(f"{candidate_prefix}/csubst_sites/other_branch/csubst.outputs.tsv", original_manifest)
+    assert not mod.archive_matches_source(archive, summary)
+    archive.write_bytes(original_archive)
+
     raw_damaged = tmp_path / "raw-damaged.zip"
     with zipfile.ZipFile(archive, "r") as source_zip, zipfile.ZipFile(
         raw_damaged, "w"
