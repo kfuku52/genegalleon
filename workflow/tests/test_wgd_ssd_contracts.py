@@ -1101,7 +1101,8 @@ def test_mul_node_join_is_clade_based_not_postorder_based():
 
 
 @pytest.mark.parametrize("kind", ["gene_topology", "species_topology", "missing_node", "duplicate_node",
-                                  "missing_candidate", "count", "duplication", "mapped_tips", "wrong_model",
+                                  "missing_candidate", "count", "mapping_gap", "excess_mapping_count",
+                                  "duplication", "mapped_tips", "wrong_model",
                                   "candidate_metadata", "wrong_clade", "reconciliation", "origins",
                                   "leaf_species", "missing_column", "nonbest_candidate", "repeat_mapping"])
 def test_mul_node_join_rejects_mismatched_or_incomplete_records(kind):
@@ -1121,6 +1122,13 @@ def test_mul_node_join_rejects_mismatched_or_incomplete_records(kind):
         fixture[2] = [r for r in rows if r["mul.tree"] != "3"]
     elif kind == "count":
         rows[0]["optimal.mappings"] = "99"
+    elif kind == "mapping_gap":
+        for row in rows:
+            if row["mapping.id"] == "2":
+                row["mapping.id"] = "3"
+    elif kind == "excess_mapping_count":
+        for row in rows:
+            row["optimal.mappings"] = str(10**12)
     elif kind == "duplication":
         rows[0]["duplication"] = "2"
     elif kind == "mapped_tips":
