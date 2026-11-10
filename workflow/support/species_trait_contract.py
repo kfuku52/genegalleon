@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pandas
 from gbif_observations import COMPLETE_STATES, METRIC_DEFINITIONS, file_sha256
-from species_trait_schema import schema_path, schema_payload, select_traits
+from species_trait_schema import schema_path, schema_payload, select_traits_from_payload
 
 CONTRACT_VERSION = 1
 
@@ -92,23 +93,33 @@ def sidecar_paths(path: Path) -> dict[str, Path]:
 
 
 def read_contract(path: Path) -> dict:
+    metadata, _ = _read_contract(path)
+    return metadata
+
+
+def _read_contract(path: Path, table_sha256=None):
     sidecar = metadata_path(path)
     if not sidecar.exists():
-        return {}
-    metadata = json.loads(sidecar.read_text())
+        return {}, None
+    metadata_bytes = sidecar.read_bytes()
+    metadata = json.loads(metadata_bytes.decode("utf-8"))
     if metadata.get("schema_version") != CONTRACT_VERSION:
         raise ValueError(f"Unsupported species-trait metadata schema: {sidecar}")
-    if metadata.get("table_sha256") != file_sha256(path):
+    if metadata.get("table_sha256") != (file_sha256(path) if table_sha256 is None else table_sha256):
         raise ValueError(f"Species-trait table differs from its metadata: {path}; regenerate the bundle")
     if not isinstance(metadata.get("traits"), dict):
         raise ValueError(f"Species-trait metadata lacks trait roles: {sidecar}")
-    return metadata
+    return metadata, hashlib.sha256(metadata_bytes).hexdigest()
 
 
 def select_species_traits(path: Path | str, selection: str = "all", auxiliary: tuple[str, ...] = (),
                           allow_empty: bool = False) -> tuple[pandas.DataFrame, dict]:
     path = Path(path)
-    with path.open(encoding="utf-8-sig", newline="") as handle:
+    return _select_species_traits(path, path.read_bytes(), selection, auxiliary, allow_empty)
+
+
+def _select_species_traits(path, payload, selection, auxiliary=(), allow_empty=False):
+    with io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader, [])
         for line, row in enumerate(reader, 2):
@@ -116,10 +127,11 @@ def select_species_traits(path: Path | str, selection: str = "all", auxiliary: t
                 raise ValueError(f"Species-trait row {line} has the wrong number of fields: {path}")
     if not header or len(header) != len(set(header)) or any(not name for name in header):
         raise ValueError(f"Species-trait header must contain distinct nonempty column names: {path}")
-    frame = pandas.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    frame = pandas.read_csv(io.BytesIO(payload), sep="\t", dtype=str, keep_default_na=False)
     if frame.shape[1] < 1:
         raise ValueError(f"Empty species-trait table: {path}")
-    metadata = read_contract(path)
+    table_sha256 = hashlib.sha256(payload).hexdigest()
+    metadata, metadata_sha256 = _read_contract(path, table_sha256)
     definitions = metadata.get("traits", {})
     identifier = frame.columns[0]
     available = [name for name in frame.columns[1:] if name not in auxiliary]
@@ -131,7 +143,7 @@ def select_species_traits(path: Path | str, selection: str = "all", auxiliary: t
         raise ValueError("Species-trait columns not found: " + ", ".join(absent))
     if not requested and not allow_empty:
         raise ValueError("No automatically eligible species traits. Select GBIF observed columns explicitly and retain their .metadata.json sidecar.")
-    audit = {"source": str(path.resolve()), "table_sha256": file_sha256(path),
+    audit = {"source": str(path.resolve()), "table_sha256": table_sha256,
              "selection": "automatic" if automatic else "explicit", "selected": requested,
              "excluded_columns": sorted(protected) if automatic else [], "masked_species": {},
              "traits": {name: definitions.get(name, {"role": "trait", "source": "user"}) for name in requested}}
@@ -161,8 +173,8 @@ def select_species_traits(path: Path | str, selection: str = "all", auxiliary: t
             audit["masked_species"][name] = masked
         audit["interpretation"] = "Association with retained GBIF observations; not evidence of an association with true biological ranges or of adaptation"
         audit["gbif"] = metadata["gbif"]
-    if metadata:
-        audit["metadata_sha256"] = file_sha256(metadata_path(path))
+    if metadata_sha256 is not None:
+        audit["metadata_sha256"] = metadata_sha256
     if automatic and protected:
         print("Excluded observation/quality columns from automatic trait selection: " + ", ".join(sorted(protected)), flush=True)
     return frame.loc[:, list(dict.fromkeys([identifier, *requested, *auxiliary]))].copy(), audit
@@ -171,9 +183,12 @@ def select_species_traits(path: Path | str, selection: str = "all", auxiliary: t
 
 def select_analysis_traits(path, selection="all", allow_empty=False):
     """Apply observation eligibility before numeric response type selection."""
-    frame, audit = select_species_traits(path, selection, allow_empty=allow_empty)
-    report = select_traits(path, "all" if audit["selection"] == "automatic" else selection,
-                           eligible=audit["selected"], allow_empty=allow_empty)
+    path = Path(path)
+    payload = path.read_bytes()
+    frame, audit = _select_species_traits(path, payload, selection, allow_empty=allow_empty)
+    report, schema_sha256 = select_traits_from_payload(
+        path, payload, "all" if audit["selection"] == "automatic" else selection,
+        eligible=audit["selected"], allow_empty=allow_empty)
     selected = [row["trait"] for row in report if row["status"] == "selected"]
     audit["selected"] = selected
     audit["type_selection"] = report
@@ -181,8 +196,8 @@ def select_analysis_traits(path, selection="all", allow_empty=False):
                             for row in report if row["status"] == "selected"}
     audit["traits"] = {name: audit["traits"][name] for name in selected}
     audit["masked_species"] = {name: value for name, value in audit["masked_species"].items() if name in selected}
-    if schema_path(path).exists():
-        audit["schema_sha256"] = file_sha256(schema_path(path))
+    if schema_sha256 is not None:
+        audit["schema_sha256"] = schema_sha256
     return frame.loc[:, [frame.columns[0], *selected]].copy(), audit
 
 

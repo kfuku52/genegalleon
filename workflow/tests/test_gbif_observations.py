@@ -668,6 +668,30 @@ def test_custom_database_name_cannot_strip_gbif_observation_roles(tmp_path):
         generator.load_database_table("custom", {"acquisition_mode": "gbif_distribution"}, [], ["Test_species"], tmp_path, 1, False)
 
 
+def test_analysis_trait_audit_rejects_metadata_for_a_replaced_table(tmp_path, monkeypatch):
+    from species_trait_contract import select_analysis_traits
+    from species_trait_schema import schema_path, schema_payload
+
+    path = tmp_path / "traits.tsv"
+
+    def publish(height):
+        frame = pandas.DataFrame({"species": ["A"], "height": [height]})
+        write_trait_bundle(frame, path, {"height": {"role": "trait"}}, None, [])
+        schema_path(path).write_bytes(schema_payload(path.read_bytes(), {"height": "numeric"}))
+
+    publish(4)
+    read_csv = pandas.read_csv
+
+    def replace_after_read(*args, **kwargs):
+        frame = read_csv(*args, **kwargs)
+        publish(5)
+        return frame
+
+    monkeypatch.setattr(pandas, "read_csv", replace_after_read)
+    with pytest.raises(ValueError, match="Species-trait table differs from its metadata"):
+        select_analysis_traits(path)
+
+
 def test_numeric_and_observation_contracts_compose_and_preserve_derived_types(tmp_path):
     from species_trait_contract import select_analysis_traits, write_derived_contract
     from species_trait_schema import schema_path, schema_payload, select_traits

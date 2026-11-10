@@ -28,7 +28,13 @@ def schema_payload(table_payload, trait_types):
 
 def read_table(table):
     payload = Path(table).read_bytes()
-    rows = list(csv.reader(io.StringIO(payload.decode("utf-8-sig"), newline=""), delimiter="\t", strict=True))
+    header, rows = _parse_table(payload)
+    return payload, header, rows
+
+
+def _parse_table(payload):
+    with io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t", strict=True))
     if not rows or len(rows[0]) < 2:
         raise ValueError("Trait table requires a species column and at least one trait column.")
     header = rows[0]
@@ -36,20 +42,23 @@ def read_table(table):
         raise ValueError("Trait headers must be unique, non-empty and unpadded.")
     if any(len(row) != len(header) for row in rows[1:]):
         raise ValueError("Trait table rows must have the same number of fields as the header.")
-    return payload, header, rows[1:]
+    return header, rows[1:]
 
 
 def trait_value_types(table):
     """Validate a hash-bound schema without selecting a numeric analysis."""
     payload, header, _ = read_table(table)
-    return _trait_value_types(table, payload, header[1:])
+    kinds, _ = _trait_value_types(table, payload, header[1:])
+    return kinds
 
 
 def _trait_value_types(table, payload, available):
     kinds = dict.fromkeys(available, "unspecified")
     sidecar = schema_path(table)
+    schema_digest = None
     if sidecar.exists() or sidecar.is_symlink():
-        schema = json.loads(sidecar.read_text(encoding="utf-8"))
+        schema_bytes = sidecar.read_bytes()
+        schema = json.loads(schema_bytes.decode("utf-8"))
         if not isinstance(schema, dict) or schema.get("schema_version") != 1:
             raise ValueError("Unsupported trait schema.")
         if schema.get("table_sha256") != hashlib.sha256(payload).hexdigest():
@@ -59,13 +68,25 @@ def _trait_value_types(table, payload, available):
                 or any(not isinstance(kind, str) or kind not in TYPES for kind in declared.values())):
             raise ValueError("Trait schema must declare exactly every trait column with a supported type.")
         kinds = declared
-    return kinds
+        schema_digest = hashlib.sha256(schema_bytes).hexdigest()
+    return kinds, schema_digest
 
 
 def select_traits(table, requested="all", eligible=None, allow_empty=False):
     payload, header, rows = read_table(table)
+    report, _ = _select_traits(table, payload, header, rows, requested, eligible, allow_empty)
+    return report
+
+
+def select_traits_from_payload(table, payload, requested="all", eligible=None, allow_empty=False):
+    """Select traits from captured table bytes and report the verified schema digest."""
+    header, rows = _parse_table(payload)
+    return _select_traits(table, payload, header, rows, requested, eligible, allow_empty)
+
+
+def _select_traits(table, payload, header, rows, requested, eligible, allow_empty):
     available = header[1:]
-    kinds = _trait_value_types(table, payload, available)
+    kinds, schema_digest = _trait_value_types(table, payload, available)
     automatic = requested.lower() == "all"
     chosen = available if automatic else re.findall(r"[^,\s]+", requested)
     if not chosen or len(set(chosen)) != len(chosen) or not set(chosen) <= set(available):
@@ -96,7 +117,7 @@ def select_traits(table, requested="all", eligible=None, allow_empty=False):
         report.append({"trait": trait, "value_type": kind, "status": "selected" if selected else "excluded", "reason": reason})
     if not allow_empty and not any(row["status"] == "selected" for row in report):
         raise ValueError("No numeric/binary traits selected for analysis.")
-    return report
+    return report, schema_digest
 
 
 def main():
