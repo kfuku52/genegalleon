@@ -1,3 +1,51 @@
+treevis_tip_pairs <- function(n) {
+    if (n < 2L) stop('n < m')
+    # Keep combn order in two vectors, without assembling a pair matrix.
+    first <- seq_len(n - 1L)
+    remaining <- n - first
+    list(first=rep.int(first, remaining), second=sequence(remaining, from=first + 1L))
+}
+
+treevis_tip_groups <- function(labels, node_names, group_ids) {
+    if (anyNA(labels) || anyNA(node_names)) {
+        return(lapply(labels, function(label) unique(group_ids[node_names == label])))
+    }
+    by_tip <- split(group_ids, node_names)
+    lapply(by_tip[match(labels, names(by_tip))], unique)
+}
+
+treevis_jaccard <- function(groups, observed) {
+    sizes <- as.double(lengths(groups))
+    n <- length(groups)
+    first_tips <- seq_len(n - 1L)
+    offsets <- c(0, cumsum(as.double(n - first_tips)))
+    shared <- integer(offsets[n])
+    group_ids <- unlist(groups, use.names=FALSE)
+    members <- split(rep.int(seq_len(n), sizes), match(group_ids, unique(group_ids)))
+    # Within each group, add one to the triangular index for every pair of
+    # member tips. The grouped input has at most one entry per tip and group.
+    for (tips in members[lengths(members) > 1L]) {
+        count <- length(tips)
+        for (index in seq_len(count - 1L)) {
+            first <- tips[index]
+            second <- tips[seq.int(index + 1L, count)]
+            positions <- offsets[first] + (second - first)
+            shared[positions] <- shared[positions] + 1L
+        }
+    }
+    result <- rep(NA_real_, length(shared))
+    for (first in first_tips[observed[first_tips]]) {
+        second <- seq.int(first + 1L, n)
+        second <- second[observed[second]]
+        positions <- offsets[first] + (second - first)
+        common <- shared[positions]
+        total <- sizes[first] + sizes[second] - common
+        valid <- total > 0
+        result[positions[valid]] <- common[valid] / total[valid]
+    }
+    result
+}
+
 # Pairwise neighborhood group similarity in the plotted tree's tip order.
 add_synteny_similarity_column = function(g, args, path_synteny, search_window=20, width_mm=15) {
     if (!file.exists(path_synteny) || file.info(path_synteny)$size == 0) return(g)
@@ -22,14 +70,10 @@ add_synteny_similarity_column = function(g, args, path_synteny, search_window=20
         !is.na(syn[['group_id']]) & nzchar(syn[['group_id']]) &
         syn[['node_name']] %in% tips[['label']]
     syn = syn[valid, , drop=FALSE]
-    groups = lapply(tips[['label']], function(label) unique(syn[['group_id']][syn[['node_name']] == label]))
-    if (sum(lengths(groups) > 0) < 2) return(g)
-    pairs = utils::combn(seq_len(nrow(tips)), 2)
-    similarities = vapply(seq_len(ncol(pairs)), function(k) {
-        a = groups[[pairs[1,k]]]; b = groups[[pairs[2,k]]]
-        if (!length(a) || !length(b)) return(NA_real_)
-        length(intersect(a, b)) / length(union(a, b))
-    }, numeric(1))
+    groups = treevis_tip_groups(as.character(tips[['label']]), syn[['node_name']], syn[['group_id']])
+    observed = lengths(groups) > 0L
+    if (sum(observed) < 2) return(g)
+    similarities = treevis_jaccard(groups, observed)
     treevis_pairwise_column(g, args, tips, similarities, 'synteny_similarity',
         paste0('Syntenic\nsimilarity\n(',search_window,' genes\nper side)'), width_mm)
 }
@@ -38,10 +82,10 @@ treevis_pairwise_column = function(g, args, tips, similarities, gname, axis_labe
     if (length(width_mm) != 1 || !is.finite(width_mm) || width_mm <= 0) {
         stop('Pairwise similarity width must be positive (mm).')
     }
-    pairs = utils::combn(seq_len(nrow(tips)), 2)
+    pairs = treevis_tip_pairs(nrow(tips))
     # Use a common unit for tip spacing; each diamond is one pair, not a tip row.
     spacing = min(diff(sort(unique(tips[['y']]))))
-    y1 = tips[['y']][pairs[1,]]; y2 = tips[['y']][pairs[2,]]
+    y1 = tips[['y']][pairs$first]; y2 = tips[['y']][pairs$second]
     x = (y2-y1)/2; y = (y1+y2)/2
     polygons = data.frame(
         pair=rep(seq_along(x), each=4),
@@ -122,9 +166,11 @@ add_sequence_similarity_column = function(g, args, path_alignment, sequence_mode
             stop('Genetic code must be a positive integer.')
         }
     }
-    pairs = utils::combn(as.character(tips[['label']]),2)
+    labels = as.character(tips[['label']])
+    pairs = treevis_tip_pairs(nrow(tips))
     values <- treevis_cdskit_request(list(operation="identity",sequences=as.list(seqs),
-        pairs=lapply(seq_len(ncol(pairs)),function(k) as.list(pairs[,k])),mode=sequence_mode,
+        pairs=lapply(seq_along(pairs$first), function(k) list(labels[[pairs$first[[k]]]], labels[[pairs$second[[k]]]])),
+        mode=sequence_mode,
         genetic_code=genetic_code))
     values <- vapply(values,function(x) if (is.null(x)) NA_real_ else as.numeric(x),numeric(1))
     treevis_pairwise_column(g,args,tips,values,'sequence_similarity',
@@ -162,15 +208,9 @@ add_cis_similarity_column = function(g, args, path_fimo, path_promoters, qvalue=
         stop('FIMO sequence_name and motif_id must be nonempty.')
     }
     hits = hits[is.finite(q) & q>=0 & q<=qvalue & !is.na(hits[['sequence_name']]) & nzchar(hits[['sequence_name']]) & !is.na(hits[['motif_id']]) & nzchar(hits[['motif_id']]),,drop=FALSE]
-    groups = lapply(as.character(tips[['label']]),function(id) unique(hits[['motif_id']][hits[['sequence_name']]==id]))
-    pairs = utils::combn(seq_len(nrow(tips)),2)
-    values = vapply(seq_len(ncol(pairs)),function(k) {
-        ids = pairs[,k]
-        if (!all(as.character(tips[['label']])[ids] %in% observed)) return(NA_real_)
-        a=groups[[ids[1]]]; b=groups[[ids[2]]]; all_groups=union(a,b)
-        if (!length(all_groups)) return(NA_real_)
-        length(intersect(a,b))/length(all_groups)
-    },numeric(1))
+    labels = as.character(tips[['label']])
+    groups = treevis_tip_groups(labels, hits[['sequence_name']], hits[['motif_id']])
+    values = treevis_jaccard(groups, labels %in% observed)
     treevis_pairwise_column(g,args,tips,values,'cis_similarity',
         paste0('Promoter cis\nsimilarity\n(q <= ',format(qvalue,trim=TRUE),')'),width_mm)
 }
