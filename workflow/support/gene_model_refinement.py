@@ -1474,21 +1474,25 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     gene_spans = defaultdict(list)
     for tid in sorted(transcript_ids & implicit.keys()):
         gid, seqid, strand, spans = implicit[tid]
+        if gid in known_ids and tid in known_ids:
+            continue
         start, end = min(a for a, _ in spans), max(b for _, b in spans)
-        gene_spans[(gid, seqid, strand)].append((start, end))
+        if gid not in known_ids:
+            gene_spans[(gid, seqid, strand)].append((start, end))
         if tid not in known_ids:
             kind = 'mRNA' if tid in coding_owners else 'transcript'
             lines.append(f'{seqid}\tGeneGalleon\t{kind}\t{start}\t{end}\t.\t{strand}\t.\tID={quote(tid, safe="._-:")};Parent={quote(gid, safe="._-:")};gene_id={quote(gid, safe="._-:")}\n')
     for _, fields, attributes, parent_ids in records:
-        if (fields is not None and fields[2].lower().endswith(('rna', 'transcript'))
+        if (fields is not None and parent_ids and fields[2].lower().endswith(('rna', 'transcript'))
                 and (retain_all or attributes.get('ID') in selected_ancestors)):
+            span = int(fields[3]), int(fields[4])
             for gid in parent_ids:
-                gene_spans[(gid, fields[0], fields[6])].append((int(fields[3]), int(fields[4])))
+                if gid not in known_ids:
+                    gene_spans[(gid, fields[0], fields[6])].append(span)
     synthesized_genes = []
     for (gid, seqid, strand), spans in sorted(gene_spans.items()):
-        if gid not in known_ids:
-            start, end = min(a for a, _ in spans), max(b for _, b in spans)
-            synthesized_genes.append(f'{seqid}\tGeneGalleon\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={quote(gid, safe="._-:")}\n')
+        start, end = min(a for a, _ in spans), max(b for _, b in spans)
+        synthesized_genes.append(f'{seqid}\tGeneGalleon\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={quote(gid, safe="._-:")}\n')
     lines = ['##gff-version 3\n'] + synthesized_genes + lines
     if synthetic_parents_only:
         return ''.join(lines)
