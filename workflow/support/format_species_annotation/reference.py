@@ -216,7 +216,8 @@ def validate_gff_genome_references(gff_path, genome_path):
             raise ValueError("GFF coordinates exceed genome sequence '{}': {}-{}".format(parts[0], start, end))
         feature_type = parts[2].lower()
         if feature_type in ("gene", "mrna", "rna", "transcript"):
-            attrs = parse_gff_attributes(parts[8])
+            keys = ("ID",) if feature_type == "gene" else ("Parent",)
+            attrs = parse_gff_attributes(parts[8], keys=keys)
             if feature_type == "gene":
                 for gene_id in attrs.get("ID", ()):
                     gene_axes.setdefault(gene_id, set()).add((parts[0], parts[6]))
