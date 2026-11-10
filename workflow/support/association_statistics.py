@@ -19,7 +19,7 @@ def association_rows(frame: pandas.DataFrame) -> pandas.DataFrame:
 
 
 def adjust_association_p_values(
-    values: pandas.Series,
+    values: pandas.Series | numpy.ndarray,
 ) -> tuple[numpy.ndarray, numpy.ndarray]:
     """Return Holm family-wise and Benjamini-Hochberg adjusted p-values."""
     raw = numpy.asarray(values, dtype=float)
