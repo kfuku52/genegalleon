@@ -3318,17 +3318,19 @@ if (glyph_mode) {
     observed_lanes <- tapply(glyph_rect_df$lane_count, as.character(glyph_rect_df$species), max)
     row_lanes[names(observed_lanes)] <- observed_lanes
   }
-  row_heights <- row_lanes * compact_lane_height + row_padding
   # An undetected anchor can fall inside the span of a non-contiguous glyph.
-  # Place its marker below the row so it cannot cover another copy label.
+  # Reserve a strip inside that species row, below its copy-number glyphs.
   overlapping_species <- if (nrow(loss_label_df) > 0) {
     loss_label_df$species[loss_label_df$overlaps_glyph]
   } else {
     character()
   }
-  loss_padding <- text_height * 1.35
-  row_extra <- ifelse(names(row_lanes) %in% overlapping_species, loss_padding, 0)
-  row_centers <- cumsum(row_heights + row_extra) - row_heights / 2
+  loss_strip_height <- stats::setNames(
+    ifelse(names(row_lanes) %in% overlapping_species, text_height * 1.35, 0),
+    names(row_lanes)
+  )
+  row_heights <- row_lanes * compact_lane_height + loss_strip_height
+  row_centers <- cumsum(row_heights + row_padding) - (row_heights + row_padding) / 2
   node_y <- stats::setNames(rep(NA_real_, nrow(plot_data)), as.character(plot_data$node))
   node_y[as.character(ordered_tips$node)] <- row_centers
   postorder_edges <- ape::reorder.phylo(tree_for_plot, "postorder")$edge
@@ -3338,7 +3340,8 @@ if (glyph_mode) {
   }
   plot_data$y <- unname(node_y[as.character(plot_data$node)])
   tip_y_by_species <- stats::setNames(unname(node_y[as.character(tip_df$node)]), as.character(tip_df$label))
-  row_half_height_by_species <- (row_lanes * compact_lane_height - 0.03) / 2
+  row_half_height_by_species <- (row_heights - 0.03) / 2
+  glyph_y_by_species <- tip_y_by_species + loss_strip_height[names(tip_y_by_species)] / 2
   y_values <- unname(tip_y_by_species[tip_levels])
   row_y_min <- min(y_values)
   row_y_max <- max(y_values)
@@ -3366,7 +3369,7 @@ if (glyph_mode) {
     count <- as.numeric(table[[count_field]])
     old_lane_height <- 2 * heatmap_cell_half / count
     old_center <- table$y - heatmap_cell_half + (index - 0.5) * old_lane_height
-    new_y <- unname(tip_y_by_species[as.character(table$species)])
+    new_y <- unname(glyph_y_by_species[as.character(table$species)])
     new_lane_height <- if (identical(glyph_height, "fill")) {
       compact_lane_height * unname(row_lanes[as.character(table$species)]) / count
     } else {
@@ -3388,11 +3391,11 @@ if (glyph_mode) {
   matrix_bottom <- min(tip_y_by_species - row_half_height_by_species[names(tip_y_by_species)])
   matrix_top <- max(tip_y_by_species + row_half_height_by_species[names(tip_y_by_species)])
   if (nrow(loss_label_df) > 0) {
-    loss_label_df$y <- unname(tip_y_by_species[loss_label_df$species])
+    loss_label_df$y <- unname(glyph_y_by_species[loss_label_df$species])
     overlap <- loss_label_df$overlaps_glyph
-    loss_label_df$y[overlap] <- loss_label_df$y[overlap] -
-      unname(row_half_height_by_species[loss_label_df$species[overlap]]) - loss_padding / 2
-    matrix_bottom <- min(matrix_bottom, loss_label_df$y[overlap] - text_height / 2)
+    strip_species <- loss_label_df$species[overlap]
+    loss_label_df$y[overlap] <- unname(tip_y_by_species[strip_species] -
+      row_half_height_by_species[strip_species] + loss_strip_height[strip_species] / 2)
   }
   if (nrow(family_boundary_df) > 0) {
     family_boundary_df$ymin <- min(heatmap_df$ymin)

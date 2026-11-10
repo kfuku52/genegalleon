@@ -91,6 +91,8 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
         f'source("{SUPPORT_DIR / "plot_query2family_presence_absence.R"}", local=TRUE)\n'
         'write.table(glyph_rect_df, "geometry.tsv", sep="\\t", quote=FALSE, row.names=FALSE)\n'
         'write.table(loss_label_df, "loss-geometry.tsv", sep="\\t", quote=FALSE, row.names=FALSE)\n'
+        'write.table(unique(heatmap_df[c("species", "ymin", "ymax")]), '
+        '"row-geometry.tsv", sep="\\t", quote=FALSE, row.names=FALSE)\n'
     )
     svg = tmp_path / "view.svg"
     cmd = ["Rscript", str(wrapper), f"--species_tree={tree}", f"--long_table={long_table}",
@@ -102,6 +104,7 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
                    cwd=tmp_path, check=True, capture_output=True, text=True)
     filled = pandas.read_csv(tmp_path / "geometry.tsv", sep="\t")
     loss = pandas.read_csv(tmp_path / "loss-geometry.tsv", sep="\t")
+    rows = pandas.read_csv(tmp_path / "row-geometry.tsv", sep="\t").set_index("species")
     single = filled[filled.family_id == "F1"].iloc[0]
     stacked = filled[filled.family_id == "F2"]
     assert single.ymin == pytest.approx(stacked.ymin.min())
@@ -109,7 +112,9 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
     assert single.ymax - single.ymin > (compact.ymax - compact.ymin).max()
     assert single.text_y == pytest.approx((single.ymin + single.ymax) / 2)
     assert single.copy_label == "3†"
-    assert loss.y.item() < single.ymin
+    loss_row = rows.loc[loss.species.item()]
+    assert loss_row.ymin < loss.y.item() < single.ymin
+    assert single.ymax == pytest.approx(loss_row.ymax)
     assert ">0†</text>" in svg.read_text()
 
 
