@@ -66,12 +66,19 @@ def overlapping(blocks, other):
     return any(a < d and c < b for a, b, _ in blocks for c, d in other)
 
 
-def source_owners(target, genes, coding):
+def source_owners(target, genes, coding, *, scoped=None, gene_order=None):
     named = set(target['source_gene_ids'])
     if named - genes.keys():
         raise ValueError('Reviewed projection source gene is absent: ' + ','.join(sorted(named - genes.keys())))
+    candidates = genes.items()
+    if scoped is not None:
+        # Explicitly named genes still require validation outside the indexed
+        # intervals and must keep their original error order.
+        relevant = {gene: genes[gene] for gene in sorted(named, key=gene_order.__getitem__)}
+        relevant.update(scoped)
+        candidates = relevant.items()
     actual = set()
-    for gene, value in genes.items():
+    for gene, value in candidates:
         if (value['seqid'], value['strand']) != (target['seqid'], target['strand']):
             if gene in named:
                 raise ValueError('Reviewed projection source gene has different contig/strand')
@@ -92,6 +99,21 @@ def source_owners(target, genes, coding):
     if actual != named:
         raise ValueError('Reviewed projection does not cover exactly its named source gene owners')
     return sorted(actual)
+
+
+def _validate_source_owners(targets, genes, coding):
+    # A few direct scans are cheaper than building the overlap index.
+    if len(targets) < 8:
+        for target in targets.values():
+            source_owners(target, genes, coding)
+        return
+    from cloned_cds_models import overlap_gene_candidates
+
+    scoped = overlap_gene_candidates(genes, coding, targets)
+    named = {gene for target in targets.values() for gene in target['source_gene_ids']}
+    gene_order = {gene: index for index, gene in enumerate(genes) if gene in named}
+    for name, target in targets.items():
+        source_owners(target, genes, coding, scoped=scoped[name], gene_order=gene_order)
 
 
 def choose(candidates, clones, priority):
@@ -127,8 +149,7 @@ def build_pair(task, directory):
     if set(targets) != set(clones):
         raise ValueError('Reviewed projections and supplied clone IDs differ')
     records, genes, coding, ownership = source_graph(task['gff_path'])
-    for target in targets.values():
-        source_owners(target, genes, coding)
+    _validate_source_owners(targets, genes, coding)
     prepared = fsi.prepare_cds_identifier_task(task)
     longer = set(task.get('cloned_cds_longer_only_ids', []))
     lengths = {}
