@@ -48,7 +48,7 @@ def test_wrapped_unwrapped_aliases_and_selected_disk_bytes(tmp_path, kind):
 @pytest.mark.parametrize("chunk", [1, 2, 3, 7, 16, 1024 * 1024])
 def test_fragment_boundaries_preserve_headers_and_sequence(tmp_path, chunk):
     path = tmp_path / "genome.fa"
-    path.write_text(">chr1 long header\r\nacgt\ntgca\n>chr2\nAa Tt\n>chr3")
+    path.write_text(">chr1 long header\r\nac\x1cgt\ntgca\n>chr2\nA\u00a0a Tt\n>chr3", encoding="utf-8")
     records = []
     for kind, text in genome_fragments(path, chunk):
         if kind == "header":

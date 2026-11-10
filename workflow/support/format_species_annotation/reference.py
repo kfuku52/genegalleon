@@ -54,6 +54,15 @@ def add_genome_reference(index, seen, header, length):
         index.canonical_ids[alias] = token
 
 
+_ASCII_WHITESPACE = dict.fromkeys(code for code in range(128) if chr(code).isspace())
+
+
+def _strip_sequence_whitespace(text):
+    if text.isascii():
+        return text.translate(_ASCII_WHITESPACE)
+    return "".join(text.split())
+
+
 def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True):
     """Yield bounded headers/sequence fragments, including unwrapped FASTA."""
     for handle in genome_text_handles(Path(path)):
@@ -66,7 +75,7 @@ def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True):
                 positions.append(offset + 1)
                 offset = data.find("\n>", offset + 2)
             first = positions[0] if positions else len(data)
-            if text := "".join(data[:first].split()):
+            if text := _strip_sequence_whitespace(data[:first]):
                 if not have_header:
                     if strict:
                         raise ValueError("Genome sequence precedes its FASTA header")
@@ -82,7 +91,7 @@ def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True):
                     raise ValueError("Genome FASTA header exceeds 1 MiB")
                 yield "header", segment[1:newline].rstrip("\r")
                 have_header = True
-                if text := "".join(segment[newline + 1:].split()):
+                if text := _strip_sequence_whitespace(segment[newline + 1:]):
                     yield "sequence", text
             if strict and len(pending) > 1024 * 1024:
                 raise ValueError("Genome FASTA header exceeds 1 MiB")
