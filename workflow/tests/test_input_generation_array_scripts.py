@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import json
 import subprocess
 import sys
@@ -1361,6 +1362,64 @@ def test_merge_requires_validation_qc_to_be_bound_to_worker_receipt(tmp_path: Pa
         assert aggregate["source_gene_validation"] == payload["source_gene_validation"]
     qc.write_text(json.dumps({"phase_conflicts_total": 0}), encoding="utf-8")
     assert run_python(MERGE_SCRIPT, *merge_args).returncode != 0
+
+
+@pytest.mark.parametrize("issue", ["summary", "stats", "resolved", "changed"])
+def test_merge_requires_all_consumed_shards_to_match_the_receipt(tmp_path, monkeypatch, capsys, issue):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import merge_input_generation_shards as merge
+
+    species = "Arabidopsis_thaliana"
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 1, "tasks": [
+        {"species_prefix": species, "species_key": species, "manifest_row": {}},
+    ]}))
+    paths = {
+        "summary": tmp_path / "summary" / "1.tsv",
+        "stats": tmp_path / "stats" / "1.json",
+        "resolved": tmp_path / "plan.json.tasks" / "1.resolved.tsv",
+    }
+    for path in paths.values():
+        path.parent.mkdir()
+    summary = f"provider\tspecies_key\tspecies_prefix\ndirect\t{species}\t{species}\n"
+    paths["summary"].write_text(summary)
+    paths["stats"].write_text(json.dumps({"species_prefix": species, "species_processed": 1}))
+    paths["resolved"].write_text(f"species_key\tcds_url\n{species}\tfile:///fixture.fa\n")
+    receipt = tmp_path / "plan.json.completed" / "1.json"
+    receipt.parent.mkdir()
+    receipt.write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "task_index": 1,
+        "files": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for name, path in paths.items() if name != issue},
+    }))
+    if issue == "changed":
+        read_receipt = merge.read_verified_receipt
+
+        def replace_after_verification(*args, **kwargs):
+            verified = read_receipt(*args, **kwargs)
+            assert verified is not None
+            paths["summary"].write_text(summary.replace("direct", "replacement"))
+            return verified
+
+        monkeypatch.setattr(merge, "read_verified_receipt", replace_after_verification)
+
+    outputs = {name: tmp_path / (name + ".old")
+               for name in ("species-summary", "aggregate-stats", "resolved-manifest", "mapping-qc")}
+    for path in outputs.values():
+        path.write_text("previous output\n")
+    argv = [str(MERGE_SCRIPT), "--task-plan", str(plan), "--species-summary-shard-dir",
+            str(paths["summary"].parent), "--task-stats-dir", str(paths["stats"].parent)]
+    for name, path in outputs.items():
+        argv.extend(("--" + name + "-output", str(path)))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as failure:
+        merge.main()
+    assert failure.value.code == 2
+    expected = "changed after worker completion verification" if issue == "changed" else "not bound to the worker completion receipt"
+    assert expected in capsys.readouterr().err
+    assert all(path.read_text() == "previous output\n" for path in outputs.values())
 
 
 def test_manifest_planning_defers_downloads_and_freezes_inputs(tmp_path):

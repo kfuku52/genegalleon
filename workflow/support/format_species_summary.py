@@ -18,19 +18,23 @@ def species_row_key(provider, species_key, species_prefix):
 
 
 def read_species_summary_rows(path):
-    rows = {}
     if not path.exists() or path.stat().st_size == 0:
-        return rows
+        return {}
     with open(path, "rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        for raw in reader:
-            provider = (raw.get("provider") or "").strip()
-            species_key = (raw.get("species_key") or "").strip()
-            species_prefix = (raw.get("species_prefix") or "").strip()
-            if provider == "" or (species_key == "" and species_prefix == ""):
-                continue
-            key = species_row_key(provider, species_key, species_prefix)
-            rows[key] = {col: str(raw.get(col) or "") for col in SPECIES_SUMMARY_COLUMNS}
+        return parse_species_summary_rows(handle)
+
+
+def parse_species_summary_rows(handle):
+    rows = {}
+    reader = csv.DictReader(handle, delimiter="\t")
+    for raw in reader:
+        provider = (raw.get("provider") or "").strip()
+        species_key = (raw.get("species_key") or "").strip()
+        species_prefix = (raw.get("species_prefix") or "").strip()
+        if provider == "" or (species_key == "" and species_prefix == ""):
+            continue
+        key = species_row_key(provider, species_key, species_prefix)
+        rows[key] = {col: str(raw.get(col) or "") for col in SPECIES_SUMMARY_COLUMNS}
     return rows
 
 
