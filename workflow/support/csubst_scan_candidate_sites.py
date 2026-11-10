@@ -547,9 +547,15 @@ def load_threshold_candidates(
     selected = frame.loc[keep, :].copy()
     selected[probability_column] = qvalues.loc[keep].astype(float)
     selected["support_unit_count"] = support.loc[keep].astype(int)
-    selected["codon_site_alignment"] = [
-        integer_value(value, "codon_site_alignment", minimum=1) for value in selected["codon_site_alignment"]
-    ]
+    # Release the full source view before ranking and constructing candidate IDs.
+    del frame, raw_probability, qvalues, support, lineage
+    sites = selected["codon_site_alignment"]
+    # Native positive integers within the exact float range pass integer_value.
+    if sites.empty or sites.dtype != np.dtype("int64") or sites.min() < 1 or sites.max() > 2**53:
+        selected["codon_site_alignment"] = [
+            integer_value(value, "codon_site_alignment", minimum=1) for value in sites
+        ]
+    del sites
     canonical_branch_ids = []
     for row_index, value in selected["support_branch_ids"].items():
         try:

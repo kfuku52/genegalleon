@@ -59,6 +59,18 @@ def test_candidate_cap_applies_after_lineage_filter_and_preserves_analysis_ident
     assert selected.iloc[0]["_analysis_key"] == same_candidate["_analysis_key"]
 
 
+@pytest.mark.parametrize("site,message", [(0, "must be >= 1"), (2**53 + 1, "must contain finite integers")])
+def test_candidate_cap_still_rejects_invalid_native_integer_sites(tmp_path, site, message):
+    mod = load_module()
+    source = candidate_rows()
+    source.loc[2, "codon_site_alignment"] = site
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, source)
+
+    with pytest.raises(ValueError, match=message):
+        mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 1, "no", "none")
+
+
 @pytest.mark.parametrize("count", [None, float("inf"), -1, 1.5, "unknown", "missing_column"])
 def test_lineage_filter_rejects_invalid_counts_even_outside_selected_pool(tmp_path, count):
     mod = load_module()
