@@ -208,21 +208,9 @@ treevis_intron_connection_polygons = function(labels, half_width, tolerance_nt=3
         tolerance_nt!=floor(tolerance_nt)) stop('Invalid intron position tolerance')
     labels = labels[labels$status %in% c('mapped','position_only'),,drop=FALSE]
     labels$connection_index = seq_len(nrow(labels))
-    polygons = list()
-    seen = new.env(hash=TRUE,parent=emptyenv())
-    add_band = function(a,b,kind) {
-        pair = paste(sort(c(a$connection_index,b$connection_index)),collapse=':')
-        if (exists(pair,envir=seen,inherits=FALSE) || a$y == b$y) return(invisible(NULL))
-        assign(pair,TRUE,envir=seen)
-        wa = min(half_width,(a$end-a$start)/2)
-        wb = min(half_width,(b$end-b$start)/2)
-        polygons[[length(polygons)+1]] <<- data.frame(
-            connection=pair,site_id=if(kind=='exact_phase') a$site_id else NA_character_,
-            kind=kind,opacity=if(kind=='exact_phase') 0.16 else 0.05,
-            from_index=a$connection_index,to_index=b$connection_index,
-            position_delta=abs(a$alignment_left-b$alignment_left),
-            x=c(a$x-wa,a$x+wa,b$x+wb,b$x-wb),y=c(a$y,a$y,b$y,b$y))
-    }
+    from = to = integer(nrow(labels))
+    exact_phase = logical(nrow(labels))
+    connection_count = 0L
     rows = sort(unique(labels$y))
     if (length(rows)>1) {
         row_data = lapply(rows,function(y) labels[labels$y == y,,drop=FALSE])
@@ -248,9 +236,31 @@ treevis_intron_connection_polygons = function(labels, half_width, tolerance_nt=3
                 if (length(reverse)!=1 || reverse[1]!=i) next
                 exact = a$status[i]=='mapped' && b$status[j]=='mapped' &&
                     !is.na(a$site_id[i]) && !is.na(b$site_id[j]) && a$site_id[i]==b$site_id[j]
-                add_band(a[i,],b[j,],if(exact) 'exact_phase' else 'position_candidate')
+                # Each boundary can contribute once, only towards a later row.
+                connection_count = connection_count+1L
+                from[connection_count] = a$connection_index[i]
+                to[connection_count] = b$connection_index[j]
+                exact_phase[connection_count] = if (exact) TRUE else FALSE
             }
         }
     }
-    if (length(polygons)) do.call(rbind,polygons) else data.frame()
+    if (!connection_count) return(data.frame())
+    used = seq_len(connection_count)
+    from = from[used]
+    to = to[used]
+    exact_phase = exact_phase[used]
+    a = labels[from,,drop=FALSE]
+    b = labels[to,,drop=FALSE]
+    half_width = min(half_width,Inf)
+    wa = pmin(half_width,(a$end-a$start)/2)
+    wb = pmin(half_width,(b$end-b$start)/2)
+    data.frame(
+        connection=rep(paste(pmin(from,to),pmax(from,to),sep=':'),each=4L),
+        site_id=rep(ifelse(exact_phase,a$site_id,NA_character_),each=4L),
+        kind=rep(ifelse(exact_phase,'exact_phase','position_candidate'),each=4L),
+        opacity=rep(ifelse(exact_phase,0.16,0.05),each=4L),
+        from_index=rep(from,each=4L),to_index=rep(to,each=4L),
+        position_delta=rep(abs(a$alignment_left-b$alignment_left),each=4L),
+        x=as.vector(rbind(a$x-wa,a$x+wa,b$x+wb,b$x-wb)),
+        y=as.vector(rbind(a$y,a$y,b$y,b$y)))
 }
