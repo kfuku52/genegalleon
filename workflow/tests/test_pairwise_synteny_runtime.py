@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from Bio.Data import CodonTable
 from PIL import Image
+from subprocess_helpers import run_workflow_command
 
 from workflow.tests.test_genome_evolution_protein_mode import _run_core
 
@@ -285,7 +286,7 @@ def run_core(workspace, **overrides):
     env = {**os.environ, "gg_workspace_dir": str(workspace), "GG_COMMON_TMP_ROOT": "workspace",
            "GG_ARRAY_TASK_ID": "1", "GG_JOB_ID": "synteny_test", "GG_TASK_CPUS": "1", "GG_MEM_PER_CPU_GB": "8",
            "genome_evolution_mode": "synteny", "artifact_stale_policy": "stop", **overrides}
-    return subprocess.run(["bash", str(CORE)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=180)
+    return run_workflow_command(["bash", str(CORE)], cwd=REPO_ROOT, env=env, timeout=180)
 
 
 def test_ds_stage_uses_cdskit_reuses_analysis_and_has_independent_cache(tmp_path):

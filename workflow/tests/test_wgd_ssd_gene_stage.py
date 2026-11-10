@@ -5,11 +5,11 @@ import hashlib
 import json
 import os
 import shlex
-import subprocess
 import zipfile
 from pathlib import Path
 
 import pytest
+from subprocess_helpers import run_workflow_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SUPPORT = ROOT / "workflow/support"
@@ -146,9 +146,11 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
 ''', encoding="utf-8")
 
     def run(distance, evidence_dir="", **overrides):
-        result = subprocess.run(["bash", str(script)], cwd=tmp_path, text=True, capture_output=True,
-                                env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": str(distance),
-                                     "WGD_TEST_EVIDENCE_DIR": evidence_dir, **overrides}, timeout=90)
+        result = run_workflow_command(
+            ["bash", str(script)], cwd=tmp_path, timeout=90,
+            env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": str(distance),
+                 "WGD_TEST_EVIDENCE_DIR": evidence_dir, **overrides},
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         with GeneFamilyOutputStore(output_root).open_binary("wgd_ssd", result_zip.name) as handle:
             with zipfile.ZipFile(handle) as archive:
@@ -263,9 +265,11 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     if mul_enabled:
         previous = snapshot(result_zip, manifest)
         for overrides in ({"WGD_TEST_MUL_MAX_MAPS": "1"}, {"WGD_TEST_MUL_H1": ""}):
-            failed = subprocess.run(["bash", str(script)], cwd=tmp_path, text=True, capture_output=True,
-                                    env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": "5",
-                                         "WGD_TEST_EVIDENCE_DIR": relative_evidence, **overrides}, timeout=90)
+            failed = run_workflow_command(
+                ["bash", str(script)], cwd=tmp_path, timeout=90,
+                env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": "5",
+                     "WGD_TEST_EVIDENCE_DIR": relative_evidence, **overrides},
+            )
             assert failed.returncode != 0, failed.stdout + failed.stderr
             assert snapshot(result_zip, manifest) == previous
     run(5, relative_evidence, WGD_TEST_MUL_ENABLED=str(int(not mul_enabled)))

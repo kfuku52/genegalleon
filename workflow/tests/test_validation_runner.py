@@ -1,13 +1,16 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, call
 
 import prepare_test_wheels
 import pytest
 import run_checks
+import subprocess_helpers
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -271,6 +274,27 @@ def test_strict_runtime_reports_outcomes_and_enables_required_integrations(tmp_p
     else:
         assert result.returncode != 0
         assert "Required runtime checks were skipped" in result.stdout
+
+
+def test_workflow_command_timeout_signals_group_and_keeps_original_diagnostics(tmp_path, monkeypatch):
+    command = ["bash", "fixture.sh"]
+    timeout = subprocess.TimeoutExpired(command, 90, output=b"running\n", stderr=b"diagnostic\n")
+    child = MagicMock()
+    child.pid = 12345
+    child.__enter__.return_value = child
+    child.communicate.side_effect = [timeout, subprocess.TimeoutExpired(command, 2)]
+    popen = MagicMock(return_value=child)
+    killpg = MagicMock()
+    monkeypatch.setattr(subprocess_helpers.subprocess, "Popen", popen)
+    monkeypatch.setattr(subprocess_helpers.os, "killpg", killpg)
+
+    with pytest.raises(subprocess.TimeoutExpired) as failure:
+        subprocess_helpers.run_workflow_command(command, cwd=tmp_path, env={}, timeout=90)
+
+    assert failure.value is timeout
+    assert popen.call_args.kwargs["start_new_session"] is True
+    assert child.communicate.call_args_list == [call(timeout=90), call(timeout=2)]
+    assert killpg.call_args_list == [call(child.pid, signal.SIGTERM), call(child.pid, signal.SIGKILL)]
 
 
 def test_wheel_inputs_resolve_only_the_temporary_build_and_install_offline(tmp_path):
