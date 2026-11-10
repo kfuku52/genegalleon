@@ -115,10 +115,13 @@ def _read_contract(path: Path, table_sha256=None):
 def select_species_traits(path: Path | str, selection: str = "all", auxiliary: tuple[str, ...] = (),
                           allow_empty: bool = False) -> tuple[pandas.DataFrame, dict]:
     path = Path(path)
-    return _select_species_traits(path, path.read_bytes(), selection, auxiliary, allow_empty)
+    return select_species_traits_from_payload(path, path.read_bytes(), selection, auxiliary, allow_empty)
 
 
-def _select_species_traits(path, payload, selection, auxiliary=(), allow_empty=False):
+def select_species_traits_from_payload(path: Path, payload: bytes, selection: str = "all",
+                                       auxiliary: tuple[str, ...] = (),
+                                       allow_empty: bool = False) -> tuple[pandas.DataFrame, dict]:
+    """Select and verify species traits using one captured table payload."""
     with io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader, [])
@@ -185,7 +188,7 @@ def select_analysis_traits(path, selection="all", allow_empty=False):
     """Apply observation eligibility before numeric response type selection."""
     path = Path(path)
     payload = path.read_bytes()
-    frame, audit = _select_species_traits(path, payload, selection, allow_empty=allow_empty)
+    frame, audit = select_species_traits_from_payload(path, payload, selection, allow_empty=allow_empty)
     report, schema_sha256 = select_traits_from_payload(
         path, payload, "all" if audit["selection"] == "automatic" else selection,
         eligible=audit["selected"], allow_empty=allow_empty)
