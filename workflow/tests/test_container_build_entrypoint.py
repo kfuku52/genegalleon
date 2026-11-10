@@ -459,3 +459,54 @@ def test_container_env_coverage_preflight_does_not_require_ripgrep():
     script = CHECK_ENV_COVERAGE.read_text(encoding="utf-8")
 
     assert "rg -n" not in script
+
+
+@pytest.mark.skipif(
+    subprocess.run(["bash", "-c", "type mapfile >/dev/null 2>&1"], check=False).returncode != 0,
+    reason="the runtime validator requires Bash 4+",
+)
+def test_runtime_validation_batches_commands_and_preserves_report_order(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("base", "other"):
+        (tmp_path / name).mkdir()
+        _write_executable(tmp_path / name / f"{name}-only", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        bin_dir / "micromamba",
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == run && "$2" == -n && "$4" == bash && "$5" == -lc ]]
+printf '%s\\n' "$3" >> "$GG_PROBE_ROOT/activations"
+[[ -d "$GG_PROBE_ROOT/$3" ]] || exit 1
+echo other-only
+PATH="$GG_PROBE_ROOT/$3" exec /bin/bash -c "$6" "${@:7}"
+""",
+    )
+    required = tmp_path / "required.tsv"
+    required.write_text("other\tother-only # installed\nbase\tbase-only\nbase\tother-only\nother\tother-only\n")
+    optional = tmp_path / "optional.tsv"
+    optional.write_text("base\tbase-only\nmissing\tother-only\n")
+    report = tmp_path / "report.tsv"
+
+    result = subprocess.run(
+        ["bash", str(CHECK_ENV_COVERAGE.with_name("validate_runtime.sh")),
+         "--required", str(required), "--optional", str(optional), "--report", str(report)],
+        cwd=tmp_path,
+        env=dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", GG_PROBE_ROOT=str(tmp_path)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "missing required command: env=base command=other-only" in result.stdout
+    assert sorted((tmp_path / "activations").read_text().splitlines()) == ["base", "missing", "other"]
+    assert report.read_text().splitlines() == [
+        "tier\tenv\tcommand\tfound",
+        "required\tother\tother-only\t1",
+        "required\tbase\tbase-only\t1",
+        "required\tbase\tother-only\t0",
+        "required\tother\tother-only\t1",
+        "optional\tbase\tbase-only\t1",
+        "optional\tmissing\tother-only\t0",
+    ]

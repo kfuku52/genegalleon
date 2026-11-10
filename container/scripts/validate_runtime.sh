@@ -31,12 +31,50 @@ if [[ -z "${required_file}" || -z "${optional_file}" || -z "${report_file}" ]]; 
   exit 1
 fi
 
+declare -A available_commands=()
+
+command_available() {
+  local key="$1"$'\t'"$2"
+  [[ "${available_commands[$key]:-0}" == "1" ]]
+}
+
+probe_commands() {
+  local row env_name command_name probe_file
+  local -a names
+  local -A by_environment=([base]=$'Trinity\ncsubst\n')
+  for row in "$@"; do
+    IFS=$'\t' read -r env_name command_name <<< "${row}"
+    if [[ -n "${env_name}" && -n "${command_name}" ]]; then
+      by_environment["${env_name}"]+="${command_name}"$'\n'
+    fi
+  done
+  probe_file="$(mktemp)"
+  for env_name in "${!by_environment[@]}"; do
+    mapfile -t names < <(printf '%s' "${by_environment[${env_name}]}")
+    : > "${probe_file}"
+    if micromamba run -n "${env_name}" bash -lc '
+      output=$1
+      shift
+      for name in "$@"; do
+        if command -v -- "$name" >/dev/null 2>&1; then
+          printf "%s\n" "$name"
+        fi
+      done > "$output"
+    ' bash "${probe_file}" "${names[@]}"; then
+      while IFS= read -r command_name; do
+        available_commands["${env_name}"$'\t'"${command_name}"]=1
+      done < "${probe_file}"
+    fi
+  done
+  rm -f -- "${probe_file}"
+}
+
 check_one() {
   local tier=$1
   local env_name=$2
   local command_name=$3
   local found=0
-  if micromamba run -n "${env_name}" bash -lc "command -v ${command_name} >/dev/null 2>&1"; then
+  if command_available "${env_name}" "${command_name}"; then
     found=1
   fi
   printf '%s\t%s\t%s\t%s\n' "${tier}" "${env_name}" "${command_name}" "${found}" >> "${report_file}"
@@ -60,7 +98,7 @@ check_trinity_salmon_compatibility() {
   local version_info
   local passed=1
 
-  if ! micromamba run -n "${env_name}" bash -lc "command -v Trinity >/dev/null 2>&1"; then
+  if ! command_available "${env_name}" "Trinity"; then
     return 0
   fi
 
@@ -107,11 +145,15 @@ check_trinity_salmon_compatibility() {
 
 mkdir -p "$(dirname "${report_file}")"
 printf 'tier\tenv\tcommand\tfound\n' > "${report_file}"
+mapfile -t required_rows < <(read_tsv "${required_file}")
+mapfile -t optional_rows < <(read_tsv "${optional_file}")
+probe_commands "${required_rows[@]}" "${optional_rows[@]}"
 
 required_failed=0
 library_required=0
 nwkit_required=0
-while IFS=$'\t' read -r env_name command_name; do
+for row in "${required_rows[@]}"; do
+  IFS=$'\t' read -r env_name command_name <<< "${row}"
   if [[ "${command_name}" == "nwkit" ]]; then
     nwkit_required=1
   fi
@@ -121,7 +163,7 @@ while IFS=$'\t' read -r env_name command_name; do
   if ! check_one "required" "${env_name}" "${command_name}"; then
     required_failed=1
   fi
-done < <(read_tsv "${required_file}")
+done
 
 if [[ "${nwkit_required}" -eq 1 ]]; then
   nwkit_log="$(dirname "${report_file}")/nwkit_reconciliation_validation.txt"
@@ -155,7 +197,7 @@ if [[ "${library_required}" -eq 1 ]]; then
   fi
 fi
 
-if micromamba run -n base bash -lc "command -v csubst >/dev/null 2>&1"; then
+if command_available base csubst; then
   if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/check_csubst_3di.py"; then
     printf '%s\t%s\t%s\t%s\n' "required" "base" "CSUBST 3Di dependencies" "1" >> "${report_file}"
   else
@@ -171,9 +213,10 @@ if micromamba run -n base bash -lc "command -v csubst >/dev/null 2>&1"; then
   fi
 fi
 
-while IFS=$'\t' read -r env_name command_name; do
+for row in "${optional_rows[@]}"; do
+  IFS=$'\t' read -r env_name command_name <<< "${row}"
   check_one "optional" "${env_name}" "${command_name}" || true
-done < <(read_tsv "${optional_file}")
+done
 
 if ! check_trinity_salmon_compatibility; then
   required_failed=1
