@@ -179,9 +179,10 @@ Use the species-tree tip ID and the exact family and anchor IDs from the
 plot's `.columns.tsv`. Unknown species or anchors are errors. Repeated rows
 add a single mark. A dagger beside a copy number marks an inferred loss
 alongside the displayed copies. A `0†` marks an inferred loss with no displayed
-copy for the anchor. A dagger can apply to a shared glyph spanning multiple
-anchors. It marks one or more inferred lineage extinctions, while the number
-continues to count displayed copies.
+copy for the anchor. If another glyph spans that cell, the plot puts the
+`0†` in a strip at the bottom of the same species row. A dagger can apply to
+a shared glyph spanning multiple anchors. It marks one or more inferred
+lineage extinctions, while the number continues to count displayed copies.
 
 ## Interpret duplication bars
 
@@ -282,9 +283,10 @@ original D nodes, and with displayed-descendant provenance also checks that the
 gene/anchor pair lies in opposite child subtrees, even without a UFBoot table.
 Ortholog plots size each species row independently by its maximum displayed
 lane count, reserving space for 8-point copy-number text and any evidence bands.
-In the default `compact` mode, sparse families are centered within the row. The species tree follows those
-row positions, while column labels and legends retain compact spacing in
-physical units. A dense row does not stretch the other rows or the whole plot.
+In `compact` mode, sparse families are centered within the row. The species
+tree follows those row positions, while column labels and legends retain
+compact spacing in physical units. A dense row does not stretch the other
+rows or the whole plot.
 Automatic height follows the total space required by the rows and labels.
 An explicit height below the required minimum is rejected with that minimum.
 
