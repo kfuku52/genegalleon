@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 import zipfile
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from typing import Sequence
 
@@ -35,18 +36,22 @@ def _preflight_extraction(
         filesystem_stats.f_frsize or filesystem_stats.f_bsize or 4096
     )
     required_bytes = block_size
-    implied_directories: set[PurePosixPath] = set()
     for info in files:
         required_bytes += max(
             block_size,
             ((int(info.file_size) + block_size - 1) // block_size) * block_size,
         )
-        parent = PurePosixPath(info.filename).parent
-        while parent.as_posix() != ".":
+    # Member names have already been validated as canonical ZIP paths.
+    # Even an empty nested directory requires every parent to be created.
+    parents = chain(
+        (info.filename.rpartition("/")[0] for info in files),
+        (info.filename[:-1] for info in directories),
+    )
+    implied_directories: set[str] = set()
+    for parent in parents:
+        while parent and parent not in implied_directories:
             implied_directories.add(parent)
-            parent = parent.parent
-    for info in directories:
-        implied_directories.add(PurePosixPath(info.filename))
+            parent = parent.rpartition("/")[0]
     required_bytes += len(implied_directories) * block_size
     available_bytes = int(shutil.disk_usage(destination_root).free)
     if required_bytes > available_bytes:
@@ -150,14 +155,14 @@ def validated_members(
         )
 
     for canonical_name in seen:
-        parent = PurePosixPath(canonical_name).parent
-        while parent.as_posix() not in {".", expected_prefix}:
-            if parent.as_posix() in file_names:
+        parent = canonical_name.rpartition("/")[0]
+        while parent and parent != expected_prefix:
+            if parent in file_names:
                 raise SafeZipError(
                     f"ZIP member is nested below a file in {archive_path}: "
                     f"{canonical_name!r}"
                 )
-            parent = parent.parent
+            parent = parent.rpartition("/")[0]
     return files, directories
 
 
