@@ -221,14 +221,18 @@ def test_shared_full_intron_chain_remains_ambiguous():
 
 
 def test_unmapped_native_diagnostics_distinguish_absence_from_opposite_strand():
-    selected = utrs.read_models(model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
-                                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
+    selected = (model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
+                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
     native = utrs.read_models(model('n', 'ng', cds=((100, 200),), exons=((100, 200),), strand='-'))
-    _, reasons = utrs.native_correspondence(selected, native)
-    assert reasons['a']['status'] == 'opposite_strand_coding_overlap'
-    assert reasons['b']['status'] == 'no_coding_overlap'
-    _, reasons = utrs.native_correspondence(selected, {})
-    assert reasons['a']['status'] == 'no_native_prediction_on_contig'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    assert audit[0]['native_correspondence']['status'] == 'opposite_strand_coding_overlap'
+    assert audit[1]['native_correspondence']['status'] == 'no_coding_overlap'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', {})
+    assert audit[0]['native_status'] == 'no_unique_coding_overlap'
+    assert audit[0]['native_correspondence']['status'] == 'no_native_prediction_on_contig'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S')
+    assert audit[0]['native_status'] == 'missing_prediction'
+    assert audit[0]['native_correspondence'] == {'status': 'missing_prediction', 'candidates': []}
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
