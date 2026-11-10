@@ -188,6 +188,24 @@ def test_presence_absence_reads_stat_branch_from_zip_storage(tmp_path: Path):
     assert not (root / "stat_branch").exists()
 
 
+def test_stat_branch_copy_numbers_handle_quoted_duplicate_and_short_rows(tmp_path: Path):
+    mod = load_module("gene_family_presence_absence.py")
+    path = tmp_path / "family_stat.branch.tsv"
+    path.write_text(
+        'spnode_coverage\tso_event\tnum_leaf\tspnode_coverage\tdetail\n'
+        'Old_species\tL\t7\t" Species\tquoted "\t"detail on\ntwo lines"\n'
+        'Old_species\tL\t1\n'
+        'Old_species\tS\t1\tSpecies_fallback\n'
+        'Old_species\tS\t2\tSpecies_internal\tunused\textra\n'
+        'Old_species\tL\t1\t \n\n',
+        encoding="utf-8",
+    )
+
+    assert list(mod.read_stat_branch_copy_numbers(path).items()) == [
+        ("Species\tquoted", 1), ("Species_fallback", 1),
+    ]
+
+
 def test_query2family_presence_absence_can_include_incomplete_queries(tmp_path: Path):
     mod = load_module("gene_family_presence_absence.py")
     query_gene = tmp_path / "input" / "query_gene"

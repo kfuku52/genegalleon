@@ -2030,6 +2030,54 @@ def collect_reference_ufboot_evidence(
     return evidence_rows
 
 
+def _iter_ortholog_anchor_matches(by_id, children, root, query_tip_by_id, ordered_query_ids):
+    from nwkit.parent_index import traversal_order
+
+    # In preorder, every subtree covers a contiguous slice of the anchors.
+    order = traversal_order(children, root)
+    anchor_tips = set(query_tip_by_id.values())
+    anchor_start, anchor_stop = {}, {}
+    cursor = 0
+    for node in order:
+        anchor_start[node] = cursor
+        cursor += node in anchor_tips
+    for node in reversed(order):
+        node_children = children.get(node, ())
+        anchor_stop[node] = (anchor_stop[node_children[-1]] if node_children
+                             else anchor_start[node] + (node in anchor_tips))
+
+    # Only speciation parents add matches. Each child inherits the slices
+    # outside its subtree, sharing the previous slices with its descendants.
+    outside = {root: None}
+    for node in order:
+        speciation = str(by_id[node].get("so_event") or "") == "S"
+        inherited = outside[node]
+        for child in children.get(node, ()):
+            outside[child] = inherited
+            if speciation and (anchor_start[node] < anchor_start[child] or anchor_stop[child] < anchor_stop[node]):
+                outside[child] = (anchor_start[node], anchor_start[child], anchor_stop[child], anchor_stop[node], inherited)
+
+    # Keep the saved row order for grouping and the preorder anchor order
+    # inside each group, regardless of the order of the original queries.
+    for node, row in by_id.items():
+        if str(row.get("so_event") or "") != "L":
+            continue
+        species = str(row.get("spnode_coverage") or "").strip()
+        if not species:
+            continue
+        slices = [(anchor_start[node], anchor_start[node] + 1)] if node in anchor_tips else []
+        outside_slices = outside[node]
+        while outside_slices is not None:
+            left_start, left_stop, right_start, right_stop, outside_slices = outside_slices
+            if left_start < left_stop:
+                slices.append((left_start, left_stop))
+            if right_start < right_stop:
+                slices.append((right_start, right_stop))
+        if slices:
+            matches = tuple(ordered_query_ids[i] for start, stop in sorted(slices) for i in range(start, stop))
+            yield species, matches, str(row.get("node_name") or node)
+
+
 def _collect_family_orthologs_for_anchors(
     rows,
     cds_fasta_ids,
@@ -2091,22 +2139,11 @@ def _collect_family_orthologs_for_anchors(
         family_order=family_order,
     )
 
-    ancestor_by_node = ancestor_index(by_id)
     grouped = defaultdict(list)
-    for branch_id, row in by_id.items():
-        if str(row.get("so_event") or "") != "L":
-            continue
-        species = str(row.get("spnode_coverage") or "").strip()
-        if not species:
-            continue
-        query_set = []
-        for query_id in ordered_query_ids:
-            query_tip = query_tip_by_id[query_id]
-            ancestor = mrca_node(ancestor_by_node, branch_id, query_tip)
-            if branch_id == query_tip or str(by_id[ancestor].get("so_event") or "") == "S":
-                query_set.append(query_id)
-        if query_set:
-            grouped[(species, tuple(query_set))].append(str(row.get("node_name") or branch_id))
+    for species, query_set, gene in _iter_ortholog_anchor_matches(
+        by_id, children, root, query_tip_by_id, ordered_query_ids
+    ):
+        grouped[(species, query_set)].append(gene)
 
     glyphs = []
     for (species, query_set), gene_ids in grouped.items():

@@ -1260,6 +1260,38 @@ def test_query_gene_basis_coalesces_shared_tips_and_retains_query_mapping():
     assert output_tree[0]["basis"] == "query_gene"
 
 
+def test_query_anchors_across_multiple_speciation_siblings_keep_tree_order():
+    mod = load_module("query_gene_orthologs.py")
+    rows = [
+        stat_row(24, 21, -1, -1, "L", "Species_target_gene", "Species_target"),
+        stat_row(30, 0, -1, -1, "L", "Species_right_gene", "Species_right", "direct:qright"),
+        stat_row(0, -1, -1, -1, "S", "root"),
+        stat_row(22, 20, -1, -1, "L", "Species_paralog_gene", "Species_paralog", "direct:qparalog"),
+        stat_row(20, 0, -1, -1, "D", "duplication"),
+        stat_row(23, 21, -1, -1, "L", "Species_middle_gene", "Species_middle", "direct:qmiddle"),
+        stat_row(21, 20, -1, -1, "S", "nested_speciation"),
+        stat_row(10, 0, -1, -1, "L", "Species_left_gene", "Species_left", "direct:qleft"),
+    ]
+    for row in rows:
+        del row["child1"], row["child2"]  # Use the saved parent-only format.
+    query_ids = ["qright", "qparalog", "qmiddle", "qleft"]
+
+    columns, glyphs, _, _ = mod.collect_family_query_anchor_orthologs(
+        rows=rows,
+        cds_fasta_ids=[row["node_name"] for row in rows if row["so_event"] == "L"],
+        query_definitions=[{"query_id": query_id, "query_label": query_id} for query_id in query_ids],
+        family_id="FAM",
+        family_order=1,
+        first_column_order=1,
+        first_query_order=1,
+    )
+
+    assert [column["query_ids"] for column in columns] == ["qleft", "qmiddle", "qparalog", "qright"]
+    assert [glyph["species"] for glyph in glyphs] == [row["spnode_coverage"] for row in rows if row["so_event"] == "L"]
+    assert glyphs[0]["anchor_query_ids"] == "qleft;qmiddle;qright"
+    assert glyphs[0]["relation"] == "ambiguous"
+
+
 def test_gene_summary_wires_query_gene_ortholog_tables_and_plot():
     text = CORE_SCRIPT.read_text(encoding="utf-8")
     entrypoint_text = ENTRYPOINT_SCRIPT.read_text(encoding="utf-8")

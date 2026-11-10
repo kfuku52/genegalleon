@@ -70,9 +70,11 @@ validate_evidence_glyph_ids <- function(evidence, glyphs, label, weak_pairs) {
     stop(label, " candidate relations disagree with the ortholog glyphs")
   }
   if ("gene_ids" %in% names(glyphs)) {
-    for (i in seq_len(nrow(evidence))) {
-      genes <- strsplit(as.character(glyphs$gene_ids[indices[i]]), ";", fixed = TRUE)[[1]]
-      if (!evidence$candidate_cds_fasta_id[i] %in% genes) {
+    candidates_by_glyph <- split(evidence$candidate_cds_fasta_id, indices)
+    glyph_indices <- as.integer(names(candidates_by_glyph))
+    genes_by_glyph <- strsplit(as.character(glyphs$gene_ids[glyph_indices]), ";", fixed = TRUE)
+    for (i in seq_along(candidates_by_glyph)) {
+      if (!all(candidates_by_glyph[[i]] %in% genes_by_glyph[[i]])) {
         stop(label, " candidate gene IDs disagree with the ortholog glyphs")
       }
     }
