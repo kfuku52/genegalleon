@@ -4,7 +4,6 @@ import argparse
 import csv
 import gzip
 import json
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -213,38 +212,36 @@ def validate_task_inputs_exist(task):
     )
 
 
-def read_fasta_records(path):
+def iter_fasta_records(path):
     opener = gzip.open if str(path).lower().endswith(".gz") else open
-    records = {}
-    duplicate_ids = []
     current_id = None
     chunks = []
-
-    def flush():
-        nonlocal current_id, chunks
-        if current_id is None:
-            return
-        sequence = re.sub(r"\s+", "", "".join(chunks)).upper()
-        if current_id in records:
-            duplicate_ids.append(current_id)
-        else:
-            records[current_id] = sequence
-        current_id = None
-        chunks = []
-
     with opener(path, "rt", encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n\r")
             if line == "":
                 continue
             if line.startswith(">"):
-                flush()
-                current_id = line[1:].strip().split()[0]
+                if current_id is not None:
+                    sequence = "".join(chunks)
+                    yield current_id, "".join(sequence.split()).upper()
+                current_id = line[1:].split(maxsplit=1)[0]
                 chunks = []
                 continue
             chunks.append(line)
-    flush()
-    return records, sorted(set(duplicate_ids))
+    if current_id is not None:
+        sequence = "".join(chunks)
+        yield current_id, "".join(sequence.split()).upper()
+
+
+def read_fasta_records(path):
+    records, duplicates = {}, set()
+    for identifier, sequence in iter_fasta_records(path):
+        if identifier in records:
+            duplicates.add(identifier)
+        else:
+            records[identifier] = sequence
+    return records, sorted(duplicates)
 
 
 def collect_expected_longest_records(task, *, historical_header_groups=False):
@@ -273,29 +270,18 @@ def collect_expected_longest_records(task, *, historical_header_groups=False):
         transcript_id = formatter.build_formatted_cds_id(cds_identifier_task, header)
         gene_id = (formatter.build_header_gene_aggregate_id(cds_identifier_task, header, transcript_id)
                    if historical_header_groups else formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id))
-        raw_seq = re.sub(r"\s+", "", sequence).upper()
-        seq = formatter.pad_to_codon_length(raw_seq)
+        raw_seq = "".join(sequence.split()).upper()
+        length = len(raw_seq)
         transcripts_by_gene[gene_id] += 1
         previous = expected.get(gene_id)
-        selected = (previous is None or len(raw_seq) > previous["raw_sequence_length"]
-                    or (len(raw_seq) == previous["raw_sequence_length"]
+        selected = (previous is None or length > previous["raw_sequence_length"]
+                    or (length == previous["raw_sequence_length"]
                         and transcript_id < previous["transcript_id"]))
         source_check.observe(header, gene_id, selected)
-        if previous is None:
+        if selected:
             expected[gene_id] = {
-                "sequence": seq,
-                "raw_sequence_length": len(raw_seq),
-                "transcript_id": transcript_id,
-            }
-            continue
-        previous_raw_sequence_length = previous["raw_sequence_length"]
-        previous_transcript_id = previous["transcript_id"]
-        if len(raw_seq) > previous_raw_sequence_length or (
-            len(raw_seq) == previous_raw_sequence_length and transcript_id < previous_transcript_id
-        ):
-            expected[gene_id] = {
-                "sequence": seq,
-                "raw_sequence_length": len(raw_seq),
+                "sequence": formatter.pad_to_codon_length(raw_seq),
+                "raw_sequence_length": length,
                 "transcript_id": transcript_id,
             }
 
@@ -326,23 +312,23 @@ def validate_single_species(task, missing_limit):
             verify_existing(format_task, cds_file)
         expected_records, expected_stats = collect_expected_longest_records(
             format_task, historical_header_groups=bool(historical and historical['gene_grouping'] == 'historical-header-groups-v1'))
-        actual_records, duplicate_output_ids = read_fasta_records(cds_file)
-
-        expected_id_set = set(expected_records.keys())
-        actual_id_set = set(actual_records.keys())
-        missing_ids = sorted(expected_id_set - actual_id_set)
-        extra_ids = sorted(actual_id_set - expected_id_set)
-        shared_ids = sorted(expected_id_set.intersection(actual_id_set))
-        length_mismatch_ids = sorted(
-            gene_id
-            for gene_id in shared_ids
-            if len(actual_records[gene_id]) != len(expected_records[gene_id]["sequence"])
-        )
-        sequence_mismatch_ids = sorted(
-            gene_id
-            for gene_id in shared_ids
-            if actual_records[gene_id] != expected_records[gene_id]["sequence"]
-        )
+        observed_ids, duplicates = set(), set()
+        length_mismatch_ids, sequence_mismatch_ids = [], []
+        for gene_id, sequence in iter_fasta_records(cds_file):
+            if gene_id in observed_ids:
+                duplicates.add(gene_id)
+                continue
+            observed_ids.add(gene_id)
+            expected = expected_records.get(gene_id)
+            if expected is not None and sequence != expected["sequence"]:
+                sequence_mismatch_ids.append(gene_id)
+                if len(sequence) != len(expected["sequence"]):
+                    length_mismatch_ids.append(gene_id)
+        duplicate_output_ids = sorted(duplicates)
+        missing_ids = sorted(expected_records.keys() - observed_ids)
+        extra_ids = sorted(observed_ids - expected_records.keys())
+        length_mismatch_ids.sort()
+        sequence_mismatch_ids.sort()
 
         summary_before = str(row.get("cds_sequences_before") or "").strip()
         summary_after = str(row.get("cds_sequences_after") or "").strip()
@@ -368,7 +354,7 @@ def validate_single_species(task, missing_limit):
             "transcripts_total": expected_stats["transcripts_total"],
             "multi_isoform_genes": expected_stats["multi_isoform_genes"],
             "aggregated_cds_removed": expected_stats["aggregated_cds_removed"],
-            "output_records": len(actual_records),
+            "output_records": len(observed_ids),
             **{key: value for key, value in expected_stats.items() if key.startswith("source_gene_")},
         }
         if historical:
