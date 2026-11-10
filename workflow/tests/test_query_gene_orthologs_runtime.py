@@ -45,7 +45,8 @@ def test_strict_ortholog_copy_numbers_fit_between_evidence_bands(weak_duplicatio
     assert "height is too small for copy-number labels" in too_short.stderr
 
 
-def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
+def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "C")
     tree = tmp_path / "species.nwk"
     tree.write_text("(Species_one:1,Species_two:1);\n")
     long_table = tmp_path / "long.tsv"
@@ -87,8 +88,11 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
     )
     (tmp_path / "species_label_utils.r").symlink_to(SUPPORT_DIR / "species_label_utils.r")
     wrapper = tmp_path / "inspect.R"
+    # Inspect label code points before the locale-dependent TSV conversion.
     wrapper.write_text(
         f'source("{SUPPORT_DIR / "plot_query2family_presence_absence.R"}", local=TRUE)\n'
+        'glyph_rect_df$copy_label_codepoints <- vapply(glyph_rect_df$copy_label, '
+        'function(label) paste(utf8ToInt(enc2utf8(label)), collapse=" "), character(1))\n'
         'write.table(glyph_rect_df, "geometry.tsv", sep="\\t", quote=FALSE, row.names=FALSE)\n'
         'write.table(loss_label_df, "loss-geometry.tsv", sep="\\t", quote=FALSE, row.names=FALSE)\n'
         'write.table(unique(heatmap_df[c("species", "ymin", "ymax")]), '
@@ -111,11 +115,13 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
     assert single.ymax == pytest.approx(stacked.ymax.max())
     assert single.ymax - single.ymin > (compact.ymax - compact.ymin).max()
     assert single.text_y == pytest.approx((single.ymin + single.ymax) / 2)
-    assert single.copy_label == "3†"
+    assert [int(value) for value in single.copy_label_codepoints.split()] == [ord(char) for char in "3†"]
     loss_row = rows.loc[loss.species.item()]
     assert loss_row.ymin < loss.y.item() < single.ymin
     assert single.ymax == pytest.approx(loss_row.ymax)
-    assert ">0†</text>" in svg.read_text()
+    svg_text = svg.read_text(encoding="utf-8")
+    assert ">3†</text>" in svg_text
+    assert ">0†</text>" in svg_text
 
 
 @pytest.mark.parametrize("case", ["strict", "candidates", "subset_species", "legacy", "partial", "wrong_genes"])
