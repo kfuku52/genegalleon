@@ -521,7 +521,7 @@ def iter_processed_file_chunks(
                     logical_name=logical_name,
                 )
             )
-        else:
+        elif not isinstance(available_cols_set, frozenset):
             available_cols_set = set(available_cols_set)
 
         # Filter desired columns to only those that exist in the file.
@@ -870,8 +870,6 @@ def _populate_database(args, parser, output_store):
     # Gather input directories
     infiles = {}
     columns = {}
-    num_columns = {}
-    header_columns_by_file = {}
     header_columns_set_by_file = {}
     schema_problems = []
     indirs = {
@@ -921,10 +919,11 @@ def _populate_database(args, parser, output_store):
             continue
         infiles[stat] = visible_files(dir_path) if output_store is None else output_store.file_names(logical_subdir)
         logger.info(f"Number of infiles for '{stat}': {len(infiles[stat])}")
-        num_columns[stat] = []
-        header_columns_by_file[stat] = {}
-        header_columns_set_by_file[stat] = {}
+        table_headers = {}
+        header_columns_set_by_file[stat] = table_headers
+        shared_headers = {}
         column_names_set = set()
+        max_columns, max_column_count = [], 0
         for infile in infiles[stat]:
             file_path = os.path.join(dir_path, infile)
             try:
@@ -946,30 +945,24 @@ def _populate_database(args, parser, output_store):
                         schema_problems.append(
                             f"{file_path}: missing structural columns: {', '.join(missing_required)}"
                         )
-                infile_column_names_set = set(infile_columns)
-                header_columns_by_file[stat][infile] = infile_columns
-                header_columns_set_by_file[stat][infile] = infile_column_names_set
-                column_names_set.update(infile_column_names_set)
-                num_columns[stat].append(len(infile_column_names_set))
+                schema = frozenset(infile_columns)
+                table_headers[infile] = shared_headers.setdefault(schema, schema)
+                column_names_set.update(schema)
+                if len(schema) > max_column_count:
+                    max_columns, max_column_count = infile_columns, len(schema)
             except Exception as e:
                 logger.error(f"Error reading header from {file_path}: {e}")
                 schema_problems.append(f"{file_path}: failed to read header: {e}")
-                header_columns_by_file[stat][infile] = []
-                header_columns_set_by_file[stat][infile] = set()
-                num_columns[stat].append(0)
+                table_headers[infile] = frozenset()
 
         # Sort files so that the one with the greatest number of columns is first
-        sorted_pairs = sorted(
-            zip(infiles[stat], num_columns[stat], strict=True), key=lambda item: item[1], reverse=True
-        )
-        infiles[stat] = [infile for infile, _ in sorted_pairs]
+        infiles[stat] = sorted(infiles[stat], key=lambda infile: len(table_headers[infile]), reverse=True)
         if not infiles[stat]:
             logger.warning(f"No valid files found for '{stat}'. Skipping.")
             continue
 
         max_columns_file = os.path.join(dir_path, infiles[stat][0])
         try:
-            max_columns = header_columns_by_file[stat].get(infiles[stat][0], [])
             logger.info(f"Max columns file: {max_columns_file}")
             logger.info(f"Number of all columns in input for '{stat}': {len(column_names_set)}")
             logger.info(f"Max number of columns in input tables for '{stat}': {len(max_columns)}")
