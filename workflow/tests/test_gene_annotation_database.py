@@ -267,6 +267,29 @@ def test_same_literal_gene_id_in_different_species_is_not_collapsed(cohort):
         assert db.execute("SELECT species FROM gene_annotation WHERE gene_id='same' ORDER BY species").fetchall() == [('A',), ('B',)]
 
 
+def test_reconciled_gene_id_in_another_species_keeps_its_own_annotation(cohort):
+    gene = cohort['rows']['A'][0]['gene_id']
+    cohort['rows']['B'].append(dict.fromkeys(cohort['fields'], '') | {'gene_id': gene, 'orthogroup': 'OG9999'})
+    update_source(cohort, 'B')
+    build(cohort)
+    with sqlite3.connect(cohort['target']) as db:
+        assert db.execute(
+            "SELECT orthogroup,source_orthogroup FROM gene_annotation WHERE species='B' AND gene_id=?", (gene,)
+        ).fetchone() == (None, 'OG9999')
+
+
+def test_cross_method_gene_conflict_fails_before_annotation_publication(cohort):
+    with sqlite3.connect(cohort['db']) as db:
+        gene, species = db.execute("SELECT gene_id,species FROM reconciliation_gene LIMIT 1").fetchone()
+        db.execute("CREATE TABLE species_reconciliation_gene (gene_id TEXT, species TEXT, orthogroup TEXT)")
+        db.execute("INSERT INTO species_reconciliation_gene VALUES (?,?,?)", (gene, species, 'OG9999'))
+    cohort['config']['source_database_sha256'] = annotation.sha256(cohort['db'])
+    cohort['manifest'].write_text(json.dumps(cohort['config']))
+    with pytest.raises(ValueError, match="Reconciliation methods disagree on gene identity"):
+        build(cohort)
+    assert not cohort['target'].exists()
+
+
 @pytest.mark.parametrize('suffix', ['-wal', '-journal'])
 def test_active_database_not_used(cohort, suffix):
     (cohort['db'].parent / (cohort['db'].name + suffix)).write_bytes(b'active')
