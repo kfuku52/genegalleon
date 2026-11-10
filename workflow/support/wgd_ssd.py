@@ -174,29 +174,35 @@ def protect_output(path, inputs, workspace=None):
 
 
 def validated_members(plan):
+    rows, key, _ = _validated_family_tables(plan)
+    return rows, key
+
+
+def _validated_family_tables(plan):
     rows = read_table(plan["members"])
-    counts = validated_counts(plan)
+    count_rows = dict(validated_counts(plan))
     if not rows:
         raise ValueError("Empty family-membership or gene-count table")
     key = "family_id" if "family_id" in rows[0] else "Orthogroup"
     if set(rows[0]) != {key, *plan["species"]}:
         raise ValueError("Family membership species must exactly match the full species tree")
-    count_rows = dict(counts)
+    prefixes = [(name, name + "_") for name in plan["species"]]
     seen_families, seen_genes = set(), set()
     for row in rows:
         family = safe_token(row[key], "family ID")
         if family in seen_families or family not in count_rows:
             raise ValueError("Duplicate or unmatched family-membership row")
         seen_families.add(family)
-        for name in plan["species"]:
-            genes = [gene.strip() for gene in row[name].split(",") if gene.strip()]
-            if row[name].strip() and any(not gene.strip() for gene in row[name].split(",")):
+        for name, prefix in prefixes:
+            raw_genes = row[name].strip()
+            genes = [gene.strip() for gene in raw_genes.split(",")] if raw_genes else []
+            if "" in genes:
                 raise ValueError("Empty gene identifier in family membership")
             for gene in genes:
                 safe_token(gene, "Gene identifier")
-                if not gene.startswith(name + "_") or gene == name + "_":
+                if not gene.startswith(prefix) or gene == prefix:
                     raise ValueError("Family-membership gene identifier must have its species prefix")
-            if len(genes) != len(set(genes)) or seen_genes.intersection(genes):
+            if (len(genes) > 1 and len(genes) != len(set(genes))) or not seen_genes.isdisjoint(genes):
                 raise ValueError("Gene identifiers must be unique across family membership")
             seen_genes.update(genes)
             count = count_rows[family][name]
@@ -204,7 +210,7 @@ def validated_members(plan):
                 raise ValueError("Family membership and gene count disagree")
     if seen_families != set(count_rows):
         raise ValueError("Family membership and gene counts have different families")
-    return rows, key
+    return rows, key, count_rows
 
 
 def validate_annotation_counts(plan, members):
@@ -369,7 +375,8 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
     rng = random.Random(plan["parameters"]["seed"])
     codes = {source["species"]: source["genetic_code"] for source in plan["genomes"]}
     requests, selection = {}, []
-    for name in sorted(sequences):
+    sequence_species = sorted(sequences)
+    for name in sequence_species:
         all_pairs = sorted({tuple(sorted((row["gene_a"], row["gene_b"]))) for row in anchors if row["species"] == name})
         pairs = [pair for pair in all_pairs if all(gene in sequences[name] for gene in pair)]
         limit = plan["parameters"]["max_pairs"]
@@ -383,23 +390,24 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
                 status = "cds_unavailable" if any(gene not in sequences[name] for gene in pair) else "not_sampled"
                 selection.append({"pair_id": "|".join(pair), "species_a": name, "species_b": name,
                                   "family_id": "", "pair_role": "self_anchor", "status": status, "dS": "NA"})
-    members, family_key = validated_members(plan)
-    counts = dict(validated_counts(plan))
+    members, family_key, counts = _validated_family_tables(plan)
     single_copy, audit = [], []
     for row in members:
         family = row[family_key]
-        if any((counts[family][name] is not None and counts[family][name] > 1)
-               or len([gene for gene in row[name].split(",") if gene.strip()]) > 1 for name in plan["species"]):
+        family_counts = counts[family]
+        # Validation ensures commas separate nonempty identifiers.
+        if any((count is not None and count > 1) or "," in row[name] for name, count in family_counts.items()):
             audit.append({"family_id": family, "selection": "known_multicopy_family"})
             continue
         available = {}
-        for name in sorted(sequences):
-            genes = [gene.strip() for gene in row[name].split(",") if gene.strip()]
-            if counts[family][name] == 1 and len(genes) == 1 and genes[0] in sequences[name]:
-                available[name] = genes[0]
+        for name in sequence_species:
+            gene = row[name].strip()
+            if family_counts[name] == 1 and gene in sequences[name]:
+                available[name] = gene
         if len(available) >= 2:
-            single_copy.append((row[family_key], available))
-        audit.append({"family_id": row[family_key], "selection": "eligible" if len(available) >= 2 else "insufficient_single_copy_cds_species"})
+            single_copy.append((family, available))
+        audit.append({"family_id": family, "selection": "eligible" if len(available) >= 2 else "insufficient_single_copy_cds_species"})
+    del members, counts
     limit = plan["parameters"]["max_ks_families"]
     if len(single_copy) > limit:
         single_copy = sorted(rng.sample(single_copy, limit))
@@ -489,6 +497,7 @@ def run_analysis(plan, output, cpus):
     protect_output(output, plan["input_hashes"], Path(plan["workspace"]))
     members, _ = validated_members(plan)
     validate_annotation_counts(plan, members)
+    del members
     tree = species_tree(plan["species_tree"])
     output.mkdir(parents=True, exist_ok=False)
     normalized_counts(plan, output)
