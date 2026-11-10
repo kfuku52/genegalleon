@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import itertools
 import json
 import os
@@ -85,16 +86,17 @@ def run(config_path, output_dir):
     if statistics is not None:
         loci_path = output_dir / (prefix + ".loci.tsv")
         raw_loci = loci_path.read_bytes()
-        if hashlib.sha256(raw_loci).hexdigest() != summary["output_sha256"]["loci"]:
+        loci_sha256 = hashlib.sha256(raw_loci).hexdigest()
+        if loci_sha256 != summary["output_sha256"]["loci"]:
             raise RuntimeError("Closed profile table changed before inference")
-        with loci_path.open() as stream:
-            rows = paired_contrasts(list(csv.DictReader(stream, delimiter="\t")), **statistics)
+        with io.TextIOWrapper(io.BytesIO(raw_loci), encoding="utf-8") as stream:
+            rows = paired_contrasts(csv.DictReader(stream, delimiter="\t"), **statistics)
         if config_path.read_bytes() != raw_config or loci_path.read_bytes() != raw_loci:
             raise RuntimeError("Report inputs changed during inference")
         result = {"method": "Locus-weighted paired differences; non-overlapping reference blocks; cluster bootstrap and block sign flips; BH across all species pairs",
                   "effect_units": "fraction of expected copies (analysis_a minus analysis_b)",
                   "config_sha256": hashlib.sha256(raw_config).hexdigest(),
-                  "loci_sha256": hashlib.sha256(raw_loci).hexdigest(), "parameters": statistics, "contrasts": rows}
+                  "loci_sha256": loci_sha256, "parameters": statistics, "contrasts": rows}
         path = output_dir / (prefix + ".contrasts.json")
         descriptor, name = tempfile.mkstemp(prefix="." + prefix + ".contrasts-", dir=output_dir)
         temporary = Path(name)
