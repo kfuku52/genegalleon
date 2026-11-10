@@ -231,6 +231,54 @@ def test_summary_input_changes_during_table_writes_abort_publication(weak_duplic
     assert mod._SUMMARY_SOURCES.get() is None
 
 
+def test_manifest_routes_longest_underscore_prefix_and_reuses_source_stores(tmp_path, monkeypatch):
+    mod = load_module("query_gene_orthologs.py")
+    constructed = []
+    initialize = mod.GeneFamilyOutputStore.__init__
+
+    def track(instance, path):
+        constructed.append(path)
+        initialize(instance, path)
+
+    monkeypatch.setattr(mod.GeneFamilyOutputStore, "__init__", track)
+    source_a, source_b = map(str, (tmp_path / "source_a", tmp_path / "source_b"))
+    store = mod.ManifestOutputStore([
+        {"family_id": "group", "source_dir": source_a, "source_family_id": "OG1"},
+        {"family_id": "group_nested", "source_dir": source_a, "source_family_id": "OG2"},
+        {"family_id": "group_nested.v2", "source_dir": source_b, "source_family_id": "OG3"},
+    ])
+
+    assert constructed == [source_a, source_b]
+    assert store._resolve("group_nested.v2_stat.branch.tsv") == (store.stores[source_b], "OG3_stat.branch.tsv")
+    assert store._resolve("group_nested_protein_fasta") == (store.stores[source_a], "OG2_protein_fasta")
+    assert store._resolve("group_nested") == (store.stores[source_a], "OG1_nested")
+    with pytest.raises(ValueError, match="No manifest source"):
+        store._resolve("group.tsv")
+
+
+def test_summary_snapshot_rejects_changed_archive_epoch_before_publication(weak_duplication_fixture, tmp_path, monkeypatch):
+    from workflow.support.gene_family_output_store import INDEX_EPOCH_FILE, ArchiveStoreError
+
+    fixture, output = weak_duplication_fixture, tmp_path / "result"
+    collect_weak_fixture(fixture, output, 0, "reference_species")
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    mod = load_module("query_gene_orthologs.py")
+    store = mod.GeneFamilyOutputStore(fixture["output_root"])
+    epoch = store.archive_root / INDEX_EPOCH_FILE
+    write_tsv = mod.write_tsv
+
+    def advance_epoch(path, fields, rows):
+        write_tsv(path, fields, rows)
+        if fields is mod.COLUMN_FIELDS:
+            epoch.parent.mkdir(parents=True, exist_ok=True)
+            epoch.write_text("concurrent-archive-generation\n")
+
+    monkeypatch.setattr(mod, "write_tsv", advance_epoch)
+    with pytest.raises(ArchiveStoreError, match="Archive changed"):
+        collect_weak_fixture(fixture, output, .05, "reference_species", mod)
+    assert {path: path.read_bytes() for path in previous} == previous
+
+
 def test_query_map_path_keeps_its_existing_whitespace_normalization(weak_duplication_fixture, tmp_path):
     output = tmp_path / 'result'
     collect_weak_fixture(weak_duplication_fixture, output, 0, 'query_gene',

@@ -754,14 +754,16 @@ class ManifestOutputStore:
 
     def __init__(self, records):
         self.records = {row["family_id"]: row for row in records}
-        self.stores = {row["source_dir"]: GeneFamilyOutputStore(row["source_dir"])
-                       for row in records}
+        source_dirs = dict.fromkeys(row["source_dir"] for row in records)
+        self.stores = {directory: GeneFamilyOutputStore(directory) for directory in source_dirs}
 
     def _resolve(self, name):
-        for family_id in sorted(self.records, key=len, reverse=True):
-            if name.startswith(family_id + "_"):
-                row = self.records[family_id]
-                return self.stores[row["source_dir"]], row["source_family_id"] + name[len(family_id):]
+        boundary = name.rfind("_")
+        while boundary >= 0:
+            row = self.records.get(name[:boundary])
+            if row is not None:
+                return self.stores[row["source_dir"]], row["source_family_id"] + name[boundary:]
+            boundary = name.rfind("_", 0, boundary)
         raise ValueError(f"No manifest source for artifact: {name}")
 
     def artifact(self, subdir, name):
@@ -2795,16 +2797,22 @@ def run_many(jobs):
 
         # Keep both observations live until every staged table is complete.
         # Exiting them verifies the sources before the transaction publishes.
-        with read_only_observation(), species_inputs():
+        with read_only_observation(), species_inputs(), contextlib.ExitStack() as snapshots:
             messages = [None] * len(jobs)
             pending = {}
+            stores = set()
 
             def advance(index, iterator):
                 try:
-                    pending[index] = next(iterator)
+                    store, family_id = next(iterator)
                 except StopIteration as completed:
                     messages[index] = completed.value
                     pending.pop(index, None)
+                else:
+                    if type(store) is GeneFamilyOutputStore and store not in stores:
+                        snapshots.enter_context(store.read_snapshot())
+                        stores.add(store)
+                    pending[index] = store, family_id
 
             iterators = [_iter_run(args, write) for args in jobs]
             for index, iterator in enumerate(iterators):
