@@ -89,6 +89,12 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
                presence_absence_dup_conf_score_threshold=str(cutoff),
                presence_absence_focus_species="Anchor_one", presence_absence_plot_width="auto",
                presence_absence_legend_columns="3" if source == "orthogroup" else "auto")
+    annotate_loss = source == "query2family" and cutoff == 0
+    if annotate_loss:
+        (tmp_path / "losses.tsv").write_text(
+            "family_id\tspecies\tanchor_cds_fasta_id\nCombined\tMissing_species\tAnchor_one_a\n"
+        )
+        env.update(presence_absence_glyph_height="fill", presence_absence_loss_table="losses.tsv")
     result = subprocess.run(["bash", str(ROOT / "workflow/core/gg_gene_summary_core.sh")],
                             env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -111,6 +117,8 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
     assert "Skipping gene-family presence/absence summary because no" not in result.stdout
     svg_path = Path(str(prefix) + ".svg")
     text = svg_path.read_text()
+    if annotate_loss:
+        assert text.count(">0†</text>") == 2  # Matrix and legend.
     label_boxes = [(float(y), float(length)) for y, length in re.findall(
         r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'", text)]
     svg = ET.parse(svg_path).getroot()

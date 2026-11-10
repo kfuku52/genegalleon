@@ -49,6 +49,7 @@ csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_evidence_layout=$(echo "${presence_absence_evidence_layout:-band}" | tr '[:upper:]' '[:lower:]')
+presence_absence_glyph_height="${presence_absence_glyph_height:-compact}"
 presence_absence_ortholog_basis=$(echo "${presence_absence_ortholog_basis:-reference_species}" | tr '[:upper:]' '[:lower:]')
 presence_absence_dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold:-0}"
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
@@ -61,6 +62,7 @@ presence_absence_family_ids="${presence_absence_family_ids:-}"
 presence_absence_family_file="${presence_absence_family_file:-}"
 presence_absence_family_manifest="${presence_absence_family_manifest:-}"
 presence_absence_query_metadata="${presence_absence_query_metadata:-}"
+presence_absence_loss_table="${presence_absence_loss_table:-}"
 presence_absence_query_selection="${presence_absence_query_selection:-all}"
 presence_absence_target_species="${presence_absence_target_species:-}"
 presence_absence_selection_species="${presence_absence_selection_species:-}"
@@ -69,7 +71,7 @@ presence_absence_label_map="${presence_absence_label_map:-}"
 presence_absence_focus_species="${presence_absence_focus_species:-}"
 presence_absence_legend_columns="${presence_absence_legend_columns:-auto}"
 # Preserve caller-relative paths before core helpers change directories.
-for presence_input in presence_absence_family_manifest presence_absence_query_metadata presence_absence_label_map; do
+for presence_input in presence_absence_family_manifest presence_absence_query_metadata presence_absence_label_map presence_absence_loss_table; do
   case "${!presence_input}" in ""|/*) ;; *) printf -v "${presence_input}" '%s/%s' "${PWD}" "${!presence_input}" ;; esac
 done
 unset presence_input
@@ -80,6 +82,17 @@ fi
 case "${presence_absence_query_selection}" in all|closest) ;; *) echo 'Invalid presence_absence_query_selection (all|closest)' >&2; exit 1 ;; esac
 case "${presence_absence_query_label}" in id|label) ;; *) echo 'Invalid presence_absence_query_label (id|label)' >&2; exit 1 ;; esac
 case "${presence_absence_legend_columns}" in auto|1|2|3) ;; *) echo 'Invalid presence_absence_legend_columns (auto|1|2|3)' >&2; exit 1 ;; esac
+case "${presence_absence_glyph_height}" in compact|fill) ;; *) echo 'Invalid presence_absence_glyph_height (compact|fill)' >&2; exit 1 ;; esac
+if [[ -n "${presence_absence_loss_table}" ]]; then
+  if [[ "${presence_absence_ortholog_basis}" == "reference_species" || ! -f "${presence_absence_loss_table}" || ! -r "${presence_absence_loss_table}" ]]; then
+    echo 'presence_absence_loss_table requires a readable TSV and query_gene/both ortholog basis' >&2
+    exit 1
+  fi
+  if [[ "${gene_family_source}" != "query2family" && -z "${presence_absence_family_manifest}" ]]; then
+    echo 'presence_absence_loss_table requires query2family or a saved-family manifest' >&2
+    exit 1
+  fi
+fi
 if [[ "${presence_absence_query_selection}" == "closest" && ( -z "${presence_absence_target_species}" || "${presence_absence_ortholog_basis}" == "reference_species" ) ]]; then
   echo 'closest requires presence_absence_target_species and query_gene/both ortholog basis' >&2
   exit 1
@@ -767,6 +780,7 @@ run_presence_absence_summary_for_source() {
           --reference_species="${reference_species_resolved}"
           --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --evidence_layout="${presence_absence_evidence_layout}"
+          --glyph_height="${presence_absence_glyph_height}"
           --value=presence
           --out_pdf="${file_reference_pdf}"
           --out_svg="${file_reference_svg}"
@@ -793,6 +807,8 @@ run_presence_absence_summary_for_source() {
           --species_mapping_tree="${file_species_mapping_tree}"
           --ortholog_basis=query_gene
           --evidence_layout="${presence_absence_evidence_layout}"
+          --glyph_height="${presence_absence_glyph_height}"
+          --loss_table="${presence_absence_loss_table}"
           --value=presence
           --out_pdf="${file_query_pdf}"
           --out_svg="${file_query_svg}"
@@ -801,6 +817,10 @@ run_presence_absence_summary_for_source() {
         presence_plot_jobs+=("${query_gene_plot_args[@]}")
         presence_plot_count=$((presence_plot_count + 1))
       else
+        if [[ -n "${presence_absence_loss_table}" ]]; then
+          echo 'presence_absence_loss_table requires mapped query-gene ortholog columns and glyphs' >&2
+          return 1
+        fi
         echo "Skipping query-gene ortholog plot because no mapped query-anchor glyphs were found."
       fi
     fi

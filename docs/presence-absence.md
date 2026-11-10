@@ -128,6 +128,7 @@ presence_absence_query_label="label"  # Default: id.
 presence_absence_focus_species="Species_one,Species_two"
 presence_absence_legend_columns="auto"  # auto, 1, 2, or 3.
 presence_absence_label_map="/path/to/display_labels.tsv"
+presence_absence_glyph_height="fill"  # compact (default) or fill.
 ```
 
 Auto width reserves at least 0.14 inches per column plus tree/label space on
@@ -145,9 +146,36 @@ column	Species_one_gene_123	HOG0000100: gene 123
 ```
 
 The plotting helper also accepts these as `--width=auto`, `--label_map=PATH`,
-`--focus_species=Species_one,Species_two`, and `--legend_columns=auto`. Empty
+`--focus_species=Species_one,Species_two`, `--legend_columns=auto`, and
+`--glyph_height=fill`. Empty
 `--out_pdf=` / `--out_svg=` explicitly disable that format; omitted output
 options also leave that format disabled.
+
+In ortholog plots, `fill` divides the full species row height among the
+lanes in each family. A one-lane family fills the row, even when an adjacent
+family uses multiple lanes. Copy-number text keeps its size and stays centred
+in each glyph. Synteny and topology evidence move with their glyphs.
+
+## Annotate inferred terminal losses
+
+Set `presence_absence_loss_table` (standalone `--loss_table=PATH`) to a TSV
+of terminal losses already assigned to displayed query anchors, for example
+from a reconciled gene tree. Use `presence_absence_ortholog_basis=query_gene`
+or `both` with query2family results or a saved-family manifest. The annotation
+applies to the query-gene plot.
+
+```tsv
+family_id	species	anchor_cds_fasta_id
+enzyme_family	Species_one	Species_two_gene_123
+```
+
+Use the species-tree tip ID and the exact family and anchor IDs from the
+plot's `.columns.tsv`. Unknown species or anchors are errors. Repeated rows
+add a single mark. A dagger beside a copy number marks an inferred loss
+alongside the displayed copies. A `0†` marks an inferred loss with no displayed
+copy for the anchor. A dagger can apply to a shared glyph spanning multiple
+anchors, and its presence gives no event count. The supplied table provides
+the inference independently of the displayed copy counts.
 
 ## Interpret duplication bars
 
@@ -248,7 +276,7 @@ original D nodes, and with displayed-descendant provenance also checks that the
 gene/anchor pair lies in opposite child subtrees, even without a UFBoot table.
 Ortholog plots size each species row independently by its maximum displayed
 lane count, reserving space for 8-point copy-number text and any evidence bands.
-Sparse families are centered within the row. The species tree follows those
+In the default `compact` mode, sparse families are centered within the row. The species tree follows those
 row positions, while column labels and legends retain compact spacing in
 physical units. A dense row does not stretch the other rows or the whole plot.
 Automatic height follows the total space required by the rows and labels.

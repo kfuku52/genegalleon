@@ -803,6 +803,7 @@ ortholog_tree_path <- get_arg(args, "ortholog_tree_table")
 ortholog_synteny_path <- get_arg(args, "ortholog_synteny_table")
 ortholog_ufboot_path <- get_arg(args, "ortholog_ufboot_table")
 ortholog_dup_conf_path <- get_arg(args, "ortholog_dup_conf_table")
+loss_table_path <- get_arg(args, "loss_table")
 ortholog_basis <- tolower(get_arg(args, "ortholog_basis", "reference_species"))
 reference_species <- get_arg(args, "reference_species")
 out_pdf <- get_arg(args, "out_pdf")
@@ -819,6 +820,10 @@ if (!legend_columns_arg %in% c("auto", "1", "2", "3")) {
   stop("--legend_columns must be auto, 1, 2, or 3")
 }
 plot_height_arg <- get_arg(args, "height", "auto")
+glyph_height <- get_arg(args, "glyph_height", "compact")
+if (!glyph_height %in% c("compact", "fill")) {
+  stop("--glyph_height must be compact or fill")
+}
 evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))
 dup_conf_threshold <- suppressWarnings(as.numeric(get_arg(args, "dup_conf_score_threshold", "0")))
 if (length(dup_conf_threshold) != 1 || !is.finite(dup_conf_threshold) || dup_conf_threshold < 0 || dup_conf_threshold > 1) {
@@ -829,6 +834,9 @@ if (!ortholog_basis %in% c("reference_species", "query_gene")) {
   stop("--ortholog_basis must be reference_species or query_gene: ", ortholog_basis)
 }
 query_ortholog_mode <- identical(ortholog_basis, "query_gene")
+if (nzchar(loss_table_path) && (!glyph_mode || !query_ortholog_mode)) {
+  stop("--loss_table requires query-gene ortholog columns and glyphs")
+}
 reference_species_display <- ""
 ortholog_scope_label <- ""
 ortholog_specific_label <- "reference-gene-specific"
@@ -2125,6 +2133,60 @@ if (glyph_mode && nrow(ortholog_glyphs) > 0) {
   }
 }
 
+loss_label_df <- data.frame()
+has_loss_markers <- FALSE
+if (nzchar(loss_table_path)) {
+  loss_fields <- c("family_id", "species", "anchor_cds_fasta_id")
+  loss_table <- utils::read.delim(loss_table_path, colClasses = "character",
+                                 na.strings = character(), check.names = FALSE,
+                                 quote = "", comment.char = "", fill = FALSE)
+  if (!all(loss_fields %in% names(loss_table)) || anyDuplicated(names(loss_table))) {
+    stop("--loss_table requires unique headers including: ", paste(loss_fields, collapse = ", "))
+  }
+  loss_table <- unique(loss_table[loss_fields])
+  if (anyNA(loss_table) || any(!nzchar(as.matrix(loss_table)))) {
+    stop("--loss_table identifiers must be non-empty")
+  }
+  if (any(!loss_table$species %in% tip_levels)) {
+    stop("--loss_table contains a species absent from the plot")
+  }
+  column_keys <- paste(ortholog_columns$family_id, ortholog_columns$cds_fasta_id, sep = "\t")
+  loss_keys <- paste(loss_table$family_id, loss_table$anchor_cds_fasta_id, sep = "\t")
+  loss_columns <- match(loss_keys, column_keys)
+  if (anyNA(loss_columns) || any(loss_keys %in% column_keys[duplicated(column_keys)])) {
+    stop("--loss_table anchors must resolve to one displayed column per family")
+  }
+  has_loss_markers <- nrow(loss_table) > 0
+  marked_glyphs <- rep(FALSE, nrow(glyph_rect_df))
+  loss_has_glyph <- loss_overlaps_glyph <- rep(FALSE, nrow(loss_table))
+  glyph_anchors <- strsplit(as.character(glyph_rect_df$reference_cds_fasta_ids), ";", fixed = TRUE)
+  glyph_rows <- split(seq_len(nrow(glyph_rect_df)),
+                      paste(glyph_rect_df$species, glyph_rect_df$family_id, sep = "\t"))
+  loss_rows <- paste(loss_table$species, loss_table$family_id, sep = "\t")
+  for (i in seq_len(nrow(loss_table))) {
+    rows <- glyph_rows[[loss_rows[i]]]
+    column <- ortholog_columns$column_order[loss_columns[i]]
+    matches <- rows[vapply(glyph_anchors[rows], function(ids) {
+      loss_table$anchor_cds_fasta_id[i] %in% ids
+    }, logical(1))]
+    if (length(matches) > 0) {
+      strict <- matches[glyph_rect_df$relation[matches] != "weak_duplication"]
+      marked_glyphs[if (length(strict) > 0) strict else matches] <- TRUE
+      loss_has_glyph[i] <- TRUE
+    } else {
+      loss_overlaps_glyph[i] <- any(glyph_rect_df$start_order[rows] <= column &
+                                     glyph_rect_df$end_order[rows] >= column)
+    }
+  }
+  glyph_rect_df$copy_label[marked_glyphs] <- paste0(glyph_rect_df$copy_label[marked_glyphs], "\u2020")
+  empty <- !loss_has_glyph
+  loss_label_df <- data.frame(
+    species = loss_table$species[empty],
+    x = heatmap_left + (ortholog_columns$column_order[loss_columns[empty]] - 0.5) * heatmap_cell_pitch,
+    overlaps_glyph = loss_overlaps_glyph[empty]
+  )
+}
+
 evidence_group_fields <- c(
   "species", "family_id", "family_order", "relation", "column_order",
   "glyph_copy_number", "glyph_start_order", "glyph_end_order",
@@ -2894,6 +2956,16 @@ if (glyph_mode) {
     ),
     stringsAsFactors = FALSE
   )
+  legend_df$symbol <- ""
+  if (has_loss_markers) {
+    legend_df <- rbind(legend_df, data.frame(
+      label = c("Inferred terminal loss, no copy shown", "Inferred terminal loss with copies shown"),
+      fill = NA_character_,
+      x = heatmap_left + 0.05,
+      y = y_legend,
+      symbol = c("0\u2020", "n\u2020")
+    ))
+  }
   legend_cell_width <- 1.10 + max(text_width_inches(legend_df$label)) * layout_data_units_per_inch
   legend_columns <- if (identical(legend_columns_arg, "auto")) {
     max(1, min(3, floor((heatmap_right - heatmap_left) / legend_cell_width)))
@@ -3247,7 +3319,16 @@ if (glyph_mode) {
     row_lanes[names(observed_lanes)] <- observed_lanes
   }
   row_heights <- row_lanes * compact_lane_height + row_padding
-  row_centers <- cumsum(row_heights) - row_heights / 2
+  # An undetected anchor can fall inside the span of a non-contiguous glyph.
+  # Place its marker below the row so it cannot cover another copy label.
+  overlapping_species <- if (nrow(loss_label_df) > 0) {
+    loss_label_df$species[loss_label_df$overlaps_glyph]
+  } else {
+    character()
+  }
+  loss_padding <- text_height * 1.35
+  row_extra <- ifelse(names(row_lanes) %in% overlapping_species, loss_padding, 0)
+  row_centers <- cumsum(row_heights + row_extra) - row_heights / 2
   node_y <- stats::setNames(rep(NA_real_, nrow(plot_data)), as.character(plot_data$node))
   node_y[as.character(ordered_tips$node)] <- row_centers
   postorder_edges <- ape::reorder.phylo(tree_for_plot, "postorder")$edge
@@ -3278,8 +3359,7 @@ if (glyph_mode) {
     assign(table_name, table)
   }
 
-  # Every glyph lane has the same readable height. Sparse families remain
-  # centered within a taller species row; evidence follows its own glyph.
+  # Pack evidence and copy numbers with the glyph they describe.
   pack_glyph_geometry <- function(table, index_field, count_field) {
     if (nrow(table) == 0) return(table)
     index <- as.numeric(table[[index_field]])
@@ -3287,8 +3367,13 @@ if (glyph_mode) {
     old_lane_height <- 2 * heatmap_cell_half / count
     old_center <- table$y - heatmap_cell_half + (index - 0.5) * old_lane_height
     new_y <- unname(tip_y_by_species[as.character(table$species)])
-    new_center <- new_y + (index - (count + 1) / 2) * compact_lane_height
-    scale <- (compact_lane_height - 0.03) / (old_lane_height - 0.03)
+    new_lane_height <- if (identical(glyph_height, "fill")) {
+      compact_lane_height * unname(row_lanes[as.character(table$species)]) / count
+    } else {
+      compact_lane_height
+    }
+    new_center <- new_y + (index - (count + 1) / 2) * new_lane_height
+    scale <- (new_lane_height - 0.03) / (old_lane_height - 0.03)
     for (field in intersect(c("ymin", "ymax", "text_y", "evidence_ymin", "evidence_ymax",
                               "status_y", "status_yend", "marker_y"), names(table))) {
       table[[field]] <- new_center + (table[[field]] - old_center) * scale
@@ -3302,6 +3387,13 @@ if (glyph_mode) {
   }
   matrix_bottom <- min(tip_y_by_species - row_half_height_by_species[names(tip_y_by_species)])
   matrix_top <- max(tip_y_by_species + row_half_height_by_species[names(tip_y_by_species)])
+  if (nrow(loss_label_df) > 0) {
+    loss_label_df$y <- unname(tip_y_by_species[loss_label_df$species])
+    overlap <- loss_label_df$overlaps_glyph
+    loss_label_df$y[overlap] <- loss_label_df$y[overlap] -
+      unname(row_half_height_by_species[loss_label_df$species[overlap]]) - loss_padding / 2
+    matrix_bottom <- min(matrix_bottom, loss_label_df$y[overlap] - text_height / 2)
+  }
   if (nrow(family_boundary_df) > 0) {
     family_boundary_df$ymin <- min(heatmap_df$ymin)
     family_boundary_df$ymax <- max(heatmap_df$ymax)
@@ -3550,6 +3642,11 @@ if (identical(evidence_layout, "glyph") && nrow(ufboot_marker_df) > 0) {
 # Keep copy-number labels above every evidence representation. In particular,
 # edge bands occupy part of the presence/absence cell and must never obscure
 # the primary numeric value.
+if (nrow(loss_label_df) > 0) {
+  combined <- combined +
+    geom_text(data = loss_label_df, aes(x = x, y = y), label = "0\u2020",
+              size = font_size_mm, fontface = "bold", color = "#8c2d04")
+}
 if (nrow(glyph_rect_df) > 0) {
   combined <- combined +
     geom_text(
@@ -3661,10 +3758,17 @@ if (nrow(busco_rect_df) > 0) {
 }
 
 if (glyph_mode) {
+  loss_key <- legend_df[legend_df$symbol != "", , drop = FALSE]
+  glyph_key <- legend_df[legend_df$symbol == "", , drop = FALSE]
   combined <- combined +
     annotate("text", x = heatmap_left, y = y_legend + 0.75 * legend_y_scale, label = ortholog_scope_label, hjust = 0, size = font_size_mm, color = "black") +
-    geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18 * legend_y_scale, ymax = y + 0.18 * legend_y_scale, fill = fill), color = "#808080", linewidth = 0.14) +
+    geom_rect(data = glyph_key, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18 * legend_y_scale, ymax = y + 0.18 * legend_y_scale, fill = fill), color = "#808080", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
+  if (nrow(loss_key) > 0) {
+    combined <- combined +
+      geom_text(data = loss_key, aes(x = x + 0.18, y = y, label = symbol),
+                size = font_size_mm, color = "#8c2d04")
+  }
 } else if (value_mode == "presence") {
   combined <- combined +
     annotate("text", x = heatmap_left + 0.05, y = y_legend, label = "Ortholog", hjust = 0, size = font_size_mm, color = "black") +
