@@ -169,22 +169,6 @@ def run(args):
     subdirs = [sd for sd in subdirs if os.path.isdir(os.path.join(base_dir, sd))]
     candidate_subdirs = [sd for sd in subdirs if sd not in ["annotation_summary", "tmp"]]
 
-    if not input_species_list:
-        inferred_species = set()
-        for subdir in candidate_subdirs:
-            inferred_species.update(collect_species_ids_for_subdir(base_dir, subdir))
-        input_species_list = sorted([sid for sid in inferred_species if sid])
-        if input_species_list:
-            print(
-                "Input species could not be collected from input directories. Falling back to output-derived species list."
-            )
-
-    df = pandas.DataFrame(index=input_species_list)
-    df.index.name = "species"
-    df["GG_ARRAY_TASK_ID"] = numpy.arange(1, df.shape[0] + 1)
-
-    df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
-    species_index_set = set(df.index)
     species_ids_per_subdir = {}
     if args.ncpu > 1 and len(candidate_subdirs) > 1:
         max_workers = min(args.ncpu, len(candidate_subdirs))
@@ -200,6 +184,19 @@ def run(args):
         for subdir in candidate_subdirs:
             species_ids_per_subdir[subdir] = collect_species_ids_for_subdir(base_dir, subdir)
 
+    if not input_species_list:
+        input_species_list = sorted({sid for ids in species_ids_per_subdir.values() for sid in ids if sid})
+        if input_species_list:
+            print(
+                "Input species could not be collected from input directories. Falling back to output-derived species list."
+            )
+
+    df = pandas.DataFrame(index=input_species_list)
+    df.index.name = "species"
+    df["GG_ARRAY_TASK_ID"] = numpy.arange(1, df.shape[0] + 1)
+
+    df = pandas.concat([df, pandas.DataFrame(data=0, index=df.index, columns=subdirs, dtype=int)], axis=1)
+    species_index_set = set(df.index)
     for subdir in subdirs:
         if subdir in ["annotation_summary", "tmp"]:
             continue
