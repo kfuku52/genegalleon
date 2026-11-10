@@ -49,7 +49,7 @@ csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_evidence_layout=$(echo "${presence_absence_evidence_layout:-band}" | tr '[:upper:]' '[:lower:]')
-presence_absence_glyph_height="${presence_absence_glyph_height:-compact}"
+presence_absence_glyph_height="${presence_absence_glyph_height:-fill}"
 presence_absence_ortholog_basis=$(echo "${presence_absence_ortholog_basis:-reference_species}" | tr '[:upper:]' '[:lower:]')
 presence_absence_dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold:-0}"
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
@@ -62,6 +62,7 @@ presence_absence_family_ids="${presence_absence_family_ids:-}"
 presence_absence_family_file="${presence_absence_family_file:-}"
 presence_absence_family_manifest="${presence_absence_family_manifest:-}"
 presence_absence_query_metadata="${presence_absence_query_metadata:-}"
+presence_absence_mark_terminal_losses="${presence_absence_mark_terminal_losses:-1}"
 presence_absence_loss_table="${presence_absence_loss_table:-}"
 presence_absence_query_selection="${presence_absence_query_selection:-all}"
 presence_absence_target_species="${presence_absence_target_species:-}"
@@ -83,6 +84,11 @@ case "${presence_absence_query_selection}" in all|closest) ;; *) echo 'Invalid p
 case "${presence_absence_query_label}" in id|label) ;; *) echo 'Invalid presence_absence_query_label (id|label)' >&2; exit 1 ;; esac
 case "${presence_absence_legend_columns}" in auto|1|2|3) ;; *) echo 'Invalid presence_absence_legend_columns (auto|1|2|3)' >&2; exit 1 ;; esac
 case "${presence_absence_glyph_height}" in compact|fill) ;; *) echo 'Invalid presence_absence_glyph_height (compact|fill)' >&2; exit 1 ;; esac
+case "${presence_absence_mark_terminal_losses}" in
+  0) presence_absence_loss_table="" ;;
+  1) ;;
+  *) echo 'Invalid presence_absence_mark_terminal_losses (0|1)' >&2; exit 1 ;;
+esac
 if [[ -n "${presence_absence_loss_table}" ]]; then
   if [[ "${presence_absence_ortholog_basis}" == "reference_species" || ! -f "${presence_absence_loss_table}" || ! -r "${presence_absence_loss_table}" ]]; then
     echo 'presence_absence_loss_table requires a readable TSV and query_gene/both ortholog basis' >&2
@@ -696,6 +702,7 @@ run_presence_absence_summary_for_source() {
       local file_reference_dup_conf="${summary_output_dir}/query2family_reference_gene_orthologs.dup_conf.tsv"
       local file_reference_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
       local file_reference_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
+      local file_reference_losses=""
 
       if [[ ${#ortholog_jobs[@]} -gt 0 ]]; then ortholog_jobs+=(--next-job); fi
       ortholog_jobs+=(
@@ -712,6 +719,10 @@ run_presence_absence_summary_for_source() {
         --out_synteny "${file_reference_synteny}"
         --out_ufboot "${file_reference_ufboot}"
       )
+      if [[ "${presence_absence_mark_terminal_losses}" == 1 ]]; then
+        file_reference_losses="${summary_output_dir}/query2family_reference_gene_orthologs.terminal_losses.tsv"
+        ortholog_jobs+=(--species_tree "${file_species_tree}" --out_terminal_losses "${file_reference_losses}")
+      fi
 
       render_reference=1
 
@@ -728,6 +739,7 @@ run_presence_absence_summary_for_source() {
       local file_query_pdf="${summary_output_dir}/query2family_query_gene_orthologs.pdf"
       local file_query_svg="${summary_output_dir}/query2family_query_gene_orthologs.svg"
       local file_query_long="${summary_output_dir}/query2family_query_gene_orthologs.long.tsv"
+      local file_query_losses="${presence_absence_loss_table}"
       local query_input_args=(
         --family_manifest "${presence_absence_family_manifest}"
         --query_metadata "${presence_absence_query_metadata}"
@@ -757,6 +769,10 @@ run_presence_absence_summary_for_source() {
         --out_query_map "${file_query_map}"
         "${query_input_args[@]}"
       )
+      if [[ "${presence_absence_mark_terminal_losses}" == 1 && -z "${file_query_losses}" ]]; then
+        file_query_losses="${summary_output_dir}/query2family_query_gene_orthologs.terminal_losses.tsv"
+        ortholog_jobs+=(--out_terminal_losses "${file_query_losses}")
+      fi
 
       render_query=1
 
@@ -781,6 +797,7 @@ run_presence_absence_summary_for_source() {
           --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --evidence_layout="${presence_absence_evidence_layout}"
           --glyph_height="${presence_absence_glyph_height}"
+          --loss_table="${file_reference_losses}"
           --value=presence
           --out_pdf="${file_reference_pdf}"
           --out_svg="${file_reference_svg}"
@@ -808,7 +825,7 @@ run_presence_absence_summary_for_source() {
           --ortholog_basis=query_gene
           --evidence_layout="${presence_absence_evidence_layout}"
           --glyph_height="${presence_absence_glyph_height}"
-          --loss_table="${presence_absence_loss_table}"
+          --loss_table="${file_query_losses}"
           --value=presence
           --out_pdf="${file_query_pdf}"
           --out_svg="${file_query_svg}"

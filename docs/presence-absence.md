@@ -128,7 +128,7 @@ presence_absence_query_label="label"  # Default: id.
 presence_absence_focus_species="Species_one,Species_two"
 presence_absence_legend_columns="auto"  # auto, 1, 2, or 3.
 presence_absence_label_map="/path/to/display_labels.tsv"
-presence_absence_glyph_height="fill"  # compact (default) or fill.
+presence_absence_glyph_height="fill"  # Default: fill. Use compact for uniform lane heights.
 ```
 
 Auto width reserves at least 0.14 inches per column plus tree/label space on
@@ -158,11 +158,17 @@ in each glyph. Synteny and topology evidence move with their glyphs.
 
 ## Annotate inferred terminal losses
 
-Set `presence_absence_loss_table` (standalone `--loss_table=PATH`) to a TSV
-of terminal losses already assigned to displayed query anchors, for example
-from a reconciled gene tree. Use `presence_absence_ortholog_basis=query_gene`
-or `both` with query2family results or a saved-family manifest. The annotation
-applies to the query-gene plot.
+By default, both ortholog views read saved GeneRax recPhyloXML, including
+ZIP-backed results and saved-family sources. A terminal loss is linked to an
+anchor in its surviving sister lineage or across an ancestral speciation when
+the anchor and loss map to opposite sides of that split. The plot uses the
+selected anchors and species. Families without XML contribute no markers.
+The summary saves the links in the corresponding `.terminal_losses.tsv` file.
+
+Set `presence_absence_mark_terminal_losses=0` to disable these annotations.
+For query-gene plots, `presence_absence_loss_table` overrides automatic links
+with a curated TSV. For standalone rendering, pass either table to
+`--loss_table=PATH`.
 
 ```tsv
 family_id	species	anchor_cds_fasta_id
@@ -174,8 +180,8 @@ plot's `.columns.tsv`. Unknown species or anchors are errors. Repeated rows
 add a single mark. A dagger beside a copy number marks an inferred loss
 alongside the displayed copies. A `0†` marks an inferred loss with no displayed
 copy for the anchor. A dagger can apply to a shared glyph spanning multiple
-anchors, and its presence gives no event count. The supplied table provides
-the inference independently of the displayed copy counts.
+anchors. It marks one or more inferred lineage extinctions, while the number
+continues to count displayed copies.
 
 ## Interpret duplication bars
 

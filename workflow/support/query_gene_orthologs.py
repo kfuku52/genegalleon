@@ -209,6 +209,7 @@ DUP_CONF_FIELDS = [
     "dup_conf_score_threshold", "branch_ufboot", "branch_ufboot_source",
 ]
 QUERY_DUP_CONF_FIELDS = [field.replace("reference_", "anchor_", 1) for field in DUP_CONF_FIELDS]
+TERMINAL_LOSS_FIELDS = ["family_id", "species", "anchor_cds_fasta_id"]
 COLUMN_FIELDS = [
     "column_order",
     "family_id",
@@ -426,6 +427,8 @@ def build_arg_parser():
                         help="0 disables extra candidates; positive values flag cross-species D-MRCA pairs with Jaccard score <= threshold")
     parser.add_argument("--out_dup_conf", metavar="TSV", default="",
                         help="Pairwise provenance for weak-duplication candidates")
+    parser.add_argument("--out_terminal_losses", metavar="TSV", default="",
+                        help="Anchor-linked terminal losses from stored GeneRax XML; requires --species_tree")
     return parser
 
 
@@ -764,6 +767,10 @@ class ManifestOutputStore:
     def artifact(self, subdir, name):
         store, original = self._resolve(name)
         return store.artifact(subdir, original)
+
+    def source_artifact(self, subdir, name):
+        store, original = self._resolve(name)
+        return store.source_artifact(subdir, original)
 
     def open_binary(self, subdir, name):
         store, original = self._resolve(name)
@@ -2637,15 +2644,55 @@ def query_evidence_for_output(rows):
     return output
 
 
+def read_family_reconciliation(store, family_id):
+    name = f"{family_id}_generax.xml"
+    artifact = store.source_artifact("generax_xml", name)
+    if artifact is None:
+        return None
+    from nwkit.recphyloxml_records import read_event_records
+
+    _FAMILY_INPUTS.get().observe(artifact)
+    with store.open_binary("generax_xml", name) as handle:
+        try:
+            return read_event_records(handle.read().decode("utf-8"))
+        except ValueError as exc:
+            raise ValueError(f"Invalid GeneRax XML for {family_id}: {exc}") from exc
+
+
 class FamilyEvidence:
     """Finish all evidence while one family's input context is still live."""
 
-    def __init__(self, threshold, require_one_branch_per_glyph):
+    def __init__(self, threshold, require_one_branch_per_glyph, loss_species):
         self.threshold = threshold
         self.require_one_branch_per_glyph = require_one_branch_per_glyph
+        self.loss_species = loss_species
+        self.terminal_losses = []
         self.duplications, self.synteny, self.ufboot = [], [], []
 
+    def collect_terminal_losses(self, store, columns):
+        if __package__:
+            from .query_ortholog_losses import terminal_loss_links
+        else:
+            from query_ortholog_losses import terminal_loss_links
+
+        family_id = columns[0]["family_id"]
+        inputs = _FAMILY_INPUTS.get()
+        reconciliation = inputs.get("generax_xml", lambda: read_family_reconciliation(store, family_id))
+        if reconciliation is None:
+            return
+        species_taxa, records = reconciliation
+        anchors = {row["cds_fasta_id"]: normalize_species_label(row.get("anchor_species", row["reference_species"]))
+                   for row in columns}
+        plotted_tips = {tip: normalize_species_label(tip) for tip, taxa in species_taxa.items()
+                        if len(taxa) == 1 and normalize_species_label(tip) in self.loss_species}
+        links = terminal_loss_links(species_taxa, records, anchors, plotted_tips, normalize_species_label)
+        for species, anchor in sorted(links):
+            self.terminal_losses.append(dict(family_id=family_id, species=plotted_tips[species],
+                                             anchor_cds_fasta_id=anchor))
+
     def process(self, store, columns, glyphs, tree_nodes):
+        if self.loss_species is not None and columns:
+            self.collect_terminal_losses(store, columns)
         assign_lanes(glyphs)
         glyphs.sort(key=lambda row: (str(row['species']), int(row['start_order']),
                                      int(row['end_order']), str(row['relation'])))
@@ -2678,7 +2725,8 @@ def run_many(jobs):
 
     outputs, inputs = [], []
     for args in jobs:
-        roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf']
+        roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf',
+                 'out_terminal_losses']
         if getattr(args, 'basis', 'reference_species') == 'query_gene':
             roles += ['out_query_map', 'out_selection', 'out_long', 'out_overlap']
         for name in roles:
@@ -2748,7 +2796,13 @@ def _iter_run(args, write):
     manifest_path = getattr(args, "family_manifest", "")
     manifest_records = read_family_manifest(manifest_path) if manifest_path else None
     basis = getattr(args, "basis", "reference_species")
-    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species')
+    loss_output = getattr(args, "out_terminal_losses", "")
+    loss_species = None
+    if loss_output:
+        if not args.species_tree:
+            raise ValueError("--out_terminal_losses requires --species_tree")
+        loss_species = {normalize_species_label(tip.name) for tip in read_species_tree(args.species_tree).get_terminals()}
+    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species', loss_species)
     if basis == "reference_species":
         if manifest_records or getattr(args, "query_selection", "all") != "all":
             raise ValueError("Family manifests and query selection require --basis=query_gene")
@@ -2769,6 +2823,8 @@ def _iter_run(args, write):
         write(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
         if getattr(args, "out_dup_conf", ""):
             write(args.out_dup_conf, DUP_CONF_FIELDS, dup_evidence)
+        if loss_output:
+            write(loss_output, TERMINAL_LOSS_FIELDS, evidence.terminal_losses)
         return (
             "Reference-species ortholog summary: "
             f"reference_species={normalize_species_label(args.reference_species)}, "
@@ -2818,6 +2874,8 @@ def _iter_run(args, write):
         query_evidence_for_output(ufboot_evidence),
     )
     write(out_query_map, QUERY_MAP_FIELDS, query_map)
+    if loss_output:
+        write(loss_output, TERMINAL_LOSS_FIELDS, evidence.terminal_losses)
     if getattr(args, "out_dup_conf", ""):
         write(args.out_dup_conf, QUERY_DUP_CONF_FIELDS, query_evidence_for_output(dup_evidence))
     if selection_output:

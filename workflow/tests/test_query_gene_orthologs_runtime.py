@@ -18,15 +18,18 @@ weak_duplication_fixture = fixture_provider
 def test_strict_ortholog_copy_numbers_fit_between_evidence_bands(weak_duplication_fixture, tmp_path):
     fixture = weak_duplication_fixture
     out_dir = collect_weak_fixture(fixture, tmp_path / "strict_band", 0)
+    losses = out_dir / "losses.tsv"
+    losses.write_text("family_id\tspecies\tanchor_cds_fasta_id\nFAM\tShared_species\tReference_species_REF1\n")
     command = ["Rscript", str(SUPPORT_DIR / "plot_query2family_presence_absence.R"),
                f"--species_tree={fixture['species_tree']}", f"--species_mapping_tree={fixture['species_tree']}",
                f"--long_table={fixture['long_table']}", "--reference_species=Reference_species",
-               "--width=7.2", "--evidence_layout=band", f"--out_svg={out_dir / 'strict.svg'}"]
+               "--width=7.2", "--evidence_layout=band", f"--out_svg={out_dir / 'strict.svg'}", f"--loss_table={losses}"]
     command += [f"--ortholog_{kind}_table={out_dir / (name + '.tsv')}" for kind, name in
                 (("column", "columns"), ("glyph", "glyphs"), ("tree", "tree"), ("synteny", "synteny"), ("ufboot", "ufboot"))]
     subprocess.run(command, check=True, capture_output=True, text=True)
     elements = list(ET.parse(out_dir / "strict.svg").getroot().iter())
-    labels = [element for element in elements if element.tag.endswith("text") and element.text == "1"]
+    labels = [element for element in elements if element.tag.endswith("text") and element.text in ("1", "1†")]
+    assert any(element.text == "1†" for element in labels)
     cells = [element for element in elements if element.tag.endswith("rect") and
              "fill: #2166AC" in element.attrib.get("style", "") and
              any(float(element.attrib["x"]) <= float(label.attrib.get("x", -1)) <=
@@ -93,9 +96,9 @@ def test_fill_rows_and_loss_marks_with_a_noncontiguous_glyph(tmp_path):
     cmd = ["Rscript", str(wrapper), f"--species_tree={tree}", f"--long_table={long_table}",
            "--ortholog_basis=query_gene", f"--ortholog_column_table={columns}", f"--ortholog_glyph_table={glyphs}",
            "--evidence_layout=off", f"--out_svg={svg}"]
-    subprocess.run(cmd, cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run([*cmd, "--glyph_height=compact"], cwd=tmp_path, check=True, capture_output=True, text=True)
     compact = pandas.read_csv(tmp_path / "geometry.tsv", sep="\t")
-    subprocess.run([*cmd, "--glyph_height=fill", f"--loss_table={losses}"],
+    subprocess.run([*cmd, f"--loss_table={losses}"],
                    cwd=tmp_path, check=True, capture_output=True, text=True)
     filled = pandas.read_csv(tmp_path / "geometry.tsv", sep="\t")
     loss = pandas.read_csv(tmp_path / "loss-geometry.tsv", sep="\t")

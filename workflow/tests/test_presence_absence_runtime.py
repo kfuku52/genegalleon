@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas
 import pytest
 
+from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
 from workflow.tests.test_presence_absence_inputs import saved_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -73,7 +74,7 @@ def test_empty_svg_and_both_empty_outputs_do_not_write_sentinel_file(tmp_path):
 @pytest.mark.parametrize("cutoff", [0, 1])
 def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, source, cutoff):
     assert shutil.which("Rscript"), "Run this test in a GeneGalleon container"
-    _store, manifest = saved_manifest(tmp_path)
+    store, manifest = saved_manifest(tmp_path)
     tree = tmp_path / "species.nwk"
     tree.write_text("((Anchor_one:1,Anchor_two:1):1,Missing_species:2);\n")
     workspace = tmp_path / "workspace"
@@ -94,7 +95,37 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
         (tmp_path / "losses.tsv").write_text(
             "family_id\tspecies\tanchor_cds_fasta_id\nCombined\tMissing_species\tAnchor_one_a\n"
         )
-        env.update(presence_absence_glyph_height="fill", presence_absence_loss_table="losses.tsv")
+        env["presence_absence_loss_table"] = "losses.tsv"
+    if source == "orthogroup":
+        def clade(name, event="", species="", children=""):
+            events = f'<eventsRec><{event} speciesLocation="{species}"/></eventsRec>' if event else ""
+            return f"<clade><name>{name}</name>{events}{children}</clade>"
+
+        species = clade("root", children=clade("Missing_species") + clade(
+            "inner", children=clade("Anchor_one") + clade("Anchor_two")))
+        gene = clade("dup", "duplication", "root", clade(
+            "owner", "speciation", "root", clade("loss", "loss", "Missing_species") + clade(
+                "a", "speciation", "inner", clade("Anchor_one_a", "leaf", "Anchor_one")
+                + clade("Anchor_two_a", "leaf", "Anchor_two"))) + clade(
+            "b", "speciation", "inner", clade("Anchor_one_b", "leaf", "Anchor_one")
+            + clade("Anchor_two_b", "leaf", "Anchor_two")))
+        (store / "generax_xml").mkdir()
+        (store / "generax_xml/OG1_generax.xml").write_text(
+            f"<recPhylo><spTree><phylogeny>{species}</phylogeny></spTree>"
+            f"<recGeneTree><phylogeny>{gene}</phylogeny></recGeneTree></recPhylo>"
+        )
+        query_dir = tmp_path / "queries"
+        query_dir.mkdir()
+        (query_dir / "OG1").write_text(">near\nAA\n")
+        for subdir, suffix in (("stat_tree", "_stat.tree.tsv"), ("tree_plot", "_tree_plot.pdf")):
+            folder = store / subdir
+            folder.mkdir()
+            (folder / f"OG1{suffix}").write_text("fixture\n")
+        families, from_name = family_context("query2family", query_dir=query_dir)
+        archive_completed_outputs(store, "query2family", families, from_name)
+        assert not (store / "generax_xml").exists()
+        if cutoff:
+            env["presence_absence_mark_terminal_losses"] = "0"
     result = subprocess.run(["bash", str(ROOT / "workflow/core/gg_gene_summary_core.sh")],
                             env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -117,8 +148,17 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
     assert "Skipping gene-family presence/absence summary because no" not in result.stdout
     svg_path = Path(str(prefix) + ".svg")
     text = svg_path.read_text()
-    if annotate_loss:
+    if annotate_loss or (source == "orthogroup" and cutoff == 0):
         assert text.count(">0†</text>") == 2  # Matrix and legend.
+    else:
+        assert "†" not in text
+    auto_table = Path(str(prefix) + ".terminal_losses.tsv")
+    if source == "orthogroup" and cutoff == 0:
+        assert auto_table.read_text().splitlines()[1:] == ["Combined\tMissing_species\tAnchor_one_a"]
+    elif source == "query2family" and cutoff:
+        assert len(auto_table.read_text().splitlines()) == 1  # Missing XML.
+    else:
+        assert not auto_table.exists()
     label_boxes = [(float(y), float(length)) for y, length in re.findall(
         r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'", text)]
     svg = ET.parse(svg_path).getroot()

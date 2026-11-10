@@ -820,7 +820,7 @@ if (!legend_columns_arg %in% c("auto", "1", "2", "3")) {
   stop("--legend_columns must be auto, 1, 2, or 3")
 }
 plot_height_arg <- get_arg(args, "height", "auto")
-glyph_height <- get_arg(args, "glyph_height", "compact")
+glyph_height <- get_arg(args, "glyph_height", "fill")
 if (!glyph_height %in% c("compact", "fill")) {
   stop("--glyph_height must be compact or fill")
 }
@@ -834,8 +834,8 @@ if (!ortholog_basis %in% c("reference_species", "query_gene")) {
   stop("--ortholog_basis must be reference_species or query_gene: ", ortholog_basis)
 }
 query_ortholog_mode <- identical(ortholog_basis, "query_gene")
-if (nzchar(loss_table_path) && (!glyph_mode || !query_ortholog_mode)) {
-  stop("--loss_table requires query-gene ortholog columns and glyphs")
+if (nzchar(loss_table_path) && !glyph_mode) {
+  stop("--loss_table requires ortholog columns and glyphs")
 }
 reference_species_display <- ""
 ortholog_scope_label <- ""
