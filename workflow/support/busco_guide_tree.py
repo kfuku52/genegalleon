@@ -244,6 +244,58 @@ def neighbors(tree, names, count, qualities):
             for n in names}
 
 
+def _read_pairwise_distances(path, names, marker_count, minimum_required):
+    species_count = len(names)
+    expected_rows = species_count * (species_count - 1) // 2
+    shape = (species_count, species_count)
+    # Negative distances mark unread pairs in the first matrix.
+    distances = np.full(shape, -1.0)
+    np.fill_diagonal(distances, 0.0)
+    matrices = [distances, np.zeros(shape), np.zeros(shape)]
+    saturated, shared_total, minimum_shared = 0, 0, marker_count
+    saturated_partners = [0] * species_count
+    row_count = 0
+    first_error = None
+    with path.open() as handle:
+        for row_count, row in enumerate(csv.DictReader(handle, delimiter="\t"), start=1):
+            if row_count > expected_rows or first_error is not None:
+                continue
+            try:
+                i, j = int(row["i"]), int(row["j"])
+                if not 0 <= i < j < species_count or distances[i, j] >= 0:
+                    raise ValueError("Invalid pairwise matrix indices")
+                shared = int(row["shared"])
+                if shared < minimum_required or min(int(row["count_0"]), int(row["count_1"])) < max(1, minimum_required // 2):
+                    raise ValueError(f"Too few shared usable BUSCO markers: {names[i]} / {names[j]}")
+                minimum_shared = min(minimum_shared, shared)
+                pair_saturated = int(row["saturated"])
+                saturated += pair_saturated
+                shared_total += shared
+                if pair_saturated == shared:
+                    saturated_partners[i] += 1
+                    saturated_partners[j] += 1
+                for matrix, key in zip(matrices, ("distance", "panel_0", "panel_1"), strict=True):
+                    value = float(row[key])
+                    if not math.isfinite(value) or not 0 <= value <= 1:
+                        raise ValueError("Invalid k-mer distance")
+                    matrix[i, j] = matrix[j, i] = value
+            except (KeyError, TypeError, ValueError) as error:
+                # Complete the count before reporting an invalid row, as the
+                # original table validation does for incomplete matrices.
+                first_error = error
+    if row_count != expected_rows:
+        raise ValueError("Incomplete pairwise distance matrix")
+    if first_error is not None:
+        raise first_error
+    if saturated == shared_total:
+        raise ValueError("All usable BUSCO marker pairs are k-mer saturated; provide an external tree")
+    isolated = [name for name, count in zip(names, saturated_partners, strict=True) if count == species_count - 1]
+    if isolated:
+        raise ValueError("All comparisons are k-mer saturated for species " + ", ".join(isolated)
+                         + "; provide an external tree")
+    return matrices, minimum_shared, saturated
+
+
 def build(args):
     if (args.markers < 20 or args.k < 3 or args.k > 10 or args.sketch_size < 16
             or args.sketch_size > 65536 or args.cpus < 1 or args.minimum_shared < 2
@@ -377,39 +429,9 @@ def build(args):
                     copy_atomic(root / "pairwise.tsv", cached_matrix, expected_sha256=digest(root / "pairwise.tsv"))
                     atomic_json(matrix_meta, {"key": matrix_key, "sha256": digest(cached_matrix)})
             cache_boundary.check()
-            matrices = [np.zeros((len(names), len(names)), dtype=float) for _ in range(3)]
-            saturated, shared_total, minimum_shared = 0, 0, len(markers)
-            saturated_partners = [0] * len(names)
-            with (root / "pairwise.tsv").open() as handle:
-                rows = list(csv.DictReader(handle, delimiter="\t"))
-            if len(rows) != len(names)*(len(names)-1)//2:
-                raise ValueError("Incomplete pairwise distance matrix")
-            seen = set()
-            for row in rows:
-                i, j = int(row["i"]), int(row["j"])
-                if not 0 <= i < j < len(names) or (i,j) in seen:
-                    raise ValueError("Invalid pairwise matrix indices")
-                seen.add((i,j))
-                shared = int(row["shared"])
-                if shared < args.minimum_shared or min(int(row["count_0"]), int(row["count_1"])) < max(1, args.minimum_shared//2):
-                    raise ValueError(f"Too few shared usable BUSCO markers: {names[i]} / {names[j]}")
-                minimum_shared = min(minimum_shared, shared)
-                saturated += int(row["saturated"])
-                shared_total += shared
-                if int(row["saturated"]) == shared:
-                    saturated_partners[i] += 1
-                    saturated_partners[j] += 1
-                for matrix, key in zip(matrices, ("distance", "panel_0", "panel_1"), strict=True):
-                    value = float(row[key])
-                    if not math.isfinite(value) or not 0 <= value <= 1:
-                        raise ValueError("Invalid k-mer distance")
-                    matrix[i,j] = matrix[j,i] = value
-            if saturated == shared_total:
-                raise ValueError("All usable BUSCO marker pairs are k-mer saturated; provide an external tree")
-            isolated = [name for name, count in zip(names, saturated_partners, strict=True) if count == len(names)-1]
-            if isolated:
-                raise ValueError("All comparisons are k-mer saturated for species " + ", ".join(isolated)
-                                 + "; provide an external tree")
+            matrices, minimum_shared, saturated = _read_pairwise_distances(
+                root / "pairwise.tsv", names, len(markers), args.minimum_shared
+            )
             trees, nj_seconds = [], 0.0
             for matrix, label in zip(matrices, ("guide_tree", "panel_0", "panel_1"), strict=True):
                 tree, seconds = nj(matrix, names, root, label, rapidnj)

@@ -14,6 +14,30 @@ from workflow.support import pairwise_synteny, rescue_gene_models
 from workflow.support.rescue_gene_models import patristic_distances
 
 
+@pytest.mark.parametrize("pairs, error", [
+    ([(1, 2, "0.3"), (0, 2, "0.2"), (0, 1, "0.1")], None),
+    ([(0, 1, "bad"), (0, 2, "0.2")], "Incomplete pairwise distance matrix"),
+    ([(0, 1, "0.1"), (0, 2, "0.2"), (0, 1, "0.1")], "Invalid pairwise matrix indices"),
+    ([(0, 1, "nan"), (0, 2, "0.2"), (1, 2, "0.3")], "Invalid k-mer distance"),
+])
+def test_pairwise_distance_reader_preserves_matrices_and_error_priority(tmp_path, pairs, error):
+    path = tmp_path / "pairwise.tsv"
+    path.write_text(
+        "i\tj\tdistance\tshared\tsaturated\tpanel_0\tcount_0\tpanel_1\tcount_1\n"
+        + "".join(f"{i}\t{j}\t{distance}\t22\t2\t{distance}\t11\t{distance}\t11\n"
+                  for i, j, distance in pairs)
+    )
+    if error is not None:
+        with pytest.raises(ValueError, match=error):
+            guide._read_pairwise_distances(path, ["A", "B", "C"], 24, 10)
+        return
+    matrices, minimum_shared, saturated = guide._read_pairwise_distances(path, ["A", "B", "C"], 24, 10)
+    assert [matrix.tolist() for matrix in matrices] == [
+        [[0.0, 0.1, 0.2], [0.1, 0.0, 0.3], [0.2, 0.3, 0.0]]
+    ] * 3
+    assert (minimum_shared, saturated) == (22, 6)
+
+
 def test_matching_sketch_proof_reuses_only_its_first_content_read(tmp_path, monkeypatch):
     payload, meta = tmp_path / 'sketch.bin', tmp_path / 'sketch.json'
     payload.write_bytes(b'cached sketch')
