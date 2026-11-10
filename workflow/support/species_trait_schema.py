@@ -41,8 +41,11 @@ def read_table(table):
 
 def trait_value_types(table):
     """Validate a hash-bound schema without selecting a numeric analysis."""
-    payload, header, rows = read_table(table)
-    available = header[1:]
+    payload, header, _ = read_table(table)
+    return _trait_value_types(table, payload, header[1:])
+
+
+def _trait_value_types(table, payload, available):
     kinds = dict.fromkeys(available, "unspecified")
     sidecar = schema_path(table)
     if sidecar.exists() or sidecar.is_symlink():
@@ -60,9 +63,9 @@ def trait_value_types(table):
 
 
 def select_traits(table, requested="all", eligible=None, allow_empty=False):
-    _, header, rows = read_table(table)
+    payload, header, rows = read_table(table)
     available = header[1:]
-    kinds = trait_value_types(table)
+    kinds = _trait_value_types(table, payload, available)
     automatic = requested.lower() == "all"
     chosen = available if automatic else re.findall(r"[^,\s]+", requested)
     if not chosen or len(set(chosen)) != len(chosen) or not set(chosen) <= set(available):
