@@ -239,8 +239,8 @@ def test_invalid_shard_cannot_silently_run_partial_validation(tmp_path, shard):
 
 
 @pytest.mark.parametrize("workers", [None, "2"])
-@pytest.mark.parametrize("behavior", ["skip", "skip_collection", "check_environment"])
-def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path, workers, behavior):
+@pytest.mark.parametrize("behavior", ["skip", "skip_collection", "check_environment", "failure"])
+def test_strict_runtime_reports_outcomes_and_enables_required_integrations(tmp_path, workers, behavior):
     test_dir = tmp_path / "workflow/tests"
     test_dir.mkdir(parents=True)
     for name in ("conftest.py", "validation_manifest.json"):
@@ -248,6 +248,7 @@ def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path
     body = {
         "skip": 'import pytest\ndef test_runtime(): pytest.skip("missing required executable")\n',
         "skip_collection": 'import pytest\npytest.skip("missing dependency", allow_module_level=True)\n',
+        "failure": 'def test_runtime(): assert False\n',
         "check_environment": 'import os\ndef test_runtime(): assert os.environ["KFFRACTBIAS_RUN_INTEGRATION"] == "1"; assert os.environ["GG_TEST_CSUBST_3DI"] == "1"\n',
     }[behavior]
     (test_dir / "test_required.py").write_text(body)
@@ -262,6 +263,11 @@ def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
     if behavior == "check_environment":
         assert result.returncode == 0, result.stdout + result.stderr
+    elif behavior == "failure":
+        assert result.returncode == 1, result.stdout + result.stderr
+        line = "[validation] test failed (call) workflow/tests/test_required.py::test_runtime"
+        assert result.stdout.splitlines().count(line) == 1
+        assert result.stdout.index(line) < result.stdout.index("short test summary info")
     else:
         assert result.returncode != 0
         assert "Required runtime checks were skipped" in result.stdout
