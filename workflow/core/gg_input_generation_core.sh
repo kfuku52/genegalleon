@@ -1488,10 +1488,11 @@ run_cds_fx2tab_for_one_file() {
 run_cds_fx2tab_stage_all() {
   local task="seqkit fx2tab for species CDS files"
   local source_species_input_fasta=()
-  local input_species_set=()
+  local source_species_names=()
+  local -A input_species_seen=()
   local fx2tab_output_files=()
-  local fx2tab_file fx2tab_base fx2tab_species fx2tab_species_found input_species
-  local seq_full seq_file sp_ub
+  local fx2tab_file fx2tab_species species_name
+  local index seq_full seq_file sp_ub
 
   if [[ ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1504,7 +1505,9 @@ run_cds_fx2tab_stage_all() {
   ensure_dir "${species_cds_fx2tab_dir}"
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
+    sp_ub=$(gg_species_name_from_path_or_dot "${path}")
     source_species_input_fasta+=( "${path}" )
+    source_species_names+=( "${sp_ub}" )
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for fx2tab: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
@@ -1519,32 +1522,25 @@ run_cds_fx2tab_stage_all() {
   fi
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
-    input_species_set+=( "${species_name}" )
-  done < <(gg_species_names_from_fasta_dir "${species_cds_dir}")
+    input_species_seen["${species_name}"]=1
+  done < <(printf '%s\n' "${source_species_names[@]}" | sort -u)
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     fx2tab_output_files+=( "${path}" )
   done < <(find "${species_cds_fx2tab_dir}" -maxdepth 1 -type f -name "*_fx2tab_cds.tsv" 2> /dev/null | sort)
   if [[ ${#fx2tab_output_files[@]} -gt 0 ]]; then
     for fx2tab_file in "${fx2tab_output_files[@]}"; do
-      fx2tab_base=$(basename "${fx2tab_file}")
-      fx2tab_species=$(gg_species_name_from_path_or_dot "${fx2tab_base}")
-      fx2tab_species_found=0
-      for input_species in "${input_species_set[@]}"; do
-        if [[ "${input_species}" == "${fx2tab_species}" ]]; then
-          fx2tab_species_found=1
-          break
-        fi
-      done
-      if [[ ${fx2tab_species_found} -eq 0 ]]; then
+      fx2tab_species=$(gg_species_name_from_path_or_dot "${fx2tab_file}")
+      if [[ -z "${fx2tab_species}" || -z "${input_species_seen[${fx2tab_species}]+present}" ]]; then
         handle_obsolete_input_generation_output "${fx2tab_file}" "fx2tab output for removed species" || return $?
       fi
     done
   fi
 
-  for seq_full in "${source_species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
+  for index in "${!source_species_input_fasta[@]}"; do
+    seq_full=${source_species_input_fasta[index]}
+    seq_file=${seq_full##*/}
+    sp_ub=${source_species_names[index]}
     gg_step_start "${task}: ${seq_file}"
     run_cds_fx2tab_for_one_file "${seq_full}" "${sp_ub}"
   done
@@ -1724,17 +1720,21 @@ run_species_busco_for_one_file() {
 run_species_busco_stage_all() {
   local task="BUSCO analysis of species CDS files"
   local source_species_input_fasta=()
+  local source_species_names=()
   local input_species_set=()
+  local -A input_species_seen=()
   local busco_output_files=()
-  local busco_file busco_base busco_species busco_species_found input_species
-  local seq_full seq_file sp_ub
+  local busco_file busco_species species_name
+  local index seq_full seq_file sp_ub
   local busco_stage_relevant=${run_species_busco}
 
   gg_step_start "${task}"
   stage_species_busco_status="running"
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
+    sp_ub=$(gg_species_name_from_path_or_dot "${path}")
     source_species_input_fasta+=( "${path}" )
+    source_species_names+=( "${sp_ub}" )
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for BUSCO: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
@@ -1747,7 +1747,8 @@ run_species_busco_stage_all() {
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
     input_species_set+=( "${species_name}" )
-  done < <(gg_species_names_from_fasta_dir "${species_cds_dir}")
+    input_species_seen["${species_name}"]=1
+  done < <(printf '%s\n' "${source_species_names[@]}" | sort -u)
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     busco_output_files+=( "${path}" )
@@ -1767,16 +1768,8 @@ run_species_busco_stage_all() {
   normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   if [[ ${#busco_output_files[@]} -gt 0 ]]; then
     for busco_file in "${busco_output_files[@]}"; do
-      busco_base=$(basename "${busco_file}")
-      busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")
-      busco_species_found=0
-      for input_species in "${input_species_set[@]}"; do
-        if [[ "${input_species}" == "${busco_species}" ]]; then
-          busco_species_found=1
-          break
-        fi
-      done
-      if [[ ${busco_species_found} -eq 0 ]]; then
+      busco_species=$(gg_species_name_from_path_or_dot "${busco_file}")
+      if [[ -z "${busco_species}" || -z "${input_species_seen[${busco_species}]+present}" ]]; then
         handle_obsolete_input_generation_output "${busco_file}" "BUSCO output for removed species" || return $?
       fi
     done
@@ -1822,9 +1815,10 @@ run_species_busco_stage_all() {
   local busco_threads_per_job=$((GG_TASK_CPUS / busco_jobs))
   [[ ${busco_threads_per_job} -lt 1 ]] && busco_threads_per_job=1
   echo "BUSCO species parallelism: jobs=${busco_jobs}, threads_per_job=${busco_threads_per_job}"
-  for seq_full in "${source_species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
+  for index in "${!source_species_input_fasta[@]}"; do
+    seq_full=${source_species_input_fasta[index]}
+    seq_file=${seq_full##*/}
+    sp_ub=${source_species_names[index]}
     gg_step_start "${task}: ${seq_file}"
     if [[ ${busco_jobs} -eq 1 ]]; then
       run_species_busco_for_one_file "${seq_full}" "${sp_ub}" "${busco_threads_per_job}"
