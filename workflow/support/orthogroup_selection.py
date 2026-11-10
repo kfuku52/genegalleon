@@ -218,6 +218,7 @@ def get_df_gc_original(df_og_original, df_gc_original, fx2tab, args):
         fx2tab.loc[:, ["#id", "length"]].drop_duplicates(subset=["#id"], keep="first").set_index("#id")["length"]
     )
     species_cols = [col for col in df_og_original.columns if col != "Orthogroup"]
+    duplicate_families = not df_og_original["Orthogroup"].is_unique
 
     print("Identifying genes with specified quantile lengths in {:,} orthogroups".format(df_og_original.shape[0]))
     long_frames = []
@@ -229,34 +230,32 @@ def get_df_gc_original(df_og_original, df_gc_original, fx2tab, args):
         tmp = pandas.DataFrame(
             {
                 "Orthogroup": df_og_original.loc[mask, "Orthogroup"].to_numpy(),
-                "genes": values.loc[mask].astype(str).to_numpy(),
-                "species_rank": species_rank,
+                "gene_id": values.loc[mask].astype(str).str.split(",").to_numpy(),
             }
         )
+        if duplicate_families:
+            tmp["species_rank"] = species_rank
         long_frames.append(tmp)
 
     if len(long_frames) == 0:
         return df_gc_original
 
     long_df = pandas.concat(long_frames, ignore_index=True)
-    long_df.loc[:, "genes"] = long_df["genes"].str.strip()
-    long_df = long_df.loc[long_df["genes"] != "", :]
-    if long_df.empty:
-        return df_gc_original
-
-    long_df.loc[:, "cell_idx"] = numpy.arange(long_df.shape[0], dtype=numpy.int64)
-    long_df.loc[:, "gene_id"] = long_df["genes"].str.split(",")
-    long_df = long_df.explode("gene_id", ignore_index=True)
+    del long_frames
+    long_df = long_df.explode("gene_id", ignore_index=not duplicate_families)
     long_df.loc[:, "gene_id"] = long_df["gene_id"].astype(str).str.strip()
     long_df = long_df.loc[long_df["gene_id"] != "", :]
     if long_df.empty:
         return df_gc_original
 
-    long_df.loc[:, "gene_pos"] = long_df.groupby("cell_idx", sort=False).cumcount()
-    long_df = long_df.sort_values(["Orthogroup", "species_rank", "gene_pos"], kind="mergesort")
+    # Concatenation and explode already preserve the species and gene order
+    # for a unique family row. Repeated rows retain their interleaved gene order.
+    if duplicate_families:
+        long_df.loc[:, "gene_pos"] = long_df.groupby(level=0, sort=False).cumcount()
+        long_df = long_df.sort_values(["Orthogroup", "species_rank", "gene_pos"], kind="mergesort")
     long_df.loc[:, "length"] = long_df["gene_id"].map(gene2length)
 
-    total_counts = long_df.groupby("Orthogroup", sort=False).size()
+    total_counts = long_df.groupby("Orthogroup", sort=True).size()
     matched_mask = long_df["length"].notna()
     matched_counts = long_df.loc[matched_mask, :].groupby("Orthogroup", sort=False).size()
     matched_counts = matched_counts.reindex(total_counts.index).fillna(0).astype(int)
