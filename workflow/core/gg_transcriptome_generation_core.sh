@@ -1429,10 +1429,11 @@ has_resumable_getfastq_run_state() {
 bind_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local support_dir
+  support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import gzip
 import hashlib
 import json
 import math
@@ -1441,47 +1442,14 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, sys.argv[3])
+from fastq_proof import FastqChanged, proof_fastq
+
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
-
-
-def validate_fastq_gzip(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        return False
-    try:
-        with gzip.open(path, "rb") as handle:
-            record_count = 0
-            while True:
-                header = handle.readline()
-                if not header:
-                    break
-                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
-                    return False
-                sequence_length = 0
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    if line.startswith(b"+"):
-                        break
-                    sequence_length += len(line.rstrip(b"\r\n"))
-                if sequence_length == 0:
-                    return False
-                quality_length = 0
-                while quality_length < sequence_length:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    quality_length += len(line.rstrip(b"\r\n"))
-                if quality_length != sequence_length:
-                    return False
-                record_count += 1
-            return record_count > 0
-    except (EOFError, OSError, ValueError):
-        return False
 
 
 def safe_fastq_path(raw_value):
@@ -1506,17 +1474,15 @@ def safe_fastq_path(raw_value):
 
 def file_contract(raw_value):
     value, path = safe_fastq_path(raw_value)
-    if not validate_fastq_gzip(path):
-        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+    try:
+        complete, size, checksum = proof_fastq(path)
+    except FastqChanged:
         raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(value))
-    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+    except OSError:
+        complete = False
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
+    return {"path": value, "size": size, "sha256": checksum}
 
 
 def positive_number(value):
