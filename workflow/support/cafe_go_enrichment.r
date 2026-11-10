@@ -207,6 +207,10 @@ summarise_orthogroup_targets <- function(df) {
     ))
   }
   family_ids <- unique(df$FamilyID)
+  rows <- split(seq_len(nrow(df)), match(df$FamilyID, family_ids))
+  collapse <- function(values) {
+    unname(vapply(rows, function(idx) paste0(values[idx], collapse = "; "), character(1)))
+  }
   out <- data.frame(
     FamilyID = family_ids,
     gene_ids = NA_character_,
@@ -214,13 +218,9 @@ summarise_orthogroup_targets <- function(df) {
     sprot_recnames = NA_character_,
     stringsAsFactors = FALSE
   )
-  for (i in seq_along(family_ids)) {
-    fam <- family_ids[i]
-    tmp <- df[df$FamilyID == fam, , drop = FALSE]
-    out$gene_ids[i] <- paste0(tmp$gene_id, collapse = "; ")
-    out$sprot_bests[i] <- paste0(tmp$sprot_best, collapse = "; ")
-    out$sprot_recnames[i] <- paste0(tmp$sprot_recname, collapse = "; ")
-  }
+  out$gene_ids <- collapse(df$gene_id)
+  out$sprot_bests <- collapse(df$sprot_best)
+  out$sprot_recnames <- collapse(df$sprot_recname)
   out
 }
 
@@ -481,13 +481,19 @@ read_cafe_branch_families <- function(changes, probabilities, family_results, fa
     target_change = changes[[target]][ci], branch_reported = !is.na(pi),
     target_branch_probability = probabilities[[target]][pi],
     target_flagged = NA, n_other_flagged = NA_integer_, other_flagged_branches = NA_character_)
-  for (i in which(result$branch_reported)) {
-    flagged <- nonroot[vapply(nonroot, function(b) probabilities[[b]][pi[i]] < 0.05 &&
-      changes[[b]][ci[i]] != 0, logical(1))]
-    other <- setdiff(flagged, target)
-    result$target_flagged[i] <- target %in% flagged
-    result$n_other_flagged[i] <- length(other)
-    result$other_flagged_branches[i] <- paste(other, collapse = ", ")
+  reported <- which(result$branch_reported)
+  if (length(reported)) {
+    p_rows <- pi[reported]
+    c_rows <- ci[reported]
+    is_flagged <- function(branch) probabilities[[branch]][p_rows] < 0.05 & changes[[branch]][c_rows] != 0
+    result$target_flagged[reported] <- is_flagged(target)
+    other <- setdiff(nonroot, target)
+    positions <- lapply(other, function(branch) which(is_flagged(branch)))
+    # Group flagged branches by family, retaining native branch order.
+    groups <- factor(unlist(positions, use.names = FALSE), levels = seq_along(reported))
+    flagged <- split(rep(other, lengths(positions)), groups)
+    result$n_other_flagged[reported] <- lengths(flagged)
+    result$other_flagged_branches[reported] <- vapply(flagged, paste, character(1), collapse = ", ")
   }
   result$direction <- ifelse(result$target_change > 0, "increase",
     ifelse(result$target_change < 0, "decrease", "unchanged"))
@@ -515,16 +521,20 @@ select_cafe_branch_families <- function(families, alpha, direction) {
 summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.05) {
   tested <- families
   selected <- tested$FamilyID[tested$selected]
-  annotations <- unique(annotations[annotations$FamilyID %in% tested$FamilyID, , drop = FALSE])
+  positions <- match(annotations$FamilyID, tested$FamilyID)
+  matched <- !is.na(positions)
+  families_by_go <- split(positions[matched], annotations$go_ids[matched])
   out <- candidate_go[, c("go_ids", "go_aspects", "go_terms"), drop = FALSE]
   for (col in c("n_selected_in_go", "n_background_in_go", "n_selected_out_go", "n_background_out_go")) out[[col]] <- integer(nrow(out))
   out$odds_ratio <- rep(NA_real_, nrow(out))
   out$p_value <- rep(1, nrow(out))
   out$orthogroup_in_target <- rep("", nrow(out))
   for (i in seq_len(nrow(out))) {
-    ids <- unique(annotations$FamilyID[annotations$go_ids == out$go_ids[i]])
-    a <- sum(selected %in% ids)
-    b <- sum(!tested$selected & tested$FamilyID %in% ids)
+    # Each family counts once per term. Row order determines the reported IDs.
+    idx <- sort(unique(families_by_go[[out$go_ids[i]]]))
+    flagged <- tested$selected[idx]
+    a <- sum(flagged)
+    b <- sum(!flagged)
     c <- length(selected) - a
     d <- nrow(tested) - length(selected) - b
     out[i, c("n_selected_in_go", "n_background_in_go", "n_selected_out_go", "n_background_out_go")] <- list(a, b, c, d)
@@ -533,7 +543,7 @@ summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.0
       out$p_value[i] <- fit$p.value
       out$odds_ratio[i] <- unname(fit$estimate)
     }
-    out$orthogroup_in_target[i] <- paste(selected[selected %in% ids], collapse = ", ")
+    out$orthogroup_in_target[i] <- paste(tested$FamilyID[idx[flagged]], collapse = ", ")
   }
   out$p_value_adjusted <- p.adjust(out$p_value, "BH")
   out <- out[order(out$p_value_adjusted, out$p_value, out$go_ids), , drop = FALSE]
