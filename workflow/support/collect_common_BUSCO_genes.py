@@ -5,6 +5,7 @@ import argparse
 import csv
 import os
 import warnings
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
@@ -47,15 +48,18 @@ def read_busco_table(path_to_table):
 def process_species_table(path_to_table, species_infile):
     tmp_table = read_busco_table(path_to_table)
 
-    tmp_metadata = tmp_table.loc[:, ["busco_id", "orthodb_url", "description"]]
-    tmp_metadata = tmp_metadata.drop_duplicates(subset=["busco_id"], keep="first", ignore_index=True)
+    first_rows = tmp_table.drop_duplicates(subset=["busco_id"], keep="first", ignore_index=True)
+    repeated = tmp_table["busco_id"].duplicated(keep=False)
+    if repeated.any():
+        copies = defaultdict(list)
+        for busco_id, sequence in tmp_table.loc[repeated, ["busco_id", "sequence"]].itertuples(index=False, name=None):
+            copies[busco_id].append(sequence)
+        repeated_sequences = {busco_id: ",".join(sequences) for busco_id, sequences in copies.items()}
+        replace_rows = first_rows["busco_id"].isin(repeated_sequences)
+        first_rows.loc[replace_rows, "sequence"] = first_rows.loc[replace_rows, "busco_id"].map(repeated_sequences)
 
-    tmp_sequence = (
-        tmp_table.loc[:, ["busco_id", "sequence"]]
-        .groupby("busco_id", as_index=False, sort=False)
-        .agg(sequence=("sequence", ",".join))
-        .rename(columns={"sequence": species_infile})
-    )
+    tmp_metadata = first_rows.loc[:, ["busco_id", "orthodb_url", "description"]]
+    tmp_sequence = first_rows.loc[:, ["busco_id", "sequence"]].rename(columns={"sequence": species_infile})
     return species_infile, tmp_sequence, tmp_metadata
 
 
