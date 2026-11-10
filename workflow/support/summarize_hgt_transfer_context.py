@@ -69,7 +69,7 @@ def species_nodes(clade):
     for node in reversed(list(clade.iter("clade"))):
         children = node.findall("clade")
         name = species_key(node.findtext("name"))
-        leaves = set().union(*(nodes[id(c)][1] for c in children)) if children else {name}
+        leaves = frozenset().union(*(nodes[id(c)][1] for c in children)) if children else frozenset((name,))
         if not children and not name:
             raise ValueError("Unnamed reconciliation species-tree terminal")
         nodes[id(node)] = (name, leaves, "internal" if children else "terminal")
@@ -78,7 +78,7 @@ def species_nodes(clade):
         if name:
             if name in result:
                 raise ValueError(f"Duplicate reconciliation species-tree name: {name}")
-            result[name] = (frozenset(leaves), kind)
+            result[name] = (leaves, kind)
     return result
 
 
@@ -144,8 +144,18 @@ def external_nodes(path):
     if not path:
         return {}
     tree = read_species_tree(path)
-    return {species_key(n.name): frozenset(species_key(t.name) for t in n.get_terminals())
-            for n in tree.find_clades() if n.name}
+    descendant_tips, named = {}, {}
+    # Build each descendant set once while preserving the named clades' preorder.
+    for node in reversed(list(tree.find_clades())):
+        name = species_key(node.name)
+        if node.clades:
+            tips = frozenset().union(*(descendant_tips.pop(child) for child in node.clades))
+        else:
+            tips = frozenset((name,))
+        descendant_tips[node] = tips
+        if name:
+            named[name] = tips
+    return dict(reversed(named.items()))
 
 
 def branch_correspondence(nodes, expected):
@@ -161,7 +171,7 @@ def branch_correspondence(nodes, expected):
         if not tips or tips in target:
             return None
         target[tips] = name
-    if set(source) != set(target):
+    if source.keys() != target.keys():
         return None
     return {name: target[tips] for tips, name in source.items()}
 
