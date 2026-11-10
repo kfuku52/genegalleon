@@ -8,6 +8,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import heapq
 import json
 import math
 import os
@@ -237,11 +238,19 @@ def nj(matrix, names, root, label, rapidnj):
 
 
 def neighbors(tree, names, count, qualities):
+    if count == 0:
+        return {name: [] for name in names}
     # Precompute distances once, avoiding repeated tree traversal in sorting.
     distances = patristic_distances(tree)
-    return {n: sorted((m for m in names if m != n),
-                      key=lambda m: (distances[n][m], -qualities[m]["complete_pct"], m))[:count]
-            for n in names}
+    quality_rank = {name: -qualities[name]["complete_pct"] for name in names}
+    nearest = {}
+    for name in names:
+        distances_from_name = distances[name]
+        candidates = [other for other in names if other != name]
+        nearest[name] = heapq.nsmallest(
+            count, candidates, key=lambda other: (distances_from_name[other], quality_rank[other], other)
+        )
+    return nearest
 
 
 def _read_pairwise_distances(path, names, marker_count, minimum_required):

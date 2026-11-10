@@ -1,6 +1,7 @@
 """BUSCO protein preservation and input-integrity contracts."""
 import gzip
 import inspect
+import io
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,21 @@ from workflow.support import busco_guide_tree as guide
 from workflow.support import busco_reference_quality as quality
 from workflow.support import pairwise_synteny, rescue_gene_models
 from workflow.support.rescue_gene_models import patristic_distances
+
+
+def test_nearest_species_resolve_distance_and_quality_ties(monkeypatch):
+    tree = Phylo.read(io.StringIO("(A:1,B:1,C:1,D:2);"), "newick")
+    names = ["D", "C", "B", "A"]
+    qualities = {name: {"complete_pct": pct} for name, pct in zip(names, [100, 95, 95, 90], strict=True)}
+    assert guide.neighbors(tree, names, 2, qualities) == {
+        "D": ["B", "C"], "C": ["B", "A"], "B": ["C", "A"], "A": ["B", "C"],
+    }
+
+    def unexpected_distance_calculation(_tree):
+        pytest.fail("No distances are needed for zero neighbors")
+
+    monkeypatch.setattr(guide, "patristic_distances", unexpected_distance_calculation)
+    assert guide.neighbors(tree, names, 0, qualities) == {name: [] for name in names}
 
 
 @pytest.mark.parametrize("pairs, error", [
