@@ -2614,6 +2614,7 @@ if [[ "${mode_gene_evolution}" == "orthogroup" ]]; then
   primary_fasta_provenance_args+=(--input "orthogroups=${file_og}")
 else
   primary_fasta_provenance_args+=(--input "query_blast=${file_og_query_blast}")
+  primary_fasta_provenance_args+=(--parameter "query_subject_ids=literal")
 fi
 if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
   ensure_species_fasta_sequence_store protein || exit 1

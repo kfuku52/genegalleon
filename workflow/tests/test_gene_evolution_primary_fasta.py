@@ -23,6 +23,7 @@ def family(tmp_path):
     source = sources / "Species_a.fa"
     source.write_text(
         ">Species_a_keep\nATGAAA\n>Species_a_remove\nATGCCC\n>Species_a_other\nATGGGG\n"
+        ">001\nATGAAA\n>NA\nATGCCC\n"
     )
     database, index = tmp_path / "sequences.sqlite3", tmp_path / "sequences.json"
     build_store(database, index, [(source, "Species_a")], 0, 0)
@@ -116,6 +117,22 @@ def test_previously_restamped_legacy_cds_is_regenerated_once(family):
     assert again.returncode == 0, again.stdout + again.stderr
     assert "skipped=Fasta generation" in again.stdout
     assert {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in before} == before
+
+
+def test_query2family_preserves_literal_subjects_and_versions_the_receipt(family):
+    blast = family.root / "query.tsv"
+    blast.write_text("sacc\tqjointcov\tmin_evalue\n001\t0.8\t1e-10\nNA\t0.9\t1e-4\n")
+    family.env.update(mode_gene_evolution="query2family", file_og_query_blast=str(blast))
+    completed = run(family)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert headers(family) == ["001", "NA"]
+    receipt = json.loads(family.manifest.read_text())
+    assert receipt["parameters"].pop("query_subject_ids") == "literal"
+    family.manifest.write_text(json.dumps(receipt))
+    old_fasta = family.fasta.read_bytes()
+    rejected = run(family, policy="stop")
+    assert rejected.returncode != 0
+    assert family.fasta.read_bytes() == old_fasta
 
 
 @pytest.mark.parametrize("failure", ["missing-gene", "strict-stale-policy"])
