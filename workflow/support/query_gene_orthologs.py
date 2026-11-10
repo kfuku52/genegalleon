@@ -908,7 +908,7 @@ def read_stat_branch(store, family_id):
 
 def _read_stat_branch(store, family_id):
     name = f"{family_id}{STAT_BRANCH_SUFFIX}"
-    artifact = store.artifact("stat_branch", name)
+    artifact = store.source_artifact("stat_branch", name)
     inputs = _FAMILY_INPUTS.get()
     if inputs is not None:
         inputs.observe(artifact)
@@ -928,7 +928,7 @@ def read_family_synteny(store, family_id):
     """
 
     name = f"{family_id}{SYNTENY_SUFFIX}"
-    artifact = store.artifact("synteny", name)
+    artifact = store.source_artifact("synteny", name)
     if artifact is not None:
         observe_summary_input(artifact.live_path or artifact.zip_path)
     if artifact is None or not artifact.size:
@@ -1109,7 +1109,7 @@ def _read_family_cds_fasta_ids(store, family_id):
                       for suffix in (".fa.gz", ".fasta.gz", ".fasta", ".fa"))
     observed_ids = None
     for directory, name in candidates:
-        artifact = store.artifact(directory, name)
+        artifact = store.source_artifact(directory, name)
         if artifact is not None and artifact.size:
             inputs = _FAMILY_INPUTS.get()
             if inputs is not None:
