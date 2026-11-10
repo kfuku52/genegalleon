@@ -482,6 +482,20 @@ def test_sif_aggregate_rejects_failed_or_incomplete_partitions(tmp_path, failed)
     assert (result.returncode == 0) == (failed is None)
 
 
+@pytest.mark.parametrize("workflow,job_name", [
+    ("tests.yml", "prepare-sif"),
+    ("container-ghcr.yml", "prime-sif-cache"),
+])
+def test_sif_runtime_install_precedes_cache_transfer_and_build(workflow, job_name):
+    job = load_workflow(workflow)["jobs"][job_name]
+    steps = job["steps"]
+    install = steps.index(named_step(job, "Install Singularity runtime"))
+    assert steps.index(named_step(job, "Resolve exact validation runtime input")) < install
+    for later in ("Restore exact validation SIF", "Download SIF prepared in this run",
+                  "Build current GeneGalleon image", "Build validation SIF from current image"):
+        assert install < steps.index(named_step(job, later))
+
+
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
     sif_job = load_workflow("tests.yml")["jobs"]["prepare-sif"]
     runner_cleanup = step_run(sif_job, "Reclaim runner disk space for SIF conversion")
