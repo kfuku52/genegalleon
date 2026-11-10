@@ -62,6 +62,18 @@ def test_unmarked_zip_is_not_treated_as_completed_csubst_site_output(tmp_path):
     assert not mod.csubst_site_archive_is_complete(archive_path)
 
 
+def test_duplicate_member_is_not_treated_as_completed_csubst_site_output(tmp_path):
+    mod = load_module()
+    archive_path = tmp_path / "result.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.comment = mod.CSUBST_SITE_ARCHIVE_COMMENT
+        archive.writestr("summary.pdf", b"first")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("summary.pdf", b"second")
+
+    assert not mod.csubst_site_archive_is_complete(archive_path)
+
+
 def test_interrupted_csubst_site_archive_creation_leaves_no_final_zip(
     tmp_path,
     monkeypatch,

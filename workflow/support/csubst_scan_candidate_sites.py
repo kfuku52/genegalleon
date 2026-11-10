@@ -1260,17 +1260,11 @@ def archive_matches_source(
     skipped_manifest_member = f"{archive_path.stem}/skipped_candidates.tsv"
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
+            files, _directories = validated_members(archive, archive_path, archive_path.stem)
             if archive.testzip() is not None:
                 return False
-            member_names = set(archive.namelist())
+            member_names = {info.filename for info in files}
             root_prefix = f"{archive_path.stem}/"
-            if any(
-                not name.startswith(root_prefix)
-                or ".." in PurePosixPath(name).parts
-                or PurePosixPath(name).is_absolute()
-                for name in member_names
-            ):
-                return False
             required_top_level = {
                 metadata_member,
                 candidate_manifest_member,

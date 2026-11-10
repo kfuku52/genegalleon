@@ -809,6 +809,12 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     assert not mod.archive_matches_source(archive, summary)
     archive.write_bytes(original_archive)
 
+    with zipfile.ZipFile(archive, "a") as zipped:
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            zipped.writestr(zipped_manifest_info.filename, original_manifest)
+    assert not mod.archive_matches_source(archive, summary)
+    archive.write_bytes(original_archive)
+
     raw_damaged = tmp_path / "raw-damaged.zip"
     with zipfile.ZipFile(archive, "r") as source_zip, zipfile.ZipFile(
         raw_damaged, "w"
