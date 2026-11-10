@@ -108,19 +108,25 @@ def validate_abundance(path: Path, run_id: str) -> None:
         )
     try:
         with path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter="\t")
-            fieldnames = reader.fieldnames or []
-            missing = [name for name in REQUIRED_ABUNDANCE_COLUMNS if name not in fieldnames]
+            reader = csv.reader(handle, delimiter="\t")
+            positions = {name: index for index, name in enumerate(next(reader, ()))}
+            missing = [name for name in REQUIRED_ABUNDANCE_COLUMNS if name not in positions]
             if missing:
                 raise QuantOutputValidationError(
                     f"abundance table for {run_id} is missing column(s): "
                     + ", ".join(missing)
                 )
+            target_position = positions["target_id"]
+            numeric_positions = [(column, positions[column]) for column in NUMERIC_ABUNDANCE_COLUMNS]
+            required_width = max(positions[column] for column in REQUIRED_ABUNDANCE_COLUMNS) + 1
             seen_targets: set[str] = set()
-            row_count = 0
             for row in reader:
-                row_count += 1
-                target_id = (row.get("target_id") or "").strip()
+                if not row:
+                    continue
+                # Match DictReader's blank defaults for omitted trailing fields.
+                if len(row) < required_width:
+                    row.extend([""] * (required_width - len(row)))
+                target_id = row[target_position].strip()
                 if not target_id:
                     raise QuantOutputValidationError(
                         f"abundance table for {run_id} contains an empty target_id"
@@ -130,8 +136,8 @@ def validate_abundance(path: Path, run_id: str) -> None:
                         f"abundance table for {run_id} contains duplicate target_id: {target_id}"
                     )
                 seen_targets.add(target_id)
-                for column in NUMERIC_ABUNDANCE_COLUMNS:
-                    raw_value = (row.get(column) or "").strip()
+                for column, position in numeric_positions:
+                    raw_value = row[position].strip()
                     try:
                         value = float(raw_value)
                     except ValueError as exc:
@@ -142,7 +148,7 @@ def validate_abundance(path: Path, run_id: str) -> None:
                         raise QuantOutputValidationError(
                             f"abundance table for {run_id} has invalid {column}"
                         )
-            if row_count == 0:
+            if not seen_targets:
                 raise QuantOutputValidationError(
                     f"abundance table for {run_id} contains no data rows"
                 )
