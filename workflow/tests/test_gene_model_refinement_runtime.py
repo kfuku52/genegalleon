@@ -74,6 +74,93 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
         refinement.plan(tmp_path / 'new-refinement', rescue_output=anchor_root, mode='off')
 
 
+@pytest.mark.parametrize('fragment_count', [2, 3])
+def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
+    fixture = import_module('test_rescue_gene_models_runtime')
+    data = fixture.hidden_models.__wrapped__(tmp_path)
+    _, names, truth = data
+    target, sequence = names[0], truth[8]
+    cds = tmp_path / 'cds' / (target + '.cds.fa')
+    gff = tmp_path / 'gff' / (target + '.gff3')
+    genome = tmp_path / 'genome' / (target + '.genome.fa')
+    start = 8 * (len(sequence) + 60)
+    boundaries = [0, 240, len(sequence)] if fragment_count == 2 else [0, 159, 318, len(sequence)]
+    fragments = [sequence[a:b] for a, b in zip(boundaries, boundaries[1:], strict=False)]
+    intron = 'GT' + 'C' * (40 if fragment_count == 2 else 26) + 'AG'
+    span = str(Seq(intron.join(fragments)).reverse_complement())
+    end = start + len(span)
+    dna = genome.read_text().splitlines()[1]
+    genome.write_text('>chr1\n' + dna[:start] + span + dna[end:] + '\n')
+    split = []
+    exon_end = end
+    for index, fragment in enumerate(fragments):
+        exon_start = exon_end - len(fragment)
+        split.append(('g8' + 'abc'[index], [[exon_start, exon_end, 0]], fragment))
+        exon_end = exon_start - len(intron)
+    source_genes = [gene for gene, _, _ in split]
+    with gff.open('a') as annotation_file, cds.open('a') as fasta:
+        for gene, blocks, fragment in split:
+            annotation_file.write(annotation('chr1', gene, gene + '.t1', blocks, '-'))
+            fasta.write(f'>{target}_{gene}\n{fragment}\n')
+    before = {path: path.read_bytes() for path in (cds, gff, genome)}
+
+    anchor, _, _ = fixture.make_plan(data, model_storage='compact')
+    fixture.cli('run', '--output', anchor, '--cpus', 2)
+    worker = anchor / 'rescued' / target
+    proposals = json.loads((worker / 'split_model_candidates.json').read_text())
+    matches = [proposal for proposal in proposals if proposal['cds_sha256'] == hashlib.sha256(sequence.encode()).hexdigest()]
+    assert len(matches) == 1, proposals
+    review = matches[0]
+    assert review['strand'] == '-'
+    assert review['cds'] == [blocks[0] for _, blocks, _ in split]
+    assert [row['gene_id'] for row in review['owner_overlap']] == source_genes
+    if fragment_count == 3:
+        evidence = [row['splice_revalidation'] for row in review['support'] if 'splice_revalidation' in row]
+        assert evidence and all(row['original_cds'] == [[start, end, 0]] for row in evidence)
+    identifier = review['candidate_id']
+    original_ids = {target + '_' + gene for gene in source_genes}
+    augmented = anchor / 'augmented' / 'species_cds' / (target + '.rescue.cds.fa')
+    assert original_ids <= {gene for gene, _, _ in fasta_records(augmented)}
+    assert identifier not in {gene for gene, _, _ in fasta_records(augmented)}
+    producer_receipt = (worker / 'receipt.json').read_bytes()
+    approvals = tmp_path / 'merge.tsv'
+    write_tsv(approvals, ['species', 'candidate_id'], [{'species': target, 'candidate_id': identifier}])
+    with pytest.raises(ValueError, match='--mode conservative'):
+        refinement.plan(tmp_path / 'audit', rescue_output=anchor, mode='audit', split_model_merges=approvals)
+
+    output = tmp_path / 'refinement'
+    cli('plan', '--rescue-output', anchor, '--output', output, '--split-model-merges', approvals)
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    effective = output / 'effective'
+    inputs = next(row for row in refinement.verify_inputs(effective / 'inputs.tsv') if row['species'] == target)
+    for role in ('cds', 'analysis_cds', 'protein'):
+        records = {gene: value for gene, _, value in fasta_records(Path(inputs[role]))}
+        assert records[identifier] == (str(Seq(sequence).translate()).removesuffix('*') if role == 'protein' else sequence)
+        assert not original_ids & records.keys()
+    for role in ('gff', 'analysis_gff'):
+        text = Path(inputs[role]).read_text()
+        assert f'ID={identifier}.t1;Parent={identifier}' in text
+        assert not any(f'ID={gene};' in text or f'ID={gene}.t1;' in text for gene in source_genes)
+    archive = (effective / 'full_annotation' / (target + '.gff3')).read_text()
+    assert all(f'ID={gene}.t1;Parent={gene}' in archive for gene in [*source_genes, identifier])
+    assert (effective / 'source_annotation' / (target + '.gff3')).read_bytes() == (
+        anchor / 'augmented' / 'species_gff' / (target + '.rescue.gff3')).read_bytes()
+    mapping = {row['gene_id']: row for row in refinement.read_table(effective / 'representative_map.tsv')
+               if row['species'] == target}
+    assert mapping[identifier]['status'] == 'merged_split_model'
+    assert not original_ids & mapping.keys()
+    audit = json.loads((effective / 'split_model_merges.json').read_text())
+    assert len(audit) == 1 and set(audit[0]['replaced_gene_ids']) == original_ids
+    review_data = import_module('plot_gene_model_refinement').collect(output)
+    assert review_data['split_model_merges'] == audit
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert (worker / 'receipt.json').read_bytes() == producer_receipt
+    approvals.write_text(approvals.read_text() + '\n')
+    with pytest.raises(ValueError, match='Frozen refinement input changed'):
+        refinement.load(output)
+
+
 def native_candidate_table(tmp_path, target, genome, gff_text):
     """Mock only the native predictor boundary, never genomic/donor evidence."""
     gff, receipt, table = (tmp_path / name for name in ('native.gff3', 'native.receipt.json', 'native.tsv'))

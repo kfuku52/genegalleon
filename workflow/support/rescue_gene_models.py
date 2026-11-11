@@ -45,6 +45,8 @@ try:
     from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
+    from rescue_boundary_revalidation import _alignment as complete_donor_alignment
+    from rescue_boundary_revalidation import _phases as coding_phases
     from rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
     from rescue_coding_paths import (
         OwnershipIndex,
@@ -97,6 +99,8 @@ except ImportError:
     from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
+    from .rescue_boundary_revalidation import _alignment as complete_donor_alignment
+    from .rescue_boundary_revalidation import _phases as coding_phases
     from .rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
     from .rescue_coding_paths import (
         OwnershipIndex,
@@ -1380,6 +1384,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                             and (f[0] not in lengths or not 0 <= int(f[3]) - 1 < int(f[4]) <= lengths[f[0]])):
                         raise ValueError("Original annotation outside or absent from genome")
             atomic_json(tmp / "candidates.json", [])
+            atomic_json(tmp / "split_model_candidates.json", [])
             if storage["format"] == "compact":
                 write_model_store(tmp, [], revisions=[])
             else:
@@ -1568,11 +1573,14 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 coverage_mapping = write_unique_queries(covered, proteins, tmp / "genome.covered.unique.fa")
                 write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), coverage_mapping.items())
             atomic_json(tmp / "raw_validation_memo.json", raw_validation.diagnostics())
+            placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
+            models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
+                                 retained_paths=retained_paths)
+            atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
+                models, placement_ownership, name, genome=genome, code=source["genetic_code"],
+                params=params, proteins=proteins))
         # Recheck sources before publication, including the target genome.
         verify_sources(plan, [name], ["genome", "fasta", "gff"])
-        placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
-        models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
-                             retained_paths=retained_paths)
         if genomewide_audit is not None:
             atomic_json(tmp / 'oriongeno_genomewide.json', rescue_native_genomewide.finish_audit(genomewide_audit, models))
         for model in models:
@@ -1830,6 +1838,146 @@ def revalidate_retained_coding_paths(retained_paths, current, genome, code, para
             result.append(check_interval(checked))
             entry['emitted'] += 1
     return result, {'schema': 1, 'missing_valid_prediction_paths': len(audit), 'rows': audit}
+
+
+def _split_model_geometry(model, ownership):
+    """Find consecutive coding owners covering distinct parts of one path."""
+    owners = ownership.overlapping(model)
+    if (len(owners) < 2
+            or any(owner['strand'] != model['strand'] or not owner.get('cds') for owner in owners)):
+        return [], []
+    bounds = []
+    evidence = []
+    length = sum(end - start for start, end, _ in model['cds'])
+    for owner in owners:
+        union = []
+        for start, end in sorted(owner['cds']):
+            if union and start <= union[-1][1]:
+                union[-1][1] = max(end, union[-1][1])
+            else:
+                union.append([start, end])
+        bases = sum(end - start for start, end in union)
+        overlap = sum(max(0, min(end, b) - max(start, a))
+                      for start, end in union for a, b, _ in model['cds'])
+        if 3 * overlap < 2 * bases or (len(owners) == 2 and 5 * overlap < length):
+            return [], []
+        bounds.append((union[0][0], union[-1][1]))
+        evidence.append({'gene_id': owner['gene_id'], 'cds_bases': bases, 'overlap_bases': overlap})
+    if 4 * sum(row['overlap_bases'] for row in evidence) < 3 * length:
+        return [], []
+    owner_ids = {row['gene_id'] for row in evidence}
+    bounds.sort()
+    gaps = []
+    for (_, left_end), (right_start, _) in zip(bounds, bounds[1:], strict=False):
+        if left_end > right_start:
+            return [], []
+        if left_end < right_start:
+            gap = {**model, 'start': left_end, 'end': right_start, 'cds': [[left_end, right_start]]}
+            if any(owner['gene_id'] not in owner_ids for owner in ownership.overlapping(gap)):
+                return [], []
+            gaps.append((left_end, right_start))
+    return sorted(evidence, key=lambda row: row['gene_id']), gaps
+
+
+def split_model_geometry(model, ownership):
+    return _split_model_geometry(model, ownership)[0]
+
+
+def splice_retained_split_model_gaps(model, gaps, genome, code, params):
+    """Test exact inter-fragment boundaries inside predicted coding exons."""
+    blocks, gap_index = [], 0
+    for start, end, _ in sorted(model['cds']):
+        while gap_index < len(gaps) and gaps[gap_index][1] < end:
+            left, right = gaps[gap_index]
+            gap_index += 1
+            if start < left:
+                blocks.append([start, left, 0])
+                start = right
+        blocks.append([start, end, 0])
+    if len(blocks) == len(model['cds']):
+        return None
+    blocks = coding_phases(sorted(blocks, reverse=model['strand'] == '-'))
+    checked = validate_model({**model, 'cds': blocks}, genome, code, params)
+    if checked['problems'] or checked['cds'] != blocks:
+        return None
+    return checked
+
+
+def split_model_splice_support(original, spliced, donor, params):
+    """Require a better complete alignment with no loss of donor coverage."""
+    donor = donor.upper().removesuffix('*')
+    if not donor or set(donor) - set('ACDEFGHIKLMNPQRSTVWYX'):
+        return None
+    if donor.startswith('M'):
+        original, spliced = 'M' + original[1:], 'M' + spliced[1:]
+    overhang = params.get('terminal_max_unaligned_c_overhang', 2)
+    before, error = complete_donor_alignment(original, donor, params, overhang)
+    if error:
+        return None
+    after, error = complete_donor_alignment(spliced, donor, params, overhang)
+    margin = params.get('terminal_minimum_margin', .02)
+    if error or after['coverage'] < before['coverage'] or after['score'] - before['score'] <= margin:
+        return None
+    return before, after
+
+
+def split_model_candidates(models, ownership, species, *, genome=None, code=1, params=None, proteins=None):
+    """Publish reviewed-merge candidates separately from automatic rescue."""
+    candidates = {}
+    paths = {}
+    placement_flags = {'overlap_existing_annotation', 'unanchored_genome_search',
+                       'outside_expected_synteny_interval'}
+    for model in models:
+        if (len(model.get('revision_owner_ids', [])) < 2 or not model.get('sequence')
+                or set(model['problems']) - placement_flags):
+            continue
+        evidence = model['evidence']
+        if (not evidence.get('donor') or not evidence.get('query')
+                or any(evidence.get(flag) for flag in ('annevo', 'oriongeno', 'boundary_candidate',
+                                                      'retained_annotation_candidate'))):
+            continue
+        shape = coding_shape(model)
+        if shape not in paths:
+            geometry, gaps = _split_model_geometry(model, ownership)
+            spliced = splice_retained_split_model_gaps(model, gaps, genome, code, params) if genome is not None and gaps else None
+            translations = (tuple(str(Seq(path['sequence']).translate(table=code)).removesuffix('*')
+                                  for path in (model, spliced)) if spliced else ())
+            paths[shape] = model['sequence'], geometry, spliced, translations, {}
+        sequence, geometry, spliced, translations, alignments = paths[shape]
+        if not geometry:
+            continue
+        if model['sequence'] != sequence:
+            raise ValueError('Inconsistent CDS for split model path: ' + str(shape))
+        support = {'donor': evidence['donor'], 'query': evidence['query'],
+                   'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
+        if spliced is not None:
+            donor = proteins[evidence['donor']][evidence['query']]
+            if donor not in alignments:
+                alignments[donor] = split_model_splice_support(*translations, donor, params)
+            alignment = alignments[donor]
+            if alignment is not None:
+                before, after = alignment
+                support.update(coverage=after['coverage'], identity=after['identity'],
+                               splice_revalidation={'original_cds': model['cds'],
+                                                    'original_alignment': before, 'spliced_alignment': after})
+                model, shape = spliced, coding_shape(spliced)
+        key = (shape, tuple(row['gene_id'] for row in geometry))
+        identifier = species + '_ggmerge_' + hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+        sequence_hash = hashlib.sha256(model['sequence'].encode()).hexdigest()
+        candidate = candidates.setdefault(identifier, {
+            'candidate_id': identifier, 'seqid': model['seqid'], 'strand': model['strand'],
+            'cds': model['cds'], 'owner_overlap': geometry,
+            'cds_sha256': sequence_hash, 'support': [],
+        })
+        if candidate['cds_sha256'] != sequence_hash:
+            raise ValueError('Inconsistent CDS for split model candidate: ' + identifier)
+        if support not in candidate['support']:
+            candidate['support'].append(support)
+    for candidate in candidates.values():
+        candidate['support'].sort(key=lambda row: (row['donor'], row['query'], -row['coverage'],
+                                                   -row['identity'], row['flags'],
+                                                   row.get('splice_revalidation', {}).get('original_cds', [])))
+    return [candidates[identifier] for identifier in sorted(candidates)]
 
 
 def consolidate(validated, existing, species, nearest=(), *, retained_paths=None):

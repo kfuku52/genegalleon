@@ -348,8 +348,26 @@ Original ownership uses strand and coding overlap; intron-only or opposite-stran
 overlap does not by itself veto an intact coding model. A single existing owner
 receives revision nominations (direct compact access or legacy
 `revision_candidates.json`) for the refinement stage's normal donor,
-structure and representative-adoption checks. Multi-owner split/merge ambiguity
-is withheld. Same-locus alternative paths require shared coding bases in the
+structure and representative-adoption checks. Rescue publishes candidates for
+[reviewed split-model merging](gene-model-refinement.md#reviewed-split-model-merges)
+in `rescued/<species>/split_model_candidates.json`. A candidate is a validated
+donor-guided genomic coding path spanning two or more consecutive, same-strand
+coding owners. It must cover at least two-thirds of each owner's distinct
+coding bases. Together the owners must cover at least three-quarters of the
+predicted CDS. In a two-owner merge, each owner must also cover at least
+one-fifth of the predicted CDS. Source coding spans must be disjoint, and an
+intervening locus on the same or unknown strand blocks the merge.
+The publication records the predicted CDS blocks and phases, all owner IDs,
+overlap counts, the CDS checksum and donor alignment metrics and placement flags.
+If a predicted exon retains the entire interval between two fragment CDSs,
+rescue tests the splice at those exact boundaries. It uses a spliced path for
+that donor when genomic checks confirm a complete CDS with canonical splices
+and the full protein alignment improves by more than the configured terminal
+alignment margin while preserving donor coverage. The candidate records both
+alignment scores and the original path. Rescue retains the original prediction
+in its model audit.
+Rescue keeps the original models in its augmented outputs. Same-locus
+alternative paths require shared coding bases in the
 same frame. At least 80% overlap of the shorter CDS remains a sufficient
 structural condition. Lower overlap can qualify when a whole-protein alignment
 has at least 90% coverage on both sides and 50% identity, and every shared

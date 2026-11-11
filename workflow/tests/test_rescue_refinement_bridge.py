@@ -7,6 +7,7 @@ from importlib import import_module
 from pathlib import Path
 
 import pytest
+from Bio.Seq import Seq
 
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 sys.path.insert(0, str(SUPPORT))
@@ -159,6 +160,86 @@ def test_weak_primary_cannot_veto_two_independently_measured_rescue_donors():
     row = classify(catalog, imported, edges)[0]
     assert not proposals and row['status'] == 'accepted'
     assert row['donors'] == ['Species_donor2', 'Species_donor3']
+
+
+@pytest.mark.parametrize('case', ['adjacent', 'third_coding_owner', 'intervening_gene', 'opposite_strand', 'frameshift'])
+def test_split_model_proposal_requires_adjacent_same_strand_coding_owners(case):
+    rescue = refinement.rescue
+    owners = [dict(gene_id='left', seqid='chr1', strand='+', start=100, end=130, cds=[[100, 130]]),
+              dict(gene_id='right', seqid='chr1', strand='+', start=160, end=190, cds=[[160, 190]])]
+    if case == 'opposite_strand':
+        owners[1]['strand'] = '-'
+    if case in {'third_coding_owner', 'intervening_gene'}:
+        start = 120 if case == 'third_coding_owner' else 140
+        owners.append(dict(gene_id='third', seqid='chr1', strand='+', start=start, end=start + 6,
+                           cds=[[start, start + 6]]))
+    path = dict(seqid='chr1', strand='+', cds=[[100, 130, 0], [160, 190, 0]],
+                sequence='ATG' + 'AAA' * 18 + 'TAA', coverage=1.0, identity=1.0,
+                problems=['frameshift' if case == 'frameshift' else 'unanchored_genome_search'],
+                evidence={'donor': 'Species_donor', 'query': 'donor_gene'})
+    models = rescue.consolidate([path], owners, 'Species_target')
+    assert models[0]['status'] == 'unresolved'
+    proposals = rescue.split_model_candidates(models, rescue.OwnershipIndex(owners), 'Species_target')
+    assert len(proposals) == (1 if case == 'adjacent' else 0)
+    if proposals:
+        assert proposals[0]['support'][0]['flags'] == ['overlap_existing_annotation', 'unanchored_genome_search']
+
+
+@pytest.mark.parametrize('widths, gap_gene', [([30, 6, 30], False), ([15] * 6, False), ([30, 6, 30], True)])
+def test_split_model_proposal_uses_one_path_for_all_fragments(widths, gap_gene):
+    rescue = refinement.rescue
+    owners, blocks = [], []
+    start = 100
+    for index, width in enumerate(widths):
+        end = start + width
+        owners.append(dict(gene_id=f'fragment{index}', seqid='chr1', strand='+', start=start, end=end,
+                           cds=[[start, end]]))
+        blocks.append([start, end, 0])
+        start = end + 30
+    if gap_gene:
+        start = blocks[-2][1] + 6
+        owners.append(dict(gene_id='intervening', seqid='chr1', strand='+', start=start, end=start + 6,
+                           cds=[[start, start + 6]]))
+    path = dict(seqid='chr1', strand='+', cds=blocks, sequence='ATG' + 'AAA' * (sum(widths) // 3 - 2) + 'TAA',
+                coverage=1.0, identity=1.0, problems=[],
+                evidence={'donor': 'Species_donor', 'query': 'donor_gene'})
+    models = rescue.consolidate([path], owners, 'Species_target')
+    assert models[0]['status'] == 'unresolved'
+    proposals = rescue.split_model_candidates(models, rescue.OwnershipIndex(owners), 'Species_target')
+    if gap_gene:
+        assert proposals == []
+    else:
+        assert len(proposals) == 1
+        assert proposals[0]['cds'] == blocks
+        assert [row['gene_id'] for row in proposals[0]['owner_overlap']] == [row['gene_id'] for row in owners]
+
+
+@pytest.mark.parametrize('canonical, spliced_donor, corrected', [
+    (True, True, True), (False, True, False), (True, False, False),
+])
+def test_retained_split_model_gap_requires_splice_and_improved_donor_support(canonical, spliced_donor, corrected):
+    rescue = refinement.rescue
+    left, right = 'ATG' + 'GCT' * 19, 'TGC' * 19 + 'TAA'
+    gap = ('GT' if canonical else 'AT') + 'C' * 26 + 'AG'
+    sequence = left + gap + right
+    genome = Genome(sequence)
+    intervals = [[100, 160, 0], [190, 250, 0]]
+    owners = [dict(gene_id=f'fragment{i}', seqid='chr1', strand='+', start=a, end=b, cds=[[a, b]])
+              for i, (a, b, _) in enumerate(intervals)]
+    path = dict(seqid='chr1', strand='+', cds=[[100, 250, 0]], frameshift=False,
+                coverage=1.0, identity=1.0, evidence={'donor': 'Species_donor', 'query': 'donor_gene'})
+    params = refinement.DEFAULTS
+    checked = rescue.validate_model(path, genome, 1, params)
+    assert checked['problems'] == []
+    models = rescue.consolidate([checked], owners, 'Species_target')
+    protein = str(Seq(left + right if spliced_donor else sequence).translate()).removesuffix('*')
+    proposals = rescue.split_model_candidates(
+        models, rescue.OwnershipIndex(owners), 'Species_target', genome=genome, params=params,
+        proteins={'Species_donor': {'donor_gene': protein}})
+    assert len(proposals) == 1
+    assert proposals[0]['cds'] == (intervals if corrected else path['cds'])
+    assert ('splice_revalidation' in proposals[0]['support'][0]) is corrected
+    assert models[0]['sequence'] == sequence and models[0]['cds'] == path['cds']
 
 
 @pytest.mark.parametrize('case', ['absent_owner', 'multiple_owners', 'ambiguous_owner'])

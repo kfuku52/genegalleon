@@ -8,10 +8,12 @@ import argparse
 import bisect
 import contextlib
 import copy
+import csv
 import functools
 import gzip
 import hashlib
 import importlib.metadata
+import io
 import json
 import math
 import re
@@ -168,10 +170,54 @@ def revision_models(request, name):
     return iter_revision_models(directory)
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, **parameters):
+def freeze_split_model_merges(approvals, anchor_root, receipts):
+    approvals = Path(approvals).resolve()
+    data = approvals.read_bytes()
+    rows = list(csv.DictReader(io.StringIO(data.decode(), newline=''), delimiter='\t'))
+    if not rows or any(set(row) != {'species', 'candidate_id'} or not all(row.values()) for row in rows):
+        raise ValueError('Split model approvals require species and candidate_id columns and at least one row')
+    requested = defaultdict(set)
+    for row in rows:
+        name, identifier = row['species'], row['candidate_id']
+        if name not in receipts:
+            raise ValueError('Split model approval requires completed rescue for species: ' + name)
+        if identifier in requested[name]:
+            raise ValueError('Duplicate split model approval: ' + identifier)
+        requested[name].add(identifier)
+    publications = {str(approvals): hashlib.sha256(data).hexdigest()}
+    selected = {}
+    for name, identifiers in sorted(requested.items()):
+        path = anchor_root / 'rescued' / name / 'split_model_candidates.json'
+        receipt = (path.parent / 'receipt.json').read_bytes()
+        if hashlib.sha256(receipt).hexdigest() != receipts[name]:
+            raise ValueError('Rescue worker receipt changed during planning: ' + name)
+        expected = json.loads(receipt)['files'].get(path.name)
+        if expected is None:
+            raise ValueError('Rescue has no verified split model candidate publication for: ' + name)
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ValueError('Split model candidates differ from the verified rescue publication: ' + name)
+        candidates = {row['candidate_id']: row for row in json.loads(data)}
+        claimed = set()
+        selected[name] = []
+        for identifier in sorted(identifiers):
+            if identifier not in candidates:
+                raise ValueError('Unknown split model candidate for ' + name + ': ' + identifier)
+            candidate = candidates[identifier]
+            owners = {row['gene_id'] for row in candidate['owner_overlap']}
+            if owners & claimed:
+                raise ValueError('Approved split model candidates share a source gene: ' + identifier)
+            claimed.update(owners)
+            selected[name].append(candidate)
+        publications[str(path)] = expected
+    return selected, publications
+
+
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
+        receipts = {}
         if rescue_output:
             if inputs:
                 raise ValueError('Choose --inputs or --rescue-output; explicit inputs must not be silently ignored')
@@ -184,7 +230,6 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             augmented = anchor_root / 'augmented'
             revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if augmented.exists():
-                receipts = {}
                 for name in anchors['species']:
                     directory = anchor_root / 'rescued' / name
                     if not rescue.verified(directory, rescue.rescue_key(anchor_root, anchors, name)):
@@ -290,6 +335,12 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if oriongeno:
             files.extend(oriongeno['files'])
         tool = shutil.which('miniprot') if params['mode'] != 'off' else None
+        approved_merges, merge_publications = {}, {}
+        if split_model_merges:
+            if not receipts or params['mode'] != 'conservative':
+                raise ValueError('Split model merges require completed --rescue-output and --mode conservative')
+            approved_merges, merge_publications = freeze_split_model_merges(split_model_merges, anchor_root, receipts)
+            files.extend(merge_publications)
         request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
@@ -298,6 +349,10 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
+        if approved_merges:
+            if any(request['files'][path] != expected for path, expected in merge_publications.items()):
+                raise ValueError('Split model candidate publication changed during planning')
+            request['split_model_merges'] = approved_merges
         if annevo:
             request['annevo'] = annevo
         if oriongeno:
@@ -1730,6 +1785,70 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
 
 
 @invocation_cached
+def prepare_split_model_merges(request, name, db, selected):
+    """Bind each reviewed path to the current catalog loci and frozen genome."""
+    reviews = request['split_model_merges'][name]
+    source = request['sources'][name]
+    parameters = parameters_for(request, name)
+    targets = {row['gene_id'] for review in reviews for row in review['owner_overlap']}
+    owners = {}
+    for gene in iter_loci(db, name):
+        ids = {row['source_gene_id'] for row in gene['candidates'] if row['origin'] == 'original'}
+        if ids & targets:
+            if len(ids) != 1 or gene.get('ambiguous_coordinates') or ids & owners.keys():
+                raise ValueError('Ambiguous catalog ownership for split model merge: ' + gene['gene_id'])
+            owners[ids.pop()] = gene['gene_id']
+    if targets != owners.keys() or len(set(owners.values())) != len(targets):
+        raise ValueError('Approved split model owners do not match distinct catalog loci: ' + name)
+    with open_text(Path(source['gff'])) as handle:
+        ownership = rescue.OwnershipIndex(rescue.original_ownership(handle, rescue.attributes))
+    code = source['genetic_code']
+    genes, audit, footprints = [], [], []
+    with indexed_genome(source['genome']) as genome:
+        for review in reviews:
+            identifier = review['candidate_id']
+            blocks = review['cds']
+            coordinates = {'seqid': review['seqid'], 'strand': review['strand'], 'cds': blocks,
+                           'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
+            if rescue.split_model_geometry(coordinates, ownership) != review['owner_overlap']:
+                raise ValueError('Approved split model ownership changed: ' + identifier)
+            support = next((row for row in review['support']
+                            if not rescue.homology_problems(row['coverage'], row['identity'], parameters)), None)
+            if support is None:
+                raise ValueError('Approved split model does not meet refinement homology thresholds: ' + identifier)
+            checked = rescue.validate_model({**coordinates, 'coverage': support['coverage'],
+                                             'identity': support['identity'], 'frameshift': False},
+                                            genome, code, parameters)
+            sequence = checked['sequence']
+            if (checked['problems'] or checked['cds'] != blocks
+                    or hashlib.sha256(sequence.encode()).hexdigest() != review['cds_sha256']):
+                raise ValueError('Approved split model no longer has a complete validated CDS: ' + identifier)
+            transcript = identifier + '.t1'
+            candidate = {'candidate_id': identifier, 'gene_id': identifier, 'species': name,
+                         'source_gene_id': identifier, 'source_transcript_id': transcript, 'gene_token': identifier,
+                         'seqid': review['seqid'], 'strand': review['strand'], 'blocks': blocks,
+                         'cds': sequence, 'origin': 'split_model_merge',
+                         'support': {'donors': sorted({row['donor'] for row in review['support']})}}
+            candidate['quality'] = validate_candidate(candidate, code)
+            if not candidate['quality']['valid_orf'] or not candidate['protein']:
+                raise ValueError('Approved split model cannot be admitted for translation: ' + identifier)
+            if identifier in selected:
+                raise ValueError('Approved split model ID collides with an existing catalog locus: ' + identifier)
+            genes.append({'gene_id': identifier, 'seqid': review['seqid'], 'strand': review['strand'],
+                          'candidates': [candidate]})
+            selected[identifier] = {'species': name, 'gene_id': identifier, 'candidate_id': identifier,
+                                    'source_transcript_id': transcript, 'status': 'merged_split_model',
+                                    'reason': 'reviewed_rescue_split_model'}
+            audit.append({**review, 'species': name, 'gene_id': identifier, 'source_transcript_id': transcript,
+                          'replaced_gene_ids': [owners[row['gene_id']] for row in review['owner_overlap']]})
+            footprints.append({**coordinates, 'gene_id': identifier})
+    approved_paths = rescue.OwnershipIndex(footprints)
+    for path in footprints:
+        if approved_paths.overlapping(path, owner=path['gene_id']):
+            raise ValueError('Approved split model coding paths overlap: ' + path['gene_id'])
+    return genes, audit
+
+
 def finalize(root, value):
     final = select(root, value, predictions=True)
     db = catalog_index(root, value, predictions=True)
@@ -1741,9 +1860,24 @@ def finalize(root, value):
         selected_by_species = defaultdict(list)
         for selected_row in selections:
             selected_by_species[selected_row['species']].append(selected_row)
+        merged_by_species, retired_by_species, merges = {}, {}, []
+        request = value['request']
+        for name in request.get('split_model_merges', {}):
+            selected = {row['gene_id']: row for row in selected_by_species[name]}
+            merged_by_species[name], audit = prepare_split_model_merges(request, name, db, selected)
+            selected_by_species[name] = list(selected.values())
+            retired_by_species[name] = {gene_id for row in audit for gene_id in row['replaced_gene_ids']}
+            merges.extend(audit)
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates', 'species_transcript', 'utr_audit'):
             (tmp / role).mkdir()
-        shutil.copyfile(final / 'representative_map.tsv', tmp / 'representative_map.tsv')
+        map_path = tmp / 'representative_map.tsv'
+        if merges:
+            rescue.write_tsv(map_path, MAP_FIELDS, [[row.get(k, '') for k in MAP_FIELDS]
+                             for name in value['species'] for row in selected_by_species[name]
+                             if row['gene_id'] not in retired_by_species.get(name, ())])
+            atomic_json(tmp / 'split_model_merges.json', merges)
+        else:
+            shutil.copyfile(final / 'representative_map.tsv', map_path)
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         unpublished_candidates, utr_summaries = [], []
@@ -1770,16 +1904,52 @@ def finalize(root, value):
             else:
                 shutil.copyfile(source['gff'], source_annotation)
             original = source_annotation.read_bytes().decode('utf-8')
+            source_graph = _gff_source_graph(original)
+            retired = retired_by_species.get(name, set())
+            new_genes = merged_by_species.get(name, [])
+            if new_genes:
+                occupied = source_graph[1].keys() | source_graph[2].keys()
+                occupied.update(row['source_transcript_id'] for row in selected_by_species[name]
+                                if row['status'] != 'merged_split_model')
+                for gene in new_genes:
+                    candidate = gene['candidates'][0]
+                    tid = candidate['source_transcript_id']
+                    identifiers = {gene['gene_id'], tid, *(f'{tid}.{kind}{i}' for kind in ('exon', 'cds')
+                                   for i in range(1, len(candidate['blocks']) + 1))}
+                    if identifiers & occupied:
+                        raise ValueError('Approved split model GFF ID collides: ' + gene['gene_id'])
+                    occupied.update(identifiers)
             directive = re.search(r'^##FASTA(?:\r?\n|$)', original, flags=re.MULTILINE)
             sep, embedded = ('##FASTA', original[directive.start() + len('##FASTA'):]) if directive else ('', '')
             additions, predicted_rows, original_transcripts, expanded_bounds, analysis_candidates = [], [], set(), {}, []
             with paths['cds'].open('w') as cds, paths['protein'].open('w') as pep, paths['gff'].open('w') as gff, \
                     paths['analysis_cds'].open('w') as analysis_cds, \
                     (tmp / 'all_candidates' / (name + '.fa')).open('w') as all_cds:
-                for gene in catalog['loci']:
+                for gene in chain(catalog['loci'], new_genes):
                     chosen = selected[gene['gene_id']]
                     candidates = {c['candidate_id']: c for c in gene['candidates']}
                     candidate = candidates[chosen['candidate_id']]
+                    for c in candidates.values():
+                        if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
+                                and not c.get('same_coordinate_source_repair') and not c['quality'].get('rna_supported')
+                                and chosen['status'] == 'ambiguous_correspondence'):
+                            # Keep copy-unresolved homology in the prediction audit.
+                            unpublished_candidates.append({'species': name, 'gene_id': gene['gene_id'],
+                                'candidate_id': c['candidate_id'], 'reason': chosen['reason']})
+                            continue
+                        all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
+                        if c['origin'] == 'split_model_merge':
+                            additions.append(candidate_gff(gene, c, name))
+                        elif c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
+                            # Preserve the original gene and attach only new transcript/CDS rows.
+                            lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
+                                                  gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
+                            start, end = min(b[0] for b in c['blocks']), max(b[1] for b in c['blocks'])
+                            old = expanded_bounds.get(c['source_gene_id'], (start, end))
+                            expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
+                            additions.extend(lines)
+                    if gene['gene_id'] in retired:
+                        continue
                     exportable = bool(candidate['cds']) and bool(candidate['blocks']) and not gene.get('ambiguous_coordinates') and not candidate['quality'].get('sequence_mismatch') and not candidate['quality'].get('structure_problem')
                     if exportable:
                         cds.write(f">{gene['gene_id']}\n{candidate['cds']}\n")
@@ -1806,28 +1976,10 @@ def finalize(root, value):
                         original_transcripts.add(candidate['source_transcript_id'])
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
-                    for c in candidates.values():
-                        if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
-                                and not c.get('same_coordinate_source_repair') and not c['quality'].get('rna_supported')
-                                and chosen['status'] == 'ambiguous_correspondence'):
-                            # Keep the proposal in the catalog/prediction audit,
-                            # rather than publishing a copy-unresolved homology
-                            # model in the active paired full GFF/CDS view.
-                            unpublished_candidates.append({'species': name, 'gene_id': gene['gene_id'],
-                                'candidate_id': c['candidate_id'], 'reason': chosen['reason']})
-                            continue
-                        all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
-                        if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
-                            # Preserve the original gene and attach only new transcript/CDS rows.
-                            lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
-                                                  gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
-                            start, end = min(b[0] for b in c['blocks']), max(b[1] for b in c['blocks'])
-                            old = expanded_bounds.get(c['source_gene_id'], (start, end))
-                            expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
-                            additions.extend(lines)
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
-                source_graph = _gff_source_graph(original)
                 gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
+            for identifier in retired:
+                del selected[identifier]
             import transcript_utrs
             native_prediction = value['request'].get('oriongeno', {}).get('predictions', {}).get(name)
             native_models = transcript_utrs.load_models(native_prediction['gff']) if native_prediction else None
@@ -1879,9 +2031,9 @@ def finalize(root, value):
         fields = list(rows[0])
         rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
         atomic_json(tmp / 'changes.json', changes)
-        atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(selections),
-                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired'} for r in selections),
-                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in selections),
+        atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(changes),
+                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired', 'merged_split_model'} for r in changes),
+                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in changes),
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
         representative_map_proof.check()
     return stage(root, 'effective', {'dependencies': dependencies}, build)
@@ -2034,6 +2186,7 @@ def parser():
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--split-model-merges', type=Path, help='Reviewed rescue merge candidates TSV: species,candidate_id')
     prep.add_argument('--oriongeno-inputs', type=Path, help='Native OrionGeno TSV: species,gff,receipt; also supplies UTRs')
     prep.add_argument('--annevo-inputs', type=Path, help='Source-bound native ANNEVO candidate TSV: species,gff,receipt')
     prep.add_argument('--species-profiles', type=Path, help='Explicit target-species prediction parameter overrides (TSV)')
@@ -2069,6 +2222,7 @@ def _main():
     if args.command == 'plan':
         plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
              species_profiles=args.species_profiles, annevo_inputs=args.annevo_inputs, oriongeno_inputs=args.oriongeno_inputs,
+             split_model_merges=args.split_model_merges,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:

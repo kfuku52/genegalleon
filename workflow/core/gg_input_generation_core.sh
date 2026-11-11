@@ -30,6 +30,7 @@ gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
+gene_model_refinement_split_model_merges="${gene_model_refinement_split_model_merges:-}"
 gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
 gene_model_refinement_min_support="${gene_model_refinement_min_support:-2}"
 gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-32}"
@@ -2733,6 +2734,7 @@ prepare_gene_model_refinement() {
   fi
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")

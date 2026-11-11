@@ -38,6 +38,8 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     rows = verify_inputs(root / "effective" / "inputs.tsv")
     plan_hash = digest(root / "plan.json")
     changes = verified_json(root / "effective", "changes.json", plan_hash)
+    merges = (verified_json(root / "effective", "split_model_merges.json", plan_hash)
+              if any(row["status"] == "merged_split_model" for row in changes) else [])
     selections, selected_by_species = {}, defaultdict(list)
     for selected in changes:
         key = selected["species"], selected["gene_id"]
@@ -60,14 +62,15 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
             "accepted_repair_paths": sum(r["change_type"] == "model_revision" for r in accepted),
             "accepted_isoform_paths": sum(r["change_type"] == "isoform_addition" for r in accepted),
             "accepted_loci": len({r["gene_id"] for r in accepted}),
-            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired"} for r in selected),
+            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired", "merged_split_model"}
+                                           for r in selected),
             "predicted_representatives": sum(r["selected_origin"] == "predicted" for r in selected),
             "proposed_paths": len(models) - len(accepted),
             "selection_status": dict(Counter(r["status"] for r in selected)),
             "proposal_reasons": dict(Counter(p for r in models if r["status"] != "accepted" for p in r["problems"])),
             "source_fasta_mapping": metadata["summary"]["fasta_mapping"],
         }
-        detail_keys.update((name, r["gene_id"]) for r in accepted)
+        detail_keys.update((name, r["gene_id"]) for r in accepted if (name, r["gene_id"]) in selections)
         detail_keys.update((name, r["gene_id"]) for r in selected if r["status"] in {"conserved", "sequence_repaired"})
     for r in table(root / "effective" / "effective_exclusions.tsv"):
         stats[r["species"]].setdefault("effective_exclusions", 0)
@@ -92,7 +95,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         if key not in ordered:
             ordered.append(key)
     proposals = sorted(
-        {(n, r["gene_id"]) for n, models in predictions.items() for r in models},
+        {(n, r["gene_id"]) for n, models in predictions.items() for r in models if (n, r["gene_id"]) in selections},
         key=lambda key: (key[0] != preferred_species, key),
     )
     for key in proposals:
@@ -152,6 +155,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         "effective_receipt_sha256": digest(root / "effective" / "receipt.json"),
         "species": stats, "details": details, "changed_loci_available": len(detail_keys),
         "coding_path_phase_loci_available": len(phase_detail_keys),
+        "split_model_merges": merges,
         "gallery_limit": max_loci, "performance": performance,
         "limits": "Counts cover all species and paths. The locus gallery is bounded. Ranking margins are not probabilities. RNA chain support does not establish translation initiation. Accepted paths and selected representatives are distinct decisions.",
     }
@@ -301,6 +305,11 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
         html_text += "".join('<td>' + (html.escape(name.replace("_", " ")) if not key else "Not analysed" if status == "not_analysed" else f'{stats.get(key, 0):,}') + '</td>'
                                     for _, key in columns) + '</tr>'
     html_text += '</tbody></table></div></details>'
+    if data.get("split_model_merges"):
+        html_text += '<details><summary>Reviewed split-model merges</summary><ul>' + "".join(
+            '<li>' + html.escape(row["species"] + ' ' + row["gene_id"] + ' replaces '
+                                 + ', '.join(row["replaced_gene_ids"])) + '</li>'
+            for row in data["split_model_merges"]) + '</ul></details>'
     html_text += f'<p>Gallery: {len(cards)} loci; all changed/accepted loci available: {data["changed_loci_available"]}. '
     html_text += f'Source coding-path phase resolutions available: {data["coding_path_phase_loci_available"]}. '
     html_text += "Phase resolutions and rejected proposals fill unused gallery slots. Exon plots use genomic spacing and 1-based display coordinates.</p>"

@@ -376,6 +376,7 @@ def rescue(root, plan, name, cpus):
         counts['unchanged_strict_rejections'] = counts['raw_records'] - len(current)
         with r.open_text(Path(source['gff'])) as handle:
             existing = r.original_ownership(handle, r.attributes)
+        ownership = r.OwnershipIndex(existing)
         proteins = {donor: {i: s for i, _, s in r.fasta_records(root / 'prepared' / donor / 'genes.pep')}
                     for donor in [name, *plan['donors'][name]]}
         native_audit = None
@@ -388,11 +389,11 @@ def rescue(root, plan, name, cpus):
             if plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension':
                 import rescue_native_genomewide_reuse
                 additions, native_audit = rescue_native_genomewide_reuse.fresh_candidates(
-                    root, plan, name, proteins, genome, r.OwnershipIndex(existing), params, tmp, cpus, models)
+                    root, plan, name, proteins, genome, ownership, params, tmp, cpus, models)
                 extra.extend(additions)
                 models.extend(additions)
             placement = r.reassess_unanchored_models(models, params['unanchored_min_species'],
-                                                     ownership=r.OwnershipIndex(existing))
+                                                     ownership=ownership)
             r.consolidate(models, existing, name, plan.get('nearest_references', {}).get(name, ()),
                           retained_paths=retained)
             for model in models:
@@ -401,6 +402,8 @@ def rescue(root, plan, name, cpus):
                     if fresh['problems'] or fresh['cds'] != model['cds'] or fresh['sequence'] != model['sequence']:
                         raise ValueError('Admitted historical CDS failed fresh genomic QC')
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
+            r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
+                models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
         if native_audit is not None:
             import rescue_native_genomewide
             rescue_native_genomewide.finish_audit(native_audit, models)
@@ -420,6 +423,7 @@ def rescue(root, plan, name, cpus):
                                      append_partial_evidence=native_audit is not None)
         # Copy every other receipt member without truncating a shared inode.
         mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
+                   'split_model_candidates.json',
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
         if native_audit is not None:
             mutable.add('oriongeno_genomewide.json')

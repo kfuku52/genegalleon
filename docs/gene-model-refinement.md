@@ -113,8 +113,8 @@ flowchart LR
    and independent protein similarity agree. Predictions must have the correct
    locus/strand, canonical splice sites, consistent phases, genomic start/stop,
    sufficient protein coverage/identity and no frameshift, internal stop or
-   assembly ambiguity. Overlap with another locus remains a proposal. Split or
-   merged genes are not applied automatically.
+   assembly ambiguity. Overlap with another locus remains a proposal. Explicitly
+   reviewed merges of consecutive fragments can be published through the split-model interface.
 4. **Effective inputs:** retain original transcripts in `full_annotation`, add
    accepted paths with stable assembly/coordinate/phase/CDS-derived IDs, and
    publish a selected GFF with the exact transcript behind every representative.
@@ -248,6 +248,7 @@ Important settings:
 | `gene_model_refinement_inputs` | blank | Optional original species CDS/GFF/genome TSV, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
+| `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
 | `gene_model_refinement_min_margin` | `0.10` | Experimental score margin for adoption. |
 | `gene_model_refinement_min_support` | `2` | Independent donor species for acceptance/adoption. |
 | `gene_model_refinement_candidate_limit` | `32` | Exceeding the selection limit abstains; prediction does not silently truncate alternatives. |
@@ -259,6 +260,37 @@ requires reciprocal protein coverage ≥0.75 and aligned identity ≥0.35, as we
 as its margin and donor gates. These distinct comparisons are not accuracy
 estimates. The new output namespace does not replace rescue
 outputs or install files into curated `workspace/input`.
+
+### Reviewed split-model merges
+
+Review `rescued/<species>/split_model_candidates.json` from a completed rescue
+run with split-model support, including donor support and alternative candidate
+paths for the same fragments. Each candidate links two or more consecutive
+fragments through one complete donor-supported genomic CDS. Rescue can search
+incomplete and copy-ambiguous matches through its bounded whole-genome fallback.
+Candidate placement flags and competing structures warrant review before
+changing the locus count.
+
+Make a tab-separated file with columns `species` and `candidate_id`, with one
+row for each approved candidate. Use a fresh refinement output directory and
+set `gene_model_refinement_split_model_merges` to that file and
+`gene_model_refinement_rescue_dir` to the completed rescue directory. The CLI
+equivalent is:
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output RESCUE_DIR --output REFINEMENT_DIR \
+  --mode conservative --split-model-merges reviewed_merges.tsv
+python workflow/support/gene_model_refinement.py run --output REFINEMENT_DIR
+```
+
+Refinement freezes the review table and rescue candidate publication. It
+rejects duplicate approvals, shared source genes and paths whose ownership or
+genomic CDS fails revalidation. The approved model replaces all its fragments in
+the representative CDS, protein, transcript, GFF and analysis views. The
+original models remain in the source and full annotation views.
+`effective/split_model_merges.json` records all original owners and their
+retired representative IDs. Use `effective/inputs.tsv` for downstream analysis.
 
 Slurm submission uses the existing array helper:
 
