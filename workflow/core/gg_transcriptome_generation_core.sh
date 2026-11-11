@@ -37,6 +37,7 @@ transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"
 transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}"
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+amalgkit_rrna_filter="${amalgkit_rrna_filter:-no}"
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"
 amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"
@@ -3672,6 +3673,22 @@ run_amalgkit_getfastq_or_fallback() {
 
 
 
+require_rnaspades_memory_budget() {
+  if [[ "${GG_SCHEDULER_KIND:-}" == slurm || -n "${SLURM_JOB_ID:-}" ]]; then
+    case "${GG_MEM_TOTAL_SOURCE:-unknown}" in
+      slurm-env|slurm-alloc-tres|explicit) ;;
+      *)
+        echo "rnaSPAdes: Slurm memory could not be verified. Use --mem/--mem-per-cpu or set GG_MEM_TOTAL_GB to the confirmed allocation. Refusing the estimated budget." >&2
+        return 1
+        ;;
+    esac
+  fi
+  if [[ ! "${1:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "rnaSPAdes: no memory remains after the assembly reserve. Increase the allocation or correct the reserve." >&2
+    return 1
+  fi
+}
+
 if [[ "${GG_CORE_SOURCE_ONLY:-0}" == "1" ]]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -4194,6 +4211,9 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
     assembly_ram_reserved_gb=${GG_MEM_TOOL_RESERVE_GB}
   fi
   assembly_mem_gb=$((${GG_MEM_TOTAL_GB} - ${assembly_ram_reserved_gb}))
+  if [[ "${effective_assembly_method}" == 'rnaspades' ]]; then
+    require_rnaspades_memory_budget "${assembly_mem_gb}" || exit 1
+  fi
   if [[ ${assembly_cpus} -lt 1 ]]; then
     echo "Adjusted assembly_cpus from ${assembly_cpus} to 1 because it must be >=1."
     assembly_cpus=1

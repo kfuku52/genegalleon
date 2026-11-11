@@ -87,6 +87,14 @@ Inside the runtime, GeneGalleon consistently uses:
 Those are populated from SLURM/PBS/UGE values when available and then forwarded into the container as both `SINGULARITYENV_*` and `APPTAINERENV_*`.
 `GG_MEM_TOTAL_GB` records the scheduler allocation. `GG_MEM_TOOL_GB` is the smaller memory budget passed to tools that accept a maximum-memory option, leaving headroom for the shell, Python/R helpers, Java overhead, compression, and other container-side processes. By default the reserved headroom is `GG_MEM_TOOL_RESERVE_GB`, a bounded absolute reserve that scales down for small jobs but saturates at 4 GB for larger jobs. Set `GG_MEM_TOOL_RESERVE_GB` explicitly when a workflow or site needs more headroom; set it to `0` only when you intentionally want tool limits to consume the full job allocation.
 
+On Slurm, GeneGalleon uses the memory allocation exported by Slurm. If those
+variables are missing and there is no explicit memory override, it can recover
+the allocation from the current single-node job's allocated resources via
+`scontrol`. The log records the source of the budget. rnaSPAdes refuses to
+start if the Slurm budget is only an estimate, or if the assembly reserve leaves
+no usable memory. On sites where the allocation cannot be queried, set
+`GG_MEM_TOTAL_GB` to the confirmed allocation before running the entrypoint.
+
 ## Container activation and bind mounts
 
 `gg_entrypoint_activate_container_runtime` performs the second half of setup:
