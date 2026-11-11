@@ -20,7 +20,9 @@ def dispatch_download_jobs(download_jobs, max_workers, headers, timeout, overwri
     """
     queues = defaultdict(deque)
     for job in download_jobs:
-        key = request_database(job["url"], job["provider"]) if urlparse(job["url"]).scheme in ("http", "https", "ftp") else "local"
+        key = "local"
+        if job.get("import_spec") is None and urlparse(job["url"]).scheme in ("http", "https", "ftp"):
+            key = request_database(job["url"], job["provider"])
         queues[key].append(job)
     keys = deque(queues)
     active = defaultdict(int)

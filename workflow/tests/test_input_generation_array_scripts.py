@@ -692,6 +692,78 @@ def test_legacy_download_rejects_original_changed_before_receipt(bound_staging_p
     assert not Path(str(plan) + '.tasks/1.json').exists()
 
 
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (None, ""),
+        ("url", "import URL does not match"),
+        ("size", "expected size"),
+        ("checksum", "checksum mismatch"),
+        ("existing", "checksum mismatch"),
+        ("format", "expected gzip signature"),
+    ],
+)
+def test_stage_verified_public_download_import(tmp_path, error, message):
+    downloads = tmp_path / "downloads"
+    source = tmp_path / "transferred.cds.gz"
+    contents = b">gene1\nATGAAATAA\n"
+    source.write_bytes(contents if error == "format" else gzip.compress(contents))
+    url = "https://publisher.invalid/species.cds.fa.gz"
+    digest = hashlib.md5(source.read_bytes(), usedforsecurity=False).hexdigest()
+    row = {
+        "provider": "direct", "id": "release", "species_key": "Arabidopsis_thaliana",
+        "cds_url": url, "cds_import_url": url if error != "url" else url + "?other=1",
+        "cds_import_path": str(source),
+        "cds_import_size": source.stat().st_size + (error == "size"),
+        "cds_import_checksum": f"md5:{digest if error != 'checksum' else '0' * 32}",
+    }
+    manifest = tmp_path / "manifest.tsv"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=row.keys(), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+
+    plan = tmp_path / "plan.json"
+    planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                         "--download-dir", str(downloads), "--stage-downloads", "--outfile", str(plan))
+    assert planned.returncode == 0, planned.stderr
+    staged_plan = json.loads(plan.read_text())
+    plan_hash = hashlib.sha256(plan.read_bytes()).hexdigest()
+    target = (Path(staged_plan["tasks"][0]["download_dir"]) / "staged" / plan_hash
+              / "Direct" / "species_wise_original" / row["species_key"] / "species.cds.fa.gz")
+    if error == "existing":
+        target.parent.mkdir(parents=True)
+        original = bytearray(source.read_bytes())
+        original[4] ^= 1  # Change the gzip header mtime and keep both size and gzip integrity.
+        target.write_bytes(original)
+
+    staged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    receipts = Path(str(plan) + ".tasks")
+    if error:
+        assert staged.returncode != 0 and message in staged.stderr, staged.stderr
+        assert not (receipts / "1.json").exists()
+        if error == "existing":
+            assert target.read_bytes() == original
+        else:
+            assert not list(downloads.rglob("species.cds.fa.gz"))
+        assert not list(downloads.rglob(".gg-import-*"))
+        return
+
+    assert staged.returncode == 0, staged.stdout + staged.stderr
+    task = json.loads((receipts / "1.json").read_text())["task"]
+    payload = Path(task["cds_path"])
+    assert payload.read_bytes() == source.read_bytes()
+    assert task["input_sha256"][str(payload)] == hashlib.sha256(source.read_bytes()).hexdigest()
+    with (receipts / "1.resolved.tsv").open() as handle:
+        resolved = next(csv.DictReader(handle, delimiter="\t"))
+    assert resolved["cds_url"] == url
+    assert resolved["cds_import_checksum"] == f"md5:{digest}"
+    source.unlink()
+    restaged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    assert restaged.returncode == 0, restaged.stdout + restaged.stderr
+    assert gzip.decompress(payload.read_bytes()) == contents
+
+
 def test_bound_sources_preserve_formatted_outputs_without_raw_copy_and_reject_changes(tmp_path):
     raw = tmp_path / "raw"
     species = "Arabidopsis_thaliana"

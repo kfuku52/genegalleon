@@ -27,6 +27,28 @@ not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
 the merged species summary and resolved download manifest.
 
+### Import a verified copy of a public download
+
+For an explicit `direct` source, keep the publisher's `<role>_url` and add
+`<role>_import_path`, `<role>_import_url`, `<role>_import_size`, and
+`<role>_import_checksum`. Replace `<role>` with `cds`, `gff`, `gbff`, or
+`genome`. For example, `genome_import_path` is the absolute path to the
+downloaded file as seen by the prepare job. Use the URL recorded when the
+file was fetched for `genome_import_url`, its verified byte count for
+`genome_import_size`, and the publisher digest as `sha256:<hex>` or
+`md5:<hex>`. The import URL must match the manifest source URL exactly.
+Imports apply to whole public HTTP, HTTPS, or FTP files.
+
+Prepare verifies the size, digest, and file integrity before publishing a
+copy in the ordinary raw download directory. The resolved manifest retains
+the publisher URL and import evidence. A valid existing copy is reused
+after verification, so the transfer copy can be removed after prepare.
+An import failure stops staging of the affected inputs. Other roles can
+continue using regular download sources. The same columns work in the
+standalone input formatter's download manifest.
+
+### Bind existing local sources
+
 For existing raw files, a manifest row can opt into `bind_local_sources=1`.
 Every supplied role must then use an absolute `file://` URL without an archive
 member. Prepare validates and binds the frozen source hashes directly; it does

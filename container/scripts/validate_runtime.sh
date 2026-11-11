@@ -152,8 +152,12 @@ probe_commands "${required_rows[@]}" "${optional_rows[@]}"
 required_failed=0
 library_required=0
 nwkit_required=0
+busco_required=0
 for row in "${required_rows[@]}"; do
   IFS=$'\t' read -r env_name command_name <<< "${row}"
+  if [[ "${env_name}" == "base" && "${command_name}" == "busco" ]]; then
+    busco_required=1
+  fi
   if [[ "${command_name}" == "nwkit" ]]; then
     nwkit_required=1
   fi
@@ -164,6 +168,18 @@ for row in "${required_rows[@]}"; do
     required_failed=1
   fi
 done
+
+if [[ "${busco_required}" -eq 1 ]]; then
+  busco_log="$(dirname "${report_file}")/busco_genome_validation.txt"
+  if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/../testdata/busco_genome_smoke/check.py" > "${busco_log}" 2>&1; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "BUSCO genome mode" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "BUSCO genome mode" "0" >> "${report_file}"
+    echo "[validate_runtime] BUSCO genome-mode smoke test failed."
+    cat "${busco_log}"
+    required_failed=1
+  fi
+fi
 
 if [[ "${nwkit_required}" -eq 1 ]]; then
   nwkit_log="$(dirname "${report_file}")/nwkit_reconciliation_validation.txt"

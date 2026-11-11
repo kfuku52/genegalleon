@@ -45,6 +45,7 @@ base	trimal
 base	corset
 base	augustus
 base	busco
+base	stats.sh
 base	hmmsearch
 base	metaeuk
 base	prodigal

@@ -1,6 +1,58 @@
 # ruff: noqa: E501,F403,F405
 
+import hashlib
+
+import pytest
 from format_species_download_helpers import *
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_download_only_imports_verified_genome_and_annotation(tmp_path, conflict):
+    manifest = tmp_path / "download.tsv"
+    resolved = tmp_path / "resolved.tsv"
+    downloads = tmp_path / "downloads"
+    species = "Arabidopsis_thaliana"
+    row = {"provider": "direct", "id": "assembly-v1", "species_key": species}
+    sources = {
+        "genome": ("assembly.fa.gz", b">chr1\nATGAAATAA\n"),
+        "gff": ("annotation.gff.gz", b"##gff-version 3\nchr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds\n"),
+    }
+    for role, (filename, content) in sources.items():
+        payload = gzip.compress(content)
+        transferred = tmp_path / ("transferred-" + filename)
+        transferred.write_bytes(payload)
+        url = f"https://publisher.invalid/{filename}"
+        row.update({
+            f"{role}_url": url, f"{role}_import_url": url, f"{role}_import_path": str(transferred),
+            f"{role}_import_size": len(payload), f"{role}_import_checksum": f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        })
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=row.keys(), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+        if conflict:
+            writer.writerow(dict(row, id="assembly-v2"))
+
+    command = ("--provider", "direct", "--download-manifest", str(manifest), "--download-dir", str(downloads),
+               "--resolved-manifest-output", str(resolved), "--download-only")
+    result = run_script(*command)
+    if conflict:
+        assert result.returncode != 0 and "same import destination" in result.stderr
+        assert not list(downloads.rglob("*.gz"))
+        return
+    assert result.returncode == 0, result.stderr
+    with resolved.open() as handle:
+        saved = next(csv.DictReader(handle, delimiter="\t"))
+    for role, (filename, content) in sources.items():
+        target = downloads / "Direct" / "species_wise_original" / species / filename
+        assert gzip.decompress(target.read_bytes()) == content
+        assert saved[f"{role}_url"] == row[f"{role}_url"]
+        assert saved[f"{role}_import_checksum"] == row[f"{role}_import_checksum"]
+        Path(row[f"{role}_import_path"]).unlink()
+
+    reused = run_script(*command)
+    assert reused.returncode == 0, reused.stderr
+    assert "files downloaded=0" in reused.stdout
 
 
 def test_download_manifest_then_format_ensembl(tmp_path):

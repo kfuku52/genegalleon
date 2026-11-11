@@ -60,6 +60,7 @@ trinity
 
 # BUSCO runtime dependency toolchain (BUSCO itself is installed
 # from the current upstream branch via pip to avoid conda sepp/gsl solver conflicts).
+bbmap
 hmmer
 metaeuk
 prodigal
