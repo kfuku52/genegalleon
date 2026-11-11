@@ -1050,7 +1050,7 @@ def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changin
                                       "chr1\ts\tmRNA\t1\t50\t.\t+\t.\tID=t1;Parent=g\n"
                                       "chr1\ts\tCDS\t1\t3\t.\t+\t0\tParent=t1\n"
                                       "chr1\ts\tCDS\t45\t50\t.\t+\t0\tParent=t1\n")
-    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus, *, compact):
         return [dict(query=region["id"], seqid=seqid, strand="+", cds=[[0 - start, 3 - start, 0], [44 - start, 50 - start, 0]],
                      frameshift=False, coverage=1.0, identity=1.0)
                 for (seqid, start, _end), regions in windows.items() for region in regions]
@@ -1115,7 +1115,7 @@ def test_refined_representative_preserves_historical_rescue_locus_without_borrow
             if edge['species_' + side] == name:
                 edge['gene_' + side] = gene_id
     write_tsv(edges, list(links[0]), links)
-    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus, *, compact):
         return [dict(query=region['id'], seqid=seqid, strand='+', cds=[[94 - start, 112 - start, 0]],
                      frameshift=False, coverage=1., identity=1.)
                 for (seqid, start, _end), regions in windows.items() for region in regions]

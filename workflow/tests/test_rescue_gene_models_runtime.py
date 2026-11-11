@@ -7,6 +7,7 @@ import json
 import random
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -351,8 +352,16 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models)
         assert not any((b / filename).exists() for filename in (
             "models.json", "partial_models.json", "revision_candidates.json", "regions.fa", "queries.fa",
             "genome.gff", "unresolved.fa", "unresolved.unique.fa", "genome.covered.unique.fa"))
-        assert not list((b / "intervals").glob("*/region.fa"))
-        assert not list((b / "intervals").glob("*/queries.fa"))
+        assert not (b / "intervals").exists()
+        originals = sorted((a / "intervals").glob("*/models.gff"))
+        if originals:
+            with zipfile.ZipFile(b / rescue.INTERVAL_ARCHIVE) as archive:
+                for original in originals:
+                    assert archive.read(original.relative_to(a).as_posix()) == original.read_bytes()
+            assert json.loads((b / "receipt.json").read_text())["files"][rescue.INTERVAL_ARCHIVE] == (
+                rescue.digest(b / rescue.INTERVAL_ARCHIVE))
+        else:
+            assert not (b / rescue.INTERVAL_ARCHIVE).exists()
         for folder, suffix in (("species_cds", ".rescue.cds.fa"), ("species_gff", ".rescue.gff3")):
             assert (legacy / "augmented" / folder / (name + suffix)).read_bytes() == (
                 compact / "augmented" / folder / (name + suffix)).read_bytes()

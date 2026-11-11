@@ -215,7 +215,7 @@ def transfer_structure(models, proteins, genome, code, params, directory, *, cpu
     target = Path(directory) / 'native_genomewide_transfer'
     target.mkdir()
     predictions = r.search_intervals(target, {key: list(rows.values()) for key, rows in windows.items()},
-                                     proteins, genome, code, params['max_intron'], cpus)
+                                     proteins, genome, code, params['max_intron'], cpus, compact=True)
     for model in predictions:
         region = evidence[model['query']]
         model['seqid'] = region['seqid']

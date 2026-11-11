@@ -1289,7 +1289,8 @@ def predict_species(root, value, name, cpus=1):
                 for region in regions:
                     region['end'] = end
                 bounded[seqid, start, end] = regions
-            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'], params['max_intron'], cpus) if windows else []
+            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'],
+                                             params['max_intron'], cpus, compact=True) if windows else []
             for model in models:
                 region = queries[model['query']]
                 model['seqid'] = region['seqid']

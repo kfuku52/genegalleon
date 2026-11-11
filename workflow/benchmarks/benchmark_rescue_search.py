@@ -12,6 +12,7 @@ import shutil
 import statistics
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
@@ -54,6 +55,7 @@ class FrozenEvidence:
         if key.get("plan") != self.hashes[str(root / "plan.json")] or key.get("species") != species:
             raise ValueError("Producer receipt does not belong to this plan/species")
         self.files = self.receipt["files"]
+        self.archive_ids = None
         for member in self.files:
             prediction_cache._safe_member(self.source, member, resolve=False)
         self.contract = prediction_cache._verified_search_contract(root, self.plan, species, self.receipt, self.expect)
@@ -159,6 +161,20 @@ class FrozenEvidence:
         return path
 
     def interval_ids(self):
+        if rescue.INTERVAL_ARCHIVE in self.files:
+            if (self.source / "intervals").exists() or any(p.startswith("intervals/") for p in self.files):
+                raise ValueError("Ambiguous archived and expanded interval evidence")
+            if self.archive_ids is None:
+                with zipfile.ZipFile(self.checked(self.source / rescue.INTERVAL_ARCHIVE)) as archive:
+                    names = archive.namelist()
+                if len(names) != len(set(names)):
+                    raise ValueError("Duplicate interval archive member")
+                models = [re.fullmatch(r"intervals/([1-9][0-9]*)/models\.gff", member) for member in names]
+                ids = sorted(int(match[1]) for match in models if match)
+                if ids != list(range(1, len(ids) + 1)) or not ids:
+                    raise ValueError("Noncontiguous models in interval archive")
+                self.archive_ids = ids
+            return self.archive_ids
         ids = set()
         for relative in self.files:
             if relative.startswith("intervals/"):
@@ -185,6 +201,21 @@ class FrozenEvidence:
                 for name in ("region.fa", "queries.fa"):
                     prediction_cache._safe_member(self.source, f"intervals/{i}/{name}")
         return sorted(ids)
+
+    def interval_model_hashes(self, ids):
+        if self.archive_ids is not None:
+            with zipfile.ZipFile(self.checked(self.source / rescue.INTERVAL_ARCHIVE)) as archive:
+                hashes = {}
+                for i in ids:
+                    with archive.open(f"intervals/{i}/models.gff") as model:
+                        hashes[i] = hashlib.file_digest(model, "sha256").hexdigest()
+                return hashes
+        hashes = {}
+        for i in ids:
+            relative = f"intervals/{i}/models.gff"
+            self.checked(self.source / relative)
+            hashes[i] = self.files[relative]
+        return hashes
 
     def recheck(self):
         self.interval_ids()
@@ -217,15 +248,15 @@ def main():
         parser.error("Benchmark output must be outside original evidence")
     args.output.mkdir(parents=True, exist_ok=False)
     evidence = FrozenEvidence(args.evidence, args.species, export_directory=args.output / "evidence_export", cpus=args.cpus)
-    plan, source, receipt = evidence.plan, evidence.source, evidence.receipt
+    plan, source = evidence.plan, evidence.source
     count = len(evidence.interval_ids())
     selected = count if args.check_existing else min(count, args.interval_count)
     chosen = sorted({1 + int((count - 1) * i / max(1, selected - 1)) for i in range(selected)})
+    expected_models = evidence.interval_model_hashes(chosen)
     windows, proteins, dna = {}, {"donor": {}}, {}
     for i in chosen:
         directory = evidence.inputs / "intervals" / str(i)
         region, query = evidence.checked(directory / "region.fa"), evidence.checked(directory / "queries.fa")
-        evidence.checked(source / "intervals" / str(i) / "models.gff")
         sequence = next(rescue.fasta_records(region))[2]
         dna[str(i)] = sequence
         regions = []
@@ -265,7 +296,7 @@ def main():
         if args.check_existing:
             directory = args.output / "interval_parallel_0"
             for index, original_index in enumerate(chosen, 1):
-                expected = receipt["files"][f"intervals/{original_index}/models.gff"]
+                expected = expected_models[original_index]
                 require_identical(rescue.digest(directory / "intervals" / str(index) / "models.gff"), expected,
                                   f"Interval {original_index} differs")
         else:

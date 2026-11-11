@@ -492,10 +492,14 @@ three arrays explicitly. Input generation forwards these choices through
 
 Successful predictor input FASTAs and expanded genome GFF are omitted by
 default. Small records retain coordinates, input-sequence hashes, donor/query
-mappings and search flags. Raw predictor GFF and logs remain. Failed searches
-retain their actual inputs. `--retain-search-inputs` (input generation:
-`GG_INPUT_GENE_MODEL_RESCUE_RETAIN_SEARCH_INPUTS=1`) preserves successful inputs
-and the combined diagnostic FASTAs too. The following commands create new,
+mappings and search flags. Compact rescue writes interval GFF and logs into
+`intervals.zip`, and its receipt verifies the ZIP. Only the bounded set of
+pending windows uses directories in the process temporary area. On a cluster,
+place the temporary area on node-local storage. Failed searches retain the
+failed window's actual inputs with its diagnostics. `--retain-search-inputs`
+(input generation: `GG_INPUT_GENE_MODEL_RESCUE_RETAIN_SEARCH_INPUTS=1`) keeps the
+traditional interval directory layout, including successful inputs and the
+combined diagnostic FASTAs. Existing directory-based receipts remain valid. The following commands create new,
 verified exports without changing a completed producer or its receipt:
 
 ```bash

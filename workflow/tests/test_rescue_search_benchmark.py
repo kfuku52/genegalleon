@@ -1,7 +1,10 @@
 """Benchmark provenance and retention-free replay, without expensive searches."""
 import gzip
+import hashlib
 import importlib.util
 import json
+import shutil
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -81,8 +84,16 @@ def fake_export(monkeypatch, source, *, mutate=None):
     return calls
 
 
-def test_retention_free_replay_is_bound_and_never_writes_source(tmp_path, monkeypatch):
-    root, source, _ = fixture(tmp_path, compact=True)
+@pytest.mark.parametrize("archived", [False, True])
+def test_retention_free_replay_is_bound_and_never_writes_source(tmp_path, monkeypatch, archived):
+    root, source, plan = fixture(tmp_path, compact=True)
+    models = source / "intervals/1/models.gff"
+    expected = hashlib.sha256(models.read_bytes()).hexdigest()
+    if archived:
+        with zipfile.ZipFile(source / benchmark.rescue.INTERVAL_ARCHIVE, "w") as archive:
+            archive.write(models, "intervals/1/models.gff")
+        shutil.rmtree(source / "intervals")
+        publish(root, plan, source)
     before = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
     calls = fake_export(monkeypatch, source)
     output = tmp_path / "benchmark/inputs"
@@ -90,7 +101,7 @@ def test_retention_free_replay_is_bound_and_never_writes_source(tmp_path, monkey
     assert calls == [(output, True, 4)]
     assert evidence.interval_ids() == [1]
     assert evidence.inputs == output and evidence.fallback_recorded
-    assert evidence.checked(source / "intervals/1/models.gff").read_text() == "# original local alignment\n"
+    assert evidence.interval_model_hashes([1]) == {1: expected}
     evidence.recheck()
     assert before == {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
 

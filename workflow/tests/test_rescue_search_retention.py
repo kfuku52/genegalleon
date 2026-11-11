@@ -1,5 +1,6 @@
 """Predictor inputs remain reproducible without repeated permanent FASTAs."""
 import gzip
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -116,7 +117,39 @@ def test_successful_interval_inputs_retained_only_on_request(tmp_path, monkeypat
     assert row["region_sha256"] == inputs.sequence_sha("ATGAAATAA")
 
 
-def test_failed_interval_retains_actual_inputs_and_reconstruction_record(tmp_path, monkeypatch):
+def test_compact_interval_work_is_bounded_and_archived(tmp_path, monkeypatch):
+    from workflow.support import rescue_gene_models as rescue
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    destination = tmp_path / "stage"
+    destination.mkdir()
+    monkeypatch.setattr(rescue.tempfile, "tempdir", str(scratch))
+    proteins = {"Self": {"g": "MK"}}
+    windows = {("chr1", i, i + 9): [{"id": f"q{i}", "donor": "Self", "query": "g"}] for i in range(1, 17)}
+
+    def predict(command, directory, label, stdout):
+        assert directory.is_relative_to(scratch)
+        assert len(list(directory.parent.iterdir())) <= 4
+        assert not (destination / "intervals").exists()
+        (directory / "logs").mkdir()
+        (directory / "logs/miniprot.log").write_text(directory.name)
+        Path(stdout).write_text("##gff-version 3\n")
+
+    monkeypatch.setattr(rescue, "run", predict)
+    assert rescue.search_intervals(destination, windows, proteins, Genome("A" * 32), 1, 20000, 2, compact=True) == []
+    assert not list(scratch.iterdir())
+    with zipfile.ZipFile(destination / rescue.INTERVAL_ARCHIVE) as archive:
+        assert archive.testzip() is None
+        assert archive.namelist() == [
+            f"intervals/{i}/{member}" for i in range(1, 17) for member in ("logs/miniprot.log", "models.gff")
+        ]
+        for i in range(1, 17):
+            assert archive.read(f"intervals/{i}/logs/miniprot.log") == str(i).encode()
+            assert archive.read(f"intervals/{i}/models.gff") == b"##gff-version 3\n"
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_failed_interval_retains_actual_inputs_and_reconstruction_record(tmp_path, monkeypatch, compact):
     from workflow.support import rescue_gene_models as rescue
     proteins = {"Self": {"g": "MK"}}
     regions = [{"id": "q1", "donor": "Self", "query": "g"}]
@@ -124,8 +157,14 @@ def test_failed_interval_retains_actual_inputs_and_reconstruction_record(tmp_pat
         raise RuntimeError("predictor failed")
     monkeypatch.setattr(rescue, "run", fail)
     with pytest.raises(RuntimeError, match="predictor failed"):
-        rescue.search_intervals(tmp_path, {("chr1", 2, 11): regions}, proteins, Genome(), 1, 20000, 1)
-    assert (tmp_path / "intervals/1/region.fa").read_text() == ">interval\nATGAAATAA\n"
+        rescue.search_intervals(tmp_path, {("chr1", 2, 11): regions}, proteins, Genome(), 1, 20000, 1,
+                                compact=compact)
+    if compact:
+        assert not (tmp_path / "intervals").exists()
+        with zipfile.ZipFile(tmp_path / rescue.INTERVAL_ARCHIVE) as archive:
+            assert archive.read("intervals/1/region.fa") == b">interval\nATGAAATAA\n"
+    else:
+        assert (tmp_path / "intervals/1/region.fa").read_text() == ">interval\nATGAAATAA\n"
     assert len(list(inputs.records(tmp_path / inputs.LOCAL_RECORDS))) == 1
 
 

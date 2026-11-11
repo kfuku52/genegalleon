@@ -22,8 +22,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -137,6 +139,7 @@ except ImportError:
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
+INTERVAL_ARCHIVE = "intervals.zip"
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
               "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback",
@@ -1114,8 +1117,16 @@ def check_interval(model):
     return model
 
 
+def archive_interval(archive, directory):
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"Unexpected symlink in predictor scratch: {path}")
+        if path.is_file():
+            archive.write(path, Path("intervals") / directory.name / path.relative_to(directory))
+
+
 def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None,
-                     retain_inputs=False):
+                     retain_inputs=False, *, compact=False):
     """Bound pending work and retain input order, with total threads <= cpus.
 
     Only the submitting thread fetches from pysam's seekable FASTA handle.
@@ -1124,8 +1135,11 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
     workers = min(cpus, len(windows)) if interval_workers is None else interval_workers
     if cpus < 1 or (windows and not 1 <= workers <= cpus):
         raise ValueError("Interval workers must be positive and no greater than cpus")
+    if compact and retain_inputs:
+        raise ValueError("Retained interval inputs require directory output")
     interval_dir = tmp / "intervals"
-    interval_dir.mkdir()
+    if not compact:
+        interval_dir.mkdir()
     if not windows:
         return []
     threads = cpus // workers
@@ -1140,7 +1154,29 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
             (directory / "queries.fa").unlink()
         return result
     pending, predictions = deque(), []
-    with gzip.open(tmp / LOCAL_RECORDS, "wt", compresslevel=1) as metadata, ThreadPoolExecutor(max_workers=workers) as executor:
+    with ExitStack() as stack:
+        archive = None
+        if compact:
+            interval_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="gg-rescue-intervals-")))
+            archive = stack.enter_context(zipfile.ZipFile(
+                tmp / INTERVAL_ARCHIVE, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=1))
+        metadata = stack.enter_context(gzip.open(tmp / LOCAL_RECORDS, "wt", compresslevel=1))
+        executor = stack.enter_context(ThreadPoolExecutor(max_workers=workers))
+
+        def collect():
+            directory, future = pending.popleft()
+            try:
+                result = future.result()
+            except Exception as exc:
+                if archive is not None:
+                    archive_interval(archive, directory)
+                    exc.add_note(f"Failed interval {directory.name} diagnostics retained in {INTERVAL_ARCHIVE}")
+                raise
+            predictions.extend(result)
+            if archive is not None:
+                archive_interval(archive, directory)
+                shutil.rmtree(directory)
+
         for i, ((seqid, start, end), queries) in enumerate(windows.items(), 1):
             directory = interval_dir / str(i)
             directory.mkdir()
@@ -1150,11 +1186,11 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
             with (directory / "queries.fa").open("w") as out:
                 for region in queries:
                     out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
-            pending.append(executor.submit(predict, directory))
+            pending.append((directory, executor.submit(predict, directory)))
             if len(pending) >= workers * 2:
-                predictions.extend(pending.popleft().result())
-        for future in pending:
-            predictions.extend(future.result())
+                collect()
+        while pending:
+            collect()
     return predictions
 
 
@@ -1376,7 +1412,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 write_local_search_inputs(tmp, windows, proteins, genome)
             predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
                                            params["max_intron"], cpus, interval_workers,
-                                           retain_inputs=storage["retain_search_inputs"])
+                                           retain_inputs=storage["retain_search_inputs"],
+                                           compact=storage["format"] == "compact" and not storage["retain_search_inputs"])
             by_id = {r["id"]: r for r in regions}
             validated = []
             raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params,
