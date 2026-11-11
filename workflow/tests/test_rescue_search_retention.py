@@ -148,6 +148,27 @@ def test_compact_interval_work_is_bounded_and_archived(tmp_path, monkeypatch):
             assert archive.read(f"intervals/{i}/models.gff") == b"##gff-version 3\n"
 
 
+def test_archive_reports_unreadable_diagnostics(tmp_path, monkeypatch):
+    from workflow.support import rescue_gene_models as rescue
+
+    interval = tmp_path / "1"
+    logs = interval / "logs"
+    logs.mkdir(parents=True)
+    (interval / "models.gff").write_text("##gff-version 3\n")
+    scandir = rescue.os.scandir
+
+    def unreadable(path):
+        if isinstance(path, (str, Path)) and Path(path) == logs:
+            raise PermissionError("Cannot read predictor logs")
+        return scandir(path)
+
+    monkeypatch.setattr(rescue.os, "scandir", unreadable)
+    with zipfile.ZipFile(tmp_path / "intervals.zip", "w") as archive:
+        with pytest.raises(PermissionError, match="Cannot read predictor logs"):
+            rescue.archive_interval(archive, interval)
+    assert (interval / "models.gff").is_file()
+
+
 @pytest.mark.parametrize("compact", [False, True])
 def test_failed_interval_retains_actual_inputs_and_reconstruction_record(tmp_path, monkeypatch, compact):
     from workflow.support import rescue_gene_models as rescue

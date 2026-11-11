@@ -1118,11 +1118,22 @@ def check_interval(model):
 
 
 def archive_interval(archive, directory):
-    for path in sorted(directory.rglob("*")):
-        if path.is_symlink():
-            raise ValueError(f"Unexpected symlink in predictor scratch: {path}")
-        if path.is_file():
-            archive.write(path, Path("intervals") / directory.name / path.relative_to(directory))
+    """Archive private scratch and release its entries in one traversal."""
+    def drain(path, member):
+        with os.scandir(path) as entries:
+            children = sorted(entries, key=lambda entry: entry.name)
+        for entry in children:
+            child = member / entry.name
+            if entry.is_dir(follow_symlinks=False):
+                drain(entry.path, child)
+            elif entry.is_file(follow_symlinks=False):
+                archive.write(entry.path, child)
+                os.unlink(entry.path)
+            else:
+                raise ValueError(f"Unsupported predictor scratch entry: {entry.path}")
+        os.rmdir(path)
+
+    drain(directory, Path("intervals") / directory.name)
 
 
 def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None,
@@ -1169,13 +1180,16 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
                 result = future.result()
             except Exception as exc:
                 if archive is not None:
-                    archive_interval(archive, directory)
-                    exc.add_note(f"Failed interval {directory.name} diagnostics retained in {INTERVAL_ARCHIVE}")
+                    try:
+                        archive_interval(archive, directory)
+                    except Exception as archive_error:
+                        exc.add_note(f"Could not archive interval {directory.name}: {archive_error}")
+                    else:
+                        exc.add_note(f"Failed interval {directory.name} diagnostics retained in {INTERVAL_ARCHIVE}")
                 raise
             predictions.extend(result)
             if archive is not None:
                 archive_interval(archive, directory)
-                shutil.rmtree(directory)
 
         for i, ((seqid, start, end), queries) in enumerate(windows.items(), 1):
             directory = interval_dir / str(i)
