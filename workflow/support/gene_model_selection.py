@@ -101,15 +101,16 @@ def _aligner():
                            open_gap_score=-5.0, extend_gap_score=-0.5)
 
 
-def _comparison_signature(candidate):
+def _comparison_signature(candidate, protein):
     has_structure = not candidate.get("sequence_only", False)
-    return _protein(candidate), has_structure, _junction_positions(candidate) if has_structure else ()
+    junctions = _junction_positions(candidate) if has_structure else ()
+    return protein, junctions, has_structure
 
 
 def _score_signatures(signature_a, signature_b, *, max_alignment_cells, aligner_factory):
     # These experimental ranking rules remain GeneGalleon policy.
-    protein_a, has_structure_a, junctions_a = signature_a
-    protein_b, has_structure_b, junctions_b = signature_b
+    protein_a, junctions_a, has_structure_a = signature_a
+    protein_b, junctions_b, has_structure_b = signature_b
     compare_junctions = has_structure_a and has_structure_b
     result = _native_score_signatures((protein_a, junctions_a if compare_junctions else ()),
         (protein_b, junctions_b if compare_junctions else ()),
@@ -121,7 +122,10 @@ def _score_signatures(signature_a, signature_b, *, max_alignment_cells, aligner_
 
 def pair_score(candidate_a: dict, candidate_b: dict, *, max_alignment_cells: int = 25_000_000) -> PairScore:
     """Global protein alignment with reciprocal coverage and projected junctions."""
-    return _score_signatures(_comparison_signature(candidate_a), _comparison_signature(candidate_b),
+    protein_a, protein_b = _protein(candidate_a), _protein(candidate_b)
+    if not protein_a or not protein_b or len(protein_a) * len(protein_b) > max_alignment_cells:
+        return PairScore(0.0, 0.0, 0.0, 0.0, 0.0, 0, False, False, True)
+    return _score_signatures(_comparison_signature(candidate_a, protein_a), _comparison_signature(candidate_b, protein_b),
                              max_alignment_cells=max_alignment_cells, aligner_factory=_aligner)
 
 
@@ -139,7 +143,7 @@ class _PairScores:
     def signature(self, candidate: dict) -> tuple:
         identifier = id(candidate)
         if identifier not in self.signatures:
-            self.signatures[identifier] = _comparison_signature(candidate)
+            self.signatures[identifier] = _comparison_signature(candidate, _protein(candidate))
         return self.signatures[identifier]
 
     def get_aligner(self) -> PairwiseAligner:

@@ -180,14 +180,13 @@ def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, 
 
     def guard():
         proof.check()
-        if not output.exists() or (output.is_dir() and not any(output.iterdir())):
-            return
-        try:
-            previous = json.loads((output / 'receipt.json').read_text())
-        except (OSError, ValueError):
-            previous = {}
-        if not isinstance(previous, dict) or previous.get('key') != key:
-            raise ValueError(f'Assembly candidate inputs differ or {output} belongs to another run. Use a new --output.')
+        if output.exists() and (not output.is_dir() or any(output.iterdir())):
+            try:
+                previous = json.loads((output / 'receipt.json').read_text())
+            except (OSError, ValueError):
+                previous = {}
+            if not isinstance(previous, dict) or previous.get('key') != key:
+                raise ValueError(f'Assembly candidate inputs differ or {output} belongs to another run. Use a new --output.')
 
     def build(tmp):
         # Use the same ORF caller as transcriptome generation, before sequence
