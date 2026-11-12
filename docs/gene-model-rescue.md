@@ -358,6 +358,13 @@ coordinates are included only when their declared phases conflict. These
 publications are available for review even when the prediction has an
 unresolved placement flag.
 
+Rescue also searches automatically at existing loci when two or more
+reference species have longer, unambiguous internal anchors in their syntenic
+blocks. The reference proteins must exceed the target by at least 15 amino acids
+and 10 percent. These local searches reuse the existing synteny comparisons.
+Their candidates enter the single-locus publication with the anchored owner
+recorded alongside the donor alignment.
+
 To revisit a particular annotation even when donor screening considers it
 represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
 Set `gene_model_rescue_model_repair_targets` for the input-generation workflow.

@@ -1371,7 +1371,10 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
         atomic_json(tmp / "genome_search_nomination.json", nomination)
         genomewide_audit = None
-        if (not regions and not review_targets and not plan["request"].get("prediction_cache")
+        proteins = {donor: {i: seq for i, _, seq in fasta_records(root / "prepared" / donor / "genes.pep")}
+                    for donor in donors}
+        repair_targets = [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins)]
+        if (not regions and not repair_targets and not plan["request"].get("prediction_cache")
                 and not plan['request'].get('oriongeno_genomewide')):
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
@@ -1416,7 +1419,6 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         with open_text(Path(source["gff"])) as handle:
             existing = original_ownership(handle, attributes)
         placement_ownership = OwnershipIndex(existing)
-        proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
         frozen_cache = plan["request"].get("prediction_cache")
         retained_paths = {}
         with indexed_genome(source["genome"]) as genome:
@@ -1596,7 +1598,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
                 models, placement_ownership, name, genome=genome, code=source["genetic_code"],
                 params=params, proteins=proteins))
-            targeted = search_model_repair_targets(tmp, review_targets, existing, placement_ownership, proteins,
+            targeted = search_model_repair_targets(tmp, repair_targets, existing, placement_ownership, proteins,
                                                     genome, source["genetic_code"], params, cpus)
             atomic_json(tmp / "model_repair_candidates.json", model_repair_candidates(
                 chain(models, targeted), placement_ownership, name, source["gff"]))
@@ -2029,6 +2031,43 @@ def verify_model_repair_targets(plan):
     return review['by_species']
 
 
+def automatic_model_repair_targets(root, plan, species, proteins):
+    """Use existing syntenic correspondences to revisit clearly shorter CDSs."""
+    candidates = defaultdict(list)
+    donors = plan['donors'][species]
+    if len(donors) < 2:
+        return []
+    locus_ids = {row['jcvi_id']: row['locus_id'] for row in table(root / 'prepared' / species / 'genes.id_map.tsv')
+                 if row['status'] == 'selected'}
+    for job in plan['synteny_jobs']:
+        a, b = job['a'], job['b']
+        if a == b or species not in (a, b):
+            continue
+        donor = b if a == species else a
+        if donor not in donors:
+            continue
+        blocks = json.loads((root / 'synteny' / job['id'] / 'blocks.json').read_text())
+        targets_by_query, queries_by_target, interior = defaultdict(set), defaultdict(set), set()
+        for block in blocks:
+            for index, pair in enumerate(block):
+                target, query = pair if a == species else reversed(pair)
+                targets_by_query[query].add(target)
+                queries_by_target[target].add(query)
+                if 0 < index < len(block) - 1:
+                    interior.add((target, query))
+        for target, query in sorted(interior):
+            if len(targets_by_query[query]) != 1 or len(queries_by_target[target]) != 1:
+                continue
+            locus = locus_ids.get(target)
+            target_length = len(proteins[species].get(target, ''))
+            donor_length = len(proteins[donor].get(query, ''))
+            if locus and target_length and donor_length - target_length >= max(15, .10 * target_length):
+                candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor,
+                                          'query': query, 'syntenic_locus': locus})
+    return [row for locus in sorted(candidates) if len({r['donor'] for r in candidates[locus]}) >= 2
+            for row in candidates[locus]]
+
+
 def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
     """Project selected donor proteins near specified existing loci for review."""
     if not targets:
@@ -2039,6 +2078,8 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     for index, target in enumerate(targets):
         owner = owners.get(target['gene_id'])
         if not owner or not owner.get('cds') or owner['strand'] not in {'+', '-'}:
+            if target.get('syntenic_locus'):
+                continue
             raise ValueError('Unknown or invalid coding owner for model repair: ' + target['gene_id'])
         if target['query'] not in proteins[target['donor']]:
             raise ValueError('Unknown prepared model repair donor protein: ' + target['query'])
@@ -2046,11 +2087,15 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         start = max(0, owner['start'] - padding)
         end = min(genome.get_reference_length(owner['seqid']), owner['end'] + padding)
         if end - start > params['max_interval']:
+            if target.get('syntenic_locus'):
+                continue
             raise ValueError('Model repair target exceeds max interval: ' + target['gene_id'])
         identifier = f'review_{index + 1}'
         query = {**target, 'id': identifier, 'seqid': owner['seqid'], 'start': start, 'end': end}
         windows[owner['seqid'], start, end].append(query)
         queries[identifier] = query
+    if not windows:
+        return []
     directory = tmp / 'model_repair_search'
     directory.mkdir()
     atomic_json(directory / 'targets.json', list(queries.values()))
@@ -2128,6 +2173,8 @@ def model_repair_candidates(models, ownership, species, source_gff):
             raise ValueError('Inconsistent CDS for reviewed model repair: ' + identifier)
         support = {'donor': evidence['donor'], 'query': evidence['query'],
                    'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
+        if evidence.get('syntenic_locus') == geometry[0]['gene_id']:
+            support['syntenic_locus'] = evidence['syntenic_locus']
         if support not in row['support']:
             row['support'].append(support)
 

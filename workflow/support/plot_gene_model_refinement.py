@@ -313,8 +313,8 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
                                  + ', '.join(row["replaced_gene_ids"])) + '</li>'
             for row in data["split_model_merges"]) + '</ul></details>'
     if data.get("model_repairs"):
-        html_text += '<details><summary>Reviewed single-locus repairs</summary><ul>' + "".join(
-            '<li>' + html.escape(row["gene_id"] + ' (' + row["kind"].replace('_', ' ') + ')') + '</li>'
+        html_text += '<details><summary>Single-locus model repairs</summary><ul>' + "".join(
+            '<li>' + html.escape(row["gene_id"] + ' (' + row.get("adoption", "reviewed") + ', ' + row["kind"].replace('_', ' ') + ')') + '</li>'
             for row in data["model_repairs"]) + '</ul></details>'
     html_text += f'<p>Gallery: {len(cards)} loci; all changed/accepted loci available: {data["changed_loci_available"]}. '
     html_text += f'Source coding-path phase resolutions available: {data["coding_path_phase_loci_available"]}. '

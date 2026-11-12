@@ -293,6 +293,24 @@ original models remain in the source and full annotation views.
 `effective/split_model_merges.json` records all original owners and their
 retired representative IDs. Use `effective/inputs.tsv` for downstream analysis.
 
+### Automatic single-locus model repairs
+
+In conservative mode, refinement reads the verified rescue publication and
+selects a unique genomic coding path when two or more independently anchored
+reference species support it and the path passes current homology, ownership,
+splice and ORF checks. For an intact source CDS, the path must preserve all
+existing coding bases and their reading frame while extending the CDS. For a
+partial source, it must preserve at least two-thirds of the coding bases in
+frame and keep an annotated start or stop at its original coordinate.
+Refinement keeps competing supported paths unresolved.
+
+Refinement also corrects conflicting numeric CDS phases when one source
+transcript has the same complete CDS in the supplied FASTA and the genome.
+It preserves that transcript ID and CDS coordinates. Automatic changes are
+recorded with their evidence in `effective/model_repairs.json`. The standard
+rescue and conservative refinement commands use this behavior without target
+or approval tables.
+
 ### Reviewed single-locus model repairs
 
 Rescue writes `rescued/<species>/model_repair_candidates.json`. Coding-path

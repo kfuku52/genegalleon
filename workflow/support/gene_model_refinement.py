@@ -46,6 +46,7 @@ try:
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
+    from rescue_coding_paths import coding_overlap
     from rescue_homology_policy import homology_supported
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from rescue_prediction_cache import stream_json_array
@@ -69,6 +70,7 @@ except ImportError:
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
+    from .rescue_coding_paths import coding_overlap
     from .rescue_homology_policy import homology_supported
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from .rescue_prediction_cache import stream_json_array
@@ -170,6 +172,21 @@ def revision_models(request, name):
     return iter_revision_models(directory)
 
 
+def read_model_publication(path, receipt_sha, *, required=True):
+    receipt = (path.parent / 'receipt.json').read_bytes()
+    if hashlib.sha256(receipt).hexdigest() != receipt_sha:
+        raise ValueError('Rescue worker receipt changed during planning: ' + str(path.parent))
+    expected = json.loads(receipt)['files'].get(path.name)
+    if expected is None:
+        if required:
+            raise ValueError('Rescue has no verified candidate publication: ' + str(path))
+        return [], None
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError('Candidates differ from the verified rescue publication: ' + str(path))
+    return json.loads(data), expected
+
+
 def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
     approvals = Path(approvals).resolve()
     data = approvals.read_bytes()
@@ -188,16 +205,8 @@ def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
     selected = {}
     for name, identifiers in sorted(requested.items()):
         path = anchor_root / 'rescued' / name / publication
-        receipt = (path.parent / 'receipt.json').read_bytes()
-        if hashlib.sha256(receipt).hexdigest() != receipts[name]:
-            raise ValueError('Rescue worker receipt changed during planning: ' + name)
-        expected = json.loads(receipt)['files'].get(path.name)
-        if expected is None:
-            raise ValueError('Rescue has no verified ' + label.lower() + ' candidate publication for: ' + name)
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != expected:
-            raise ValueError(label + ' candidates differ from the verified rescue publication: ' + name)
-        candidates = {row['candidate_id']: row for row in json.loads(data)}
+        rows, expected = read_model_publication(path, receipts[name])
+        candidates = {row['candidate_id']: row for row in rows}
         claimed = set()
         selected[name] = []
         for identifier in sorted(identifiers):
@@ -353,6 +362,20 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             reviews[key] = selected
             publications.update(proof)
             files.extend(proof)
+        automatic = {}
+        if params['mode'] == 'conservative':
+            for name, receipt_sha in sorted(receipts.items()):
+                path = anchor_root / 'rescued' / name / 'model_repair_candidates.json'
+                rows, expected = read_model_publication(path, receipt_sha, required=False)
+                candidates = [row for row in rows if row['kind'] == 'coding_path'
+                              and any(hit.get('syntenic_locus') for hit in row['support'])
+                              and (name, row['owner_overlap'][0]['gene_id']) not in claimed]
+                if candidates:
+                    automatic[name] = candidates
+                    publications[str(path)] = expected
+                    files.append(str(path))
+        if automatic:
+            reviews['automatic_model_repairs'] = automatic
         request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
@@ -1795,6 +1818,127 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
     return ''.join(lines)
 
 
+def source_phase_repair(candidate, species):
+    """A complete, source-matching CDS fixes conflicting numeric phases uniquely."""
+    quality = candidate['quality']
+    blocks = candidate['blocks']
+    sequence = candidate['cds']
+    if (not quality.get('phase_conflict') or not quality.get('has_start') or not quality.get('has_stop')
+            or quality.get('partial') or not blocks or blocks[0][2] != 0
+            or any(block[2] not in (0, 1, 2) for block in blocks)
+            or not any(record['cds'].upper() == sequence for record in candidate.get('source_cds', []))
+            or rescue.phase_conventions([{'start': a, 'end': b, 'phase': str(p)} for a, b, p in blocks])):
+        return None
+    fixed = rescue.coding_phases(blocks)
+    shape = candidate['seqid'], candidate['strand'], fixed
+    identifier = species + '_ggphase_' + hashlib.sha256(repr((candidate['source_gene_id'], shape)).encode()).hexdigest()[:16]
+    return {'candidate_id': identifier, 'kind': 'phase_only', 'adoption': 'automatic',
+            'basis': 'exact_source_cds', 'seqid': candidate['seqid'], 'strand': candidate['strand'],
+            'cds': fixed, 'cds_sha256': hashlib.sha256(sequence.encode()).hexdigest(), 'support': []}
+
+
+def automatic_coding_gain(original, checked):
+    """Keep the intact source CDS or extend a partial model in the same frame."""
+    old, new = original['cds'], checked['sequence']
+    if len(new) - len(old) < 3 * max(15, .10 * len(old) / 3):
+        return False
+    _, in_frame = coding_overlap({**original, 'cds': original['blocks']}, checked)
+    quality = original['quality']
+    if quality['valid_orf']:
+        return in_frame == len(old) and (new.endswith(old) or new.startswith(old))
+    blocks, repaired = original['blocks'], checked['cds']
+    start_side, stop_side = (0, 1) if original['strand'] == '+' else (1, 0)
+    same_start = blocks[0][start_side] == repaired[0][start_side]
+    same_stop = blocks[-1][stop_side] == repaired[-1][stop_side]
+    return (quality['partial'] and in_frame * 3 >= len(old) * 2
+            and ((quality['has_start'] and same_start) or (quality['has_stop'] and same_stop)))
+
+
+def repair_coordinates(review):
+    blocks = review['cds']
+    return {'seqid': review['seqid'], 'strand': review['strand'], 'cds': blocks,
+            'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
+
+
+def automatic_model_choices(options, originals, ownership, genome, code, params):
+    """Choose a unique qualifying path and keep competing qualifying paths unresolved."""
+    choices = []
+    for owner, rows in options.items():
+        original, chosen = originals[owner]
+        supported = []
+        for review in rows:
+            coordinates = repair_coordinates(review)
+            geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
+            if [row['gene_id'] for row in geometry] != [owner]:
+                continue
+            if review['kind'] == 'phase_only':
+                if not exact:
+                    continue
+                # This path has exact source evidence rather than alignment metrics.
+                metrics = {'coverage': 0., 'identity': 0.}
+                checks = {**params, 'minimum_coverage': 0., 'minimum_identity': 0., 'minimum_broad_coverage': 0.}
+                support = []
+            else:
+                if exact or geometry != review['owner_overlap']:
+                    continue
+                support = [row for row in review['support']
+                           if row.get('syntenic_locus') == owner and row['donor'] != original['species']
+                           and homology_supported(row['coverage'], row['identity'], params)]
+                if len({row['donor'] for row in support}) < max(2, params['min_support']):
+                    continue
+                metrics, checks = support[0], params
+            checked = rescue.validate_model({**coordinates, 'coverage': metrics['coverage'],
+                                             'identity': metrics['identity'], 'frameshift': False},
+                                            genome, code, checks)
+            if (checked['problems'] or checked['cds'] != review['cds']
+                    or hashlib.sha256(checked['sequence'].encode()).hexdigest() != review['cds_sha256']):
+                continue
+            if review['kind'] == 'coding_path' and not automatic_coding_gain(original, checked):
+                continue
+            supported.append(({**review, 'owner_overlap': geometry, 'support': support,
+                               'adoption': 'automatic', 'basis': review.get('basis', 'syntenic_cds_gain')}, checked))
+        if len(supported) != 1:
+            continue
+        review, checked = supported[0]
+        if chosen['candidate_id'] == original['candidate_id'] or (
+                chosen['cds'] == checked['sequence'] and chosen['blocks'] == review['cds']
+                and chosen['seqid'] == review['seqid'] and chosen['strand'] == review['strand']):
+            choices.append((review, checked))
+    return choices
+
+
+def independent_source_phases(source_gff, options, originals):
+    """Return phase repairs whose CDS rows can be edited without affecting other transcripts."""
+    expected = {}
+    for owner, rows in options.items():
+        if rows[0]['kind'] == 'phase_only':
+            model = originals[owner][0]
+            expected[owner] = {(model['seqid'], model['strand'], a, b, model['source_transcript_id'])
+                               for a, b, _ in model['blocks']}
+    if not expected:
+        return set()
+    pending = set().union(*expected.values())
+    seen, ambiguous = set(), set()
+    with open_text(Path(source_gff)) as handle:
+        for line in handle:
+            if line.strip() == '##FASTA':
+                break
+            if line.startswith('#') or not line.strip():
+                continue
+            fields = line.rstrip().split('\t')
+            if len(fields) != 9 or fields[2] != 'CDS':
+                continue
+            locus = fields[0], fields[6], int(fields[3]) - 1, int(fields[4])
+            attrs = parse_gff_attributes(fields[8])
+            parents = attrs.get('Parent') or attrs.get('transcript_id', ())
+            matches = {(*locus, parent) for parent in parents} & pending
+            if len(parents) != 1:
+                ambiguous.update(matches)
+            ambiguous.update(matches & seen)
+            seen.update(matches)
+    return {owner for owner, keys in expected.items() if keys <= seen and not keys & ambiguous}
+
+
 def prepare_reviewed_models(request, name, db, selected):
     """Recheck approved merge and repair paths against the frozen target inputs."""
     merges = request.get('split_model_merges', {}).get(name, [])
@@ -1802,44 +1946,82 @@ def prepare_reviewed_models(request, name, db, selected):
     source = request['sources'][name]
     parameters = parameters_for(request, name)
     targets = {row['gene_id'] for review in chain(merges, repairs) for row in review['owner_overlap']}
-    owners = {}
+    nominations = defaultdict(list)
+    for row in request.get('automatic_model_repairs', {}).get(name, []):
+        nominations[row['owner_overlap'][0]['gene_id']].append(row)
+    owners, auto_originals, auto_options = {}, {}, {}
     for gene in iter_loci(db, name):
-        ids = {row['source_gene_id'] for row in gene['candidates'] if row['origin'] == 'original'}
+        originals = [c for c in gene['candidates'] if c['origin'] == 'original']
+        ids = {row['source_gene_id'] for row in originals}
         if ids & targets:
             if len(ids) != 1 or gene.get('ambiguous_coordinates') or ids & owners.keys():
                 raise ValueError('Ambiguous catalog ownership for reviewed model: ' + gene['gene_id'])
-            owners[ids.pop()] = gene
-    if targets != owners.keys() or len({gene['gene_id'] for gene in owners.values()}) != len(targets):
+            owners[next(iter(ids))] = gene
+            continue
+        if parameters['mode'] != 'conservative' or gene.get('ambiguous_coordinates') or len(originals) != 1:
+            continue
+        original = originals[0]
+        owner = original['source_gene_id']
+        if any(original['quality'].get(flag) for flag in (
+                'annotated_exception', 'structure_problem', 'internal_stop', 'ambiguous',
+                'invalid_base', 'translation_uncertain', 'phase_unresolved', 'sequence_mismatch')):
+            continue
+        phase = source_phase_repair(original, name)
+        options = [phase] if phase else nominations.get(owner, []) if original['quality']['usable'] else []
+        if options:
+            if owner in auto_originals:
+                auto_options.pop(owner, None)
+                continue
+            chosen_id = selected[gene['gene_id']]['candidate_id']
+            chosen = next(c for c in gene['candidates'] if c['candidate_id'] == chosen_id)
+            auto_originals[owner], auto_options[owner], owners[owner] = (original, chosen), options, gene
+    manual_owners = {owner: owners[owner] for owner in targets if owner in owners}
+    if targets != manual_owners.keys() or len({gene['gene_id'] for gene in manual_owners.values()}) != len(targets):
         raise ValueError('Approved model owners do not match distinct catalog loci: ' + name)
+    independent = independent_source_phases(source['gff'], auto_options, auto_originals)
+    auto_options = {owner: rows for owner, rows in auto_options.items()
+                    if rows[0]['kind'] != 'phase_only' or owner in independent}
+    if not (targets or auto_options):
+        return [], {}, [], []
     with open_text(Path(source['gff'])) as handle:
         ownership = rescue.OwnershipIndex(rescue.original_ownership(handle, rescue.attributes))
     code = source['genetic_code']
     new_genes, repaired, merge_audit, repair_audit, footprints = [], {}, [], [], []
     with indexed_genome(source['genome']) as genome:
-        for review in chain(merges, repairs):
+        automatic = automatic_model_choices(auto_options, auto_originals, ownership, genome, code, parameters)
+        automatic_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                                 for row, _ in automatic])
+        manual_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                              for row in chain(merges, repairs)])
+        for review, checked in chain(((row, None) for row in chain(merges, repairs)), automatic):
             identifier = review['candidate_id']
             kind = review.get('kind')
             blocks = review['cds']
-            coordinates = {'seqid': review['seqid'], 'strand': review['strand'], 'cds': blocks,
-                           'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
-            if kind:
-                geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
-                if kind != ('phase_only' if exact else 'coding_path'):
-                    raise ValueError('Approved model repair type changed: ' + identifier)
+            coordinates = repair_coordinates(review)
+            if checked is not None:
+                if (automatic_paths.overlapping(coordinates, owner=identifier)
+                        or manual_paths.overlapping(coordinates)):
+                    continue
+                geometry, support = review['owner_overlap'], review['support']
             else:
-                geometry = rescue.split_model_geometry(coordinates, ownership)
-            if not geometry or geometry != review['owner_overlap']:
-                raise ValueError('Approved model ownership changed: ' + identifier)
-            support = [row for row in review['support']
-                       if not rescue.homology_problems(row['coverage'], row['identity'], parameters)]
-            donors = sorted({row['donor'] for row in support})
-            if not support or (kind and len(set(donors) - {name}) < (
-                    1 if kind == 'phase_only' else max(2, parameters['min_support']))):
-                raise ValueError('Approved model lacks required independent homology: ' + identifier)
-            checked = rescue.validate_model({**coordinates, 'coverage': support[0]['coverage'],
-                                             'identity': support[0]['identity'], 'frameshift': False},
-                                            genome, code, parameters)
+                if kind:
+                    geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
+                    if kind != ('phase_only' if exact else 'coding_path'):
+                        raise ValueError('Approved model repair type changed: ' + identifier)
+                else:
+                    geometry = rescue.split_model_geometry(coordinates, ownership)
+                if not geometry or geometry != review['owner_overlap']:
+                    raise ValueError('Approved model ownership changed: ' + identifier)
+                support = [row for row in review['support']
+                           if homology_supported(row['coverage'], row['identity'], parameters)]
+                if not support or (kind and len({r['donor'] for r in support} - {name}) < (
+                        1 if kind == 'phase_only' else max(2, parameters['min_support']))):
+                    raise ValueError('Approved model lacks required independent homology: ' + identifier)
+                checked = rescue.validate_model({**coordinates, 'coverage': support[0]['coverage'],
+                                                 'identity': support[0]['identity'], 'frameshift': False},
+                                                genome, code, parameters)
             sequence = checked['sequence']
+            donors = sorted({row['donor'] for row in support})
             if (checked['problems'] or checked['cds'] != blocks
                     or hashlib.sha256(sequence.encode()).hexdigest() != review['cds_sha256']):
                 raise ValueError('Approved model no longer has a complete validated CDS: ' + identifier)
@@ -1865,13 +2047,18 @@ def prepare_reviewed_models(request, name, db, selected):
                 audit['previous_candidate_id'] = selected[gene_id]['candidate_id']
             elif identifier in selected:
                 raise ValueError('Approved split model ID collides with an existing catalog locus: ' + identifier)
-            origin = 'reviewed_model_repair' if kind else 'split_model_merge'
+            if review.get('adoption') == 'automatic':
+                origin = 'automatic_model_repair'
+            else:
+                origin = 'reviewed_model_repair' if kind else 'split_model_merge'
             candidate = {'candidate_id': identifier, 'gene_id': gene_id, 'species': name,
                          'source_gene_id': source_id, 'source_transcript_id': transcript, 'gene_token': gene_token,
                          'seqid': review['seqid'], 'strand': review['strand'], 'blocks': blocks,
                          'cds': sequence, 'origin': origin, 'support': {'donors': donors}}
             candidate['quality'] = validate_candidate(candidate, code)
             if not candidate['quality']['valid_orf'] or not candidate['protein']:
+                if review.get('adoption') == 'automatic':
+                    continue
                 raise ValueError('Approved model cannot be admitted for translation: ' + identifier)
             audit.update(gene_id=gene_id, source_transcript_id=transcript)
             if kind:
@@ -1886,7 +2073,8 @@ def prepare_reviewed_models(request, name, db, selected):
             selected[gene_id] = {'species': name, 'gene_id': gene_id, 'candidate_id': identifier,
                                  'source_transcript_id': transcript,
                                  'status': 'repaired_model' if kind else 'merged_split_model',
-                                 'reason': 'reviewed_rescue_model_repair' if kind else 'reviewed_rescue_split_model'}
+                                 'reason': origin if origin == 'automatic_model_repair' else
+                                 'reviewed_rescue_model_repair' if kind else 'reviewed_rescue_split_model'}
             footprints.append({**coordinates, 'gene_id': identifier})
     approved_paths = rescue.OwnershipIndex(footprints)
     for path in footprints:
@@ -1934,8 +2122,9 @@ def finalize(root, value):
         merged_by_species, repaired_by_species, retired_by_species = {}, {}, {}
         merges, repairs = [], []
         request = value['request']
-        reviewed_species = request.get('split_model_merges', {}).keys() | request.get('model_repairs', {}).keys()
-        for name in sorted(reviewed_species):
+        for name in value['species']:
+            if parameters_for(request, name)['mode'] != 'conservative':
+                continue
             selected = {row['gene_id']: row for row in selected_by_species[name]}
             new_genes, repaired, merge_audit, repair_audit = prepare_reviewed_models(request, name, db, selected)
             selected_by_species[name] = list(selected.values())

@@ -161,7 +161,9 @@ def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
         refinement.load(output)
 
 
-def test_reviewed_single_locus_repairs_from_real_rescue(tmp_path):
+@pytest.mark.parametrize('case', ['partial', 'intact', 'manual'])
+def test_single_locus_repairs_from_real_rescue(tmp_path, case):
+    manual = case == 'manual'
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
     _, names, truth = data
@@ -172,11 +174,17 @@ def test_reviewed_single_locus_repairs_from_real_rescue(tmp_path):
     phase_genome = tmp_path / 'genome' / (phase_target + '.genome.fa')
     period = len(truth[8]) + 60
     start = 8 * period
-    partial = truth[8][:-60]
+    if case == 'intact':
+        source_cds = truth[8][60:]
+        assert source_cds.startswith('ATG')
+        source_blocks = [[start + 60, start + len(truth[8]), 0]]
+    else:
+        source_cds = truth[8][:-60]
+        source_blocks = [[start, start + len(source_cds), 0]]
     with coding_cds.open('a') as handle:
-        handle.write(f'>{coding_target}_g8\n{partial}\n')
+        handle.write(f'>{coding_target}_g8\n{source_cds}\n')
     with coding_gff.open('a') as handle:
-        handle.write(annotation('chr1', 'g8', 'g8.t1', [[start, start + len(partial), 0]]))
+        handle.write(annotation('chr1', 'g8', 'g8.t1', source_blocks))
     phase_start = 11 * period
     first_exon = 241
     intron = 'GT' + 'C' * 40 + 'AG'
@@ -192,26 +200,36 @@ def test_reviewed_single_locus_repairs_from_real_rescue(tmp_path):
     phase_gff.write_text(''.join(original))
     before = {path: path.read_bytes() for path in (coding_cds, coding_gff, phase_gff, phase_genome)}
     expected = {coding_target: (8, 'coding_path'), phase_target: (11, 'phase_only')}
-    targets = tmp_path / 'targets.tsv'
-    write_tsv(targets, ['species', 'gene_id', 'donor', 'query'],
-              [{'species': target, 'gene_id': f'g{i}', 'donor': name, 'query': f'{name}_g{i}'}
-               for target, (i, _) in expected.items() for name in names[2:4]])
-    anchor, _, _ = fixture.make_plan(data, model_storage='compact', extra_args=('--model-repair-targets', targets))
+    rescue_args = ()
+    if manual:
+        targets = tmp_path / 'targets.tsv'
+        write_tsv(targets, ['species', 'gene_id', 'donor', 'query'],
+                  [{'species': target, 'gene_id': f'g{i}', 'donor': name, 'query': f'{name}_g{i}'}
+                   for target, (i, _) in expected.items() for name in names[2:4]])
+        rescue_args = ('--model-repair-targets', targets)
+    anchor, _, _ = fixture.make_plan(data, model_storage='compact', extra_args=rescue_args)
     fixture.cli('run', '--output', anchor, '--cpus', 2)
     approved = []
     for target, (i, kind) in expected.items():
+        if not manual and kind == 'phase_only':
+            continue
         publication = anchor / 'rescued' / target / 'model_repair_candidates.json'
         candidate, = [row for row in json.loads(publication.read_text())
                       if row['owner_overlap'][0]['gene_id'] == f'g{i}']
         assert candidate['kind'] == kind
+        if not manual:
+            assert len({hit['donor'] for hit in candidate['support'] if hit.get('syntenic_locus') == 'g8'}) >= 2
         approved.append({'species': target, 'candidate_id': candidate['candidate_id']})
     augmented_cds = anchor / 'augmented' / 'species_cds' / (coding_target + '.rescue.cds.fa')
-    assert {gene: seq for gene, _, seq in fasta_records(augmented_cds)}[coding_target + '_g8'] == partial
-    approvals = tmp_path / 'repairs.tsv'
-    write_tsv(approvals, ['species', 'candidate_id'], approved)
+    assert {gene: seq for gene, _, seq in fasta_records(augmented_cds)}[coding_target + '_g8'] == source_cds
 
     output = tmp_path / 'refinement'
-    cli('plan', '--rescue-output', anchor, '--output', output, '--model-repairs', approvals)
+    refine_args = ()
+    if manual:
+        approvals = tmp_path / 'repairs.tsv'
+        write_tsv(approvals, ['species', 'candidate_id'], approved)
+        refine_args = ('--model-repairs', approvals)
+    cli('plan', '--rescue-output', anchor, '--output', output, *refine_args)
     cli('run', '--output', output, '--cpus', 2)
     cli('qc', '--output', output)
     effective = output / 'effective'
@@ -233,6 +251,9 @@ def test_reviewed_single_locus_repairs_from_real_rescue(tmp_path):
     assert phases(effective / 'source_annotation' / (phase_target + '.gff3')) == ['0', '0']
     audit = json.loads((effective / 'model_repairs.json').read_text())
     assert {row['gene_id'] for row in audit} == {coding_target + '_g8', phase_target + '_g11'}
+    if not manual:
+        assert {row['basis'] for row in audit} == {'syntenic_cds_gain', 'exact_source_cds'}
+        assert {row['adoption'] for row in audit} == {'automatic'}
     review = import_module('plot_gene_model_refinement').collect(output)
     assert review['model_repairs'] == audit
     assert all(path.read_bytes() == content for path, content in before.items())

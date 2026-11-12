@@ -404,7 +404,8 @@ def rescue(root, plan, name, cpus):
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
             r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
                 models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
-            targets = r.verify_model_repair_targets(plan).get(name, [])
+            targets = [*r.verify_model_repair_targets(plan).get(name, []),
+                       *r.automatic_model_repair_targets(root, plan, name, proteins)]
             targeted = r.search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome,
                                                       source['genetic_code'], params, cpus)
             r.atomic_json(tmp / 'model_repair_candidates.json',
