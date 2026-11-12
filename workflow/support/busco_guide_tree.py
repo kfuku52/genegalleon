@@ -28,13 +28,13 @@ try:
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from input_generation_stage_resume import copy_atomic, reject_output_overlap
-    from species_labeling import extract_species_label
+    from species_labeling import assembly_only_species, extract_species_label
 except ImportError:
     from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .input_generation_stage_resume import copy_atomic, reject_output_overlap
-    from .species_labeling import extract_species_label
+    from .species_labeling import assembly_only_species, extract_species_label
 
 SCHEMA = 1
 # Earlier cache producers did not fence concurrent cache/tool changes before
@@ -314,10 +314,14 @@ def build(args):
     if not kernel or not rapidnj:
         raise ValueError("BUSCO guide tree requires gg-kmer-distance and rapidnj in the GeneGalleon runtime")
     sources = {}
+    excluded = assembly_only_species(getattr(args, 'transcriptome_assembly_dir', None),
+                                     getattr(args, 'gff_dir', None), getattr(args, 'genome_dir', None))
     for path in sorted(args.cds_dir.iterdir()):
         if not path.is_file() or not path.name.removesuffix(".gz").endswith((".fa", ".fas", ".fasta", ".fna")):
             continue
         name = extract_species_label(path.name)
+        if name in excluded:
+            continue
         safe_token(name, "species")
         if name in sources:
             raise ValueError("Duplicate CDS species: " + name)
@@ -510,6 +514,9 @@ def parser():
     guide = commands.add_parser("build")
     for key in ("cds-dir", "full-dir", "short-dir", "output", "cache"):
         guide.add_argument("--" + key, required=True, type=Path)
+    guide.add_argument('--transcriptome-assembly-dir', type=Path)
+    guide.add_argument('--gff-dir', type=Path)
+    guide.add_argument('--genome-dir', type=Path)
     guide.add_argument("--markers", type=int, default=200)
     guide.add_argument("--k", type=int, default=5)
     guide.add_argument("--sketch-size", type=int, default=256)

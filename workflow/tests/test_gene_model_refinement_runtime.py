@@ -75,8 +75,8 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
         refinement.plan(tmp_path / 'new-refinement', rescue_output=anchor_root, mode='off')
 
 
-@pytest.mark.parametrize('fragment_count', [2, 3])
-def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
+@pytest.mark.parametrize(('fragment_count', 'manual'), [(2, False), (3, False), (3, True)])
+def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
     _, names, truth = data
@@ -85,7 +85,11 @@ def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
     gff = tmp_path / 'gff' / (target + '.gff3')
     genome = tmp_path / 'genome' / (target + '.genome.fa')
     start = 8 * (len(sequence) + 60)
-    boundaries = [0, 240, len(sequence)] if fragment_count == 2 else [0, 159, 318, len(sequence)]
+    if fragment_count == 2:
+        boundaries = [0, 240, len(sequence)]
+    else:
+        # At codon 106 the last fragment has its own in-frame ATG and stop.
+        boundaries = [0, 159, 318 if manual else 321, len(sequence)]
     fragments = [sequence[a:b] for a, b in zip(boundaries, boundaries[1:], strict=False)]
     intron = 'GT' + 'C' * (40 if fragment_count == 2 else 26) + 'AG'
     span = str(Seq(intron.join(fragments)).reverse_complement())
@@ -130,7 +134,8 @@ def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
         refinement.plan(tmp_path / 'audit', rescue_output=anchor, mode='audit', split_model_merges=approvals)
 
     output = tmp_path / 'refinement'
-    cli('plan', '--rescue-output', anchor, '--output', output, '--split-model-merges', approvals)
+    approval_args = ('--split-model-merges', approvals) if manual else ()
+    cli('plan', '--rescue-output', anchor, '--output', output, *approval_args)
     cli('run', '--output', output, '--cpus', 2)
     cli('qc', '--output', output)
     effective = output / 'effective'
@@ -153,16 +158,19 @@ def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
     assert not original_ids & mapping.keys()
     audit = json.loads((effective / 'split_model_merges.json').read_text())
     assert len(audit) == 1 and set(audit[0]['replaced_gene_ids']) == original_ids
+    if not manual:
+        assert audit[0]['adoption'] == 'automatic'
     review_data = import_module('plot_gene_model_refinement').collect(output)
     assert review_data['split_model_merges'] == audit
     assert all(path.read_bytes() == content for path, content in before.items())
     assert (worker / 'receipt.json').read_bytes() == producer_receipt
-    approvals.write_text(approvals.read_text() + '\n')
-    with pytest.raises(ValueError, match='Frozen refinement input changed'):
-        refinement.load(output)
+    if manual:
+        approvals.write_text(approvals.read_text() + '\n')
+        with pytest.raises(ValueError, match='Frozen refinement input changed'):
+            refinement.load(output)
 
 
-@pytest.mark.parametrize('case', ['partial', 'intact', 'manual'])
+@pytest.mark.parametrize('case', ['partial', 'intact', 'reciprocal', 'manual'])
 def test_single_locus_repairs_from_real_rescue(tmp_path, case):
     manual = case == 'manual'
     fixture = import_module('test_rescue_gene_models_runtime')
@@ -175,7 +183,14 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case):
     phase_genome = tmp_path / 'genome' / (phase_target + '.genome.fa')
     period = len(truth[8]) + 60
     start = 8 * period
-    if case == 'intact':
+    contig = 'chr1'
+    if case == 'reciprocal':
+        coding_genome = tmp_path / 'genome' / (coding_target + '.genome.fa')
+        dna = coding_genome.read_text().splitlines()[1]
+        dna = dna[:start] + 'N' * len(truth[8]) + dna[start + len(truth[8]):]
+        coding_genome.write_text('>chr1\n' + dna + '\n>isolated\n' + truth[8] + '\n')
+        contig, start = 'isolated', 0
+    if case in {'intact', 'reciprocal'}:
         source_cds = truth[8][60:]
         assert source_cds.startswith('ATG')
         source_blocks = [[start + 60, start + len(truth[8]), 0]]
@@ -185,7 +200,7 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case):
     with coding_cds.open('a') as handle:
         handle.write(f'>{coding_target}_g8\n{source_cds}\n')
     with coding_gff.open('a') as handle:
-        handle.write(annotation('chr1', 'g8', 'g8.t1', source_blocks))
+        handle.write(annotation(contig, 'g8', 'g8.t1', source_blocks))
     phase_start = 11 * period
     first_exon = 241
     intron = 'GT' + 'C' * 40 + 'AG'
@@ -219,7 +234,8 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case):
                       if row['owner_overlap'][0]['gene_id'] == f'g{i}']
         assert candidate['kind'] == kind
         if not manual:
-            assert len({hit['donor'] for hit in candidate['support'] if hit.get('syntenic_locus') == 'g8'}) >= 2
+            field = 'reciprocal_locus' if case == 'reciprocal' else 'syntenic_locus'
+            assert len({hit['donor'] for hit in candidate['support'] if hit.get(field) == 'g8'}) >= 2
         approved.append({'species': target, 'candidate_id': candidate['candidate_id']})
     augmented_cds = anchor / 'augmented' / 'species_cds' / (coding_target + '.rescue.cds.fa')
     assert {gene: seq for gene, _, seq in fasta_records(augmented_cds)}[coding_target + '_g8'] == source_cds
@@ -253,7 +269,8 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case):
     audit = json.loads((effective / 'model_repairs.json').read_text())
     assert {row['gene_id'] for row in audit} == {coding_target + '_g8', phase_target + '_g11'}
     if not manual:
-        assert {row['basis'] for row in audit} == {'syntenic_cds_gain', 'exact_source_cds'}
+        coding_basis = 'reciprocal_cds_extension' if case == 'reciprocal' else 'syntenic_cds_gain'
+        assert {row['basis'] for row in audit} == {coding_basis, 'exact_source_cds'}
         assert {row['adoption'] for row in audit} == {'automatic'}
     review = import_module('plot_gene_model_refinement').collect(output)
     assert review['model_repairs'] == audit
@@ -550,15 +567,87 @@ def test_transcriptome_assembly_refinement_uses_protein_correspondence(tmp_path)
     assert 'Frozen refinement input changed' in cli('qc', '--output', root, success=False).stderr
 
 
-@pytest.mark.parametrize("rna", [False, True])
+@pytest.mark.parametrize('mixed', [False, True])
+def test_discovered_assemblies_infer_edges_and_abstain_on_duplicate_copies(tmp_path, mixed):
+    fixture = import_module('test_rescue_gene_models_runtime')
+    data = fixture.hidden_models.__wrapped__(tmp_path)
+    _, _, sequences = data
+    directory = tmp_path / 'transcriptome_assembly'
+    assemblies = directory / 'assembled_transcripts_with_isoforms'
+    assemblies.mkdir(parents=True)
+    matching = sequences[0]
+    baseline = ''.join(sequences[2][i:i + 3] if 60 <= i < 420 and i % 9 == 0 else matching[i:i + 3]
+                       for i in range(0, len(matching), 3))
+    target = 'Assembly_target'
+    donors = ('Assembly_donor1', 'Assembly_donor2')
+    for species in (target, *donors):
+        with gzip.open(assemblies / (species + '_isoform.fa.gz'), 'wt') as handle:
+            if species == target:
+                handle.write(f'>TRINITY_DN1_c0_g1_i1\n{baseline}\n>TRINITY_DN1_c0_g1_i2\n{matching}\n')
+                handle.write(f'>TRINITY_DN1_c0_g2_i1\n{sequences[1]}\n')
+            else:
+                handle.write(f'>TRINITY_DN1_c0_g1_i1\n{matching}\n')
+                handle.write(f'>TRINITY_DN1_c0_g2_i1\n{sequences[1]}\n>TRINITY_DN1_c0_g3_i1\n{sequences[1]}\n')
+    genomic_args = ()
+    if mixed:
+        species = donors[1]
+        cds, gff, genome = (tmp_path / (species + ext) for ext in ('.cds.fa', '.gff3', '.genome.fa'))
+        proteins = [matching, sequences[1], sequences[1]]
+        cds.write_text(''.join(f'>DN1-c0-g{i}\n{seq}\n' for i, seq in enumerate(proteins, 1)))
+        genome.write_text(''.join(f'>chr{i}\n{seq}\n' for i, seq in enumerate(proteins, 1)))
+        gff.write_text('##gff-version 3\n' + ''.join(
+            annotation(f'chr{i}', f'DN1-c0-g{i}', f't{i}', [[0, len(seq), 0]])
+            for i, seq in enumerate(proteins, 1)))
+        genomic = tmp_path / 'genomic.tsv'
+        write_tsv(genomic, ['species', 'cds', 'gff', 'genome'],
+                  [{'species': species, 'cds': cds, 'gff': gff, 'genome': genome}])
+        genomic_args = ('--inputs', genomic)
+    output = tmp_path / 'automatic'
+    cli('plan', '--transcriptome-assembly-dir', directory, '--output', output, *genomic_args)
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    edges = json.loads((output / 'correspondence' / 'edges.json').read_text())
+    assert sum(target in (row['species_a'], row['species_b']) for row in edges) == 2
+    assert all(row['gene_a'].endswith('_DN1-c0-g1') and row['gene_b'].endswith('_DN1-c0-g1') for row in edges)
+    choices = {row['gene_id']: row for row in refinement.read_table(output / 'effective/sequence/representative_map.tsv')}
+    assert choices[target + '_DN1-c0-g1']['source_transcript_id'] == 'TRINITY_DN1_c0_g1_i2'
+    assert choices[target + '_DN1-c0-g2']['source_transcript_id'] == 'TRINITY_DN1_c0_g2_i1'
+    if mixed:
+        rows = refinement.verify_inputs(output / 'effective/inputs.tsv')
+        assert {row['species'] for row in rows} == {donors[1]}
+
+
+@pytest.mark.parametrize("rna", [False, True, "bam"])
 def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological_negatives(tmp_path, rna):
-    inputs, edges, evidence, sources, truth = truth_fixture(tmp_path, rna=rna)
+    inputs, edges, evidence, sources, truth = truth_fixture(tmp_path, rna=rna is True)
     original = {row[role]: Path(row[role]).read_bytes() for row in sources for role in ("cds", "gff", "genome")}
     root = tmp_path / "run"
     params = ["plan", "--inputs", inputs, "--edges", edges, "--output", root,
               "--padding", 650, "--max-intron", 2000]
     if evidence:
         params += ["--rna", evidence]
+    if rna == "bam":
+        pysam = import_module('pysam')
+        bam_dir = tmp_path / 'rna_bams'
+        bam_dir.mkdir()
+        genome = {name: seq for name, _, seq in fasta_records(Path(sources[0]['genome']))}
+        header = {'HD': {'VN': '1.6', 'SO': 'coordinate'},
+                  'SQ': [{'SN': key, 'LN': len(seq)} for key, seq in genome.items()]}
+        species = sources[0]['species']
+        blocks = truth[species, 'alternate']['blocks']
+        a, b, _ = blocks[0]
+        c, d, _ = blocks[2]
+        with pysam.AlignmentFile(str(bam_dir / (species + '.bam')), 'wb', header=header) as bam:
+            read = pysam.AlignedSegment(bam.header)
+            read.query_name = 'whole_coding_chain'
+            read.query_sequence = genome['chr_alternate'][a:b] + genome['chr_alternate'][c:d]
+            read.reference_id = bam.get_tid('chr_alternate')
+            read.reference_start = a
+            read.mapping_quality = 60
+            read.cigartuples = [(0, b - a), (3, c - b), (0, d - c)]
+            read.set_tag('XS', '+')
+            bam.write(read)
+        params += ['--rna-bam-dir', bam_dir]
     cli(*params)
     for command in ("catalog", "correspondence", "select", "predict", "finalize", "qc"):
         cli(command, "--output", root, "--cpus", 2)
@@ -574,14 +663,14 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
         assert model["change_type"] == "model_revision"
         assert model["donors"] == ["Species_donor1", "Species_donor2"]
     alternative = next(row for row in predictions if row['gene_id'] == target + '_alternate')
-    assert ("alternate" in accepted) is rna
+    assert ("alternate" in accepted) is bool(rna)
     if not rna:
         assert alternative['status'] == 'proposal'
         assert 'unconfirmed_source_structure_change' in alternative['problems']
     assert alternative["candidate"]["cds"] == truth[target, "alternate"]["shorter_cds"]
     assert alternative["change_type"] == "isoform_addition"
     assert alternative["evidence_class"] == ("rna_path_supported" if rna else "homology_only_predicted")
-    assert alternative["candidate"]["quality"]["representative_eligible"] is rna
+    assert alternative["candidate"]["quality"]["representative_eligible"] is bool(rna)
     assert not ({"intact", "pseudogene", "stop", "gap"} & set(accepted))
     effective = root / "effective"
     summary = json.loads((root / "catalog_index_final/summary.json").read_text())
@@ -605,7 +694,7 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
         assert selected[target + "_alternate"] == truth[target, "alternate"]["cds"]
     full = (effective / "full_annotation" / (target + ".gff3")).read_text()
     assert all("ID=" + kind + ".long;" in full for kind in ("repair", "minus", "alternate"))
-    assert ("ID=" + alternative["candidate"]["source_transcript_id"] + ";" in full) is rna
+    assert ("ID=" + alternative["candidate"]["source_transcript_id"] + ";" in full) is bool(rna)
     reimported = refinement.build_catalog(target, effective / "all_candidates" / (target + ".fa"),
                                           effective / "full_annotation" / (target + ".gff3"),
                                           effective / "species_genome" / (target + ".fa"))

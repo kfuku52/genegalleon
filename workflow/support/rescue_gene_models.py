@@ -42,6 +42,7 @@ try:
     from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from model_protein_correspondence import reciprocal_matches
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
@@ -86,7 +87,7 @@ try:
         write_record,
     )
     from rescue_terminal_completion import complete_terminals
-    from species_labeling import extract_species_label
+    from species_labeling import assembly_only_species, extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
     from . import busco_reference_quality as busco_reference_implementation
@@ -96,6 +97,7 @@ except ImportError:
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from .model_protein_correspondence import reciprocal_matches
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
@@ -140,7 +142,7 @@ except ImportError:
         write_record,
     )
     from .rescue_terminal_completion import complete_terminals
-    from .species_labeling import extract_species_label
+    from .species_labeling import assembly_only_species, extract_species_label
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
@@ -213,6 +215,7 @@ def identities():
     versions['annevo_pairwise_aligner_sha256'] = digest(_pairwisealigner.__file__)
     versions["prediction_search_contract"] = prediction_search_contract()
     # Replay also binds the compatibility module in the archived checkout.
+    versions["model_protein_correspondence"] = digest(Path(__file__).with_name("model_protein_correspondence.py"))
     versions["attribute_syntax_implementation"] = digest(Path(__file__).with_name("gff_attribute_syntax.py"))
     versions["ownership_attribute_parser_implementation"] = digest(Path(__file__).with_name("format_species_annotation") / "common.py")
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
@@ -298,6 +301,9 @@ def build_plan(args):
             raise ValueError("Invalid bounded genome-search or terminal-completion parameters")
         species = sorted({extract_species_label(p.name) for p in args.cds_dir.iterdir()
                           if p.is_file() and p.name.removesuffix(".gz").endswith((".fa", ".fas", ".fasta", ".fna"))})
+        excluded = assembly_only_species(getattr(args, 'transcriptome_assembly_dir', None),
+                                         args.gff_dir, args.genome_dir)
+        species = [name for name in species if name not in excluded]
         if not species:
             raise ValueError("No CDS species found")
         tree_bytes = args.tree.read_bytes()
@@ -1373,7 +1379,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         genomewide_audit = None
         proteins = {donor: {i: seq for i, _, seq in fasta_records(root / "prepared" / donor / "genes.pep")}
                     for donor in donors}
-        repair_targets = [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins)]
+        repair_targets = [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins, params)]
         if (not regions and not repair_targets and not plan["request"].get("prediction_cache")
                 and not plan['request'].get('oriongeno_genomewide')):
             # No copy/index/predictor is needed, but invalid source annotations
@@ -2031,7 +2037,7 @@ def verify_model_repair_targets(plan):
     return review['by_species']
 
 
-def automatic_model_repair_targets(root, plan, species, proteins):
+def automatic_model_repair_targets(root, plan, species, proteins, params):
     """Use existing syntenic correspondences to revisit clearly shorter CDSs."""
     candidates = defaultdict(list)
     donors = plan['donors'][species]
@@ -2039,6 +2045,7 @@ def automatic_model_repair_targets(root, plan, species, proteins):
         return []
     locus_ids = {row['jcvi_id']: row['locus_id'] for row in table(root / 'prepared' / species / 'genes.id_map.tsv')
                  if row['status'] == 'selected'}
+    target_lengths = {query: len(sequence) for query, sequence in proteins[species].items()}
     for job in plan['synteny_jobs']:
         a, b = job['a'], job['b']
         if a == b or species not in (a, b):
@@ -2055,15 +2062,29 @@ def automatic_model_repair_targets(root, plan, species, proteins):
                 queries_by_target[target].add(query)
                 if 0 < index < len(block) - 1:
                     interior.add((target, query))
-        for target, query in sorted(interior):
-            if len(targets_by_query[query]) != 1 or len(queries_by_target[target]) != 1:
-                continue
+        donor_lengths = {query: len(sequence) for query, sequence in proteins[donor].items()}
+        anchored = {(target, query) for target, query in interior
+                    if len(targets_by_query[query]) == len(queries_by_target[target]) == 1}
+        left, right = (target_lengths, donor_lengths) if a == species else (donor_lengths, target_lengths)
+        coverage = (.90, .75) if a == species else (.75, .90)
+        matches = reciprocal_matches(root / 'synteny' / job['id'] / 'target.query.last', left, right,
+                                     min_identity=params['minimum_identity'],
+                                     coverage_a=coverage[0], coverage_b=coverage[1])
+        reciprocal = {(x, y) if a == species else (y, x) for x, y, _ in matches}
+        for target, query in sorted(anchored | reciprocal):
             locus = locus_ids.get(target)
-            target_length = len(proteins[species].get(target, ''))
-            donor_length = len(proteins[donor].get(query, ''))
-            if locus and target_length and donor_length - target_length >= max(15, .10 * target_length):
-                candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor,
-                                          'query': query, 'syntenic_locus': locus})
+            target_length = target_lengths.get(target, 0)
+            donor_length = donor_lengths.get(query, 0)
+            if not locus or not target_length or donor_length - target_length < max(15, .10 * target_length):
+                continue
+            if (target, query) in anchored:
+                basis = 'syntenic_locus'
+            elif targets_by_query.get(query, {target}) == {target} and queries_by_target.get(target, {query}) == {query}:
+                basis = 'reciprocal_locus'
+            else:
+                continue
+            candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor,
+                                      'query': query, basis: locus})
     return [row for locus in sorted(candidates) if len({r['donor'] for r in candidates[locus]}) >= 2
             for row in candidates[locus]]
 
@@ -2078,7 +2099,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     for index, target in enumerate(targets):
         owner = owners.get(target['gene_id'])
         if not owner or not owner.get('cds') or owner['strand'] not in {'+', '-'}:
-            if target.get('syntenic_locus'):
+            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
                 continue
             raise ValueError('Unknown or invalid coding owner for model repair: ' + target['gene_id'])
         if target['query'] not in proteins[target['donor']]:
@@ -2087,7 +2108,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         start = max(0, owner['start'] - padding)
         end = min(genome.get_reference_length(owner['seqid']), owner['end'] + padding)
         if end - start > params['max_interval']:
-            if target.get('syntenic_locus'):
+            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
                 continue
             raise ValueError('Model repair target exceeds max interval: ' + target['gene_id'])
         identifier = f'review_{index + 1}'
@@ -2173,8 +2194,9 @@ def model_repair_candidates(models, ownership, species, source_gff):
             raise ValueError('Inconsistent CDS for reviewed model repair: ' + identifier)
         support = {'donor': evidence['donor'], 'query': evidence['query'],
                    'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
-        if evidence.get('syntenic_locus') == geometry[0]['gene_id']:
-            support['syntenic_locus'] = evidence['syntenic_locus']
+        for basis in ('syntenic_locus', 'reciprocal_locus'):
+            if evidence.get(basis) == geometry[0]['gene_id']:
+                support[basis] = evidence[basis]
         if support not in row['support']:
             row['support'].append(support)
 
@@ -2645,6 +2667,8 @@ def parser():
     plan.add_argument("--nearest-references", type=int, default=3)
     plan.add_argument("--minimum-busco", type=float, default=90)
     plan.add_argument("--genetic-code", type=int, default=1)
+    plan.add_argument('--transcriptome-assembly-dir', type=Path,
+                      help='Known assembly-only species to omit from genomic rescue')
     plan.add_argument("--genetic-codes", type=Path)
     plan.add_argument("--species-profiles", type=Path, help="Explicit target-species prediction parameter overrides (TSV)")
     plan.add_argument("--feature", default="")

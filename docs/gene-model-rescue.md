@@ -363,7 +363,12 @@ reference species have longer, unambiguous internal anchors in their syntenic
 blocks. The reference proteins must exceed the target by at least 15 amino acids
 and 10 percent. These local searches reuse the existing synteny comparisons.
 Their candidates enter the single-locus publication with the anchored owner
-recorded alongside the donor alignment.
+recorded alongside the donor alignment. Where the target lacks a resolved
+syntenic anchor, reciprocal protein matches from the existing comparison can
+nominate the same search. These matches must cover at least 90% of the shorter
+target and 75% of the donor, and both proteins must have a unique best partner.
+Refinement can adopt a reciprocal-match extension only when it preserves the
+source CDS in full and in frame.
 
 To revisit a particular annotation even when donor screening considers it
 represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
@@ -376,7 +381,7 @@ bounded by `--max-interval`. Results from this targeted search only enter the
 review publication. They never enter the automatic rescue model set.
 
 Rescue publishes candidates for
-[reviewed split-model merging](gene-model-refinement.md#reviewed-split-model-merges)
+[split-model merging](gene-model-refinement.md#automatic-split-model-merges)
 in `rescued/<species>/split_model_candidates.json`. A candidate is a validated
 donor-guided genomic coding path spanning two or more consecutive, same-strand
 coding owners. It must cover at least two-thirds of each owner's distinct

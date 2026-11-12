@@ -75,3 +75,20 @@ from nwkit.taxonomic_labels import (
 from nwkit.taxonomic_labels import (
     tokenize_taxonomic_name as tokenize_taxonomic_name,
 )
+
+
+def assembly_only_species(assembly_dir, gff_dir, genome_dir):
+    """Exclude known assemblies from genomic rescue only when both genomic inputs are absent."""
+    from pathlib import Path
+
+    if not assembly_dir:
+        return set()
+    assemblies = Path(assembly_dir) / 'assembled_transcripts_with_isoforms'
+    names = {path.name.removesuffix('.gz').removesuffix('_isoform.fa')
+             for path in assemblies.iterdir() if path.is_file()
+             and path.name.removesuffix('.gz').endswith('_isoform.fa')} if assemblies.is_dir() else set()
+    for directory, suffixes in ((gff_dir, ('.gff', '.gff3')), (genome_dir, ('.fa', '.fas', '.fasta', '.fna'))):
+        if directory and Path(directory).is_dir():
+            names.difference_update(extract_species_label(path.name) for path in Path(directory).iterdir()
+                                    if path.is_file() and path.name.removesuffix('.gz').endswith(suffixes))
+    return names

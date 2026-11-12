@@ -308,9 +308,9 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
                                     for _, key in columns) + '</tr>'
     html_text += '</tbody></table></div></details>'
     if data.get("split_model_merges"):
-        html_text += '<details><summary>Reviewed split-model merges</summary><ul>' + "".join(
+        html_text += '<details><summary>Split-model merges</summary><ul>' + "".join(
             '<li>' + html.escape(row["species"] + ' ' + row["gene_id"] + ' replaces '
-                                 + ', '.join(row["replaced_gene_ids"])) + '</li>'
+                                 + ', '.join(row["replaced_gene_ids"]) + ' (' + row.get("adoption", "reviewed") + ')') + '</li>'
             for row in data["split_model_merges"]) + '</ul></details>'
     if data.get("model_repairs"):
         html_text += '<details><summary>Single-locus model repairs</summary><ul>' + "".join(

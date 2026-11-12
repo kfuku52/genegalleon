@@ -27,6 +27,8 @@ gene_model_refinement_policy="${gene_model_refinement_policy:-conserved}"
 gene_model_refinement_isoform_adoption="${gene_model_refinement_isoform_adoption:-rna_required}"
 gene_model_refinement_mode="${gene_model_refinement_mode:-conservative}"
 gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
+gene_model_refinement_assembly_dir="${gene_model_refinement_assembly_dir-auto}"
+gene_model_refinement_rna_bam_dir="${gene_model_refinement_rna_bam_dir-auto}"
 gene_model_refinement_transcriptome_inputs="${gene_model_refinement_transcriptome_inputs:-}"
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
@@ -2615,9 +2617,22 @@ resolve_oriongeno_candidate_inputs() {
   fi
 }
 
+refinement_assembly_directory() {
+  local directory="${gene_model_refinement_assembly_dir-auto}"
+  [[ "${directory}" != auto ]] || directory="${gg_workspace_output_dir}/transcriptome_assembly"
+  if [[ -n "${directory}" ]] && compgen -G "${directory}/assembled_transcripts_with_isoforms/*_isoform.fa*" >/dev/null; then
+    printf '%s\n' "${directory}"
+  fi
+}
+
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
-  local -a rescue_args=()
+  local -a rescue_args=() guide_assembly_args=()
+  local assembly_dir
+  assembly_dir=$(refinement_assembly_directory)
+  if [[ -n "${assembly_dir}" ]]; then
+    guide_assembly_args=(--transcriptome-assembly-dir "${assembly_dir}" --gff-dir "${species_gff_dir}" --genome-dir "${species_genome_dir}")
+  fi
   if [[ "${rescue_tree}" == auto ]]; then
     python "${gg_support_dir}/busco_guide_tree.py" build \
       --cds-dir "${species_cds_dir}" --full-dir "${species_busco_full_dir}" --short-dir "${species_busco_short_dir}" \
@@ -2625,7 +2640,7 @@ prepare_gene_model_rescue() {
       --markers "${gene_model_rescue_guide_markers}" --k "${gene_model_rescue_guide_k}" \
       --sketch-size "${gene_model_rescue_guide_sketch_size}" --occupancy "${gene_model_rescue_guide_occupancy}" \
       --minimum-shared "${gene_model_rescue_guide_minimum_shared}" --nearest "${gene_model_rescue_nearest_references}" \
-      --cpus "${GG_TASK_CPUS}" || return $?
+      --cpus "${GG_TASK_CPUS}" "${guide_assembly_args[@]}" || return $?
     rescue_tree="${gene_model_rescue_guide_dir}/guide_tree.nwk"
     rescue_args+=(--guide-tree-receipt "${gene_model_rescue_guide_dir}/receipt.json")
   fi
@@ -2646,6 +2661,7 @@ prepare_gene_model_rescue() {
     --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
+  [[ -z "${assembly_dir}" ]] || rescue_args+=(--transcriptome-assembly-dir "${assembly_dir}")
   [[ -z "${gene_model_rescue_model_repair_targets}" ]] || rescue_args+=(--model-repair-targets "${gene_model_rescue_model_repair_targets}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
   local oriongeno_inputs
@@ -2717,7 +2733,8 @@ finish_gene_model_rescue() {
 }
 
 prepare_gene_model_refinement() {
-  local genomic_inputs=0
+  local genomic_inputs=0 assembly_dir rna_bam_dir
+  assembly_dir=$(refinement_assembly_directory)
   local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
     --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
     --isoform-adoption "${gene_model_refinement_isoform_adoption}"
@@ -2730,7 +2747,9 @@ prepare_gene_model_refinement() {
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
     genomic_inputs=1
-  elif [[ -z "${gene_model_refinement_transcriptome_inputs}" || -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]]; then
+  elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ||
+          ( -z "${gene_model_refinement_transcriptome_inputs}" &&
+            ( -z "${assembly_dir}" || $(count_nonhidden_matching_files "${species_genome_dir}" '*.f[an]*') -gt 0 ) ) ]]; then
     local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
     if [[ ! -s "${anchor_dir}/plan.json" ]]; then
       [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }
@@ -2739,7 +2758,19 @@ prepare_gene_model_refinement() {
     refinement_args+=(--rescue-output "${anchor_dir}")
     genomic_inputs=1
   fi
-  [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] || refinement_args+=(--transcriptome-inputs "${gene_model_refinement_transcriptome_inputs}")
+  if [[ -n "${gene_model_refinement_transcriptome_inputs}" ]]; then
+    refinement_args+=(--transcriptome-inputs "${gene_model_refinement_transcriptome_inputs}")
+  elif [[ -n "${assembly_dir}" ]]; then
+    refinement_args+=(--transcriptome-assembly-dir "${assembly_dir}" --assembly-cpus "${GG_TASK_CPUS}")
+    local genetic_codes="${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"
+    [[ ! -s "${genetic_codes}" ]] || refinement_args+=(--assembly-genetic-codes "${genetic_codes}")
+  fi
+  rna_bam_dir="${gene_model_refinement_rna_bam_dir-auto}"
+  if [[ "${rna_bam_dir}" == auto ]]; then
+    rna_bam_dir="${gg_workspace_input_dir}/refinement_rna_bam"
+    [[ -d "${rna_bam_dir}" ]] || rna_bam_dir=""
+  fi
+  [[ -z "${rna_bam_dir}" ]] || refinement_args+=(--rna-bam-dir "${rna_bam_dir}")
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
   [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")

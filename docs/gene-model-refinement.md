@@ -249,6 +249,8 @@ Important settings:
 | `gene_model_refinement_transcriptome_inputs` | blank | Assembly coding isoforms and their gene assignments, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
+| `gene_model_refinement_rna_bam_dir` | `auto` | Discover RNA BAMs under the workspace input directory, or use the configured directory. Blank disables discovery. |
+| `gene_model_refinement_assembly_dir` | `auto` | Discover standard transcriptome assembly output. Blank disables discovery. |
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
 | `gene_model_refinement_model_repairs` | blank | Reviewed single-locus candidates from a completed rescue publication. |
 | `gene_model_refinement_min_margin` | `0.10` | Experimental score margin for adoption. |
@@ -262,6 +264,17 @@ requires reciprocal protein coverage ≥0.75 and aligned identity ≥0.35, as we
 as its margin and donor gates. These distinct comparisons are not accuracy
 estimates. The new output namespace does not replace rescue
 outputs or install files into curated `workspace/input`.
+
+### Automatic split-model merges
+
+In conservative mode, refinement adopts a unique split-model candidate when
+two or more external donor species support the same complete genomic CDS.
+Each fragment must be an incomplete, usable source coding model and the
+candidate must preserve at least two-thirds of each fragment in frame. The
+existing geometry, splice, homology, ORF and ownership checks also apply.
+Competing paths, complete source models and protected annotations stay out
+of automatic merges. The resulting change is recorded in
+`effective/split_model_merges.json` with `adoption: automatic`.
 
 ### Reviewed split-model merges
 
@@ -303,7 +316,10 @@ splice and ORF checks. For an intact source CDS, the path must preserve all
 existing coding bases and their reading frame while extending the CDS. For a
 partial source, it must preserve at least two-thirds of the coding bases in
 frame and keep an annotated start or stop at its original coordinate.
-Refinement keeps competing supported paths unresolved.
+When syntenic anchors are unavailable, rescue can use unambiguous reciprocal
+protein matches. In that case the adopted path must retain all the original
+coding bases and their reading frame while extending the CDS. Refinement keeps
+competing supported paths unresolved.
 
 Refinement also corrects conflicting numeric CDS phases when one source
 transcript has the same complete CDS in the supplied FASTA and the genome.
@@ -404,13 +420,36 @@ RNA evidence columns are `species`, `seqid`, `strand`, `cds_blocks`,
 `transcript_id`, `count`. `cds_blocks` is a JSON list of zero-based, half-open
 coding intervals in transcript order. The entire coding path must agree with
 one target transcript. A collection of individually supported junctions does not
-establish co-occurrence and must not be entered as a complete RNA path. This
-release consumes reviewed paths, rather than inferring them from BAM files.
-Exact matching paths support both existing annotated candidates and new
-predictions. Paths are indexed once for matching; partial paths and separately
+establish co-occurrence. The same full-path requirement applies to RNA BAMs. Place genome-aligned RNA BAMs in
+`workspace/input/refinement_rna_bam/` for input generation, or use
+`--rna-bam-dir` with the standalone CLI. Use `<species>.bam`,
+`<species>.<sample>.bam` or `<species>/<sample>.bam`. The workflow verifies
+the BAM reference dictionary and available sequence checksums, and generates
+an index in its own output if needed. A primary alignment with MAPQ at least
+20 must cover every coding block and match the strand and complete splice
+chain. An XS strand tag or the unambiguous splice orientation establishes the
+strand. Evidence records identify the BAM and supporting read. Exact matching
+paths from either input route support both existing annotated candidates and
+new predictions. Paths are indexed once for matching; partial paths and separately
 supported junctions do not strengthen a full transcript choice.
 
 ## Transcriptome assembly inputs
+
+Input generation automatically discovers species without genomic inputs in
+`workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms/`.
+It prepares all CDS isoforms and their gene assignments from standard Trinity,
+rnaSPAdes or RNA-Bloom2 outputs, using the corresponding Corset clusters for
+RNA-Bloom2. The standalone CLI accepts `--transcriptome-assembly-dir` pointing
+to the parent `transcriptome_assembly` directory. An explicit
+`--transcriptome-inputs` manifest can still be supplied.
+
+Without an explicit `--edges` table, DIAMOND compares baseline proteins for
+species pairs that include a transcriptome. An inferred edge requires a
+reciprocal best match with at least 80% coverage in each protein and the
+configured minimum identity. Pairs with a second distinct match scoring at
+least 95% of the best score are left unresolved. The result supplies
+sequence-only evidence for representative selection. Genomic prediction
+uses the existing synteny correspondence.
 
 Refinement can select existing coding isoforms in a cohort of transcriptome
 assemblies, genome annotations, or both. For assembled cDNA, run this inside the
@@ -438,8 +477,8 @@ mark one existing representative per gene with `1`. Otherwise the longest input
 CDS, with ties broken by transcript ID, supplies the baseline. When combining
 manifests, resolve paths relative to the combined TSV or use absolute paths.
 
-Provide a frozen `edges.tsv` of trusted gene-level ortholog correspondences,
-for example from initial one-CDS-per-gene inputs. Use columns `species_a`,
+To use curated gene-level ortholog correspondences, provide a frozen
+`edges.tsv`. Use columns `species_a`,
 `gene_a`, `species_b`, `gene_b` and optional `weight`, `evidence`, `ambiguous`.
 Mark unresolved copy assignments as `ambiguous`. An orthogroup can contain
 multiple copies, so its membership alone is insufficient to establish edges.
