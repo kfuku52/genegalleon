@@ -35,6 +35,7 @@ try:
     import refinement_transcriptome_edges
     import rescue_gene_models as rescue
     from fasta_sequence_store import exclusive_lock, open_text
+    from filesystem_io import scratch_build_directory
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_catalog import (
         SOURCE_RESCUE_LOCUS_ATTRIBUTES,
@@ -61,6 +62,7 @@ except ImportError:
     from . import refinement_rna, refinement_transcriptome_edges
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
+    from .filesystem_io import scratch_build_directory
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_catalog import (
         SOURCE_RESCUE_LOCUS_ATTRIBUTES,
@@ -603,39 +605,67 @@ def catalog_species(root, value, name):
 
 @invocation_cached
 def catalog_index(root, value, predictions=False):
-    directories = [catalog_species(root, value, name) for name in value['species']]
-    dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']}}
+    dependencies = {}
     if predictions:
+        initial_db = catalog_index(root, value)
+        initial_receipt = (initial_db.parent / 'receipt.json').read_bytes()
+        initial_record = json.loads(initial_receipt)
+        initial_files = initial_record['files']
+        dependencies['index'] = {'catalog_index': hashlib.sha256(initial_receipt).hexdigest()}
         for name in value['species']:
             predict_species(root, value, name)
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
+    else:
+        directories = [catalog_species(root, value, name) for name in value['species']]
+    dependencies['catalog'] = {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']}
+    if predictions and initial_record['key']['dependencies']['catalog'] != dependencies['catalog']:
+        raise ValueError('Initial refinement index catalog receipts changed before final indexing')
+
     def build(tmp):
-        db = tmp / 'loci.sqlite3'
-        summary = build_store(directories, db)
+        with scratch_build_directory(tmp) as work:
+            db = work / 'loci.sqlite3'
+            if predictions:
+                raw_summary = (initial_db.parent / 'summary.json').read_bytes()
+                if hashlib.sha256(raw_summary).hexdigest() != initial_files['summary.json']:
+                    raise ValueError('Initial refinement index summary changed during copying')
+                summary = json.loads(raw_summary)
+                copy_refinement_index(initial_db, db, initial_files[db.name])
+                accepted_count = 0
+                with contextlib.closing(sqlite3.connect(db)) as connection, connection:
+                    for name in value['species']:
+                        additions = json.loads((root / 'predictions' / name / 'predictions.json').read_text())
+                        by_gene = defaultdict(list)
+                        for model in additions:
+                            if model['status'] == 'accepted':
+                                by_gene[model['gene_id']].append(model['candidate'])
+                        for gene, candidates in by_gene.items():
+                            locus = json.loads(connection.execute('SELECT json FROM loci WHERE species=? AND gene_id=?', (name, gene)).fetchone()[0])
+                            locus['candidates'].extend(candidates)
+                            for candidate in candidates:
+                                connection.execute('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)', (name, candidate['candidate_id'], gene))
+                            serialized = json.dumps(locus, sort_keys=True)
+                            connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
+                            accepted_count += len(candidates)
+                            summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
+                summary['accepted_prediction_count'] = accepted_count
+                summary['candidate_count'] += accepted_count
+            else:
+                summary = build_store(directories, db)
+            if work != tmp:
+                copied = tmp / db.name
+                copy_refinement_index(db, copied, digest(db))
+                with copied.open('rb') as handle:
+                    os.fsync(handle.fileno())
         summary['database'] = str((root / ('catalog_index_final' if predictions else 'catalog_index') / 'loci.sqlite3').resolve())
-        if predictions:
-            accepted_count = 0
-            with sqlite3.connect(db) as connection:
-                for name in value['species']:
-                    additions = json.loads((root / 'predictions' / name / 'predictions.json').read_text())
-                    by_gene = defaultdict(list)
-                    for model in additions:
-                        if model['status'] == 'accepted':
-                            by_gene[model['gene_id']].append(model['candidate'])
-                    for gene, candidates in by_gene.items():
-                        locus = json.loads(connection.execute('SELECT json FROM loci WHERE species=? AND gene_id=?', (name, gene)).fetchone()[0])
-                        locus['candidates'].extend(candidates)
-                        for candidate in candidates:
-                            connection.execute('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)', (name, candidate['candidate_id'], gene))
-                        serialized = json.dumps(locus, sort_keys=True)
-                        connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
-                        accepted_count += len(candidates)
-                        summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
-            summary['accepted_prediction_count'] = accepted_count
-            summary['candidate_count'] += accepted_count
         atomic_json(tmp / 'summary.json', summary)
     directory = stage(root, 'catalog_index_final' if predictions else 'catalog_index', {'dependencies': dependencies}, build)
     return directory / 'loci.sqlite3'
+
+
+def copy_refinement_index(source, destination, expected_sha256):
+    shutil.copyfile(source, destination)
+    if digest(destination) != expected_sha256:
+        raise OSError('Copied refinement SQLite index differs from its source database')
 
 
 def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, params):
@@ -2641,7 +2671,8 @@ def inspect_stages(root, value):
                 worker_hash = None
             dependencies['rescue_workers'] = {name: worker_hash}
         expected[str(Path('predictions') / name)] = {'dependencies': dependencies}
-    expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'predictions': predictions}}
+    expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'index': initial_index,
+                                                        'predictions': predictions}}
     expected['selection_final'] = {'dependencies': {**selection_dependencies, 'predictions': predictions, 'index': final_index}}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}

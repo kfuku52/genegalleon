@@ -19,6 +19,11 @@ import tempfile
 from collections import OrderedDict
 from pathlib import Path, PurePosixPath
 
+if __package__:
+    from .filesystem_io import scratch_build_directory
+else:
+    from filesystem_io import scratch_build_directory
+
 FORMAT = "gg_rescue_model_store_v1"
 KINDS = {"models", "accepted", "partial", "revision"}
 BODY_FIELDS = frozenset({
@@ -273,7 +278,27 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         raise ValueError("Model-store publication already exists")
-    tmp = Path(tempfile.mkdtemp(prefix=".model-store-", dir=target.parent))
+    with tempfile.TemporaryDirectory(prefix=".model-store-", dir=target.parent) as directory:
+        staging = Path(directory)
+        with scratch_build_directory(staging) as work:
+            manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
+                                          codec, codec_version, compression_level)
+            if work != staging:
+                for name, expected in manifest["files"].items():
+                    copied = staging / name
+                    shutil.copyfile(work / name, copied)
+                    if _digest(copied) != expected:
+                        raise OSError(f"Copied model-store member differs: {name}")
+        (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
+        for path in staging.iterdir():
+            with path.open("rb") as handle:
+                os.fsync(handle.fileno())
+        os.rename(staging, target)
+        _sync_directory(target.parent)
+        return manifest
+
+
+def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level):
     dbs, shard_handle = [], None
     try:
         body_db = _database(tmp / "bodies.sqlite")
@@ -375,27 +400,18 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
             "revision": ["revision.sqlite"],
             "partial": ["partial.sqlite", *(["bodies.sqlite", *partial_shards] if partial_count else [])],
         }
-        manifest = {"schema": 1, "format": FORMAT, "codec": codec, "body_codec": codec,
-                    "codec_version": codec_version,
-                    "compression_level": compression_level, "files": files, "scopes": scopes,
-                    "shards": shards, "partial_ordered": partial_ordered,
-                    "counts": {"models": count, "accepted": accepted_count,
-                                                 "partial": partial_count, "revision": revision_count,
-                                                 "bodies": body_count}}
-        (tmp / "manifest.json").write_bytes(_json(manifest) + b"\n")
-        for path in tmp.iterdir():
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
-        os.rename(tmp, target)
-        _sync_directory(target.parent)
-        return manifest
-    except BaseException:
+        return {"schema": 1, "format": FORMAT, "codec": codec, "body_codec": codec,
+                "codec_version": codec_version,
+                "compression_level": compression_level, "files": files, "scopes": scopes,
+                "shards": shards, "partial_ordered": partial_ordered,
+                "counts": {"models": count, "accepted": accepted_count,
+                                             "partial": partial_count, "revision": revision_count,
+                                             "bodies": body_count}}
+    finally:
         if shard_handle is not None:
             shard_handle.close()
         for db in dbs:
             db.close()
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
 
 
 def _manifest(store):

@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,41 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     second = next(iterator)
     assert second == model(1)
     assert list(iterator) == []
+
+
+def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_path, monkeypatch):
+    records = [model(0, 'accepted'), model(1), model(2)]
+    before, expected = published(tmp_path / 'direct', records, revisions=records)
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+
+    @contextmanager
+    def scratch_directory(staging):
+        assert not any(staging.iterdir())
+        with store.tempfile.TemporaryDirectory(dir=scratch) as directory:
+            yield Path(directory)
+
+    monkeypatch.setattr(store, 'scratch_build_directory', scratch_directory)
+    after, actual = published(tmp_path / 'local', records, revisions=records)
+    assert actual == expected
+    assert (after / 'receipt.json').read_bytes() == (before / 'receipt.json').read_bytes()
+    assert list(store.iter_models(after)) == records
+    assert list(store.iter_revision_models(after)) == records
+
+    copy = store.shutil.copyfile
+
+    def corrupt_copy(source, destination):
+        assert scratch in source.parents
+        copy(source, destination)
+        with destination.open('ab') as handle:
+            handle.write(b'damage')
+
+    monkeypatch.setattr(store.shutil, 'copyfile', corrupt_copy)
+    failed = tmp_path / 'failed'
+    with pytest.raises(OSError, match='Copied model-store member differs'):
+        store.write_model_store(failed, records, codec='gzip')
+    assert not any(failed.iterdir())
+    assert not any(scratch.iterdir())
 
 
 @pytest.mark.parametrize('scope', ['models', 'accepted', 'partial', 'revision'])

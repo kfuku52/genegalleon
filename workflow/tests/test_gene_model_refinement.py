@@ -9,6 +9,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
+from functools import wraps
 from importlib import import_module
 from pathlib import Path
 
@@ -1330,6 +1332,65 @@ def test_selection_does_not_publish_when_dependency_changes_during_build(tmp_pat
         refinement.select(root, value)
     assert not (root / 'selection_initial/receipt.json').exists()
     assert (root / 'selection_initial.failed/selection.json').exists()
+
+
+@pytest.mark.parametrize('predictions', [False, True])
+def test_catalog_index_scratch_build_and_checked_publication(tmp_path, monkeypatch, predictions):
+    inputs, edges, _rows = tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    db = refinement.catalog_index(root, value, predictions=predictions)
+    expected = db.read_bytes()
+    receipt = json.loads((db.parent / 'receipt.json').read_text())
+    db.parent.rename(tmp_path / 'original-index')
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+    built = []
+
+    @contextmanager
+    def scratch_directory(staging):
+        with refinement.tempfile.TemporaryDirectory(dir=scratch) as directory:
+            work = Path(directory)
+            yield work
+            built.append((work / 'loci.sqlite3').read_bytes())
+            assert not (work / 'loci.sqlite3-journal').exists()
+
+    monkeypatch.setattr(refinement, 'scratch_build_directory', scratch_directory)
+    if predictions:
+        # The final stage must reuse the completed initial index while applying
+        # prediction overlays to its own copy.
+        @wraps(refinement.build_store)
+        def unexpected_reimport(*args):
+            pytest.fail('Final index re-imported the locus catalogs')
+
+        monkeypatch.setattr(refinement, 'build_store', unexpected_reimport)
+    assert refinement.catalog_index(root, value, predictions=predictions) == db
+    assert built == [expected]
+    assert db.read_bytes() == expected
+    published = json.loads((db.parent / 'receipt.json').read_text())
+    assert published['key'] == receipt['key']
+    assert published['files']['loci.sqlite3'] == receipt['files']['loci.sqlite3']
+    assert published['files']['summary.json'] == receipt['files']['summary.json']
+    assert not any(scratch.iterdir())
+
+
+def test_final_catalog_index_rejects_catalog_receipt_change_after_initial_index(tmp_path, monkeypatch):
+    inputs, edges, _rows = tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    refinement.catalog_index(root, value)
+    for name in value['species']:
+        refinement.predict_species(root, value, name)
+    receipt = root / 'catalog' / value['species'][0] / 'receipt.json'
+
+    def change_catalog(_root, _value, name):
+        if name == value['species'][-1]:
+            receipt.write_bytes(receipt.read_bytes() + b'\n')
+
+    monkeypatch.setattr(refinement, 'predict_species', change_catalog)
+    with pytest.raises(ValueError, match='Initial refinement index catalog receipts changed'):
+        refinement.catalog_index(root, value, predictions=True)
+    assert not (root / 'catalog_index_final').exists()
 
 
 @pytest.mark.parametrize('consumer', ['correspondence', 'selection_initial', 'selection_final', 'prediction', 'effective'])

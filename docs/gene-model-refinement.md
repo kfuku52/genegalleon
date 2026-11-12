@@ -909,6 +909,17 @@ indexing. Zero-window refinement skips staging; zero-candidate rescue still
 streams contig lengths to validate annotation bounds. Final effective bundles
 retain their self-contained genome copies.
 
+Set `TMPDIR` to writable node-local storage visible inside the container to
+build the rescue model store and both refinement SQLite indexes there. When
+temporary storage and the output are on different filesystems, the workflow
+copies the completed files to the output stage, verifies their SHA-256, and
+publishes them using the existing stage checks. A single filesystem uses direct
+staging. Size temporary storage for the largest model store or locus index per
+concurrent task.
+The final index copies the verified initial SQLite index and applies the
+accepted predictions to that copy. This reuses the original catalog import
+and preserves the initial index for restart and inspection.
+
 ## Three-stage BUSCO
 
 Within each species, three thin horizontal stacked bars are ordered vertically:
