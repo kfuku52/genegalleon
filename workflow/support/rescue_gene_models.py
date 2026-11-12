@@ -1167,29 +1167,37 @@ def archive_interval(archive, directory):
 
 
 def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None,
-                     retain_inputs=False, *, compact=False):
+                     retain_inputs=False, *, compact=False, deduplicate_queries=False):
     """Bound pending work and retain input order, with total threads <= cpus.
 
     Only the submitting thread fetches from pysam's seekable FASTA handle.
     Alignments remain independent so other WGD intervals cannot compete.
+    Deduplicated searches restore donor-specific records before archiving.
     """
     workers = min(cpus, len(windows)) if interval_workers is None else interval_workers
     if cpus < 1 or (windows and not 1 <= workers <= cpus):
         raise ValueError("Interval workers must be positive and no greater than cpus")
     if compact and retain_inputs:
         raise ValueError("Retained interval inputs require directory output")
+    if deduplicate_queries and retain_inputs:
+        raise ValueError("Deduplicated interval searches do not retain predictor FASTAs")
     interval_dir = tmp / "intervals"
     if not compact:
         interval_dir.mkdir()
     if not windows:
         return []
     threads = cpus // workers
-    def predict(directory):
+    def predict(directory, representatives):
         run(["miniprot", "-u", "-T", code, "-t", threads, "-G", max_intron,
              "-N", MINIPROT_MAX_SECONDARY, f"--outs={MINIPROT_OUTPUT_SCORE_RATIO}",
              "--gff", directory / "region.fa", directory / "queries.fa"],
             directory, "miniprot", directory / "models.gff")
-        result = read_miniprot(directory / "models.gff")
+        models = directory / "models.gff"
+        if representatives and any(query != representative for query, representative in representatives.items()):
+            expanded = directory / "expanded.gff"
+            expand_miniprot_queries(models, expanded, representatives)
+            expanded.replace(models)
+        result = read_miniprot(models)
         if not retain_inputs:
             (directory / "region.fa").unlink()
             (directory / "queries.fa").unlink()
@@ -1227,10 +1235,15 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
             sequence = genome.fetch(seqid, start, end)
             (directory / "region.fa").write_text(f">interval\n{sequence}\n")
             write_record(metadata, local_record(i, (seqid, start, end), queries, proteins, sequence))
-            with (directory / "queries.fa").open("w") as out:
-                for region in queries:
-                    out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
-            pending.append((directory, executor.submit(predict, directory)))
+            query_fasta = directory / "queries.fa"
+            representatives = None
+            if deduplicate_queries:
+                representatives = write_unique_queries(queries, proteins, query_fasta)
+            else:
+                with query_fasta.open("w") as out:
+                    for region in queries:
+                        out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
+            pending.append((directory, executor.submit(predict, directory, representatives)))
             if len(pending) >= workers * 2:
                 collect()
         while pending:
@@ -2126,7 +2139,8 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     directory = tmp / 'model_repair_search'
     directory.mkdir()
     atomic_json(directory / 'targets.json', list(queries.values()))
-    predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus, compact=True)
+    predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus,
+                                   compact=True, deduplicate_queries=True)
     return validate_model_repair_predictions(predictions, queries, ownership, genome, code, params)
 
 

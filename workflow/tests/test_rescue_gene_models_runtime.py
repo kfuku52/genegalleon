@@ -414,6 +414,40 @@ def test_parallel_intervals_preserve_every_real_alignment_and_order(hidden_model
         assert command[command.index("-t") + 1] == "1"
 
 
+def test_deduplicated_intervals_preserve_donor_specific_alignments_and_archive(hidden_models):
+    import pysam
+
+    root, names, sequences = hidden_models
+    genome_path = root / "genome" / (names[0] + ".genome.fa")
+    pysam.faidx(str(genome_path))
+    donors = names[1:3]
+    proteins = {donor: {f"g{i}": str(Seq(sequence).translate())[:-1] for i, sequence in enumerate(sequences)}
+                for donor in donors}
+    windows = {}
+    for i in (8, 9):
+        start = i * (len(sequences[0]) + 60)
+        windows[("chr1", start, start + len(sequences[i]) + 10)] = [
+            {"id": f"query_{i}_{j}", "donor": donor, "query": f"g{query}"}
+            for j, (donor, query) in enumerate(((donors[0], i), (donors[0], 0), (donors[1], i)))
+        ]
+    original, deduplicated = root / "original", root / "deduplicated"
+    original.mkdir()
+    deduplicated.mkdir()
+    with pysam.FastaFile(str(genome_path)) as genome:
+        expected = rescue.search_intervals(original, windows, proteins, genome, 1, 20000, 2, compact=True)
+        actual = rescue.search_intervals(deduplicated, windows, proteins, genome, 1, 20000, 2,
+                                         compact=True, deduplicate_queries=True)
+    assert actual == expected
+    assert {"query_8_0", "query_8_2", "query_9_0", "query_9_2"} <= {model["query"] for model in actual}
+    with (zipfile.ZipFile(original / rescue.INTERVAL_ARCHIVE) as before,
+          zipfile.ZipFile(deduplicated / rescue.INTERVAL_ARCHIVE) as after):
+        for name in ("intervals/1/models.gff", "intervals/2/models.gff"):
+            assert before.read(name) == after.read(name)
+    for directory in (original, deduplicated):
+        with gzip.open(directory / rescue.LOCAL_RECORDS, "rt") as stream:
+            assert [len(json.loads(line)["queries"]) for line in stream] == [3, 3]
+
+
 def test_local_input_diagnostics_fetch_each_new_window_once(tmp_path):
     class Genome:
         fetched = []
