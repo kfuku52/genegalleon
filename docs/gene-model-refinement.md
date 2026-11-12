@@ -246,6 +246,7 @@ Important settings:
 | `gene_model_refinement_mode` | `conservative` | `off` skips prediction; `audit` retains prediction proposals; `conservative` accepts only supported predictions. |
 | `gene_model_refinement_dir` | blank | `output/input_generation/gene_model_refinement`. Use a new directory for changed inputs/settings/implementation. |
 | `gene_model_refinement_inputs` | blank | Optional original species CDS/GFF/genome TSV, paired with `gene_model_refinement_edges`. |
+| `gene_model_refinement_transcriptome_inputs` | blank | Assembly coding isoforms and their gene assignments, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
@@ -408,6 +409,71 @@ release consumes reviewed paths, rather than inferring them from BAM files.
 Exact matching paths support both existing annotated candidates and new
 predictions. Paths are indexed once for matching; partial paths and separately
 supported junctions do not strengthen a full transcript choice.
+
+## Transcriptome assembly inputs
+
+Refinement can select existing coding isoforms in a cohort of transcriptome
+assemblies, genome annotations, or both. For assembled cDNA, run this inside the
+GeneGalleon runtime with the original `*_isoform.fa.gz` file.
+
+```bash
+python workflow/support/gene_model_refinement.py prepare-transcriptome \
+  --assembly Genus_species_isoform.fa.gz --species Genus_species \
+  --assembler trinity --output assembly_candidates --cpus 4
+```
+
+Use `--assembler rnaspades` for rnaSPAdes or `--assembler rna-bloom2` with the
+matching `--corset-clusters` TSV for RNA-Bloom2. Use `--gene-map` in place of
+`--assembler` for explicit assignments. The command extracts one CDS per
+transcript with CDSKIT, preserving transcript IDs and identical CDSs belonging
+to distinct transcripts or genes. It also writes a gene-level
+`Genus_species_initial_longestCDS.fa` for initial orthology inference.
+
+The resulting `assembly_candidates/inputs.tsv` has `species`, `cds`,
+`transcript_gene_map` and optional `genetic_code` (default 1) columns. You can
+also supply an existing per-transcript CDS FASTA and a `transcript_id`, `gene_id`
+mapping TSV directly. Every FASTA ID must have exactly one mapping. Use the
+`GENUS_SPECIES_GENEID` format for gene IDs. The optional `baseline` column can
+mark one existing representative per gene with `1`. Otherwise the longest input
+CDS, with ties broken by transcript ID, supplies the baseline. When combining
+manifests, resolve paths relative to the combined TSV or use absolute paths.
+
+Provide a frozen `edges.tsv` of trusted gene-level ortholog correspondences,
+for example from initial one-CDS-per-gene inputs. Use columns `species_a`,
+`gene_a`, `species_b`, `gene_b` and optional `weight`, `evidence`, `ambiguous`.
+Mark unresolved copy assignments as `ambiguous`. An orthogroup can contain
+multiple copies, so its membership alone is insufficient to establish edges.
+
+```bash
+python workflow/support/gene_model_refinement.py plan --output mixed_refinement \
+  --transcriptome-inputs assembly_candidates/inputs.tsv \
+  --inputs genomic_sources.tsv --edges edges.tsv --mode off
+python workflow/support/gene_model_refinement.py run --output mixed_refinement --cpus 4
+python workflow/support/gene_model_refinement.py qc --output mixed_refinement
+```
+
+Omit `--inputs` for a transcriptome-only run. To reuse a frozen rescue plan for
+the genome species, use `--rescue-output` in place of `--inputs`. Refinement
+then combines rescue synteny edges with the supplied ortholog correspondences.
+The input-generation entrypoint accepts the same settings through
+`GG_INPUT_GENE_MODEL_REFINEMENT_TRANSCRIPTOME_INPUTS` and
+`GG_INPUT_GENE_MODEL_REFINEMENT_EDGES`, with `GG_INPUT_GENE_MODEL_REFINEMENT_INPUTS`
+or `GG_INPUT_GENE_MODEL_REFINEMENT_RESCUE_DIR` for a mixed cohort.
+
+Pairs involving an assembly use protein identity and reciprocal coverage, with
+internal-gap safeguards and no splice-junction score. Changing an assembly
+representative requires a positive conservation gain, sufficient independent
+donor support, and the score margin. Unresolved copies and weak comparisons
+keep their initial representative. Genome-based prediction and structural
+outputs use genome-annotated species.
+
+The complete cohort's paired FASTAs are in `effective/sequence/species_cds` and
+`effective/sequence/species_protein`, with their genetic codes and manifest in
+`effective/sequence/`. Use those sequence directories for sequence-based
+analyses. `effective/sequence/representative_map.tsv` records the source
+transcript, the initial transcript for assembly species, selection status and
+admission to the FASTAs. The usual `effective/inputs.tsv` covers the subset with
+genome and GFF inputs.
 
 ## Review figures
 

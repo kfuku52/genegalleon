@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import OrderedDict, defaultdict
+from dataclasses import replace
 from typing import Any
 
 from Bio.Align import PairwiseAligner
@@ -100,11 +101,23 @@ def _aligner():
                            open_gap_score=-5.0, extend_gap_score=-0.5)
 
 
+def _comparison_signature(candidate, protein):
+    has_structure = not candidate.get("sequence_only", False)
+    junctions = _junction_positions(candidate) if has_structure else ()
+    return protein, junctions, has_structure
+
+
 def _score_signatures(signature_a, signature_b, *, max_alignment_cells, aligner_factory):
     # These experimental ranking rules remain GeneGalleon policy.
-    return _native_score_signatures(signature_a, signature_b,
+    protein_a, junctions_a, has_structure_a = signature_a
+    protein_b, junctions_b, has_structure_b = signature_b
+    compare_junctions = has_structure_a and has_structure_b
+    result = _native_score_signatures((protein_a, junctions_a if compare_junctions else ()),
+        (protein_b, junctions_b if compare_junctions else ()),
         max_alignment_cells=max_alignment_cells, aligner_factory=aligner_factory,
-        identity_weight=0.85, junction_weight=0.15, internal_gap_threshold=9)
+        identity_weight=0.85 if compare_junctions else 1.0,
+        junction_weight=0.15 if compare_junctions else 0.0, internal_gap_threshold=9)
+    return result if compare_junctions else replace(result, junction_similarity=0.0)
 
 
 def pair_score(candidate_a: dict, candidate_b: dict, *, max_alignment_cells: int = 25_000_000) -> PairScore:
@@ -112,8 +125,7 @@ def pair_score(candidate_a: dict, candidate_b: dict, *, max_alignment_cells: int
     protein_a, protein_b = _protein(candidate_a), _protein(candidate_b)
     if not protein_a or not protein_b or len(protein_a) * len(protein_b) > max_alignment_cells:
         return PairScore(0.0, 0.0, 0.0, 0.0, 0.0, 0, False, False, True)
-    return _score_signatures((protein_a, _junction_positions(candidate_a)),
-                             (protein_b, _junction_positions(candidate_b)),
+    return _score_signatures(_comparison_signature(candidate_a, protein_a), _comparison_signature(candidate_b, protein_b),
                              max_alignment_cells=max_alignment_cells, aligner_factory=_aligner)
 
 
@@ -131,7 +143,7 @@ class _PairScores:
     def signature(self, candidate: dict) -> tuple:
         identifier = id(candidate)
         if identifier not in self.signatures:
-            self.signatures[identifier] = (_protein(candidate), _junction_positions(candidate))
+            self.signatures[identifier] = _comparison_signature(candidate, _protein(candidate))
         return self.signatures[identifier]
 
     def get_aligner(self) -> PairwiseAligner:
@@ -532,7 +544,8 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
             if baseline_pair.internal_loss_a:
                 return abstain("possible_species_specific_internal_region")
         result = _selection(proposed, node, "conserved", "supported_crossspecies_coding_isoform", proposed_score, margin)
-        if proposed.get("quality", {}).get("representative_admission") == "conservation_supported":
+        if (proposed.get("sequence_only", False)
+                or proposed.get("quality", {}).get("representative_admission") == "conservation_supported"):
             # An improved length/ORF quality score alone is insufficient when
             # relaxing the RNA gate. Compare both paths against the same final
             # adopted neighbors, keeping the existing copy/span/support gates.

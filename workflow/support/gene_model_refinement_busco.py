@@ -339,6 +339,7 @@ def classify_rescue_support(models, species, rescued, plan):
 def input_pairs(root, cds_dir=None, *, three_stage=False, rescue_output=None):
     """Native sources are frozen; extra CDS-only species are explicit passthroughs."""
     plan = json.loads((root / "plan.json").read_text())
+    transcriptome_species = plan["request"].get("transcriptome_sources", {})
     effective = {r["species"]: r for r in verify_inputs(root / "effective" / "inputs.tsv")}
     if set(effective) != set(plan["request"]["sources"]):
         raise ValueError("Refinement species membership differs from the frozen plan")
@@ -360,7 +361,7 @@ def input_pairs(root, cds_dir=None, *, three_stage=False, rescue_output=None):
             if name in seen:
                 raise ValueError("Ambiguous CDS files for species: " + name)
             seen.add(name)
-            if name not in pairs:
+            if name not in pairs and name not in transcriptome_species:
                 pairs[name] = {"species": name, "before": str(path.resolve()), "after": str(path.resolve()),
                                "refinement_status": "not_analysed",
                                "reason": "No matching genome/GFF in the refinement plan; CDS retained unchanged"}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Restartable, opt-in synteny-guided coding model refinement.
+"""Restartable coding-model refinement and conserved isoform selection.
 
-Original annotations are immutable. Accepted predictions and representative
-adoption are separate decisions; every effective sequence has an exact GFF path.
+Original annotations are immutable. Genomic representatives have exact GFF
+paths, and assembly representatives retain their original transcript IDs.
 """
 import argparse
 import bisect
@@ -16,6 +16,7 @@ import importlib.metadata
 import io
 import json
 import math
+import os
 import re
 import resource
 import shutil
@@ -28,6 +29,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 try:
+    import gene_model_transcriptome as transcriptome
     import rescue_gene_models as rescue
     from fasta_sequence_store import exclusive_lock, open_text
     from format_species_annotation.common import parse_gff_attributes
@@ -52,6 +54,7 @@ try:
     from rescue_prediction_cache import stream_json_array
     from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
+    from . import gene_model_transcriptome as transcriptome
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
     from .format_species_annotation.common import parse_gff_attributes
@@ -137,7 +140,7 @@ def implementation():
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
                     'refinement_input_snapshot.py', 'annevo_gene_models.py', 'oriongeno_runtime.py', 'oriongeno_model_profiles.py', 'transcript_utrs.py', 'genome_sequence_identity.py',
-                    'gene_model_source_retention.py')
+                    'gene_model_source_retention.py', 'gene_model_transcriptome.py', 'rename_rnabloom_transcripts.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -222,10 +225,18 @@ def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
     return selected, publications
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, **parameters):
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, transcriptome_inputs=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
+        transcriptome_sources = {}
+        transcriptome_proof = FreshDigestBatch()
+        if transcriptome_inputs:
+            if not edges:
+                raise ValueError('Transcriptome refinement requires an explicit gene correspondence table (--edges)')
+            transcriptome_inputs = Path(transcriptome_inputs).resolve()
+            transcriptome_proof.read([transcriptome_inputs])
+            transcriptome_sources = transcriptome.read_sources(transcriptome_inputs)
         receipts = {}
         if rescue_output:
             if inputs:
@@ -289,10 +300,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         else:
             anchor_root = None
             revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
-            if not inputs:
-                raise ValueError('Provide --inputs or --rescue-output')
             sources = {}
-            for row in read_table(inputs):
+            for row in read_table(inputs) if inputs else ():
                 name = row['species']
                 rescue.safe_token(name, 'species')
                 if name in sources:
@@ -304,9 +313,14 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                 sources[name] = {'species': name, 'fasta': resolve_path(row.get('cds', row.get('fasta', ''))),
                                  'gff': resolve_path(row['gff']), 'genome': resolve_path(row['genome']),
                                  'genetic_code': int(row.get('genetic_code') or 1)}
-            files = [str(Path(inputs).resolve())]
-        if not sources:
-            raise ValueError('No species')
+            files = [str(Path(inputs).resolve())] if inputs else []
+        if sources.keys() & transcriptome_sources.keys():
+            raise ValueError('A species may occur in only one of the genomic and transcriptome inputs')
+        if not sources and not transcriptome_sources:
+            raise ValueError('Provide species through --inputs, --rescue-output or --transcriptome-inputs')
+        if transcriptome_sources:
+            files += [str(transcriptome_inputs), *(s[k] for s in transcriptome_sources.values()
+                                                   for k in ('fasta', 'transcript_gene_map'))]
         inherited = {k: v for k, v in anchors['request']['parameters'].items() if k.startswith('terminal_')} if anchor_root else {}
         params = {**DEFAULTS, **inherited, **parameters}
         if params['policy'] not in {'longest', 'conserved'} or params['mode'] not in {'off', 'audit', 'conservative'}:
@@ -343,7 +357,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                      if oriongeno_inputs else copy.deepcopy(inherited_oriongeno))
         if oriongeno:
             files.extend(oriongeno['files'])
-        tool = shutil.which('miniprot') if params['mode'] != 'off' else None
+        tool = shutil.which('miniprot') if sources and params['mode'] != 'off' else None
         reviews, publications, claimed = {}, {}, set()
         for key, approvals, publication, label in (
             ('split_model_merges', split_model_merges, 'split_model_candidates.json', 'Split model'),
@@ -391,9 +405,12 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             request['annevo'] = annevo
         if oriongeno:
             request['oriongeno'] = oriongeno
+        if transcriptome_sources:
+            request['transcriptome_sources'] = transcriptome_sources
+            transcriptome_proof.check()
         if not edges and not anchor_root:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
-        if params['mode'] != 'off' and not tool:
+        if sources and params['mode'] != 'off' and not tool:
             raise ValueError('miniprot is required for prediction')
         path = root / 'plan.json'
         if path.exists():
@@ -401,7 +418,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             if previous['request'] != request:
                 raise ValueError('Frozen refinement plan differs; use a new output directory')
             return previous
-        value = {'request': request, 'species': sorted(sources)}
+        value = {'request': request, 'species': sorted(sources.keys() | transcriptome_sources.keys())}
         atomic_json(path, value, immutable=True)
         return value
 
@@ -419,12 +436,16 @@ def load(root, names=None):
     request = value['request']
     if request['schema'] != SCHEMA or request['implementation'] != implementation() or request['dependencies'] != dependency_identities():
         raise ValueError('Refinement implementation changed; use a new output directory')
-    species_paths = {source[k] for source in request['sources'].values() for k in ('fasta', 'gff', 'genome')}
+    source_paths = {name: [source[k] for k in ('fasta', 'gff', 'genome')]
+                    for name, source in request['sources'].items()}
+    source_paths.update({name: [source[k] for k in ('fasta', 'transcript_gene_map')]
+                         for name, source in request.get('transcriptome_sources', {}).items()})
+    species_paths = set(chain.from_iterable(source_paths.values()))
     native_groups = [request.get(engine, {}).get('predictions', {}) for engine in ('annevo', 'oriongeno')]
     species_paths.update(prediction[k] for native in native_groups for prediction in native.values() for k in ('gff', 'receipt'))
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
-        files.update({request['sources'][n][k]: request['files'][request['sources'][n][k]] for n in names for k in ('fasta', 'gff', 'genome')})
+        files.update({path: request['files'][path] for name in names for path in source_paths[name]})
         files.update({native[n][k]: request['files'][native[n][k]] for native in native_groups for n in names if n in native for k in ('gff', 'receipt')})
     if _INPUT_SNAPSHOT is None:
         if digest_paths(files) != files:
@@ -514,8 +535,12 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
 
 @invocation_cached
 def catalog_species(root, value, name):
-    source = value['request']['sources'][name]
     def build(tmp):
+        transcriptome_source = value['request'].get('transcriptome_sources', {}).get(name)
+        if transcriptome_source:
+            write_catalog(transcriptome.build_catalog(name, transcriptome_source), tmp)
+            return
+        source = value['request']['sources'][name]
         catalog = build_catalog(name, source['fasta'], source['gff'], source['genome'], source['genetic_code'])
         if value['request']['rna']:
             rna = rna_path_index(read_table(value['request']['rna']))
@@ -614,12 +639,16 @@ def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, p
     return result
 
 
+def uses_rescue_correspondence(request):
+    return bool(request['rescue_output'] and (not request['edges'] or request.get('transcriptome_sources')))
+
+
 @invocation_cached
 def correspondence(root, value, cpus=1, comparison_cache=None):
     db = catalog_index(root, value)
     request = value['request']
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
-    if anchor_root and not request['edges']:
+    if uses_rescue_correspondence(request):
         anchor_plan = rescue.load(anchor_root, inspect_only=True)
         with PreparedSnapshot(anchor_root, anchor_plan, rescue) as snapshot:
             return _correspondence(root, value, db, cpus, comparison_cache, anchor_plan, snapshot)
@@ -632,18 +661,19 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     jobs = []
-    if anchor_root and not request['edges']:
+    if anchor_plan is not None:
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
         for job in jobs:
             rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
                            prepared_snapshot=prepared_snapshot)
         dependencies['anchors'] = {j['id']: digest(anchor_root / 'synteny' / j['id'] / 'receipt.json') for j in jobs}
         dependencies['prepared'] = {}
-        for name in value['species']:
+        for name in request['sources']:
             prepared_snapshot.prepared(name)
             dependencies['prepared'][name] = prepared_snapshot.receipt_digest(name)
     def build(tmp):
         edges = []
+        sequence_edges = set()
         valid = defaultdict(set)
         for species, gene in iter_locus_keys(db):
             valid[species].add(gene)
@@ -655,12 +685,21 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                 weight = float(row.get('weight') or 1)
                 if not math.isfinite(weight) or weight <= 0 or weight > 1:
                     raise ValueError('Invalid correspondence weight')
+                sequence_only = any(n in request.get('transcriptome_sources', {}) for n in (a, b))
+                ambiguity = (row.get('ambiguous') or '').strip().lower()
+                if sequence_only:
+                    pair = tuple(sorted(((a, ga), (b, gb))))
+                    if pair in sequence_edges or ambiguity not in {'', '0', '1', 'false', 'true', 'no', 'yes'}:
+                        raise ValueError('Duplicate or malformed transcriptome correspondence: ' + str(row))
+                    sequence_edges.add(pair)
                 edges.append(dict(species_a=a, gene_a=ga, species_b=b, gene_b=gb, weight=weight,
-                                  evidence=row.get('evidence') or 'user_frozen_synteny',
-                                  ambiguous=str(row.get('ambiguous', '')).lower() in {'1', 'true', 'yes'}))
-        else:
+                                  evidence=row.get('evidence') or ('user_frozen_orthology' if sequence_only else 'user_frozen_synteny'),
+                                  ambiguous=ambiguity in {'1', 'true', 'yes'}))
+                if sequence_only:
+                    edges[-1]['comparison_basis'] = 'protein_alignment'
+        if anchor_plan is not None:
             aliases = {}
-            for n in value['species']:
+            for n in request['sources']:
                 prepared_snapshot.check([n])
                 lookup = {}
                 for g in iter_loci(db, n):
@@ -672,7 +711,7 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                 aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
                               for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
             position_index = {}
-            for n in value['species']:
+            for n in request['sources']:
                 positions, tracks = {}, defaultdict(list)
                 for g in iter_loci(db, n):
                     blocks = [b for c in g['candidates'] for b in c['blocks']]
@@ -1278,7 +1317,7 @@ def predict_species(root, value, name, cpus=1):
     db = catalog_index(root, value)
     corr = correspondence(root, value)
     donor_names = prediction_donor_names(corr, name, value['species'])
-    params, source = parameters_for(value['request'], name), value['request']['sources'][name]
+    params, source = parameters_for(value['request'], name), value['request']['sources'].get(name)
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
@@ -1286,12 +1325,13 @@ def predict_species(root, value, name, cpus=1):
     if revision_directory is not None:
         dependencies['rescue_workers'] = {name: digest(revision_directory / 'receipt.json')}
     def build(tmp):
-        if params['mode'] == 'off':
+        if params['mode'] == 'off' or source is None:
             atomic_json(tmp / 'predictions.json', [])
             return
         catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
         catalog['loci'] = list(iter_loci(db, name))
         edges = json.loads((corr / 'edges.json').read_text())
+        edges = [edge for edge in edges if edge.get('comparison_basis') != 'protein_alignment']
         catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         loci = {(name, g['gene_id']): g for g in catalog['loci']}
         decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
@@ -2108,6 +2148,55 @@ def apply_reviewed_phase_rows(graph, repairs):
                          + str(sorted(expected.keys() - seen)))
 
 
+def write_sequence_view(tmp, db, request, selected_by_species, retired_by_species, coding_audit):
+    """Publish paired coding sequences for the complete mixed cohort."""
+    output = tmp / 'sequence'
+    for directory in ('species_cds', 'species_protein'):
+        (output / directory).mkdir(parents=True)
+    genome_admission = {(name, gene): status for name, gene, _, status, *_ in coding_audit}
+    transcriptome_sources = request['transcriptome_sources']
+    inputs, decisions = [], []
+    for name in sorted(request['sources'].keys() | transcriptome_sources.keys()):
+        rows = selected_by_species[name]
+        cds_path, pep_path = (output / role / (name + '.fa') for role in ('species_cds', 'species_protein'))
+        if name in request['sources']:
+            code = request['sources'][name]['genetic_code']
+            os.link(tmp / 'analysis_cds' / cds_path.name, cds_path)
+            os.link(tmp / 'species_protein' / pep_path.name, pep_path)
+            for row in rows:
+                gene = row['gene_id']
+                if gene not in retired_by_species.get(name, ()):
+                    decisions.append((row, 'genome_annotation', '', genome_admission[name, gene]))
+            kind = 'genome_annotation'
+        else:
+            code = transcriptome_sources[name]['genetic_code']
+            selected = {row['gene_id']: row for row in rows}
+            with cds_path.open('w') as cds, pep_path.open('w') as protein:
+                for locus in iter_loci(db, name):
+                    gene = locus['gene_id']
+                    row = selected[gene]
+                    records = locus['candidates']
+                    candidate = next(c for c in records if c['candidate_id'] == row['candidate_id'])
+                    baseline = _baseline(locus, records)['source_transcript_id']
+                    usable = candidate['quality']['usable']
+                    if usable:
+                        sequence = candidate['cds']
+                        cds.write(f'>{gene}\n{sequence[:len(sequence) // 3 * 3]}\n')
+                        protein.write(f'>{gene}\n{candidate["protein"]}\n')
+                    decisions.append((row, 'transcriptome_assembly', baseline, 'included' if usable else 'excluded'))
+            kind = 'transcriptome_assembly'
+        inputs.append((name, kind, cds_path.relative_to(output), pep_path.relative_to(output), code))
+    rescue.write_tsv(output / 'inputs.tsv', ('species', 'source_kind', 'cds', 'protein', 'genetic_code'), inputs)
+    rescue.write_tsv(output / 'species_genetic_code.tsv', ('species', 'genetic_code'),
+                     [(name, code) for name, _, _, _, code in inputs])
+    rescue.write_tsv(output / 'representative_map.tsv', (*MAP_FIELDS, 'source_kind', 'baseline_transcript_id', 'sequence_admission'),
+                     [[*(row.get(k, '') for k in MAP_FIELDS), kind, baseline, admission]
+                      for row, kind, baseline, admission in decisions])
+    assembly_rows = [row for row, kind, _, _ in decisions if kind == 'transcriptome_assembly']
+    return {'transcriptome_species': len(transcriptome_sources), 'transcriptome_loci': len(assembly_rows),
+            'transcriptome_changed_representatives': sum(row['status'] == 'conserved' for row in assembly_rows)}
+
+
 def finalize(root, value):
     final = select(root, value, predictions=True)
     db = catalog_index(root, value, predictions=True)
@@ -2122,7 +2211,7 @@ def finalize(root, value):
         merged_by_species, repaired_by_species, retired_by_species = {}, {}, {}
         merges, repairs = [], []
         request = value['request']
-        for name in value['species']:
+        for name in sorted(request['sources']):
             if parameters_for(request, name)['mode'] != 'conservative':
                 continue
             selected = {row['gene_id']: row for row in selected_by_species[name]}
@@ -2135,9 +2224,9 @@ def finalize(root, value):
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates', 'species_transcript', 'utr_audit'):
             (tmp / role).mkdir()
         map_path = tmp / 'representative_map.tsv'
-        if merges or repairs:
+        if merges or repairs or request.get('transcriptome_sources'):
             rescue.write_tsv(map_path, MAP_FIELDS, [[row.get(k, '') for k in MAP_FIELDS]
-                             for name in value['species'] for row in selected_by_species[name]
+                             for name in sorted(request['sources']) for row in selected_by_species[name]
                              if row['gene_id'] not in retired_by_species.get(name, ())])
         else:
             shutil.copyfile(final / 'representative_map.tsv', map_path)
@@ -2148,7 +2237,7 @@ def finalize(root, value):
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         unpublished_candidates, utr_summaries = [], []
-        for name in value['species']:
+        for name in sorted(request['sources']):
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
             source = value['request']['sources'][name]
@@ -2308,13 +2397,17 @@ def finalize(root, value):
         rescue.write_tsv(tmp / 'translation_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'quality'), translation_audit)
         rescue.write_tsv(tmp / 'coding_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'head_bases_removed', 'tail_bases_removed', 'source_cds_length', 'analysis_cds_length'), coding_audit)
         rescue.write_tsv(tmp / 'species_genetic_code.tsv', ('species', 'genetic_code'), [(r['species'], r['genetic_code']) for r in rows])
-        fields = list(rows[0])
-        rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
+        if rows:
+            fields = list(rows[0])
+            rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
+        sequence_summary = (write_sequence_view(tmp, db, request, selected_by_species, retired_by_species, coding_audit)
+                            if request.get('transcriptome_sources') else {})
         atomic_json(tmp / 'changes.json', changes)
         atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(changes),
                                          'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired', 'merged_split_model'} for r in changes),
                                          'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in changes),
-                                         'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
+                                         'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes),
+                                         **sequence_summary})
         representative_map_proof.check()
     return stage(root, 'effective', {'dependencies': dependencies}, build)
 
@@ -2408,7 +2501,7 @@ def inspect_stages(root, value):
     correspondence_dependencies = {'catalog': catalogs, 'index': initial_index}
     anchors = {}
     request = value['request']
-    if request['rescue_output'] and not request['edges']:
+    if uses_rescue_correspondence(request):
         anchor_root = Path(request['rescue_output'])
         anchor_plan = rescue.load(anchor_root, inspect_only=True)
         anchor_hashes = {}
@@ -2425,7 +2518,7 @@ def inspect_stages(root, value):
         correspondence_dependencies['anchors'] = anchor_hashes
         prepared_hashes = {}
         anchor_hash = digest(anchor_root / 'plan.json')
-        for name in value['species']:
+        for name in request['sources']:
             directory = anchor_root / 'prepared' / name
             try:
                 prepared_hashes[name] = digest(directory / 'receipt.json')
@@ -2463,6 +2556,7 @@ def parser():
     prep = sub.add_parser('plan')
     prep.add_argument('--output', required=True, type=Path)
     prep.add_argument('--inputs', type=Path)
+    prep.add_argument('--transcriptome-inputs', type=Path, help='Assembly species TSV: species,cds,transcript_gene_map[,genetic_code]')
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
@@ -2473,6 +2567,16 @@ def parser():
     prep.add_argument('--species-profiles', type=Path, help='Explicit target-species prediction parameter overrides (TSV)')
     for key, default in DEFAULTS.items():
         prep.add_argument('--' + key.replace('_', '-'), type=type(default), default=default)
+    assembly = sub.add_parser('prepare-transcriptome', help='Extract one CDS per assembled transcript without collapsing isoforms')
+    assembly.add_argument('--assembly', type=Path, required=True)
+    assembly.add_argument('--species', required=True)
+    assembly.add_argument('--output', type=Path, required=True)
+    grouping = assembly.add_mutually_exclusive_group(required=True)
+    grouping.add_argument('--assembler', choices=['trinity', 'rnaspades', 'rna-bloom2'])
+    grouping.add_argument('--gene-map', type=Path, help='Explicit transcript_id, gene_id[,baseline] TSV')
+    assembly.add_argument('--corset-clusters', type=Path)
+    assembly.add_argument('--genetic-code', type=int, default=1)
+    assembly.add_argument('--cpus', type=int, default=1)
     for command in ('catalog', 'correspondence', 'select', 'predict', 'finalize', 'run', 'status', 'qc'):
         s = sub.add_parser(command)
         s.add_argument('--output', type=Path, required=True)
@@ -2492,6 +2596,10 @@ def parser():
 
 def _main():
     args = parser().parse_args()
+    if args.command == 'prepare-transcriptome':
+        transcriptome.prepare(args.assembly, args.species, args.output, args.genetic_code, args.cpus,
+                              args.assembler, args.corset_clusters, args.gene_map)
+        return
     if args.command == 'reproject-utrs':
         import transcript_utr_reassessment
         transcript_utr_reassessment.reproject(args.source_output, args.output, args.source_receipt_sha256, args.species)
@@ -2504,6 +2612,7 @@ def _main():
         plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
              species_profiles=args.species_profiles, annevo_inputs=args.annevo_inputs, oriongeno_inputs=args.oriongeno_inputs,
              split_model_merges=args.split_model_merges, model_repairs=args.model_repairs,
+             transcriptome_inputs=args.transcriptome_inputs,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:
@@ -2528,7 +2637,7 @@ def _main():
     if args.command in {'finalize', 'run'}:
         finalize(root, value)
     if args.command in {'status', 'qc'}:
-        if args.command == 'qc':
+        if args.command == 'qc' and value['request']['sources']:
             verify_inputs(root / 'effective' / 'inputs.tsv')
         result = {'species': len(value['species']), 'stages': inspect_stages(root, value)}
         if args.command == 'qc' and not all(result['stages'].values()):

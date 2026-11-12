@@ -1,5 +1,6 @@
 """Held-out exon/path truth tested with real miniprot on temporary genomes."""
 
+import gzip
 import hashlib
 import json
 import random
@@ -499,6 +500,56 @@ def cli(*args, success=True):
     return result
 
 
+def test_transcriptome_assembly_refinement_uses_protein_correspondence(tmp_path):
+    target, donors = 'Species_assembly', ('Species_donor1', 'Species_donor2')
+    body = 'ATG' + 'GCTGAAGGTTTCATCCAAGAC' * 11
+    matching, longest = body + 'TAA', body + 'TGG' * 20 + 'TAA'
+    assembly = tmp_path / 'assembly.fa.gz'
+    with gzip.open(assembly, 'wt') as stream:
+        for gene in (1, 2):
+            stream.write(f'>TRINITY_DN1_c0_g{gene}_i1\n{longest}\n>TRINITY_DN1_c0_g{gene}_i2\n{matching}\n')
+    prepared = tmp_path / 'prepared'
+    cli('prepare-transcriptome', '--assembly', assembly, '--species', target, '--assembler', 'trinity', '--output', prepared)
+    assert (prepared / (target + '_initial_longestCDS.fa')).read_text().count(longest) == 2
+    assert (prepared / 'all_isoforms.cds.fa').read_text().count('>') == 4
+    genomic_sources = []
+    for species in donors:
+        cds, gff, genome = (tmp_path / (species + ext) for ext in ('.cds.fa', '.gff3', '.genome.fa'))
+        cds.write_text(f'>one\n{matching}\n>two\n{matching}\n')
+        genome.write_text(f'>chr1\n{matching}\n>chr2\n{matching}\n')
+        gff.write_text('##gff-version 3\n' + annotation('chr1', 'one', 't1', [(0, len(matching), 0)])
+                       + annotation('chr2', 'two', 't2', [(0, len(matching), 0)]))
+        genomic_sources.append(dict(species=species, cds=cds, gff=gff, genome=genome))
+    genomic = tmp_path / 'genomic.tsv'
+    write_tsv(genomic, list(genomic_sources[0]), genomic_sources)
+    edges = tmp_path / 'edges.tsv'
+    gene_one, gene_two = (f'{target}_DN1-c0-g{gene}' for gene in (1, 2))
+    edge_rows = [dict(species_a=target, gene_a=gene_one, species_b=species, gene_b=species + '_one', ambiguous=0)
+                 for species in donors]
+    edge_rows.append(dict(species_a=target, gene_a=gene_two, species_b=donors[0], gene_b=donors[0] + '_two', ambiguous=1))
+    write_tsv(edges, list(edge_rows[0]), edge_rows)
+    root = tmp_path / 'refinement'
+    cli('plan', '--inputs', genomic, '--transcriptome-inputs', prepared / 'inputs.tsv', '--edges', edges, '--output', root)
+    cli('run', '--output', root)
+    cli('qc', '--output', root)
+    effective = root / 'effective'
+    assert {row['species'] for row in refinement.verify_inputs(effective / 'inputs.tsv')} == set(donors)
+    sequence = effective / 'sequence'
+    assert {row['species'] for row in refinement.read_table(sequence / 'inputs.tsv')} == {target, *donors}
+    choices = {row['gene_id']: row for row in refinement.read_table(sequence / 'representative_map.tsv') if row['species'] == target}
+    assert (choices[gene_one]['source_transcript_id'], choices[gene_one]['baseline_transcript_id'], choices[gene_one]['status']) == (
+        'TRINITY_DN1_c0_g1_i2', 'TRINITY_DN1_c0_g1_i1', 'conserved')
+    assert (choices[gene_two]['source_transcript_id'], choices[gene_two]['reason']) == (
+        'TRINITY_DN1_c0_g2_i1', 'unresolved_paralog_copy')
+    assert (sequence / 'species_cds' / (target + '.fa')).read_text() == f'>{gene_one}\n{matching}\n>{gene_two}\n{longest}\n'
+    assert not (effective / 'species_gff' / (target + '.gff3')).exists()
+    assert json.loads((root / 'predictions' / target / 'predictions.json').read_text()) == []
+    assert json.loads((root / 'predictions' / donors[0] / 'predictions.json').read_text()) == []
+    with (prepared / 'transcript_gene_map.tsv').open('a') as stream:
+        stream.write('\n')
+    assert 'Frozen refinement input changed' in cli('qc', '--output', root, success=False).stderr
+
+
 @pytest.mark.parametrize("rna", [False, True])
 def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological_negatives(tmp_path, rna):
     inputs, edges, evidence, sources, truth = truth_fixture(tmp_path, rna=rna)
@@ -623,7 +674,8 @@ def test_real_miniprot_wrong_neighbor_hits_are_proposals_not_repairs(tmp_path):
     assert any("no_overlap_owned_locus" in row["problems"] for row in predictions)
 
 
-def test_real_synteny_reuse_recovers_correspondence_for_existing_anchor_excluded_model(tmp_path):
+@pytest.mark.parametrize('with_assembly', [False, True])
+def test_real_synteny_reuse_recovers_correspondence_for_existing_anchor_excluded_model(tmp_path, with_assembly):
     """A masked final CDS base removes an anchor while its two flanks survive."""
     rescue = refinement.rescue
     names = ["Plant_species0", "Plant_species1", "Plant_species2"]
@@ -662,13 +714,25 @@ def test_real_synteny_reuse_recovers_correspondence_for_existing_anchor_excluded
     mapping = rescue.table(anchor_root / "prepared" / names[0] / "genes.id_map.tsv")
     excluded = next(row for row in mapping if row["original_id"] == names[0] + "_g3")
     assert excluded["status"] == "translation_excluded"
-    cli("plan", "--rescue-output", anchor_root, "--output", root, "--padding", 150)
+    assembly_args = []
+    if with_assembly:
+        species = 'Plant_transcriptome'
+        (tmp_path / 'assembly.fa').write_text(f'>transcript\n{truth[3]}\n')
+        (tmp_path / 'map.tsv').write_text(f'transcript_id\tgene_id\ntranscript\t{species}_g3\n')
+        (tmp_path / 'assembly.tsv').write_text(f'species\tcds\ttranscript_gene_map\n{species}\tassembly.fa\tmap.tsv\n')
+        edges = tmp_path / 'edges.tsv'
+        edges.write_text('species_a\tgene_a\tspecies_b\tgene_b\n'
+                         + ''.join(f'{species}\t{species}_g3\t{name}\t{name}_g3\n' for name in names))
+        assembly_args = ['--transcriptome-inputs', tmp_path / 'assembly.tsv', '--edges', edges]
+    cli("plan", "--rescue-output", anchor_root, "--output", root, "--padding", 150, *assembly_args)
     cli("correspondence", "--output", root, "--cpus", 2, "--comparison-cache", tmp_path / "comparisons")
     actual = json.loads((root / "correspondence" / "edges.json").read_text())
     restored = [edge for edge in actual if edge["gene_a"].endswith("_g3") and edge["gene_b"].endswith("_g3")
-                and names[0] in {edge["species_a"], edge["species_b"]}]
+                and names[0] in {edge["species_a"], edge["species_b"]} and 'comparison_basis' not in edge]
     assert len(restored) == 2, actual
     assert all(edge["evidence"]["kind"] == "two_flanking_anchors" and not edge["ambiguous"] for edge in restored)
+    if with_assembly:
+        assert sum(edge.get('comparison_basis') == 'protein_alignment' for edge in actual) == len(names)
     assert receipts == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (anchor_root / "synteny").rglob("receipt.json")}
     cli("predict", "--output", root, "--task-index", 1, "--cpus", 2)
     predictions = json.loads((root / "predictions" / names[0] / "predictions.json").read_text())

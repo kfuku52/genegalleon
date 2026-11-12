@@ -3,8 +3,9 @@
 Refinement retains full-byte-first input proofs only inside its explicit CLI
 invocation. The first use of each input scope reads and checks its frozen SHA-256.
 Later stage guards retain the ordinary names selection: global request files and
-the requested species' FASTA, GFF and genome. Library calls outside that command
-scope continue to perform fresh full-byte verification.
+the requested species' FASTA, GFF and genome or assembly CDS and transcript-to-gene
+mapping. Library calls outside that command scope continue to perform fresh
+full-byte verification.
 
 Small plan JSON is read every time. Its whole value, original generation and
 pathname must match the first frozen copy. Implementation, runtime dependency

@@ -2173,8 +2173,8 @@ def test_array_plan_rejects_escaping_species_and_download_filenames(tmp_path):
         assert not output.exists()
 
 
-@pytest.mark.parametrize('combined', [False, True])
-def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined):
+@pytest.mark.parametrize(('combined', 'transcriptome'), [(False, False), (True, False), (True, True)])
+def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined, transcriptome):
     import os
     plan = tmp_path / 'tmp' / 'plan.json'
     plan.parent.mkdir()
@@ -2202,12 +2202,18 @@ if mode == 'refinement_prepare' or mode == 'array_finalize' and os.environ.get('
     anchors.mkdir(exist_ok=True)
     if not (anchors / 'plan.json').exists():
         (anchors / 'plan.json').write_text(json.dumps({'synteny_jobs': [{'a': 'A_b', 'b': 'C_d', 'index': 1}, {'a': 'A_b', 'b': 'A_b', 'index': 2}]}))
-    (root / 'plan.json').write_text(json.dumps({'species': ['A_b', 'C_d'], 'request': {'rescue_output': str(anchors), 'edges': None}}))
+    request = {'rescue_output': str(anchors), 'edges': None}
+    species = ['A_b', 'C_d']
+    if os.environ['TEST_TRANSCRIPTOME'] == '1':
+        request.update(edges='mixed_edges.tsv', transcriptome_sources={'E_f': {}})
+        species.append('E_f')
+    (root / 'plan.json').write_text(json.dumps({'species': species, 'request': request}))
 print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue_synteny': 104, 'refinement_catalog': 105, 'refinement_correspondence': 106, 'refinement_predict': 107, 'refinement_finalize': 108, 'rescue_models': 109, 'rescue_finalize': 110, 'refinement_prepare': 111}[mode])
 ''')
     fake.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('TEST_CALLS', str(calls))
+    monkeypatch.setenv('TEST_TRANSCRIPTOME', str(int(transcriptome)))
     helper = SUPPORT_DIR.parent / 'gg_input_generation_array.py'
     result = run_python(helper, '--task-plan', str(plan), '--refinement', '--submit', '--max-running', '5',
                         '--rescue-max-running', '3', '--rescue-cpus', '8', '--rescue-memory', '64G', *(['--rescue'] if combined else []))
@@ -2226,7 +2232,7 @@ print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue
     assert submissions[3]['anchors'].endswith('/gene_model_rescue' if combined else '/anchors')
     assert '--dependency=afterok:104:105' in submissions[5]['argv']
     assert '--dependency=afterok:106' in submissions[6]['argv']
-    assert '--array=1-2%3' in submissions[6]['argv']
+    assert ('--array=1-3%3' if transcriptome else '--array=1-2%3') in submissions[6]['argv']
     assert '--cpus-per-task=8' in submissions[6]['argv'] and '--mem=64G' in submissions[6]['argv']
     assert '--dependency=afterok:107' in submissions[7]['argv']
 
