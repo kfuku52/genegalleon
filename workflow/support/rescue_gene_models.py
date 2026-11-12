@@ -601,7 +601,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -613,7 +613,7 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_
         recover_publication(dest, journal, token)
         if guard:
             guard()
-        if verified(dest, key, hash_workers=hash_workers):
+        if verified(dest, key, hash_workers=hash_workers) and (reuse is None or reuse(dest)):
             print(f"Reused {relative}", flush=True)
             return dest
         tmp = Path(tempfile.mkdtemp(prefix=".working-" + token + "-", dir=dest.parent))
@@ -756,7 +756,7 @@ def comparison_cache_key(root, plan, job, prepared_snapshot=None):
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
 
 
-def copy_verified_comparison(source, destination, key, hash_workers=1):
+def copy_verified_comparison(source, destination, key, hash_workers=1, *, receipt_sha256=None):
     """Hash source bytes while copying into a fresh stage, then rehash outputs.
 
     One invocation's source/receipt/path observations fence the complete copy;
@@ -771,7 +771,8 @@ def copy_verified_comparison(source, destination, key, hash_workers=1):
     if first == second or first in second.parents or second in first.parents:
         raise ValueError("Comparison copy destination overlaps its source")
     proof = _ReceiptProof(source)
-    receipt = proof.receipt(source / "receipt.json", digest(source / "receipt.json"))
+    receipt_path = source / "receipt.json"
+    receipt = proof.receipt(receipt_path, receipt_sha256 or digest(receipt_path))
     if receipt["key"] != key:
         raise ValueError("Comparison cache incomplete or corrupted")
     def copy_member(path):
@@ -1369,9 +1370,26 @@ def output_storage(plan):
     return value
 
 
-def rescue(root, plan, name, cpus, interval_workers=None):
+PREDICTION_STATE = "prediction_state.json"
+LOCAL_VALIDATED = "local_validated.jsonl.gz"
+TARGETED_VALIDATED = "targeted_validated.json"
+
+
+def rescue(root, plan, name, cpus, interval_workers=None, *, phase="all"):
+    if phase == "all":
+        return _rescue(root, plan, name, cpus, interval_workers, phase)
+    with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=cpus)) as dependencies:
+        return _rescue(root, plan, name, cpus, interval_workers, phase, dependencies)
+
+
+def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
+    if phase not in {"all", "predict", "postprocess"}:
+        raise ValueError("Unknown rescue phase: " + phase)
+    if phase != "all" and any(plan["request"].get(k) for k in
+                              ("admission_cache", "gemoma_jar", "oriongeno_genomewide")):
+        raise ValueError("Split miniprot rescue does not support admission replay, GeMoMa or native genome-wide transfer")
     if plan['request'].get('admission_cache'):
         if name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
             import rescue_native_genomewide_reuse
@@ -1380,27 +1398,68 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         return rescue_admission_replay.rescue(root, plan, name, cpus)
     storage = output_storage(plan)
     donors = [name, *plan["donors"][name]]
-    for donor in donors:
-        prepared(root, plan, donor)
-    key = rescue_key(root, plan, name)
-    regions = candidates(root, plan, name)
-    verify_sources(plan, [name], ["genome", "fasta", "gff"])
+    if phase != "postprocess":
+        for donor in donors:
+            prepared(root, plan, donor)
+
+    def current_key():
+        if dependencies is None:
+            return rescue_key(root, plan, name)
+        return rescue_key(root, plan, name, dependency_snapshot=dependencies)
+
+    prediction_stage = Path("miniprot_predictions") / name
+    checkpoint = root / prediction_stage if phase == "postprocess" else None
+    invalid_checkpoint = "Missing or invalid miniprot prediction checkpoint for " + name + "; run predict first"
+    if checkpoint is not None:
+        checkpoint_receipt_path = checkpoint / "receipt.json"
+        try:
+            checkpoint_sha256 = digest(checkpoint_receipt_path)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError(invalid_checkpoint) from exc
+    key = current_key()
+    source_proof = FreshDigestBatch() if dependencies is not None else None
+
+    def check_sources():
+        if source_proof is None:
+            verify_sources(plan, [name], ["genome", "fasta", "gff"])
+        else:
+            verify_sources(plan, [name], ["genome", "fasta", "gff"], verification=source_proof)
+
+    check_sources()
     source = plan["request"]["sources"][name]
     params = parameters_for(plan["request"], name)
     review_targets = verify_model_repair_targets(plan).get(name, [])
-    additional, nomination = nominate_genome_only_candidates(root, plan, name, regions, params)
-    regions.extend(additional)
+    checkpoint_proof = {"receipt_sha256": checkpoint_sha256} if checkpoint is not None else None
+
     def build(tmp):
         from gene_model_catalog import indexed_genome
         expanded_genome_sha256 = None
-        atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
-        atomic_json(tmp / "genome_search_nomination.json", nomination)
         genomewide_audit = None
+        if checkpoint is not None:
+            try:
+                copy_verified_comparison(checkpoint, tmp, key, hash_workers=cpus, receipt_sha256=checkpoint_sha256)
+            except (FileNotFoundError, ValueError) as exc:
+                raise ValueError(f"{invalid_checkpoint}: {exc}") from exc
+            state = json.loads((tmp / PREDICTION_STATE).read_text())
+            (tmp / PREDICTION_STATE).unlink()
+            atomic_json(tmp / "miniprot_checkpoint.json", checkpoint_proof)
+            candidate_regions = [] if state["empty"] else json.loads((tmp / "candidates.json").read_text())
+            extra_count = 0 if state["empty"] else state["additional_genome_queries"]
+        else:
+            atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
+            candidate_regions = candidates(root, plan, name)
+            additional, nomination = nominate_genome_only_candidates(root, plan, name, candidate_regions, params)
+            candidate_regions.extend(additional)
+            extra_count = len(additional)
+            atomic_json(tmp / "genome_search_nomination.json", nomination)
         proteins = {donor: {i: seq for i, _, seq in fasta_records(root / "prepared" / donor / "genes.pep")}
                     for donor in donors}
-        repair_targets = [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins, params)]
-        if (not regions and not repair_targets and not plan["request"].get("prediction_cache")
-                and not plan['request'].get('oriongeno_genomewide')):
+        repair_targets = ([] if checkpoint is not None else
+                          [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins, params)])
+        empty = (state["empty"] if checkpoint is not None else
+                 not candidate_regions and not repair_targets and not plan["request"].get("prediction_cache")
+                 and not plan['request'].get('oriongeno_genomewide'))
+        if empty:
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
             lengths = {}
@@ -1427,6 +1486,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if (len(f) == 9 and f[2] in {"gene", "mRNA", "transcript", "CDS"}
                             and (f[0] not in lengths or not 0 <= int(f[3]) - 1 < int(f[4]) <= lengths[f[0]])):
                         raise ValueError("Original annotation outside or absent from genome")
+            if phase == "predict":
+                atomic_json(tmp / PREDICTION_STATE, {"empty": True})
+                return
             atomic_json(tmp / "candidates.json", [])
             atomic_json(tmp / "split_model_candidates.json", [])
             atomic_json(tmp / "model_repair_candidates.json", [])
@@ -1453,10 +1515,10 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 if (feature["seqid"] not in lengths or feature["start"] < 0
                         or feature["end"] <= feature["start"] or feature["end"] > lengths[feature["seqid"]]):
                     raise ValueError("Original annotation outside or absent from genome: " + str(feature))
-            for region in regions:
+            for region in candidate_regions:
                 if not region.get("genome_only"):
                     region["end"] = min(region["end"], genome.get_reference_length(region["seqid"]))
-            cached = (verify_prediction_cache(frozen_cache["root"], root, plan, name, regions, params, frozen_cache)
+            cached = (verify_prediction_cache(frozen_cache["root"], root, plan, name, candidate_regions, params, frozen_cache)
                       if frozen_cache else None)
             if cached:
                 retained_history = []
@@ -1465,19 +1527,15 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 atomic_json(tmp / 'retained_annotation_sources.json', retained_history)
             cached_ids = cached.candidate_ids() if cached else set()
             cached_genome_ids = cached.genome_candidate_ids() if cached else set()
-            atomic_json(tmp / "candidates.json", regions)
+            if checkpoint is None:
+                atomic_json(tmp / "candidates.json", candidate_regions)
             windows = defaultdict(list)
-            for region in regions:
-                if region.get("genome_only") or region["id"] in cached_ids:
-                    continue
-                windows[(region["seqid"], region["start"], region["end"])].append(region)
-            if storage["retain_search_inputs"]:
-                write_local_search_inputs(tmp, windows, proteins, genome)
-            predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
-                                           params["max_intron"], cpus, interval_workers,
-                                           retain_inputs=storage["retain_search_inputs"],
-                                           compact=storage["format"] == "compact" and not storage["retain_search_inputs"])
-            by_id = {r["id"]: r for r in regions}
+            if checkpoint is None:
+                for region in candidate_regions:
+                    if region.get("genome_only") or region["id"] in cached_ids:
+                        continue
+                    windows[(region["seqid"], region["start"], region["end"])].append(region)
+            by_id = {r["id"]: r for r in candidate_regions}
             validated = []
             raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params,
                                                candidate_homology=homology_problems)
@@ -1487,7 +1545,13 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 return rescue_cached_validation.checked_prediction(model, raw_validation, genome,
                     source['genetic_code'], params, proteins[evidence['donor']][evidence['query']],
                     engine=sys.modules[__name__])
-            if cached:
+            if checkpoint is None and storage["retain_search_inputs"]:
+                write_local_search_inputs(tmp, windows, proteins, genome)
+            predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
+                                           params["max_intron"], cpus, interval_workers,
+                                           retain_inputs=storage["retain_search_inputs"],
+                                           compact=storage["format"] == "compact" and not storage["retain_search_inputs"]) if checkpoint is None else ()
+            if cached and checkpoint is None:
                 # Native paths still require fresh nomination and donor proof.
                 old_models = (model for model in cached.iter_models()
                               if not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')))
@@ -1502,18 +1566,22 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
                 validated.append(checked_prediction(model))
+            if checkpoint is not None:
+                with gzip.open(tmp / LOCAL_VALIDATED, "rt") as handle:
+                    validated.extend(json.loads(line) for line in handle)
+                (tmp / LOCAL_VALIDATED).unlink()
             def unresolved_regions():
                 preview = [{**m, "problems": list(m["problems"])} for m in validated]
                 reassess_unanchored_models(preview, params["unanchored_min_species"], ownership=placement_ownership)
                 preview = consolidate(preview, existing, name, plan.get("nearest_references", {}).get(name, ()),
                                       retained_paths=retained_paths)
                 resolved = {m["query"] for m in preview if m["status"] in {"accepted", "duplicate_support", "accepted_alternative_path"}}
-                return [r for r in regions if r["id"] not in resolved]
+                return [r for r in candidate_regions if r["id"] not in resolved]
             # A verified whole-genome cache already covers these queries,
             # including empty results. Without GeMoMa, this preview's unresolved
             # set is immediately filtered to empty and has no consumer.
-            fully_cached_genome = cached is not None and all(r["id"] in cached_genome_ids for r in regions)
-            unresolved = ([] if fully_cached_genome and not plan["request"]["gemoma_jar"]
+            fully_cached_genome = cached is not None and all(r["id"] in cached_genome_ids for r in candidate_regions)
+            unresolved = ([] if checkpoint is not None or (fully_cached_genome and not plan["request"]["gemoma_jar"])
                           else unresolved_regions())
             # Old local-search coverage and old whole-genome coverage are
             # separate, because acceptance can change under the new policy.
@@ -1533,6 +1601,27 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 run(["miniprot", "-u", "-t", cpus, "-G", params["max_intron"],
                      "-N", MINIPROT_MAX_SECONDARY, f"--outs={MINIPROT_OUTPUT_SCORE_RATIO}", "--gff",
                      tmp / "genome.mpi", tmp / "unresolved.unique.fa"], tmp, "miniprot_genome", tmp / "genome.unique.gff")
+            if phase == "predict":
+                targeted = search_model_repair_targets(tmp, repair_targets, existing, placement_ownership, proteins,
+                                                        genome, source["genetic_code"], params, cpus)
+                atomic_json(tmp / TARGETED_VALIDATED, targeted)
+                with gzip.open(tmp / LOCAL_VALIDATED, "wt", compresslevel=1) as handle:
+                    for model in validated:
+                        write_record(handle, model)
+                atomic_json(tmp / PREDICTION_STATE, {"empty": False, "searched_local_windows": len(windows),
+                                                     "additional_genome_queries": extra_count,
+                                                     "local_validation_memo": raw_validation.diagnostics()})
+                (tmp / "genome.mpi").unlink(missing_ok=True)
+                (tmp / "genome.fa").unlink(missing_ok=True)
+                if not storage["retain_search_inputs"]:
+                    (tmp / "unresolved.unique.fa").unlink(missing_ok=True)
+                if cached:
+                    cached.check()
+                return
+            if (tmp / "genome.unique.gff").is_file():
+                if checkpoint is not None:
+                    representatives = genome_aliases(tmp)
+                    searched_genome_ids.update(representatives)
                 if storage["retain_search_inputs"]:
                     expand_miniprot_queries(tmp / "genome.unique.gff", tmp / "genome.gff", representatives)
                 expanded_digest = hashlib.sha256()
@@ -1576,17 +1665,17 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             validated.extend(boundary_models)
             for engine in (e for e in ('annevo', 'oriongeno') if plan['request'].get(e)):
                 import annevo_gene_models
-                bounded_regions = [r for r in regions if not r.get('genome_only')]
+                bounded_regions = [r for r in candidate_regions if not r.get('genome_only')]
                 placements = set()
                 for model in validated:
                     evidence = model['evidence']
                     if not evidence.get('genome_only') or not model['cds']:
                         continue
                     a, b = min(x[0] for x in model['cds']), max(x[1] for x in model['cds'])
-                    key = (model['query'], model['seqid'], a, b)
-                    if key in placements or b - a > params['max_interval']:
+                    placement_key = (model['query'], model['seqid'], a, b)
+                    if placement_key in placements or b - a > params['max_interval']:
                         continue
-                    placements.add(key)
+                    placements.add(placement_key)
                     padding = params['terminal_max_extension']
                     bounded_regions.append({**evidence, 'annevo_bounded_placement': True, 'seqid': model['seqid'],
                                             'start': max(0, a - padding),
@@ -1613,23 +1702,30 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             if cached:
                 cached.check()
             if searched_genome_ids:
-                covered = [r for r in regions if r["id"] in searched_genome_ids]
+                covered = [r for r in candidate_regions if r["id"] in searched_genome_ids]
                 coverage_mapping = write_unique_queries(covered, proteins, tmp / "genome.covered.unique.fa")
                 write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), coverage_mapping.items())
-            atomic_json(tmp / "raw_validation_memo.json", raw_validation.diagnostics())
+            memo = raw_validation.diagnostics()
+            if checkpoint is not None:
+                memo["checkpoint_local_validation"] = state["local_validation_memo"]
+            atomic_json(tmp / "raw_validation_memo.json", memo)
             placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
             models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
                                  retained_paths=retained_paths)
             atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
                 models, placement_ownership, name, genome=genome, code=source["genetic_code"],
                 params=params, proteins=proteins))
-            targeted = search_model_repair_targets(tmp, repair_targets, existing, placement_ownership, proteins,
-                                                    genome, source["genetic_code"], params, cpus)
+            if checkpoint is None:
+                targeted = search_model_repair_targets(tmp, repair_targets, existing, placement_ownership, proteins,
+                                                        genome, source["genetic_code"], params, cpus)
+            else:
+                targeted = json.loads((tmp / TARGETED_VALIDATED).read_text())
+                (tmp / TARGETED_VALIDATED).unlink()
             atomic_json(tmp / "model_repair_candidates.json", model_repair_candidates(
                 chain(models, targeted), placement_ownership, name, source["gff"]))
             verify_model_repair_targets(plan)
         # Recheck sources before publication, including the target genome.
-        verify_sources(plan, [name], ["genome", "fasta", "gff"])
+        check_sources()
         if genomewide_audit is not None:
             atomic_json(tmp / 'oriongeno_genomewide.json', rescue_native_genomewide.finish_audit(genomewide_audit, models))
         for model in models:
@@ -1662,8 +1758,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             "prediction_cache": plan["request"].get("prediction_cache"),
         })
         atomic_json(tmp / "prediction_reuse.json", {"cached_local_queries": len(cached_ids),
-                    "cached_genome_queries": len(cached_genome_ids), "searched_local_windows": len(windows),
-                    "additional_genome_queries": len(additional), "all_queries": len(regions),
+                    "cached_genome_queries": len(cached_genome_ids),
+                    "searched_local_windows": len(windows) if checkpoint is None else state["searched_local_windows"],
+                    "additional_genome_queries": extra_count, "all_queries": len(candidate_regions),
                     "search_contract": prediction_search_contract(),
                     "cached_search_contract": cached.search_contract if cached else None,
                     "cached_local_search_compatible": cached.local_search_compatible if cached else None,
@@ -1683,7 +1780,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             for m in models:
                 yield (m["query"], m["evidence"]["query"], m["status"], ",".join(m["problems"]),
                        m["coverage"], m["identity"], m.get("model_id", ""))
-            for r in regions:
+            for r in candidate_regions:
                 if r["id"] not in detected:
                     yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
@@ -1694,8 +1791,33 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         if not storage["retain_search_inputs"]:
             (tmp / "unresolved.unique.fa").unlink(missing_ok=True)
             (tmp / "genome.covered.unique.fa").unlink(missing_ok=True)
-    return stage(root, Path("rescued") / name, key, build,
-                 lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
+    def guard():
+        require_same_key(key, current_key())
+        if dependencies is not None:
+            check_sources()
+            verify_model_repair_targets(plan)
+        if checkpoint is not None:
+            require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
+
+    relative = prediction_stage if phase == "predict" else Path("rescued") / name
+    def matches_checkpoint(directory):
+        proof = directory / "miniprot_checkpoint.json"
+        if not proof.is_file() or json.loads(proof.read_text()) != checkpoint_proof:
+            return False
+        if not verified(checkpoint, key, hash_workers=cpus):
+            raise ValueError(invalid_checkpoint)
+        require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
+        return True
+
+    def publication_guard():
+        dependencies.check_all()
+        source_proof.check()
+        if checkpoint is not None:
+            require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
+
+    return stage(root, relative, key, build, guard, hash_workers=cpus,
+                 publication_guard=publication_guard if dependencies is not None else None,
+                 reuse=matches_checkpoint if checkpoint is not None else None)
 
 
 def read_retained_coding_paths(directory, expected_receipt_sha256, *, verification=None,
@@ -2783,15 +2905,16 @@ def parser():
     plan.add_argument("--terminal-max-unaligned-c-overhang", type=int, choices=(0, 1, 2), default=2)
     plan.add_argument("--gemoma-jar", type=Path, help="Optional GeMoMa refinement; requires Java and tblastn")
     plan.add_argument("--gemoma-java", default="java", help="Java executable compatible with the supplied GeMoMa jar")
-    for name in ("synteny", "rescue", "finalize", "run", "status", "qc", "worker-complete", "qc-inputs", "export-search-inputs", "export-models"):
+    for name in ("synteny", "rescue", "predict", "postprocess", "finalize", "run", "status", "qc",
+                 "worker-complete", "qc-inputs", "export-search-inputs", "export-models"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
         cmd.add_argument("--cpus", type=int, default=1, help="Predictor and full-checksum CPU budget")
-        if name in {"rescue", "run"}:
+        if name in {"rescue", "run", "predict"}:
             cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
         if name in {"synteny", "run"}:
             cmd.add_argument("--comparison-cache", type=Path, help="Shared comparison cache (default: OUTPUT parent/gene_model_rescue_comparison_cache)")
-        if name in {"synteny", "rescue", "worker-complete", "qc-inputs"}:
+        if name in {"synteny", "rescue", "predict", "postprocess", "worker-complete", "qc-inputs"}:
             cmd.add_argument("--task-index", type=int, help="One-based frozen job/species index; omit to run all")
         if name in {"export-search-inputs", "export-models"}:
             cmd.add_argument("--task-index", type=int, required=True, help="One-based frozen species index")
@@ -2946,14 +3069,16 @@ def main():
         indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["synteny_jobs"]) + 1)
         for index in indices:
             synteny(root, plan, index, args.cpus, args.comparison_cache)
-    if args.command in {"rescue", "run"}:
+    if args.command in {"rescue", "run", "predict", "postprocess"}:
         indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["species"]) + 1)
         for index in indices:
             if not 1 <= index <= len(plan["species"]):
                 p.error("rescue task index outside frozen plan")
-            rescue(root, plan, plan["species"][index - 1], args.cpus, args.interval_workers)
             name = plan["species"][index - 1]
-            finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
+            phase = args.command if args.command in {"predict", "postprocess"} else "all"
+            rescue(root, plan, name, args.cpus, getattr(args, "interval_workers", None), phase=phase)
+            if phase != "predict":
+                finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
     if args.command in {"finalize", "run"}:
         finalize(root, plan, hash_workers=args.cpus)
 

@@ -173,7 +173,7 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
-input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_finalize | refinement_prepare | refinement_catalog | refinement_correspondence | refinement_predict | refinement_finalize. Workers use GG_ARRAY_TASK_ID.
+input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_predict | rescue_postprocess | rescue_finalize | refinement_prepare | refinement_catalog | refinement_correspondence | refinement_predict | refinement_finalize. Workers use GG_ARRAY_TASK_ID.
 species_busco_parallel_jobs="auto" # In single mode, auto runs up to four species BUSCO jobs within GG_TASK_CPUS; array_worker still runs one species per task.
 species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.

@@ -1672,7 +1672,8 @@ print({"array_prepare": 101, "array_worker": 102, "array_finalize": 103, "rescue
     assert "--dependency=afterok:105" in submissions[5]["argv"]
 
 
-def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path):
+@pytest.mark.parametrize("split", [False, True])
+def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path, split):
     import hashlib
     plan = tmp_path / "plan.json"
     plan.write_text(json.dumps({"task_count": 1, "tasks": [{"species_prefix": "A_b"}]}))
@@ -1682,16 +1683,89 @@ def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path):
         "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
     rescue = tmp_path / "rescue"
     rescue.mkdir()
-    (rescue / "plan.json").write_text(json.dumps({"species": ["A_b"], "synteny_jobs": []}))
+    (rescue / "plan.json").write_text(json.dumps({"species": ["A_b"], "synteny_jobs": [], "donors": {"A_b": []}}))
+    plan_sha = hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()
     models = rescue / "rescued" / "A_b"
     models.mkdir(parents=True)
     (models / "models.json").write_text("[]")
     (models / "receipt.json").write_text(json.dumps({"key": {"plan": hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()},
                                                     "files": {"models.json": hashlib.sha256(b"[]").hexdigest()}}))
+    if split:
+        prepared = rescue / "prepared" / "A_b"
+        prepared.mkdir(parents=True)
+        (prepared / "genes.pep").write_text("protein")
+        prepared_receipt = {"key": {"plan": plan_sha, "species": "A_b"},
+                            "files": {"genes.pep": hashlib.sha256(b"protein").hexdigest()}}
+        (prepared / "receipt.json").write_text(json.dumps(prepared_receipt))
+        prediction = rescue / "miniprot_predictions" / "A_b"
+        prediction.mkdir(parents=True)
+        (prediction / "prediction_state.json").write_text("{}")
+        (prediction / "receipt.json").write_text(json.dumps({
+            "key": {"plan": plan_sha, "species": "A_b", "comparisons": {},
+                    "prepared": {"A_b": hashlib.sha256((prepared / "receipt.json").read_bytes()).hexdigest()}},
+            "files": {"prediction_state.json": hashlib.sha256(b"{}").hexdigest()},
+        }))
     helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
-    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(rescue), "--retry")
+    extra = ["--rescue-split-miniprot"] if split else []
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(rescue), "--retry", *extra)
     assert result.returncode == 0, result.stderr
-    assert "GG_INPUT_INPUT_GENERATION_MODE=rescue_models" in result.stdout and "--array=1%8" in result.stdout
+    expected = "rescue_postprocess" if split else "rescue_models"
+    assert "GG_INPUT_INPUT_GENERATION_MODE=" + expected in result.stdout and "--array=1%8" in result.stdout
+    assert "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict" not in result.stdout
+
+
+@pytest.mark.parametrize("limit", [1, 6])
+def test_slurm_split_retry_unblocks_ready_species_and_caps_postprocessing(tmp_path, limit):
+    import hashlib
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 2, "tasks": [{"species_prefix": "A_b"}, {"species_prefix": "C_d"}]}))
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+    rescue = tmp_path / "rescue"
+    rescue.mkdir()
+    (rescue / "plan.json").write_text(json.dumps({
+        "species": ["A_b", "C_d"], "synteny_jobs": [], "donors": {"A_b": [], "C_d": []}}))
+    plan_sha = hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()
+    prepared = rescue / "prepared" / "A_b"
+    prepared.mkdir(parents=True)
+    (prepared / "genes.pep").write_text("protein")
+    (prepared / "receipt.json").write_text(json.dumps({
+        "key": {"plan": plan_sha, "species": "A_b"}, "files": {"genes.pep": hashlib.sha256(b"protein").hexdigest()}}))
+    checkpoint = rescue / "miniprot_predictions" / "A_b"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "prediction_state.json").write_text("{}")
+    (checkpoint / "receipt.json").write_text(json.dumps({
+        "key": {"plan": plan_sha, "species": "A_b", "comparisons": {},
+                "prepared": {"A_b": hashlib.sha256((prepared / "receipt.json").read_bytes()).hexdigest()}},
+        "files": {"prediction_state.json": hashlib.sha256(b"{}").hexdigest()},
+    }))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--rescue-output", str(rescue), "--rescue",
+                        "--rescue-split-miniprot", "--retry", "--rescue-max-running", str(limit))
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    predict, = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict " in line]
+    ready, dependent = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_postprocess " in line]
+    assert "--array=2%" in predict
+    assert f"--array=1%{max(1, limit // 2)}" in ready and "--dependency" not in ready
+    assert f"--array=2%{max(1, limit - max(1, limit // 2))}" in dependent
+    assert "--dependency=aftercorr:" in dependent and (",afterany:" in dependent) == (limit == 1)
+
+
+def test_slurm_rescue_split_prediction_and_postprocess_resources(tmp_path):
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--rescue",
+                        "--rescue-split-miniprot", "--rescue-predict-cpus", "12", "--rescue-predict-memory", "48G",
+                        "--rescue-predict-max-running", "3", "--rescue-cpus", "2", "--rescue-memory", "12G")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    predict = next(line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict" in line)
+    post = next(line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_postprocess" in line)
+    assert all(option in predict for option in ("--cpus-per-task=12", "--mem=48G", "--array=1-S%3"))
+    assert all(option in post for option in (
+        "--cpus-per-task=2", "--mem=12G", "--dependency=aftercorr:", "--kill-on-invalid-dep=yes"))
 
 
 def test_slurm_rescue_active_retry_rejects_before_submitting_any_job(tmp_path, monkeypatch):

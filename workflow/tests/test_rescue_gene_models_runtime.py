@@ -330,7 +330,8 @@ def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, dir
     return output, species, cds
 
 
-def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models):
+@pytest.mark.parametrize("split", [False, True])
+def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models, split):
     from workflow.support.rescue_model_store import (
         iter_models,
         iter_partial_models,
@@ -339,8 +340,15 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models)
     legacy, names, _ = make_plan(hidden_models, directory_name="legacy_storage")
     compact, _, _ = make_plan(hidden_models, model_storage="compact", retain_search_inputs=False,
                               directory_name="compact_storage")
-    for output in (legacy, compact):
-        cli("run", "--output", output, "--cpus", "4", "--interval-workers", "4")
+    cli("run", "--output", legacy, "--cpus", "4", "--interval-workers", "4")
+    if split:
+        cli("synteny", "--output", compact, "--cpus", "4")
+        cli("predict", "--output", compact, "--cpus", "4", "--interval-workers", "4")
+        assert not (compact / "rescued").exists()
+        cli("postprocess", "--output", compact, "--cpus", "2")
+        cli("finalize", "--output", compact, "--cpus", "2")
+    else:
+        cli("run", "--output", compact, "--cpus", "4", "--interval-workers", "4")
     for name in names:
         a, b = legacy / "rescued" / name, compact / "rescued" / name
         assert list(iter_models(b)) == json.loads((a / "models.json").read_text())
@@ -554,6 +562,74 @@ def test_genome_only_search_uses_fallback_inputs_without_local_diagnostics(hidde
     assert accepted[0]["placement_evidence"]["minimum_species"] == 1
     assert accepted[0]["placement_evidence"]["orthology"] == 'unassigned'
     assert accepted[0]["placement_evidence"]["expected_copy"] == 'unassigned'
+
+
+@pytest.mark.parametrize("storage", ["legacy", "compact"])
+def test_split_miniprot_retries_only_postprocessing(hidden_models, monkeypatch, storage):
+    from workflow.support.rescue_model_store import iter_models
+
+    fixture, names, sequences = hidden_models
+    baseline, _, _ = make_plan(hidden_models, model_storage=storage, retain_search_inputs=storage == "legacy")
+    plan = rescue.load(baseline)
+    name, donor = names[:2]
+    plan["donors"][name] = [donor]
+    plan["synteny_jobs"] = []
+    rescue.atomic_json(baseline / "plan.json", plan)
+    output = fixture / "split"
+    output.mkdir()
+    rescue.atomic_json(output / "plan.json", plan)
+    start = 8 * (len(sequences[0]) + 60)
+    end = start + len(sequences[8])
+    local = {"id": "local", "donor": donor, "query": donor + "_g8", "seqid": "chr1",
+             "start": start, "end": end, "expected_start": start, "expected_end": end}
+    fallback = {"id": "fallback", "donor": donor, "query": donor + "_g9", "genome_only": True,
+                "target": name, "placement": "unanchored", "nomination": {"reason": "no_target_match"},
+                "orthology": "unassigned", "expected_copy": "unassigned"}
+    monkeypatch.setattr(rescue, "candidates", lambda *_: [copy.deepcopy(local)])
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates",
+                        lambda *_: ([copy.deepcopy(fallback)], {"nominated": 1}))
+    expected = rescue.rescue(baseline, plan, name, 2)
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
+    checkpoint = rescue.rescue(output, plan, name, 2, phase="predict")
+    assert (checkpoint / "genome.unique.gff").is_file()
+    assert not (checkpoint / "genome.mpi").exists()
+    assert not (output / "rescued" / name).exists()
+    receipt = (checkpoint / "receipt.json").read_bytes()
+
+    def unexpected_search(*args, **kwargs):
+        pytest.fail("Postprocessing invoked a predictor")
+
+    monkeypatch.setattr(rescue, "run", unexpected_search)
+    monkeypatch.setattr(rescue, "prepared", unexpected_search)
+    monkeypatch.setattr(rescue, "candidates", unexpected_search)
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", unexpected_search)
+    raw_path = checkpoint / "genome.unique.gff"
+    raw_bytes = raw_path.read_bytes()
+    raw_path.write_bytes(raw_bytes + b"# corrupted checkpoint\n")
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
+    raw_path.write_bytes(raw_bytes)
+    with monkeypatch.context() as failure:
+        def failed_write(*args, **kwargs):
+            raise OSError("Simulated postprocessing failure")
+        failure.setattr(rescue, "consolidate", failed_write)
+        with pytest.raises(OSError, match="Simulated postprocessing failure"):
+            rescue.rescue(output, plan, name, 1, phase="postprocess")
+    assert not (output / "rescued" / name).exists()
+    assert (checkpoint / "receipt.json").read_bytes() == receipt
+    actual = rescue.rescue(output, plan, name, 1, phase="postprocess")
+    for filename in ("audit.tsv", "quality_flags.tsv", "genome.unique.gff", "model_repair_candidates.json"):
+        assert (actual / filename).read_bytes() == (expected / filename).read_bytes()
+    assert list(iter_models(actual)) == list(iter_models(expected))
+    assert json.loads((actual / "miniprot_checkpoint.json").read_text()) == {
+        "receipt_sha256": hashlib.sha256(receipt).hexdigest()
+    }
+    assert rescue.rescue(output, plan, name, 1, phase="postprocess") == actual
+    with (checkpoint / "genome.unique.gff").open("a") as handle:
+        handle.write("# corrupted checkpoint\n")
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
 
 
 def test_broader_genome_contract_researches_cached_positive_and_empty_coverage(hidden_models, monkeypatch):

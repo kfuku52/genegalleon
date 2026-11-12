@@ -708,6 +708,48 @@ has its own phase lock, including when multiple workspaces share a custom path.
 The helper previews submissions without `--submit`. UGE/PBS users can submit
 these same core modes manually with their usual one-based task IDs.
 
+### Separate miniprot and postprocessing jobs
+
+Use `--rescue-split-miniprot` to schedule prediction and postprocessing
+separately. The existing `--rescue-cpus`, `--rescue-memory` and
+`--rescue-max-running` settings apply to postprocessing. Prediction defaults
+to those settings and accepts its own overrides:
+
+```bash
+python workflow/gg_input_generation_array.py --task-plan /path/to/task_plan.json \
+  --rescue --rescue-split-miniprot \
+  --rescue-predict-cpus 8 --rescue-predict-memory 64G \
+  --rescue-cpus 2 --rescue-memory 32G --submit
+```
+
+Prediction evaluates local alignments to determine which queries still need
+a whole-genome search. It then saves the raw whole-genome GFF with embedded
+PAF, query mappings, validated local models and targeted repair evidence under
+`miniprot_predictions/SPECIES/`. It also saves a receipt for species without
+search work. The checkpoint excludes the temporary genome index. Its receipt
+binds the files to the frozen plan and prepared/comparison inputs.
+
+Postprocessing verifies the checkpoint and uses it for genome-wide model
+validation, placement, consolidation and effective CDS/GFF export. The array
+worker then runs post-rescue BUSCO. With `--retry --rescue-split-miniprot`,
+species with valid checkpoints can resume postprocessing without a prediction
+job. A missing or corrupt checkpoint fails a direct postprocessing request.
+On a mixed Slurm retry, species with valid checkpoints can start postprocessing
+while other species run prediction. The postprocessing arrays share the
+configured rescue concurrency limit.
+For UGE/PBS use `rescue_predict` and `rescue_postprocess` as the input-generation
+modes. The standalone CLI also exposes the two phases for one frozen species:
+
+```bash
+python workflow/support/rescue_gene_models.py predict --output /path/to/rescue --task-index 1 --cpus 8
+python workflow/support/rescue_gene_models.py postprocess --output /path/to/rescue --task-index 1 --cpus 2
+```
+
+The standalone commands stop at the effective CDS/GFF export. The array
+entrypoint also handles BUSCO and the worker completion receipt. The split
+applies to ordinary miniprot rescue. Use the existing routes for GeMoMa,
+native genome-wide structure transfer and admission replay.
+
 This stage recovers supported models and records unresolved evidence. Orthology,
 copy-specific loss and ancestral-copy reconciliation belong to downstream gene
 trees and synteny analyses. Self synteny alone does not date a WGD or identify a

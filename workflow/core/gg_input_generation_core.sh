@@ -180,9 +180,9 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${input_generation_mode}" in
-  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
+  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
   *)
-    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
+    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
     exit 1
     ;;
 esac
@@ -2855,7 +2855,7 @@ finish_gene_model_refinement() {
 ensure_dir "${input_generation_root}"
 export GG_PERFORMANCE_DIR="${input_generation_root}/tmp/performance/$$"
 array_lock_mode=exclusive
-if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == refinement_catalog || "${input_generation_mode}" == refinement_predict ]]; then
+if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == rescue_predict || "${input_generation_mode}" == rescue_postprocess || "${input_generation_mode}" == refinement_catalog || "${input_generation_mode}" == refinement_predict ]]; then
   array_lock_mode=shared
 fi
 input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
@@ -2981,25 +2981,29 @@ case "${input_generation_mode}" in
   rescue_prepare)
     prepare_gene_model_rescue
     ;;
-  rescue_synteny|rescue_models)
+  rescue_synteny|rescue_models|rescue_predict|rescue_postprocess)
     write_run_summary_on_exit=0
-    if [[ "${input_generation_mode}" == rescue_models ]]; then
+    if [[ "${input_generation_mode}" != rescue_synteny ]]; then
       [[ "${GG_ARRAY_TASK_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid rescue worker index" >&2; exit 1; }
       ensure_dir "${gene_model_rescue_dir}/core-worker-locks"
       input_generation_lock "${gene_model_rescue_dir}/core-worker-locks/${GG_ARRAY_TASK_ID}.lock" exclusive
     fi
-    rescue_subcommand=synteny
-    [[ "${input_generation_mode}" != rescue_models ]] || rescue_subcommand=rescue
+    case "${input_generation_mode}" in
+      rescue_synteny) rescue_subcommand=synteny ;;
+      rescue_models) rescue_subcommand=rescue ;;
+      rescue_predict) rescue_subcommand=predict ;;
+      rescue_postprocess) rescue_subcommand=postprocess ;;
+    esac
     rescue_execution_args=()
     if [[ "${rescue_subcommand}" == synteny && -n "${gene_model_rescue_comparison_cache:-}" ]]; then
       rescue_execution_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
     fi
-    if [[ "${rescue_subcommand}" == rescue && "${gene_model_rescue_interval_workers:-0}" != 0 ]]; then
+    if [[ ( "${rescue_subcommand}" == rescue || "${rescue_subcommand}" == predict ) && "${gene_model_rescue_interval_workers:-0}" != 0 ]]; then
       rescue_execution_args+=(--interval-workers "${gene_model_rescue_interval_workers}")
     fi
     python "${gg_support_dir}/rescue_gene_models.py" "${rescue_subcommand}" --output "${gene_model_rescue_dir}" \
       --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
-    if [[ "${input_generation_mode}" == rescue_models ]]; then
+    if [[ "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == rescue_postprocess ]]; then
       rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}") || exit $?
       while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
         gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"

@@ -91,6 +91,8 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
             "".join(f">{query}\n{protein}\n" for query, protein in proteins.items()))
         (prepared / "positions.json").write_text("[]\n")
         (prepared / "receipt.json").write_text(json.dumps({"toy_prepared_donor": donor}) + "\n")
+    (root / "prepared" / name / "genes.id_map.tsv").write_text(
+        "jcvi_id\tlocus_id\tstatus\nself\toriginal_owner\tselected\n")
     request = {
         "sources": {name: copy.deepcopy(inputs["source"])},
         "files": copy.deepcopy(inputs["files"]),
@@ -102,7 +104,7 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
     }
     if cache != "none":
         request["prediction_cache"] = {"root": "verified_toy_cache"}
-    plan = {"species": [name], "donors": {name: ["Relative_species", "Balanced_species"]},
+    plan = {"species": [name], "donors": {name: ["Relative_species", "Balanced_species"]}, "synteny_jobs": [],
             "nearest_references": {name: ["Relative_species"]}, "request": request}
     calls = {"cache_check": 0, "verify_sources": 0, "external": [], "gemoma_regions": []}
     regions = copy.deepcopy(inputs["regions"])
