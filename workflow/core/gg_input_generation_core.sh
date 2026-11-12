@@ -27,6 +27,7 @@ gene_model_refinement_policy="${gene_model_refinement_policy:-conserved}"
 gene_model_refinement_isoform_adoption="${gene_model_refinement_isoform_adoption:-rna_required}"
 gene_model_refinement_mode="${gene_model_refinement_mode:-conservative}"
 gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
+gene_model_refinement_transcriptome_inputs="${gene_model_refinement_transcriptome_inputs:-}"
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
@@ -2713,6 +2714,7 @@ finish_gene_model_rescue() {
 }
 
 prepare_gene_model_refinement() {
+  local genomic_inputs=0
   local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
     --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
     --isoform-adoption "${gene_model_refinement_isoform_adoption}"
@@ -2724,20 +2726,25 @@ prepare_gene_model_refinement() {
     --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
-  else
+    genomic_inputs=1
+  elif [[ -z "${gene_model_refinement_transcriptome_inputs}" || -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]]; then
     local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
     if [[ ! -s "${anchor_dir}/plan.json" ]]; then
       [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }
       prepare_gene_model_rescue
     fi
     refinement_args+=(--rescue-output "${anchor_dir}")
+    genomic_inputs=1
   fi
+  [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] || refinement_args+=(--transcriptome-inputs "${gene_model_refinement_transcriptome_inputs}")
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
   [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
-  local oriongeno_inputs
-  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
-  [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  if [[ ${genomic_inputs} -eq 1 ]]; then
+    local oriongeno_inputs
+    oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+    [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  fi
   [[ -z "${gene_model_annevo_inputs:-}" ]] || refinement_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"
@@ -2746,6 +2753,10 @@ prepare_gene_model_refinement() {
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
+  if [[ -s "${gene_model_refinement_dir}/effective/sequence/inputs.tsv" ]]; then
+    echo "Selected sequence inputs: ${gene_model_refinement_dir}/effective/sequence/inputs.tsv"
+    [[ -s "${gene_model_refinement_dir}/effective/inputs.tsv" ]] || return 0
+  fi
   local refinement_review_dir="${gene_model_refinement_dir%/}.review"
   local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
   local -a swissprot_plot_args=()

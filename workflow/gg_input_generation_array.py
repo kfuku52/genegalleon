@@ -213,7 +213,7 @@ def main():
             species_count = len(refinement["species"])
             anchor_output = refinement["request"].get("rescue_output")
             pair_count = 0
-            if anchor_output and not refinement["request"].get("edges"):
+            if anchor_output and (not refinement["request"].get("edges") or refinement["request"].get("transcriptome_sources")):
                 anchor_plan = json.loads((Path(anchor_output) / "plan.json").read_text())
                 pairs = [j["index"] for j in anchor_plan["synteny_jobs"] if j["a"] != j["b"]]
                 pair_count = len(pairs)

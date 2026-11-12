@@ -234,20 +234,21 @@ def validate_candidate(candidate, genetic_code=1):
 
     Partial source models remain partial. Only their known first-phase offset
     and incomplete final codon are ignored when translating; CDS itself stays
-    intact. ``usable`` is comparative eligibility, not a claim of a complete
-    or experimentally confirmed ORF.
+    intact. A sequence-only CDS starts at its supplied ORF frame and carries
+    no genomic structure. ``usable`` is comparative eligibility.
     """
     code = int(genetic_code)
     if code not in CodonTable.unambiguous_dna_by_id:
         raise ValueError("Unsupported genetic code: " + str(code))
     sequence = str(candidate.get("cds", "")).upper()
     blocks = candidate.get("blocks", [])
+    sequence_only = candidate.get("sequence_only", False)
     previous = candidate.get("quality", {})
     structure_problem = previous.get("structure_problem", "")
     if not _source_phase_interpretation_valid(candidate, code):
         structure_problem = "source_phase_interpretation_mismatch"
     ascending = sorted(blocks)
-    if not structure_problem:
+    if not structure_problem and not sequence_only:
         if candidate.get("strand", "+") not in {"+", "-"}:
             structure_problem = "invalid_strand"
         elif any(block[0] < 0 or block[1] <= block[0] for block in blocks):
@@ -265,7 +266,7 @@ def validate_candidate(candidate, genetic_code=1):
         if str(block[2]) in {"0", "1", "2"}:
             allowed_first.intersection_update({(int(block[2]) + cumulative) % 3})
         cumulative += block[1] - block[0]
-    phase_conflict = not blocks or not allowed_first
+    phase_conflict = not sequence_only and (not blocks or not allowed_first)
     phase_offset = first if not phase_conflict else 0
     coding = sequence[phase_offset:]
     codon_table = get_codon_table_components(code)
@@ -289,7 +290,7 @@ def validate_candidate(candidate, genetic_code=1):
     ambiguous = any(base not in "ACGT" for base in sequence)
     sequence_mismatch = bool(previous.get("sequence_mismatch", False))
     exception = previous.get("annotated_exception", "")
-    usable = bool(translated) and not any((phase_conflict, unknown, internal_stop, ambiguous, invalid_base,
+    usable = bool(translated.removesuffix("*") if sequence_only else translated) and not any((phase_conflict, unknown, internal_stop, ambiguous, invalid_base,
                                          sequence_mismatch, structure_problem, exception, translation_uncertain))
     quality = {**previous, "structure_problem": structure_problem,
                "valid_orf": usable and not partial, "internal_stop": internal_stop,

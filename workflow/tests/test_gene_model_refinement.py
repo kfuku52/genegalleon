@@ -51,6 +51,57 @@ def tiny_inputs(tmp_path):
     return inputs, edges, rows
 
 
+def test_sequence_only_pair_has_no_splice_junction_term():
+    protein = 'MAEDEKMF'
+    split = {'protein': protein, 'blocks': [[0, 12, 0], [24, 36, 0]]}
+    single = {'protein': protein, 'blocks': [[0, 24, 0]]}
+    assembly = {'protein': protein, 'blocks': [], 'sequence_only': True}
+    assert refinement.pair_score(single, split).score == 0.85
+    for known in (single, split):
+        score = refinement.pair_score(assembly, known)
+        assert (score.score, score.junction_similarity) == (1.0, 0.0)
+
+
+def test_initial_assembly_cds_preserves_baselines_and_rejects_unmapped_candidates(tmp_path):
+    species = 'Species_assembly'
+    fasta = tmp_path / 'cds.fa'
+    mapping = tmp_path / 'map.tsv'
+    fasta.write_text('>z\nATGCCCTAA\n>a\natgaaataa\n>picked\nATGGGGTAA\n'
+                     '>longer\nATGAAAGGGTAA\n>usable\nATGAAATAA\n>bad\nATGNNNGGGTAA\n')
+    mapping.write_text(f'transcript_id\tgene_id\tbaseline\nz\t{species}_tie\t0\na\t{species}_tie\t0\n'
+                       f'picked\t{species}_marked\t1\nlonger\t{species}_marked\t0\n'
+                       f'usable\t{species}_excluded\t0\nbad\t{species}_excluded\t0\n')
+    source = {'fasta': fasta, 'transcript_gene_map': mapping, 'genetic_code': 1}
+    output = tmp_path / 'initial.fa'
+    refinement.transcriptome.write_initial_cds(species, source, output)
+    assert output.read_text() == f'>{species}_marked\nATGGGGTAA\n>{species}_tie\nATGAAATAA\n'
+    with fasta.open('a') as stream:
+        stream.write('>unmapped\nATGTAA\n')
+    with pytest.raises(ValueError, match='Unmapped or duplicate transcriptome CDS ID: unmapped'):
+        refinement.transcriptome.write_initial_cds(species, source, output)
+
+
+def test_transcriptome_only_refinement_retains_explicit_baseline_and_verifies_outputs(tmp_path):
+    species, gene = 'Species_assembly', 'Species_assembly_gene'
+    cds, mapping = tmp_path / 'cds.fa', tmp_path / 'map.tsv'
+    cds.write_text('>short\nATGAAATAA\n>long\nATGAAAAAATAA\n')
+    mapping.write_text(f'transcript_id\tgene_id\tbaseline\nshort\t{gene}\t1\nlong\t{gene}\t0\n')
+    inputs, edges = tmp_path / 'assemblies.tsv', tmp_path / 'edges.tsv'
+    inputs.write_text(f'species\tcds\ttranscript_gene_map\n{species}\t{cds.name}\t{mapping.name}\n')
+    edges.write_text('species_a\tgene_a\tspecies_b\tgene_b\n')
+    output = tmp_path / 'run'
+    value = refinement.plan(output, transcriptome_inputs=inputs, edges=edges)
+    effective = refinement.finalize(output, value)
+    assert all(refinement.inspect_stages(output, value).values())
+    choices = refinement.read_table(effective / 'sequence/representative_map.tsv')
+    assert len(choices) == 1 and choices[0]['source_transcript_id'] == 'short'
+    assert choices[0]['reason'] == 'no_trusted_crossspecies_correspondence'
+    assert not (effective / 'inputs.tsv').exists()
+    protein = effective / 'sequence/species_protein' / f'{species}.fa'
+    protein.write_text('damaged\n')
+    assert not refinement.inspect_stages(output, value)['effective']
+
+
 def classification_fixture(*, valid_original=False, other_locus=False):
     sequence = "ATG" + "AAA" * 18 + "TAA"
     original = {"candidate_id": "Species_target_t", "source_transcript_id": "t", "source_gene_id": "g",
