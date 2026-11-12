@@ -170,50 +170,50 @@ def revision_models(request, name):
     return iter_revision_models(directory)
 
 
-def freeze_split_model_merges(approvals, anchor_root, receipts):
+def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
     approvals = Path(approvals).resolve()
     data = approvals.read_bytes()
     rows = list(csv.DictReader(io.StringIO(data.decode(), newline=''), delimiter='\t'))
     if not rows or any(set(row) != {'species', 'candidate_id'} or not all(row.values()) for row in rows):
-        raise ValueError('Split model approvals require species and candidate_id columns and at least one row')
+        raise ValueError(label + ' approvals require species and candidate_id columns and at least one row')
     requested = defaultdict(set)
     for row in rows:
         name, identifier = row['species'], row['candidate_id']
         if name not in receipts:
-            raise ValueError('Split model approval requires completed rescue for species: ' + name)
+            raise ValueError(label + ' approval requires completed rescue for species: ' + name)
         if identifier in requested[name]:
-            raise ValueError('Duplicate split model approval: ' + identifier)
+            raise ValueError('Duplicate ' + label.lower() + ' approval: ' + identifier)
         requested[name].add(identifier)
     publications = {str(approvals): hashlib.sha256(data).hexdigest()}
     selected = {}
     for name, identifiers in sorted(requested.items()):
-        path = anchor_root / 'rescued' / name / 'split_model_candidates.json'
+        path = anchor_root / 'rescued' / name / publication
         receipt = (path.parent / 'receipt.json').read_bytes()
         if hashlib.sha256(receipt).hexdigest() != receipts[name]:
             raise ValueError('Rescue worker receipt changed during planning: ' + name)
         expected = json.loads(receipt)['files'].get(path.name)
         if expected is None:
-            raise ValueError('Rescue has no verified split model candidate publication for: ' + name)
+            raise ValueError('Rescue has no verified ' + label.lower() + ' candidate publication for: ' + name)
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != expected:
-            raise ValueError('Split model candidates differ from the verified rescue publication: ' + name)
+            raise ValueError(label + ' candidates differ from the verified rescue publication: ' + name)
         candidates = {row['candidate_id']: row for row in json.loads(data)}
         claimed = set()
         selected[name] = []
         for identifier in sorted(identifiers):
             if identifier not in candidates:
-                raise ValueError('Unknown split model candidate for ' + name + ': ' + identifier)
+                raise ValueError('Unknown ' + label.lower() + ' candidate for ' + name + ': ' + identifier)
             candidate = candidates[identifier]
             owners = {row['gene_id'] for row in candidate['owner_overlap']}
             if owners & claimed:
-                raise ValueError('Approved split model candidates share a source gene: ' + identifier)
+                raise ValueError('Approved ' + label.lower() + ' candidates share a source gene: ' + identifier)
             claimed.update(owners)
             selected[name].append(candidate)
         publications[str(path)] = expected
     return selected, publications
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, **parameters):
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
@@ -335,12 +335,24 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if oriongeno:
             files.extend(oriongeno['files'])
         tool = shutil.which('miniprot') if params['mode'] != 'off' else None
-        approved_merges, merge_publications = {}, {}
-        if split_model_merges:
+        reviews, publications, claimed = {}, {}, set()
+        for key, approvals, publication, label in (
+            ('split_model_merges', split_model_merges, 'split_model_candidates.json', 'Split model'),
+            ('model_repairs', model_repairs, 'model_repair_candidates.json', 'Model repair'),
+        ):
+            if not approvals:
+                continue
             if not receipts or params['mode'] != 'conservative':
-                raise ValueError('Split model merges require completed --rescue-output and --mode conservative')
-            approved_merges, merge_publications = freeze_split_model_merges(split_model_merges, anchor_root, receipts)
-            files.extend(merge_publications)
+                raise ValueError(label + ' approvals require completed --rescue-output and --mode conservative')
+            selected, proof = freeze_model_reviews(approvals, anchor_root, receipts, publication, label)
+            owners = {(name, owner['gene_id']) for name, candidates in selected.items()
+                      for candidate in candidates for owner in candidate['owner_overlap']}
+            if owners & claimed:
+                raise ValueError('Approved repair and merge share a source gene: ' + str(sorted(owners & claimed)))
+            claimed.update(owners)
+            reviews[key] = selected
+            publications.update(proof)
+            files.extend(proof)
         request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
@@ -349,10 +361,9 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
-        if approved_merges:
-            if any(request['files'][path] != expected for path, expected in merge_publications.items()):
-                raise ValueError('Split model candidate publication changed during planning')
-            request['split_model_merges'] = approved_merges
+        if any(request['files'][path] != expected for path, expected in publications.items()):
+            raise ValueError('Reviewed candidate publication changed during planning')
+        request.update(reviews)
         if annevo:
             request['annevo'] = annevo
         if oriongeno:
@@ -1784,69 +1795,129 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
     return ''.join(lines)
 
 
-@invocation_cached
-def prepare_split_model_merges(request, name, db, selected):
-    """Bind each reviewed path to the current catalog loci and frozen genome."""
-    reviews = request['split_model_merges'][name]
+def prepare_reviewed_models(request, name, db, selected):
+    """Recheck approved merge and repair paths against the frozen target inputs."""
+    merges = request.get('split_model_merges', {}).get(name, [])
+    repairs = request.get('model_repairs', {}).get(name, [])
     source = request['sources'][name]
     parameters = parameters_for(request, name)
-    targets = {row['gene_id'] for review in reviews for row in review['owner_overlap']}
+    targets = {row['gene_id'] for review in chain(merges, repairs) for row in review['owner_overlap']}
     owners = {}
     for gene in iter_loci(db, name):
         ids = {row['source_gene_id'] for row in gene['candidates'] if row['origin'] == 'original'}
         if ids & targets:
             if len(ids) != 1 or gene.get('ambiguous_coordinates') or ids & owners.keys():
-                raise ValueError('Ambiguous catalog ownership for split model merge: ' + gene['gene_id'])
-            owners[ids.pop()] = gene['gene_id']
-    if targets != owners.keys() or len(set(owners.values())) != len(targets):
-        raise ValueError('Approved split model owners do not match distinct catalog loci: ' + name)
+                raise ValueError('Ambiguous catalog ownership for reviewed model: ' + gene['gene_id'])
+            owners[ids.pop()] = gene
+    if targets != owners.keys() or len({gene['gene_id'] for gene in owners.values()}) != len(targets):
+        raise ValueError('Approved model owners do not match distinct catalog loci: ' + name)
     with open_text(Path(source['gff'])) as handle:
         ownership = rescue.OwnershipIndex(rescue.original_ownership(handle, rescue.attributes))
     code = source['genetic_code']
-    genes, audit, footprints = [], [], []
+    new_genes, repaired, merge_audit, repair_audit, footprints = [], {}, [], [], []
     with indexed_genome(source['genome']) as genome:
-        for review in reviews:
+        for review in chain(merges, repairs):
             identifier = review['candidate_id']
+            kind = review.get('kind')
             blocks = review['cds']
             coordinates = {'seqid': review['seqid'], 'strand': review['strand'], 'cds': blocks,
                            'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
-            if rescue.split_model_geometry(coordinates, ownership) != review['owner_overlap']:
-                raise ValueError('Approved split model ownership changed: ' + identifier)
-            support = next((row for row in review['support']
-                            if not rescue.homology_problems(row['coverage'], row['identity'], parameters)), None)
-            if support is None:
-                raise ValueError('Approved split model does not meet refinement homology thresholds: ' + identifier)
-            checked = rescue.validate_model({**coordinates, 'coverage': support['coverage'],
-                                             'identity': support['identity'], 'frameshift': False},
+            if kind:
+                geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
+                if kind != ('phase_only' if exact else 'coding_path'):
+                    raise ValueError('Approved model repair type changed: ' + identifier)
+            else:
+                geometry = rescue.split_model_geometry(coordinates, ownership)
+            if not geometry or geometry != review['owner_overlap']:
+                raise ValueError('Approved model ownership changed: ' + identifier)
+            support = [row for row in review['support']
+                       if not rescue.homology_problems(row['coverage'], row['identity'], parameters)]
+            donors = sorted({row['donor'] for row in support})
+            if not support or (kind and len(set(donors) - {name}) < (
+                    1 if kind == 'phase_only' else max(2, parameters['min_support']))):
+                raise ValueError('Approved model lacks required independent homology: ' + identifier)
+            checked = rescue.validate_model({**coordinates, 'coverage': support[0]['coverage'],
+                                             'identity': support[0]['identity'], 'frameshift': False},
                                             genome, code, parameters)
             sequence = checked['sequence']
             if (checked['problems'] or checked['cds'] != blocks
                     or hashlib.sha256(sequence.encode()).hexdigest() != review['cds_sha256']):
-                raise ValueError('Approved split model no longer has a complete validated CDS: ' + identifier)
-            transcript = identifier + '.t1'
-            candidate = {'candidate_id': identifier, 'gene_id': identifier, 'species': name,
-                         'source_gene_id': identifier, 'source_transcript_id': transcript, 'gene_token': identifier,
+                raise ValueError('Approved model no longer has a complete validated CDS: ' + identifier)
+
+            source_id, gene_id, gene_token, transcript = identifier, identifier, identifier, identifier + '.t1'
+            audit = {**review, 'species': name}
+            if kind:
+                source_id = geometry[0]['gene_id']
+                gene = owners[source_id]
+                gene_id = gene['gene_id']
+                gene_token = gene.get('gene_token', gene_id)
+                originals = [c for c in gene['candidates'] if c['origin'] == 'original']
+                if any(c['quality'].get('annotated_exception') for c in originals):
+                    raise ValueError('Approved model repair targets a protected annotation: ' + identifier)
+                if kind == 'phase_only':
+                    matches = [c for c in originals if
+                               [b[:2] for b in c['blocks']] == [b[:2] for b in blocks]
+                               and c['quality'].get('phase_conflict') and c['cds'] == sequence
+                               and any(row['cds'].upper() == sequence for row in c.get('source_cds', []))]
+                    if len(matches) != 1:
+                        raise ValueError('Phase-only repair requires one conflicting source model with identical CDS: ' + identifier)
+                    transcript = matches[0]['source_transcript_id']
+                audit['previous_candidate_id'] = selected[gene_id]['candidate_id']
+            elif identifier in selected:
+                raise ValueError('Approved split model ID collides with an existing catalog locus: ' + identifier)
+            origin = 'reviewed_model_repair' if kind else 'split_model_merge'
+            candidate = {'candidate_id': identifier, 'gene_id': gene_id, 'species': name,
+                         'source_gene_id': source_id, 'source_transcript_id': transcript, 'gene_token': gene_token,
                          'seqid': review['seqid'], 'strand': review['strand'], 'blocks': blocks,
-                         'cds': sequence, 'origin': 'split_model_merge',
-                         'support': {'donors': sorted({row['donor'] for row in review['support']})}}
+                         'cds': sequence, 'origin': origin, 'support': {'donors': donors}}
             candidate['quality'] = validate_candidate(candidate, code)
             if not candidate['quality']['valid_orf'] or not candidate['protein']:
-                raise ValueError('Approved split model cannot be admitted for translation: ' + identifier)
-            if identifier in selected:
-                raise ValueError('Approved split model ID collides with an existing catalog locus: ' + identifier)
-            genes.append({'gene_id': identifier, 'seqid': review['seqid'], 'strand': review['strand'],
-                          'candidates': [candidate]})
-            selected[identifier] = {'species': name, 'gene_id': identifier, 'candidate_id': identifier,
-                                    'source_transcript_id': transcript, 'status': 'merged_split_model',
-                                    'reason': 'reviewed_rescue_split_model'}
-            audit.append({**review, 'species': name, 'gene_id': identifier, 'source_transcript_id': transcript,
-                          'replaced_gene_ids': [owners[row['gene_id']] for row in review['owner_overlap']]})
+                raise ValueError('Approved model cannot be admitted for translation: ' + identifier)
+            audit.update(gene_id=gene_id, source_transcript_id=transcript)
+            if kind:
+                candidate['repair_kind'] = kind
+                repaired[gene_id] = candidate
+                repair_audit.append(audit)
+            else:
+                new_genes.append({'gene_id': identifier, 'seqid': review['seqid'], 'strand': review['strand'],
+                                  'candidates': [candidate]})
+                audit['replaced_gene_ids'] = [owners[row['gene_id']]['gene_id'] for row in geometry]
+                merge_audit.append(audit)
+            selected[gene_id] = {'species': name, 'gene_id': gene_id, 'candidate_id': identifier,
+                                 'source_transcript_id': transcript,
+                                 'status': 'repaired_model' if kind else 'merged_split_model',
+                                 'reason': 'reviewed_rescue_model_repair' if kind else 'reviewed_rescue_split_model'}
             footprints.append({**coordinates, 'gene_id': identifier})
     approved_paths = rescue.OwnershipIndex(footprints)
     for path in footprints:
         if approved_paths.overlapping(path, owner=path['gene_id']):
-            raise ValueError('Approved split model coding paths overlap: ' + path['gene_id'])
-    return genes, audit
+            raise ValueError('Approved model coding paths overlap: ' + path['gene_id'])
+    return new_genes, repaired, merge_audit, repair_audit
+
+
+def apply_reviewed_phase_rows(graph, repairs):
+    """Change only the selected transcript's CDS phase fields in derived views."""
+    expected = {(c['source_transcript_id'], c['seqid'], c['strand'], a, b): phase
+                for c in repairs if c['repair_kind'] == 'phase_only' for a, b, phase in c['blocks']}
+    if not expected:
+        return
+    seen = set()
+    for i, (line, fields, attrs, parents) in enumerate(graph[0]):
+        if fields is None or fields[2] != 'CDS':
+            continue
+        keys = [(p, fields[0], fields[6], int(fields[3]) - 1, int(fields[4])) for p in parents]
+        matches = expected.keys() & set(keys)
+        if not matches:
+            continue
+        if len(matches) != 1 or len(parents) != 1 or matches & seen:
+            raise ValueError('Cannot isolate reviewed phase correction to one transcript: ' + str(matches))
+        seen.update(matches)
+        fields = fields[:]
+        fields[7] = str(expected[next(iter(matches))])
+        graph[0][i] = ('\t'.join(fields) + '\n', fields, attrs, parents)
+    if seen != expected.keys():
+        raise ValueError('Reviewed phase correction did not match source CDS rows: '
+                         + str(sorted(expected.keys() - seen)))
 
 
 def finalize(root, value):
@@ -1860,24 +1931,31 @@ def finalize(root, value):
         selected_by_species = defaultdict(list)
         for selected_row in selections:
             selected_by_species[selected_row['species']].append(selected_row)
-        merged_by_species, retired_by_species, merges = {}, {}, []
+        merged_by_species, repaired_by_species, retired_by_species = {}, {}, {}
+        merges, repairs = [], []
         request = value['request']
-        for name in request.get('split_model_merges', {}):
+        reviewed_species = request.get('split_model_merges', {}).keys() | request.get('model_repairs', {}).keys()
+        for name in sorted(reviewed_species):
             selected = {row['gene_id']: row for row in selected_by_species[name]}
-            merged_by_species[name], audit = prepare_split_model_merges(request, name, db, selected)
+            new_genes, repaired, merge_audit, repair_audit = prepare_reviewed_models(request, name, db, selected)
             selected_by_species[name] = list(selected.values())
-            retired_by_species[name] = {gene_id for row in audit for gene_id in row['replaced_gene_ids']}
-            merges.extend(audit)
+            merged_by_species[name], repaired_by_species[name] = new_genes, repaired
+            retired_by_species[name] = {gene_id for row in merge_audit for gene_id in row['replaced_gene_ids']}
+            merges.extend(merge_audit)
+            repairs.extend(repair_audit)
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates', 'species_transcript', 'utr_audit'):
             (tmp / role).mkdir()
         map_path = tmp / 'representative_map.tsv'
-        if merges:
+        if merges or repairs:
             rescue.write_tsv(map_path, MAP_FIELDS, [[row.get(k, '') for k in MAP_FIELDS]
                              for name in value['species'] for row in selected_by_species[name]
                              if row['gene_id'] not in retired_by_species.get(name, ())])
-            atomic_json(tmp / 'split_model_merges.json', merges)
         else:
             shutil.copyfile(final / 'representative_map.tsv', map_path)
+        if merges:
+            atomic_json(tmp / 'split_model_merges.json', merges)
+        if repairs:
+            atomic_json(tmp / 'model_repairs.json', repairs)
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         unpublished_candidates, utr_summaries = [], []
@@ -1907,17 +1985,22 @@ def finalize(root, value):
             source_graph = _gff_source_graph(original)
             retired = retired_by_species.get(name, set())
             new_genes = merged_by_species.get(name, [])
-            if new_genes:
+            repaired = repaired_by_species.get(name, {})
+            apply_reviewed_phase_rows(source_graph, repaired.values())
+            new_transcripts = [gene['candidates'][0] for gene in new_genes]
+            new_transcripts.extend(c for c in repaired.values() if c['repair_kind'] == 'coding_path')
+            if new_transcripts:
                 occupied = source_graph[1].keys() | source_graph[2].keys()
                 occupied.update(row['source_transcript_id'] for row in selected_by_species[name]
-                                if row['status'] != 'merged_split_model')
-                for gene in new_genes:
-                    candidate = gene['candidates'][0]
+                                if row['status'] not in {'merged_split_model', 'repaired_model'})
+                for candidate in new_transcripts:
                     tid = candidate['source_transcript_id']
-                    identifiers = {gene['gene_id'], tid, *(f'{tid}.{kind}{i}' for kind in ('exon', 'cds')
+                    identifiers = {tid, *(f'{tid}.{kind}{i}' for kind in ('exon', 'cds')
                                    for i in range(1, len(candidate['blocks']) + 1))}
+                    if candidate['origin'] == 'split_model_merge':
+                        identifiers.add(candidate['gene_id'])
                     if identifiers & occupied:
-                        raise ValueError('Approved split model GFF ID collides: ' + gene['gene_id'])
+                        raise ValueError('Approved model GFF ID collides: ' + candidate['candidate_id'])
                     occupied.update(identifiers)
             directive = re.search(r'^##FASTA(?:\r?\n|$)', original, flags=re.MULTILINE)
             sep, embedded = ('##FASTA', original[directive.start() + len('##FASTA'):]) if directive else ('', '')
@@ -1928,6 +2011,11 @@ def finalize(root, value):
                 for gene in chain(catalog['loci'], new_genes):
                     chosen = selected[gene['gene_id']]
                     candidates = {c['candidate_id']: c for c in gene['candidates']}
+                    if gene['gene_id'] in repaired:
+                        repair = repaired[gene['gene_id']]
+                        if repair['candidate_id'] in candidates:
+                            raise ValueError('Approved model repair ID collides: ' + repair['candidate_id'])
+                        candidates[repair['candidate_id']] = repair
                     candidate = candidates[chosen['candidate_id']]
                     for c in candidates.values():
                         if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
@@ -1940,7 +2028,9 @@ def finalize(root, value):
                         all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
                         if c['origin'] == 'split_model_merge':
                             additions.append(candidate_gff(gene, c, name))
-                        elif c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
+                        elif (c.get('repair_kind') == 'coding_path' or
+                              (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
+                               and not c.get('same_coordinate_source_repair'))):
                             # Preserve the original gene and attach only new transcript/CDS rows.
                             lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
                                                   gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
@@ -1972,7 +2062,8 @@ def finalize(root, value):
                     translation_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included' if admitted else 'excluded', json.dumps(candidate['quality'], sort_keys=True)))
                     if not exportable:
                         pass
-                    elif candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path') or candidate.get('same_coordinate_source_repair'):
+                    elif (candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path')
+                          or candidate.get('same_coordinate_source_repair') or candidate.get('repair_kind') == 'phase_only'):
                         original_transcripts.add(candidate['source_transcript_id'])
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
@@ -2186,6 +2277,7 @@ def parser():
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--model-repairs', type=Path, help='Reviewed single-locus rescue candidates TSV: species,candidate_id')
     prep.add_argument('--split-model-merges', type=Path, help='Reviewed rescue merge candidates TSV: species,candidate_id')
     prep.add_argument('--oriongeno-inputs', type=Path, help='Native OrionGeno TSV: species,gff,receipt; also supplies UTRs')
     prep.add_argument('--annevo-inputs', type=Path, help='Source-bound native ANNEVO candidate TSV: species,gff,receipt')
@@ -2222,7 +2314,7 @@ def _main():
     if args.command == 'plan':
         plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
              species_profiles=args.species_profiles, annevo_inputs=args.annevo_inputs, oriongeno_inputs=args.oriongeno_inputs,
-             split_model_merges=args.split_model_merges,
+             split_model_merges=args.split_model_merges, model_repairs=args.model_repairs,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:

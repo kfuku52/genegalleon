@@ -26,6 +26,7 @@ import zipfile
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from itertools import chain
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -36,7 +37,7 @@ from Bio.Seq import Seq
 try:
     import busco_reference_quality as busco_reference_implementation
     from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
-    from cds_model_normalisation import CdsModelNormaliser
+    from cds_model_normalisation import CdsModelNormaliser, phase_conventions
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
@@ -90,7 +91,7 @@ try:
 except ImportError:
     from . import busco_reference_quality as busco_reference_implementation
     from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
-    from .cds_model_normalisation import CdsModelNormaliser
+    from .cds_model_normalisation import CdsModelNormaliser, phase_conventions
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
@@ -376,6 +377,15 @@ def build_plan(args):
                    "gemoma_java": None}
         request["output_storage"] = {"format": getattr(args, "model_storage", "compact"),
                                      "retain_search_inputs": bool(getattr(args, "retain_search_inputs", False))}
+        repair_targets = getattr(args, "model_repair_targets", None)
+        if repair_targets:
+            repair_targets = repair_targets.resolve()
+            before = digest(repair_targets)
+            request["model_repair_targets"] = {"path": str(repair_targets),
+                                               "by_species": read_model_repair_targets(repair_targets, sources)}
+            if digest(repair_targets) != before:
+                raise ValueError("Model repair targets changed during planning")
+            request["files"][str(repair_targets)] = before
         prediction_cache = getattr(args, "prediction_cache", None)
         if prediction_cache:
             request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, sources)
@@ -452,6 +462,9 @@ def build_plan(args):
                                          key=lambda m: (distances[name][m], -sources[m]["quality"]["complete_pct"], m))
                         neighbors[name] += ordered[:args.nearest_references]
             donors = {n: sorted((set(refs) | set(neighbors[n])) - {n}) for n in species}
+            for name, rows in request.get("model_repair_targets", {}).get("by_species", {}).items():
+                if any(row["donor"] not in donors[name] for row in rows):
+                    raise ValueError("Model repair targets require selected donor species for: " + name)
             pairs = sorted({tuple(sorted((n, m))) for n in species for m in donors[n]})
             jobs = [{"a": a, "b": b, "kind": "pair"} for a, b in pairs]
             jobs += [{"a": n, "b": n, "kind": "self"} for n in species]
@@ -478,6 +491,7 @@ def load(root, *, inspect_only=False):
         path = Path(plan["request"]["guide_tree_receipt"])
         if digest(path) != plan["request"]["files"][str(path)]:
             raise ValueError("Frozen BUSCO guide receipt changed")
+    verify_model_repair_targets(plan)
     return plan
 
 
@@ -1348,6 +1362,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
     verify_sources(plan, [name], ["genome", "fasta", "gff"])
     source = plan["request"]["sources"][name]
     params = parameters_for(plan["request"], name)
+    review_targets = verify_model_repair_targets(plan).get(name, [])
     additional, nomination = nominate_genome_only_candidates(root, plan, name, regions, params)
     regions.extend(additional)
     def build(tmp):
@@ -1356,7 +1371,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
         atomic_json(tmp / "genome_search_nomination.json", nomination)
         genomewide_audit = None
-        if not regions and not plan["request"].get("prediction_cache") and not plan['request'].get('oriongeno_genomewide'):
+        if (not regions and not review_targets and not plan["request"].get("prediction_cache")
+                and not plan['request'].get('oriongeno_genomewide')):
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
             lengths = {}
@@ -1385,6 +1401,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                         raise ValueError("Original annotation outside or absent from genome")
             atomic_json(tmp / "candidates.json", [])
             atomic_json(tmp / "split_model_candidates.json", [])
+            atomic_json(tmp / "model_repair_candidates.json", [])
             if storage["format"] == "compact":
                 write_model_store(tmp, [], revisions=[])
             else:
@@ -1579,6 +1596,11 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
                 models, placement_ownership, name, genome=genome, code=source["genetic_code"],
                 params=params, proteins=proteins))
+            targeted = search_model_repair_targets(tmp, review_targets, existing, placement_ownership, proteins,
+                                                    genome, source["genetic_code"], params, cpus)
+            atomic_json(tmp / "model_repair_candidates.json", model_repair_candidates(
+                chain(models, targeted), placement_ownership, name, source["gff"]))
+            verify_model_repair_targets(plan)
         # Recheck sources before publication, including the target genome.
         verify_sources(plan, [name], ["genome", "fasta", "gff"])
         if genomewide_audit is not None:
@@ -1978,6 +2000,167 @@ def split_model_candidates(models, ownership, species, *, genome=None, code=1, p
                                                    -row['identity'], row['flags'],
                                                    row.get('splice_revalidation', {}).get('original_cds', [])))
     return [candidates[identifier] for identifier in sorted(candidates)]
+
+
+def read_model_repair_targets(path, sources):
+    rows = table(path)
+    required = {'species', 'gene_id', 'donor', 'query'}
+    seen, by_species = set(), defaultdict(list)
+    if not rows:
+        raise ValueError('Model repair target TSV is empty')
+    for row in rows:
+        if set(row) != required or not all(row.values()):
+            raise ValueError('Model repair targets require species, gene_id, donor and query columns')
+        key = tuple(row[field] for field in sorted(required))
+        if key in seen or row['species'] not in sources or row['donor'] not in sources:
+            raise ValueError('Duplicate or unknown-species model repair target: ' + str(key))
+        seen.add(key)
+        by_species[row['species']].append(row)
+    return dict(by_species)
+
+
+def verify_model_repair_targets(plan):
+    review = plan['request'].get('model_repair_targets')
+    if review is None:
+        return {}
+    path = review['path']
+    if digest(path) != plan['request']['files'][path]:
+        raise ValueError('Frozen model repair target table changed')
+    return review['by_species']
+
+
+def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
+    """Project selected donor proteins near specified existing loci for review."""
+    if not targets:
+        return []
+    target_ids = {row['gene_id'] for row in targets}
+    owners = {row['gene_id']: row for row in existing if row['gene_id'] in target_ids}
+    windows, queries = defaultdict(list), {}
+    for index, target in enumerate(targets):
+        owner = owners.get(target['gene_id'])
+        if not owner or not owner.get('cds') or owner['strand'] not in {'+', '-'}:
+            raise ValueError('Unknown or invalid coding owner for model repair: ' + target['gene_id'])
+        if target['query'] not in proteins[target['donor']]:
+            raise ValueError('Unknown prepared model repair donor protein: ' + target['query'])
+        padding = max(2000, params['padding'])
+        start = max(0, owner['start'] - padding)
+        end = min(genome.get_reference_length(owner['seqid']), owner['end'] + padding)
+        if end - start > params['max_interval']:
+            raise ValueError('Model repair target exceeds max interval: ' + target['gene_id'])
+        identifier = f'review_{index + 1}'
+        query = {**target, 'id': identifier, 'seqid': owner['seqid'], 'start': start, 'end': end}
+        windows[owner['seqid'], start, end].append(query)
+        queries[identifier] = query
+    directory = tmp / 'model_repair_search'
+    directory.mkdir()
+    atomic_json(directory / 'targets.json', list(queries.values()))
+    predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus, compact=True)
+    checked = []
+    for model in predictions:
+        target = queries[model['query']]
+        offset = target['start']
+        genomic = {**model, 'seqid': target['seqid'],
+                   'cds': [[a + offset, b + offset, p] for a, b, p in model['cds']]}
+        candidate = validate_model(genomic, genome, code, params)
+        if candidate['problems']:
+            continue
+        candidate['start'] = min(b[0] for b in candidate['cds'])
+        candidate['end'] = max(b[1] for b in candidate['cds'])
+        geometry, _ = model_repair_geometry(candidate, ownership)
+        if [row['gene_id'] for row in geometry] != [target['gene_id']]:
+            continue
+        candidate.update(evidence=target, revision_owner_ids=[target['gene_id']], problems=['overlap_existing_annotation'])
+        checked.append(candidate)
+    return checked
+
+
+def model_repair_geometry(model, ownership):
+    """Bind a substantially overlapping coding path to exactly one source locus."""
+    owners = ownership.overlapping(model)
+    if len(owners) != 1 or owners[0]['strand'] != model['strand'] or not owners[0].get('cds'):
+        return [], False
+    owner = owners[0]
+    old_blocks = {tuple(block) for block in owner['cds']}
+    union = []
+    for start, end in sorted(old_blocks):
+        if union and start <= union[-1][1]:
+            union[-1][1] = max(end, union[-1][1])
+        else:
+            union.append([start, end])
+    old_length = sum(b - a for a, b in union)
+    new_length = sum(b - a for a, b, _ in model['cds'])
+    shared = sum(max(0, min(b, y) - max(a, x))
+                 for a, b in union for x, y, _ in model['cds'])
+    if 3 * shared < 2 * old_length or 4 * shared < 3 * new_length:
+        return [], False
+    geometry = [{'gene_id': owner['gene_id'], 'cds_bases': old_length, 'overlap_bases': shared}]
+    return geometry, old_blocks == {tuple(block[:2]) for block in model['cds']}
+
+
+def model_repair_candidates(models, ownership, species, source_gff):
+    """Publish complete one-locus repairs without changing rescue admission."""
+    candidates, paths = {}, {}
+    placement = {'overlap_existing_annotation', 'unanchored_genome_search',
+                 'outside_expected_synteny_interval'}
+    for model in models:
+        evidence = model.get('evidence', {})
+        if (len(model.get('revision_owner_ids', [])) != 1 or not model.get('sequence')
+                or set(model['problems']) - placement
+                or not evidence.get('donor') or not evidence.get('query')
+                or any(evidence.get(flag) for flag in ('annevo', 'oriongeno', 'boundary_candidate',
+                                                       'retained_annotation_candidate'))):
+            continue
+        shape = coding_shape(model)
+        if shape not in paths:
+            paths[shape] = model_repair_geometry(model, ownership)
+        geometry, exact = paths[shape]
+        if not geometry:
+            continue
+        key = shape, geometry[0]['gene_id']
+        identifier = species + '_ggrepair_' + hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+        sequence_hash = hashlib.sha256(model['sequence'].encode()).hexdigest()
+        row = candidates.setdefault(identifier, {
+            'candidate_id': identifier, 'seqid': model['seqid'], 'strand': model['strand'],
+            'cds': model['cds'], 'owner_overlap': geometry, 'cds_sha256': sequence_hash,
+            'kind': 'phase_only' if exact else 'coding_path', 'support': [],
+        })
+        if row['cds_sha256'] != sequence_hash:
+            raise ValueError('Inconsistent CDS for reviewed model repair: ' + identifier)
+        support = {'donor': evidence['donor'], 'query': evidence['query'],
+                   'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
+        if support not in row['support']:
+            row['support'].append(support)
+
+    # Read declared phases only for exact-coordinate paths. Ordinary exact
+    # homology hits and valid complementary-phase annotations are unchanged.
+    def block_keys(row):
+        return [(row['seqid'], row['strand'], a, b) for a, b, _ in row['cds']]
+    phases = {key: set() for row in candidates.values() if row['kind'] == 'phase_only' for key in block_keys(row)}
+    if phases:
+        with open_text(Path(source_gff)) as handle:
+            for line in handle:
+                if line.strip() == '##FASTA':
+                    break
+                if line.startswith('#') or not line.strip():
+                    continue
+                fields = line.rstrip().split('\t')
+                if len(fields) == 9 and fields[2] == 'CDS':
+                    key = fields[0], fields[6], int(fields[3]) - 1, int(fields[4])
+                    if key in phases:
+                        phases[key].add(fields[7])
+    published = []
+    for identifier, row in sorted(candidates.items()):
+        if row['kind'] == 'phase_only':
+            declared = [phases[key] for key in block_keys(row)]
+            if any(len(values) != 1 or not values <= {'0', '1', '2'} for values in declared):
+                continue
+            source_blocks = [{'start': a, 'end': b, 'phase': next(iter(values))}
+                             for (a, b, _), values in zip(row['cds'], declared, strict=True)]
+            if phase_conventions(source_blocks):
+                continue
+        row['support'].sort(key=lambda hit: (hit['donor'], hit['query'], -hit['coverage'], -hit['identity'], hit['flags']))
+        published.append(row)
+    return published
 
 
 def consolidate(validated, existing, species, nearest=(), *, retained_paths=None):
@@ -2433,6 +2616,8 @@ def parser():
                       help="Identity required below minimum-broad-coverage")
     plan.add_argument("--minimum-identity", type=float, default=0.5)
     plan.add_argument("--max-intron", type=int, default=20000)
+    plan.add_argument("--model-repair-targets", type=Path,
+                      help="Targeted donor search TSV: species,gene_id,donor,query")
     plan.add_argument("--genome-fallback", type=int, choices=(0, 1), default=1)
     plan.add_argument("--prediction-cache", type=Path, help="Frozen, checksum-verified previous rescue output; raw predictions are revalidated")
     plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")

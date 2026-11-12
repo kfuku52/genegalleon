@@ -404,6 +404,12 @@ def rescue(root, plan, name, cpus):
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
             r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
                 models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
+            targets = r.verify_model_repair_targets(plan).get(name, [])
+            targeted = r.search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome,
+                                                      source['genetic_code'], params, cpus)
+            r.atomic_json(tmp / 'model_repair_candidates.json',
+                          r.model_repair_candidates([*models, *targeted], ownership, name, source['gff']))
+            r.verify_model_repair_targets(plan)
         if native_audit is not None:
             import rescue_native_genomewide
             rescue_native_genomewide.finish_audit(native_audit, models)
@@ -423,12 +429,12 @@ def rescue(root, plan, name, cpus):
                                      append_partial_evidence=native_audit is not None)
         # Copy every other receipt member without truncating a shared inode.
         mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
-                   'split_model_candidates.json',
+                   'split_model_candidates.json', 'model_repair_candidates.json',
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
         if native_audit is not None:
             mutable.add('oriongeno_genomewide.json')
         for member in old_receipt['files']:
-            if member.startswith('model_store/') or member in mutable:
+            if member.startswith(('model_store/', 'model_repair_search/')) or member in mutable:
                 continue
             source_path, target = store._member(old_worker, member), tmp / member
             target.parent.mkdir(parents=True, exist_ok=True)

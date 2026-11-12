@@ -319,14 +319,14 @@ def hidden_models(tmp_path):
     return tmp_path, species, cds
 
 
-def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, directory_name="rescue"):
+def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, directory_name="rescue", extra_args=()):
     root, species, cds = fixture
     output = root / directory_name
     storage_args = ["--model-storage", model_storage]
     if retain_search_inputs:
         storage_args.append("--retain-search-inputs")
     cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
-        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output, *storage_args)
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output, *storage_args, *extra_args)
     return output, species, cds
 
 

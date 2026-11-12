@@ -31,6 +31,7 @@ gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
 gene_model_refinement_split_model_merges="${gene_model_refinement_split_model_merges:-}"
+gene_model_refinement_model_repairs="${gene_model_refinement_model_repairs:-}"
 gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
 gene_model_refinement_min_support="${gene_model_refinement_min_support:-2}"
 gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-32}"
@@ -63,6 +64,7 @@ gene_model_species_profiles="${gene_model_species_profiles:-}"
 gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
+gene_model_rescue_model_repair_targets="${gene_model_rescue_model_repair_targets:-}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
 gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
@@ -2643,6 +2645,7 @@ prepare_gene_model_rescue() {
     --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
+  [[ -z "${gene_model_rescue_model_repair_targets}" ]] || rescue_args+=(--model-repair-targets "${gene_model_rescue_model_repair_targets}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
@@ -2735,6 +2738,7 @@ prepare_gene_model_refinement() {
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
   [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
+  [[ -z "${gene_model_refinement_model_repairs}" ]] || refinement_args+=(--model-repairs "${gene_model_refinement_model_repairs}")
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")

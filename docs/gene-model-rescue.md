@@ -348,7 +348,27 @@ Original ownership uses strand and coding overlap; intron-only or opposite-stran
 overlap does not by itself veto an intact coding model. A single existing owner
 receives revision nominations (direct compact access or legacy
 `revision_candidates.json`) for the refinement stage's normal donor,
-structure and representative-adoption checks. Rescue publishes candidates for
+structure and representative-adoption checks.
+
+For [reviewed single-locus repairs](gene-model-refinement.md#reviewed-single-locus-model-repairs),
+`rescued/<species>/model_repair_candidates.json` includes complete paths that
+cover at least two-thirds of the sole owner's coding bases and share at least
+three-quarters of their own coding bases with that owner. Paths with unchanged
+coordinates are included only when their declared phases conflict. These
+publications are available for review even when the prediction has an
+unresolved placement flag.
+
+To revisit a particular annotation even when donor screening considers it
+represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
+Set `gene_model_rescue_model_repair_targets` for the input-generation workflow.
+The table contains `species`, `gene_id` (the original GFF locus ID), `donor`
+(a selected reference species) and `query` (its prepared protein ID). Multiple
+rows can support the same locus. Rescue aligns these proteins in the locus
+window with at least 2 kb of flanking sequence on each side where available,
+bounded by `--max-interval`. Results from this targeted search only enter the
+review publication. They never enter the automatic rescue model set.
+
+Rescue publishes candidates for
 [reviewed split-model merging](gene-model-refinement.md#reviewed-split-model-merges)
 in `rescued/<species>/split_model_candidates.json`. A candidate is a validated
 donor-guided genomic coding path spanning two or more consecutive, same-strand

@@ -249,6 +249,7 @@ Important settings:
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
+| `gene_model_refinement_model_repairs` | blank | Reviewed single-locus candidates from a completed rescue publication. |
 | `gene_model_refinement_min_margin` | `0.10` | Experimental score margin for adoption. |
 | `gene_model_refinement_min_support` | `2` | Independent donor species for acceptance/adoption. |
 | `gene_model_refinement_candidate_limit` | `32` | Exceeding the selection limit abstains; prediction does not silently truncate alternatives. |
@@ -291,6 +292,34 @@ the representative CDS, protein, transcript, GFF and analysis views. The
 original models remain in the source and full annotation views.
 `effective/split_model_merges.json` records all original owners and their
 retired representative IDs. Use `effective/inputs.tsv` for downstream analysis.
+
+### Reviewed single-locus model repairs
+
+Rescue writes `rescued/<species>/model_repair_candidates.json`. Coding-path
+candidates cover a single existing coding locus and may extend a CDS terminus
+or change its exon boundaries. Phase-only candidates have identical coding
+coordinates and conflicting numeric source phases. The publication includes
+donor coverage and identity, placement flags, CDS blocks and a CDS checksum.
+
+Put the reviewed `species` and `candidate_id` pairs in a TSV. Use
+`gene_model_refinement_model_repairs` with a completed
+`gene_model_refinement_rescue_dir`, or plan with the CLI.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output RESCUE_DIR --output REFINEMENT_DIR \
+  --mode conservative --model-repairs reviewed_repairs.tsv
+python workflow/support/gene_model_refinement.py run --output REFINEMENT_DIR
+```
+
+Refinement rechecks genomic ownership, splice sites, phases, translation and
+the CDS checksum. Coding-path repairs require at least two independent donor
+species that meet the refinement homology thresholds, or more if configured
+by `gene_model_refinement_min_support`. Phase-only repairs require one
+independent donor and an exact match to the supplied CDS. Coding-path repairs
+retain the gene ID and add a transcript. Phase-only repairs also retain the
+source transcript ID. The source inputs are archived and
+`effective/model_repairs.json` records the adopted paths.
 
 Slurm submission uses the existing array helper:
 

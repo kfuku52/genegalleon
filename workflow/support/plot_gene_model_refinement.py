@@ -40,6 +40,8 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     changes = verified_json(root / "effective", "changes.json", plan_hash)
     merges = (verified_json(root / "effective", "split_model_merges.json", plan_hash)
               if any(row["status"] == "merged_split_model" for row in changes) else [])
+    repairs = (verified_json(root / "effective", "model_repairs.json", plan_hash)
+               if any(row["status"] == "repaired_model" for row in changes) else [])
     selections, selected_by_species = {}, defaultdict(list)
     for selected in changes:
         key = selected["species"], selected["gene_id"]
@@ -62,7 +64,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
             "accepted_repair_paths": sum(r["change_type"] == "model_revision" for r in accepted),
             "accepted_isoform_paths": sum(r["change_type"] == "isoform_addition" for r in accepted),
             "accepted_loci": len({r["gene_id"] for r in accepted}),
-            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired", "merged_split_model"}
+            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired", "merged_split_model", "repaired_model"}
                                            for r in selected),
             "predicted_representatives": sum(r["selected_origin"] == "predicted" for r in selected),
             "proposed_paths": len(models) - len(accepted),
@@ -155,7 +157,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         "effective_receipt_sha256": digest(root / "effective" / "receipt.json"),
         "species": stats, "details": details, "changed_loci_available": len(detail_keys),
         "coding_path_phase_loci_available": len(phase_detail_keys),
-        "split_model_merges": merges,
+        "split_model_merges": merges, "model_repairs": repairs,
         "gallery_limit": max_loci, "performance": performance,
         "limits": "Counts cover all species and paths. The locus gallery is bounded. Ranking margins are not probabilities. RNA chain support does not establish translation initiation. Accepted paths and selected representatives are distinct decisions.",
     }
@@ -310,6 +312,10 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
             '<li>' + html.escape(row["species"] + ' ' + row["gene_id"] + ' replaces '
                                  + ', '.join(row["replaced_gene_ids"])) + '</li>'
             for row in data["split_model_merges"]) + '</ul></details>'
+    if data.get("model_repairs"):
+        html_text += '<details><summary>Reviewed single-locus repairs</summary><ul>' + "".join(
+            '<li>' + html.escape(row["gene_id"] + ' (' + row["kind"].replace('_', ' ') + ')') + '</li>'
+            for row in data["model_repairs"]) + '</ul></details>'
     html_text += f'<p>Gallery: {len(cards)} loci; all changed/accepted loci available: {data["changed_loci_available"]}. '
     html_text += f'Source coding-path phase resolutions available: {data["coding_path_phase_loci_available"]}. '
     html_text += "Phase resolutions and rejected proposals fill unused gallery slots. Exon plots use genomic spacing and 1-based display coordinates.</p>"

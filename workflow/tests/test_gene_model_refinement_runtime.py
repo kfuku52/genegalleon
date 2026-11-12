@@ -161,6 +161,83 @@ def test_reviewed_split_model_merge_from_real_rescue(tmp_path, fragment_count):
         refinement.load(output)
 
 
+def test_reviewed_single_locus_repairs_from_real_rescue(tmp_path):
+    fixture = import_module('test_rescue_gene_models_runtime')
+    data = fixture.hidden_models.__wrapped__(tmp_path)
+    _, names, truth = data
+    coding_target, phase_target = names[:2]
+    coding_cds = tmp_path / 'cds' / (coding_target + '.cds.fa')
+    coding_gff = tmp_path / 'gff' / (coding_target + '.gff3')
+    phase_gff = tmp_path / 'gff' / (phase_target + '.gff3')
+    phase_genome = tmp_path / 'genome' / (phase_target + '.genome.fa')
+    period = len(truth[8]) + 60
+    start = 8 * period
+    partial = truth[8][:-60]
+    with coding_cds.open('a') as handle:
+        handle.write(f'>{coding_target}_g8\n{partial}\n')
+    with coding_gff.open('a') as handle:
+        handle.write(annotation('chr1', 'g8', 'g8.t1', [[start, start + len(partial), 0]]))
+    phase_start = 11 * period
+    first_exon = 241
+    intron = 'GT' + 'C' * 40 + 'AG'
+    phase_junction = phase_start + first_exon
+    phase_end = phase_start + len(truth[11]) + len(intron)
+    dna = phase_genome.read_text().splitlines()[1]
+    spliced = truth[11][:first_exon] + intron + truth[11][first_exon:]
+    phase_genome.write_text('>chr1\n' + dna[:phase_start] + spliced + dna[phase_end:] + '\n')
+    original = [line for line in phase_gff.read_text().splitlines(keepends=True)
+                if not any(token in line for token in ('ID=g11;', 'ID=g11\n', 'ID=g11.t1;', 'Parent=g11.t1'))]
+    original.append(annotation('chr1', 'g11', 'g11.t1', [[phase_start, phase_junction, 0],
+                                                      [phase_junction + len(intron), phase_end, 0]]))
+    phase_gff.write_text(''.join(original))
+    before = {path: path.read_bytes() for path in (coding_cds, coding_gff, phase_gff, phase_genome)}
+    expected = {coding_target: (8, 'coding_path'), phase_target: (11, 'phase_only')}
+    targets = tmp_path / 'targets.tsv'
+    write_tsv(targets, ['species', 'gene_id', 'donor', 'query'],
+              [{'species': target, 'gene_id': f'g{i}', 'donor': name, 'query': f'{name}_g{i}'}
+               for target, (i, _) in expected.items() for name in names[2:4]])
+    anchor, _, _ = fixture.make_plan(data, model_storage='compact', extra_args=('--model-repair-targets', targets))
+    fixture.cli('run', '--output', anchor, '--cpus', 2)
+    approved = []
+    for target, (i, kind) in expected.items():
+        publication = anchor / 'rescued' / target / 'model_repair_candidates.json'
+        candidate, = [row for row in json.loads(publication.read_text())
+                      if row['owner_overlap'][0]['gene_id'] == f'g{i}']
+        assert candidate['kind'] == kind
+        approved.append({'species': target, 'candidate_id': candidate['candidate_id']})
+    augmented_cds = anchor / 'augmented' / 'species_cds' / (coding_target + '.rescue.cds.fa')
+    assert {gene: seq for gene, _, seq in fasta_records(augmented_cds)}[coding_target + '_g8'] == partial
+    approvals = tmp_path / 'repairs.tsv'
+    write_tsv(approvals, ['species', 'candidate_id'], approved)
+
+    output = tmp_path / 'refinement'
+    cli('plan', '--rescue-output', anchor, '--output', output, '--model-repairs', approvals)
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    effective = output / 'effective'
+    inputs = {row['species']: row for row in refinement.verify_inputs(effective / 'inputs.tsv')}
+    mapping = {row['gene_id']: row for row in refinement.read_table(effective / 'representative_map.tsv')}
+    for target, (i, _) in expected.items():
+        for role in ('cds', 'analysis_cds', 'protein'):
+            records = {gene: value for gene, _, value in fasta_records(Path(inputs[target][role]))}
+            sequence = str(Seq(truth[i]).translate()).removesuffix('*') if role == 'protein' else truth[i]
+            assert records[target + f'_g{i}'] == sequence
+            assert not any('ggrepair' in gene for gene in records)
+        assert mapping[target + f'_g{i}']['status'] == 'repaired_model'
+    assert mapping[phase_target + '_g11']['source_transcript_id'] == 'g11.t1'
+    def phases(path):
+        rows = (line.split('\t') for line in path.read_text().splitlines() if not line.startswith('#'))
+        return [row[7] for row in rows if row[2] == 'CDS' and 'Parent=g11.t1' in row[8]]
+    assert phases(Path(inputs[phase_target]['gff'])) == ['0', '2']
+    assert phases(effective / 'full_annotation' / (phase_target + '.gff3')) == ['0', '2']
+    assert phases(effective / 'source_annotation' / (phase_target + '.gff3')) == ['0', '0']
+    audit = json.loads((effective / 'model_repairs.json').read_text())
+    assert {row['gene_id'] for row in audit} == {coding_target + '_g8', phase_target + '_g11'}
+    review = import_module('plot_gene_model_refinement').collect(output)
+    assert review['model_repairs'] == audit
+    assert all(path.read_bytes() == content for path, content in before.items())
+
+
 def native_candidate_table(tmp_path, target, genome, gff_text):
     """Mock only the native predictor boundary, never genomic/donor evidence."""
     gff, receipt, table = (tmp_path / name for name in ('native.gff3', 'native.receipt.json', 'native.tsv'))
