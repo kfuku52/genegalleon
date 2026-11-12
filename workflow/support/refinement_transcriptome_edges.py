@@ -44,7 +44,6 @@ def infer_edges(db, species, transcriptomes, executable, params, directory, cpus
         alignments = directory / 'protein_matches.tsv'
         run([executable, 'blastp', '--query', fasta[a], '--db', databases[b], '--threads', cpus,
              '--sensitive', '--evalue', '1e-5', '--max-target-seqs', '0', '--max-hsps', '1',
-             '--query-cover', '80', '--subject-cover', '80', '--id', str(100 * identity),
              '--outfmt', '6'], directory, f'protein_pair_{i}', alignments)
         for ga, gb, metrics in reciprocal_matches(alignments, lengths[a], lengths[b],
                                                   min_identity=identity, coverage_a=.80, coverage_b=.80):

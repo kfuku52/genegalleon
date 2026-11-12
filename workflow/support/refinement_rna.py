@@ -1,6 +1,7 @@
 """Extract complete, stranded coding-path witnesses from genome-aligned RNA BAMs."""
 import hashlib
-from contextlib import ExitStack
+from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import pysam
@@ -16,17 +17,23 @@ def discover(directory, species):
     directory = Path(directory).resolve()
     if not directory.is_dir():
         raise ValueError('RNA BAM directory does not exist: ' + str(directory))
-    result = {}
+    result, owners = {}, {}
     for name in species:
         paths = {directory / (name + '.bam'), *directory.glob(name + '.*.bam'),
                  *(directory / name).glob('*.bam')}
-        entries = []
-        for path in sorted(p.resolve() for p in paths if p.is_file()):
+        entries = {}
+        for path in sorted({p.resolve() for p in paths if p.is_file()}, key=str):
+            stat = path.stat()
+            identity = stat.st_dev, stat.st_ino
+            if owners.setdefault(identity, name) != name:
+                raise ValueError('RNA BAM is assigned to multiple species: ' + str(path))
             indices = [Path(str(path) + ext) for ext in ('.csi', '.bai')] + [path.with_suffix('.bai')]
-            index = next((str(p.resolve()) for p in indices if p.is_file()), None)
-            entries.append({'bam': str(path), 'index': index})
+            index = next((str(p.resolve()) for p in indices
+                          if p.is_file() and p.stat().st_mtime_ns >= stat.st_mtime_ns), None)
+            if identity not in entries or (index and not entries[identity]['index']):
+                entries[identity] = {'bam': str(path), 'index': index}
         if entries:
-            result[name] = entries
+            result[name] = sorted(entries.values(), key=lambda entry: Path(entry['bam']))
     return result
 
 
@@ -60,16 +67,81 @@ def splice_strand(genome, seqid, blocks):
 
 
 def coding_blocks(read, start, end):
-    blocks = []
-    for a, b in read.get_blocks():
-        a, b = max(a, start), min(b, end)
-        if a >= b:
+    """Clip aligned blocks to the CDS, accepting only CIGAR N as a splice."""
+    blocks, position = [], read.reference_start
+    for operation, length in read.cigartuples or ():
+        if operation in (1, 4, 5, 6):
             continue
+        if operation not in (0, 2, 3, 7, 8):
+            return []
+        stop = position + length
+        a, b = max(position, start), min(stop, end)
+        position = stop
+        if a >= b or operation == 3:
+            continue
+        if operation == 2:
+            return []
         if blocks and a == blocks[-1][1]:
             blocks[-1][1] = b
         else:
             blocks.append([a, b])
     return blocks
+
+
+def overlapping_windows(paths):
+    """Group overlapping spans and leave distinct loci as separate indexed queries."""
+    contigs = defaultdict(list)
+    for path in paths:
+        seqid, _, blocks = path
+        genomic = sorted(map(list, blocks))
+        contigs[seqid].append((genomic[0][0], genomic[-1][1], path, genomic))
+    for seqid, models in sorted(contigs.items()):
+        window, end = [], -1
+        for model in sorted(models):
+            if model[0] >= end and window:
+                yield seqid, window, end
+                window = []
+            window.append(model)
+            end = max(end, model[1])
+        if window:
+            yield seqid, window, end
+
+
+def bam_witnesses(bam, genome, windows):
+    """Find the first complete spanning read per candidate with one fetch per window."""
+    witnesses, inferred = {}, {}
+    for seqid, models, window_end in windows:
+        starts = [model[0] for model in models]
+        min_span = min(end - start for start, end, _, _ in models)
+        remaining = len(models)
+        for read in bam.fetch(seqid, starts[0], window_end):
+            if (read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_duplicate
+                    or read.is_qcfail or read.mapping_quality < 20):
+                continue
+            read_start, read_end = read.reference_start, read.reference_end
+            if read_end is None or read_end - read_start < min_span:
+                continue
+            first = bisect_left(starts, read_start)
+            last = bisect_right(starts, read_end - min_span)
+            if first >= last:
+                continue
+            declared = read.get_tag('XS') if read.has_tag('XS') else None
+            for i in range(first, last):
+                start, end, path, genomic = models[i]
+                if end > read_end or path in witnesses or coding_blocks(read, start, end) != genomic:
+                    continue
+                if declared in ('+', '-'):
+                    observed = declared
+                else:
+                    if path not in inferred:
+                        inferred[path] = splice_strand(genome, seqid, genomic)
+                    observed = inferred[path]
+                if observed == path[1]:
+                    witnesses[path] = read.query_name
+                    remaining -= 1
+            if not remaining:
+                break
+    return witnesses
 
 
 def evidence_rows(species, genome_path, entries, candidates, scratch):
@@ -80,32 +152,24 @@ def evidence_rows(species, genome_path, entries, candidates, scratch):
              for c in candidates if c.get('blocks', c.get('cds')) and c['strand'] in {'+', '-'}}
     if not paths:
         return []
-    result = []
-    with ExitStack() as stack:
-        genome = stack.enter_context(indexed_genome(genome_path))
-        bams, checked = [], {}
+    windows = list(overlapping_windows(paths))
+    names = Counter(Path(item['bam']).name for item in entries)
+    results = defaultdict(list)
+    with indexed_genome(genome_path) as genome:
+        checked = {}
         for i, item in enumerate(entries):
             index = item['index']
             if not index:
                 index = str(scratch / f'rna_{i}.csi')
                 pysam.index('-c', '-o', index, item['bam'])
-            bam = stack.enter_context(pysam.AlignmentFile(item['bam'], 'rb', index_filename=index))
-            verified_reference(bam, genome, checked)
-            bams.append((bam, Path(item['bam']).name))
-        for seqid, strand, blocks in sorted(paths):
-            genomic = sorted(map(list, blocks))
-            start, end = genomic[0][0], genomic[-1][1]
-            inferred = splice_strand(genome, seqid, genomic)
-            for bam, name in bams:
-                for read in bam.fetch(seqid, start, end):
-                    if (read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_duplicate
-                            or read.is_qcfail or read.mapping_quality < 20):
-                        continue
-                    observed = read.get_tag('XS') if read.has_tag('XS') else inferred
-                    if observed != strand or coding_blocks(read, start, end) != genomic:
-                        continue
-                    result.append({'species': species, 'seqid': seqid, 'strand': strand,
-                                   'cds_blocks': [list(b) for b in blocks],
-                                   'transcript_id': name + ':' + read.query_name, 'count': 1})
-                    break
-    return result
+            name = Path(item['bam']).name
+            if names[name] > 1:
+                name = item['bam']
+            with pysam.AlignmentFile(item['bam'], 'rb', index_filename=index) as bam:
+                verified_reference(bam, genome, checked)
+                for path, read in bam_witnesses(bam, genome, windows).items():
+                    seqid, strand, blocks = path
+                    results[path].append({'species': species, 'seqid': seqid, 'strand': strand,
+                                          'cds_blocks': [list(b) for b in blocks],
+                                          'transcript_id': name + ':' + read, 'count': 1})
+    return [row for path in sorted(results) for row in results[path]]

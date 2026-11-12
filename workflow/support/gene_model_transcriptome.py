@@ -156,7 +156,7 @@ def _assembly_mapping(assembly, species, assembler, corset, gene_map):
             yield transcript, species + '_' + match[1].replace('_', '-'), 0
 
 
-def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, gene_map=None):
+def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, gene_map=None, *, input_proof=None):
     if not assembler and not gene_map:
         raise ValueError('Provide --assembler or --gene-map')
     if (assembler == 'rna-bloom2') != bool(corset):
@@ -172,7 +172,7 @@ def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, 
     executable = shutil.which('cdskit')
     if not executable:
         raise ValueError('cdskit is required to extract assembly ORFs')
-    proof = FreshDigestBatch()
+    proof = input_proof if input_proof is not None else FreshDigestBatch()
     key = {'inputs': proof.read(paths), 'species': species, 'assembler': assembler, 'genetic_code': code,
            'implementation': {name: digest(Path(__file__).with_name(name)) for name in (
                Path(__file__).name, 'rename_rnabloom_transcripts.py', 'gene_model_catalog.py')},
@@ -210,44 +210,51 @@ def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, 
     return rescue.stage(output.parent, output.name, key, build, guard=guard, publication_guard=guard)
 
 
-def discover_assemblies(directory, excluded):
+def discover_assemblies(directory, excluded, proof):
     """Find standard GeneGalleon assembly outputs for species without genomic inputs."""
     directory = Path(directory).resolve()
+    if not directory.is_dir():
+        raise ValueError(f'Transcriptome assembly directory does not exist: {directory}')
     result = {}
     for path in sorted((directory / 'assembled_transcripts_with_isoforms').glob('*_isoform.fa*')):
         name = path.name.removesuffix('.gz').removesuffix('_isoform.fa')
         if name == path.name.removesuffix('.gz') or name in excluded or not path.is_file():
             continue
         rescue.safe_token(name, 'Transcriptome species')
+        path = path.resolve()
         if name in result:
             raise ValueError(f'Multiple assembly files for {name}')
         corset = directory / 'corset_clusters' / f'{name}_corset.clusters.tsv'
         receipt = directory / 'artifact_provenance' / f'{name}.assembly.json'
-        if receipt.is_file():
+        receipt = receipt if receipt.is_file() else None
+        frozen = proof.read([path, receipt] if receipt else [path])
+        if receipt:
             metadata = json.loads(receipt.read_text())
             output, = (row for row in metadata['outputs'] if row['label'] == 'isoforms')
-            if metadata['family_id'] != name or output['sha256'] != digest(path):
+            if metadata['family_id'] != name or output['sha256'] != frozen[str(path)]:
                 raise ValueError(f'Assembly output differs from the assembly receipt: {name}')
             assembler = metadata['parameters']['assembly_method'].lower()
         else:
             first = next(fasta_records(path), ('', '', ''))[0]
-            assembler = ('rna-bloom2' if corset.is_file() else 'trinity'
-                         if re.fullmatch(r'(?:TRINITY_)?DN\d+_c\d+_g\d+_i\d+', first)
-                         else 'rnaspades' if re.fullmatch(r'.+_g\d+_i\d+', first) else '')
+            assembler = ('trinity' if re.fullmatch(r'(?:TRINITY_)?DN\d+_c\d+_g\d+_i\d+', first)
+                         else 'rnaspades' if re.fullmatch(r'.+_g\d+_i\d+', first)
+                         else 'rna-bloom2' if corset.is_file() else '')
         if assembler not in {'trinity', 'rnaspades', 'rna-bloom2'}:
             raise ValueError(f'Cannot determine assembly gene identifiers for {name}; supply prepared transcriptome inputs')
-        result[name] = (path, assembler, corset if assembler == 'rna-bloom2' else None,
-                        receipt if receipt.is_file() else None)
+        result[name] = (path, assembler, corset if assembler == 'rna-bloom2' else None, receipt)
+    proof.check()
     return result
 
 
-def prepare_assemblies(directory, excluded, output, cpus, genetic_codes=None):
+def prepare_assemblies(directory, excluded, output, cpus, genetic_codes, proof):
     """Prepare and checksum all assembly-only species using the existing ORF workflow."""
-    assemblies = discover_assemblies(directory, excluded)
+    assemblies = discover_assemblies(directory, excluded, proof)
     if not assemblies:
         return {}, []
     codes = {}
     if genetic_codes:
+        genetic_codes = Path(genetic_codes).resolve()
+        proof.read([genetic_codes])
         for row in _rows(genetic_codes, ('species', 'genetic_code')):
             if row['species'] in codes:
                 raise ValueError('Duplicate species genetic code: ' + row['species'])
@@ -256,8 +263,19 @@ def prepare_assemblies(directory, excluded, output, cpus, genetic_codes=None):
     if genetic_codes:
         files.append(str(Path(genetic_codes).resolve()))
     for name, (path, assembler, corset, receipt) in assemblies.items():
-        stage = prepare(path, name, output / name, codes.get(name, 1), cpus, assembler, corset)
-        manifest = stage / 'inputs.tsv'
-        files.extend(str(p.resolve()) for p in (path, corset, receipt, manifest, stage / 'receipt.json') if p)
-        sources.update(read_sources(manifest))
+        stage = prepare(path, name, output / name, codes.get(name, 1), cpus, assembler, corset, input_proof=proof)
+        manifest, stage_receipt = stage / 'inputs.tsv', stage / 'receipt.json'
+        proof.read([stage_receipt])
+        publication = json.loads(stage_receipt.read_text())
+        expected = {str(stage / member): publication['files'][member] for member in
+                    ('inputs.tsv', 'all_isoforms.cds.fa', 'transcript_gene_map.tsv')}
+        proof.read(expected, expected=expected)
+        imported = read_sources(manifest)
+        expected_source = {'fasta': str(stage / 'all_isoforms.cds.fa'),
+                           'transcript_gene_map': str(stage / 'transcript_gene_map.tsv'), 'genetic_code': codes.get(name, 1)}
+        if imported != {name: expected_source}:
+            raise ValueError(f'Prepared assembly manifest differs from its verified outputs: {name}')
+        files.extend(str(p.resolve()) for p in (path, corset, receipt, manifest, stage_receipt) if p)
+        sources.update(imported)
+    proof.check()
     return sources, files

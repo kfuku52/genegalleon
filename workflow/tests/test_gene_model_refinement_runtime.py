@@ -171,7 +171,7 @@ def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
 
 
 @pytest.mark.parametrize('case', ['partial', 'intact', 'reciprocal', 'manual'])
-def test_single_locus_repairs_from_real_rescue(tmp_path, case):
+def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
     manual = case == 'manual'
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
@@ -268,6 +268,24 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case):
     assert phases(effective / 'source_annotation' / (phase_target + '.gff3')) == ['0', '0']
     audit = json.loads((effective / 'model_repairs.json').read_text())
     assert {row['gene_id'] for row in audit} == {coding_target + '_g8', phase_target + '_g11'}
+    if case == 'reciprocal':
+        rescue = refinement.rescue
+        replay = import_module('rescue_admission_replay')
+        output_replay = tmp_path / 'replayed'
+        replay_plan = replay.build_plan(anchor, SUPPORT.parents[1], output_replay)
+        replay.prepare(output_replay, replay_plan, 2)
+        with monkeypatch.context() as guard:
+            def forbidden(*args, **kwargs):
+                raise AssertionError('Admission replay launched a model repair search')
+            guard.setattr(rescue, 'search_intervals', forbidden)
+            replayed = rescue.rescue(output_replay, replay_plan, coding_target, 2)
+        original = anchor / 'rescued' / coding_target
+        for member in ('targets.json', rescue.LOCAL_RECORDS, rescue.INTERVAL_ARCHIVE):
+            assert (replayed / 'model_repair_search' / member).read_bytes() == (
+                original / 'model_repair_search' / member).read_bytes()
+        candidates = json.loads((replayed / 'model_repair_candidates.json').read_text())
+        match, = (row for row in candidates if row['owner_overlap'][0]['gene_id'] == 'g8')
+        assert len({hit['donor'] for hit in match['support'] if hit.get('reciprocal_locus') == 'g8'}) >= 2
     if not manual:
         coding_basis = 'reciprocal_cds_extension' if case == 'reciprocal' else 'syntenic_cds_gain'
         assert {row['basis'] for row in audit} == {coding_basis, 'exact_source_cds'}
@@ -644,8 +662,12 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
             read.reference_id = bam.get_tid('chr_alternate')
             read.reference_start = a
             read.mapping_quality = 60
+            read.query_name = 'deletion_instead_of_splice'
+            read.cigartuples = [(0, b - a), (2, c - b), (0, d - c)]
+            bam.write(read)
+            read.query_name = 'whole_coding_chain'
             read.cigartuples = [(0, b - a), (3, c - b), (0, d - c)]
-            read.set_tag('XS', '+')
+            read.set_tag('XS', 50)
             bam.write(read)
         params += ['--rna-bam-dir', bam_dir]
     cli(*params)
@@ -671,6 +693,8 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
     assert alternative["change_type"] == "isoform_addition"
     assert alternative["evidence_class"] == ("rna_path_supported" if rna else "homology_only_predicted")
     assert alternative["candidate"]["quality"]["representative_eligible"] is bool(rna)
+    if rna == "bam":
+        assert alternative['rna_paths'] == [sources[0]['species'] + '.bam:whole_coding_chain']
     assert not ({"intact", "pseudogene", "stop", "gap"} & set(accepted))
     effective = root / "effective"
     summary = json.loads((root / "catalog_index_final/summary.json").read_text())

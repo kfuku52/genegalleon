@@ -404,10 +404,13 @@ def rescue(root, plan, name, cpus):
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
             r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
                 models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
-            targets = [*r.verify_model_repair_targets(plan).get(name, []),
-                       *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
-            targeted = r.search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome,
-                                                      source['genetic_code'], params, cpus)
+            search_archive = old_worker / 'model_repair_search'
+            targeted = []
+            if any(member.startswith('model_repair_search/') for member in old_receipt['files']):
+                targets = [*r.verify_model_repair_targets(plan).get(name, []),
+                           *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
+                targeted = r.replay_model_repair_search(search_archive, targets, ownership, proteins,
+                                                        genome, source['genetic_code'], params)
             r.atomic_json(tmp / 'model_repair_candidates.json',
                           r.model_repair_candidates([*models, *targeted], ownership, name, source['gff']))
             r.verify_model_repair_targets(plan)
@@ -435,7 +438,7 @@ def rescue(root, plan, name, cpus):
         if native_audit is not None:
             mutable.add('oriongeno_genomewide.json')
         for member in old_receipt['files']:
-            if member.startswith(('model_store/', 'model_repair_search/')) or member in mutable:
+            if member.startswith('model_store/') or member in mutable:
                 continue
             source_path, target = store._member(old_worker, member), tmp / member
             target.parent.mkdir(parents=True, exist_ok=True)

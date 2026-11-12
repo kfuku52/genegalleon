@@ -2618,11 +2618,28 @@ resolve_oriongeno_candidate_inputs() {
 }
 
 refinement_assembly_directory() {
-  local directory="${gene_model_refinement_assembly_dir-auto}"
+  local directory="${gene_model_refinement_assembly_dir-auto}" path
   [[ "${directory}" != auto ]] || directory="${gg_workspace_output_dir}/transcriptome_assembly"
-  if [[ -n "${directory}" ]] && compgen -G "${directory}/assembled_transcripts_with_isoforms/*_isoform.fa*" >/dev/null; then
-    printf '%s\n' "${directory}"
-  fi
+  [[ -n "${directory}" ]] || return 0
+  for path in "${directory}/assembled_transcripts_with_isoforms/"*_isoform.fa \
+              "${directory}/assembled_transcripts_with_isoforms/"*_isoform.fa.gz; do
+    if [[ -f "${path}" ]]; then
+      printf '%s\n' "${directory}"
+      return 0
+    fi
+  done
+}
+
+refinement_has_genomes() {
+  local path
+  for path in "${species_genome_dir}"/*; do
+    case "${path}" in
+      *.fa|*.fa.gz|*.fas|*.fas.gz|*.fasta|*.fasta.gz|*.fna|*.fna.gz)
+        [[ ! -f "${path}" ]] || return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 prepare_gene_model_rescue() {
@@ -2747,9 +2764,9 @@ prepare_gene_model_refinement() {
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
     genomic_inputs=1
-  elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ||
-          ( -z "${gene_model_refinement_transcriptome_inputs}" &&
-            ( -z "${assembly_dir}" || $(count_nonhidden_matching_files "${species_genome_dir}" '*.f[an]*') -gt 0 ) ) ]]; then
+  elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]] ||
+       { [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] &&
+         { [[ -z "${assembly_dir}" ]] || refinement_has_genomes; }; }; then
     local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
     if [[ ! -s "${anchor_dir}/plan.json" ]]; then
       [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }

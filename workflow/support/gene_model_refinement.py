@@ -320,7 +320,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             files = [str(Path(inputs).resolve())] if inputs else []
         if transcriptome_assembly_dir and not transcriptome_inputs:
             transcriptome_sources, prepared_files = transcriptome.prepare_assemblies(
-                transcriptome_assembly_dir, sources, root / 'assembly_inputs', assembly_cpus, assembly_genetic_codes)
+                transcriptome_assembly_dir, sources, root / 'assembly_inputs', assembly_cpus, assembly_genetic_codes, transcriptome_proof)
             files.extend(prepared_files)
         if sources.keys() & transcriptome_sources.keys():
             raise ValueError('A species may occur in only one of the genomic and transcriptome inputs')
@@ -411,7 +411,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                         files.append(str(path))
                 if automatic:
                     reviews[key] = automatic
-        request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
+        request = {'schema': SCHEMA, 'sources': sources, 'files': transcriptome_proof.read(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
                    'rna': str(Path(rna).resolve()) if rna else None, 'species_profiles': profiles,
@@ -430,7 +430,6 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             request['oriongeno'] = oriongeno
         if transcriptome_sources:
             request['transcriptome_sources'] = transcriptome_sources
-            transcriptome_proof.check()
         if not edges and transcriptome_sources and len(sources) + len(transcriptome_sources) > 1:
             diamond = shutil.which('diamond')
             if not diamond:
@@ -440,6 +439,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
         if sources and params['mode'] != 'off' and not tool:
             raise ValueError('miniprot is required for prediction')
+        transcriptome_proof.check()
         path = root / 'plan.json'
         if path.exists():
             previous = json.loads(path.read_text())
@@ -2042,6 +2042,7 @@ def independent_source_phases(source_gff, options, originals):
     if not expected:
         return set()
     pending = set().union(*expected.values())
+    positions = {key[:4] for key in pending}
     seen, ambiguous = set(), set()
     with open_text(Path(source_gff)) as handle:
         for line in handle:
@@ -2053,6 +2054,8 @@ def independent_source_phases(source_gff, options, originals):
             if len(fields) != 9 or fields[2] != 'CDS':
                 continue
             locus = fields[0], fields[6], int(fields[3]) - 1, int(fields[4])
+            if locus not in positions:
+                continue
             attrs = parse_gff_attributes(fields[8])
             parents = attrs.get('Parent') or attrs.get('transcript_id', ())
             matches = {(*locus, parent) for parent in parents} & pending
@@ -2076,10 +2079,12 @@ def prepare_reviewed_models(request, name, db, selected):
     split_options = request.get('automatic_split_merges', {}).get(name, [])
     split_targets = {row['gene_id'] for review in split_options for row in review['owner_overlap']}
     owners, auto_originals, auto_options, split_originals = {}, {}, {}, {}
-    ambiguous_split_owners = set()
+    seen_automatic, duplicate_automatic = set(), set()
     for gene in iter_loci(db, name):
         originals = [c for c in gene['candidates'] if c['origin'] == 'original']
         ids = {row['source_gene_id'] for row in originals}
+        duplicate_automatic.update(ids & seen_automatic)
+        seen_automatic.update(ids)
         if ids & targets:
             if len(ids) != 1 or gene.get('ambiguous_coordinates') or ids & owners.keys():
                 raise ValueError('Ambiguous catalog ownership for reviewed model: ' + gene['gene_id'])
@@ -2094,13 +2099,10 @@ def prepare_reviewed_models(request, name, db, selected):
                 'invalid_base', 'translation_uncertain', 'phase_unresolved', 'sequence_mismatch')):
             continue
         chosen_id = selected[gene['gene_id']]['candidate_id']
-        if owner in split_targets and owner not in ambiguous_split_owners and chosen_id == original['candidate_id']:
-            if owner in split_originals:
-                ambiguous_split_owners.add(owner)
-                split_originals.pop(owner)
-            elif original['quality']['partial'] and original['quality']['usable']:
-                split_originals[owner] = original
-                owners[owner] = gene
+        if (owner in split_targets and chosen_id == original['candidate_id']
+                and original['quality']['partial'] and original['quality']['usable']):
+            split_originals[owner] = original
+            owners[owner] = gene
         phase = source_phase_repair(original, name)
         options = [phase] if phase else nominations.get(owner, []) if original['quality']['usable'] else []
         if options:
@@ -2112,6 +2114,9 @@ def prepare_reviewed_models(request, name, db, selected):
     manual_owners = {owner: owners[owner] for owner in targets if owner in owners}
     if targets != manual_owners.keys() or len({gene['gene_id'] for gene in manual_owners.values()}) != len(targets):
         raise ValueError('Approved model owners do not match distinct catalog loci: ' + name)
+    for owner in duplicate_automatic:
+        auto_options.pop(owner, None)
+        split_originals.pop(owner, None)
     independent = independent_source_phases(source['gff'], auto_options, auto_originals)
     auto_options = {owner: rows for owner, rows in auto_options.items()
                     if rows[0]['kind'] != 'phase_only' or owner in independent}

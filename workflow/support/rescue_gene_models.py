@@ -86,6 +86,9 @@ try:
         write_genome_records,
         write_record,
     )
+    from rescue_search_inputs import (
+        records as local_search_records,
+    )
     from rescue_terminal_completion import complete_terminals
     from species_labeling import assembly_only_species, extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
@@ -140,6 +143,9 @@ except ImportError:
         local_record,
         write_genome_records,
         write_record,
+    )
+    from .rescue_search_inputs import (
+        records as local_search_records,
     )
     from .rescue_terminal_completion import complete_terminals
     from .species_labeling import assembly_only_species, extract_species_label
@@ -2121,6 +2127,10 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     directory.mkdir()
     atomic_json(directory / 'targets.json', list(queries.values()))
     predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus, compact=True)
+    return validate_model_repair_predictions(predictions, queries, ownership, genome, code, params)
+
+
+def validate_model_repair_predictions(predictions, queries, ownership, genome, code, params):
     checked = []
     for model in predictions:
         target = queries[model['query']]
@@ -2128,7 +2138,8 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         genomic = {**model, 'seqid': target['seqid'],
                    'cds': [[a + offset, b + offset, p] for a, b, p in model['cds']]}
         candidate = validate_model(genomic, genome, code, params)
-        if candidate['problems']:
+        if (candidate['problems'] or any(a < target['start'] or b > target['end']
+                                         for a, b, _ in candidate['cds'])):
             continue
         candidate['start'] = min(b[0] for b in candidate['cds'])
         candidate['end'] = max(b[1] for b in candidate['cds'])
@@ -2138,6 +2149,59 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         candidate.update(evidence=target, revision_owner_ids=[target['gene_id']], problems=['overlap_existing_annotation'])
         checked.append(candidate)
     return checked
+
+
+def replay_model_repair_search(directory, targets, ownership, proteins, genome, code, params):
+    """Revalidate the old local alignments without invoking a predictor."""
+    paths = (directory / 'targets.json', directory / LOCAL_RECORDS, directory / INTERVAL_ARCHIVE)
+    old_targets, records_path, archive_path = paths
+    if not any(path.is_file() for path in paths):
+        return []
+    if not all(path.is_file() for path in paths):
+        raise ValueError('Incomplete archived model repair search')
+    def identity(row):
+        return tuple(row[k] for k in ('species', 'gene_id', 'donor', 'query'))
+    # A current automatic nomination can use the same frozen alignment even
+    # when the original query was also requested by an explicit target table.
+    current = {identity(row): row for row in targets}
+    old = {row['id']: row for row in json.loads(old_targets.read_text())}
+    queries = {key: {**row, **current[identity(row)]} for key, row in old.items() if identity(row) in current}
+    for key, row in queries.items():
+        for flag in ('syntenic_locus', 'reciprocal_locus'):
+            if flag not in current[identity(old[key])]:
+                row.pop(flag, None)
+    if not queries:
+        return []
+
+    def predictions(archive):
+        seen = set()
+        for record in local_search_records(records_path):
+            seqid, start, end = (record[k] for k in ('seqid', 'start', 'end'))
+            ids = set()
+            for evidence in record['queries']:
+                key = evidence['candidate']
+                if key not in queries:
+                    continue
+                query = queries[key]
+                if (key in seen or (query['seqid'], query['start'], query['end']) != (seqid, start, end)
+                        or (query['donor'], query['query']) != (evidence['donor'], evidence['query'])):
+                    raise ValueError('Archived model repair query identity changed: ' + key)
+                protein = proteins[query['donor']][query['query']]
+                if hashlib.sha256(protein.encode()).hexdigest() != evidence['protein_sha256']:
+                    raise ValueError('Archived model repair donor protein changed: ' + key)
+                ids.add(key)
+                seen.add(key)
+            if ids:
+                sequence = genome.fetch(seqid, start, end)
+                if hashlib.sha256(sequence.encode()).hexdigest() != record['region_sha256']:
+                    raise ValueError('Archived model repair genomic window changed')
+                with archive.open(f"intervals/{record['index']}/models.gff") as stream:
+                    yield from (row for row in iter_miniprot(io.TextIOWrapper(stream)) if row['query'] in ids)
+        if seen != queries.keys():
+            raise ValueError('Archived model repair queries lack frozen search inputs')
+
+    with zipfile.ZipFile(archive_path) as archive:
+        return validate_model_repair_predictions(predictions(archive), queries, ownership, genome, code, params)
 
 
 def model_repair_geometry(model, ownership):

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from workflow.support.model_protein_correspondence import reciprocal_matches
 from workflow.support.rescue_additional_candidates import (
     nominate_genome_only_candidates,
     reassess_unanchored_models,
@@ -28,6 +29,20 @@ from workflow.support.rescue_prediction_cache import (
 PARAMS = {"minimum_coverage": .8, "minimum_identity": .5, "cscore": .7, "max_intron": 20000,
           "genome_fallback": True, "max_interval": 200000, "padding": 1000,
           "min_anchors": 3, "distance": 20, "diagonal_bound": 10}
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_reciprocal_matches_retains_partial_rivals_in_both_directions(tmp_path, reverse):
+    path = tmp_path / 'hits.tsv'
+    valid = 'a1\tb1\t90\t100\t0\t0\t1\t100\t1\t100\t1e-20\t200'
+    rival = ('a2\tb1\t90\t75\t0\t0\t1\t75\t1\t75\t1e-20\t195' if reverse else
+             'a1\tb2\t90\t75\t0\t0\t1\t75\t1\t75\t1e-20\t195')
+    kwargs = dict(min_identity=.5, coverage_a=.8, coverage_b=.8)
+    lengths_a, lengths_b = {'a1': 100, 'a2': 100}, {'b1': 100, 'b2': 100}
+    path.write_text(valid + '\n' + rival + '\n')
+    assert list(reciprocal_matches(path, lengths_a, lengths_b, **kwargs)) == []
+    path.write_text(valid + '\n' + rival.rsplit('\t', 1)[0] + '\t188\n')
+    assert [(a, b) for a, b, _ in reciprocal_matches(path, lengths_a, lengths_b, **kwargs)] == [('a1', 'b1')]
 
 
 def proteins(root, species, ids):
@@ -702,3 +717,27 @@ def test_rescue_cli_defaults_to_one_external_species(tmp_path):
         "--busco-dir", str(tmp_path), "--tree", str(tmp_path / "tree.nwk"),
         "--output", str(tmp_path / "out")])
     assert args.unanchored_min_species == 1
+
+
+def test_refinement_input_discovery_ignores_partial_downloads_and_recognizes_genome_links(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    core = (root / 'workflow/core/gg_input_generation_core.sh').read_text()
+    functions = core[core.index('refinement_assembly_directory() {'):core.index('prepare_gene_model_rescue() {')]
+    output = tmp_path / 'output'
+    assemblies = output / 'transcriptome_assembly' / 'assembled_transcripts_with_isoforms'
+    assemblies.mkdir(parents=True)
+    (assemblies / 'Plant_example_isoform.fa.partial').touch()
+    genomes = tmp_path / 'genomes'
+    genomes.mkdir()
+    (genomes / 'Plant_example.fna.partial').touch()
+    real_genome = tmp_path / 'real.fa'
+    real_genome.touch()
+    def scan():
+        command = 'set -eu\n' + functions + '\nrefinement_assembly_directory\nif refinement_has_genomes; then echo genome; fi\n'
+        env = {**os.environ, 'gene_model_refinement_assembly_dir': 'auto',
+               'gg_workspace_output_dir': str(output), 'species_genome_dir': str(genomes)}
+        return subprocess.check_output(['bash', '-c', command], text=True, env=env).splitlines()
+    assert scan() == []
+    (assemblies / 'Plant_example_isoform.fa.gz').touch()
+    (genomes / 'Plant_example.fna').symlink_to(real_genome)
+    assert scan() == [str(assemblies.parent), 'genome']

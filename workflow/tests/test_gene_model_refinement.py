@@ -1741,3 +1741,48 @@ def test_flanking_anchors_nominate_only_unambiguous_existing_broken_locus(tmp_pa
         assert actual[0]["gene_b"] == "Species_donor_broken"
         assert actual[0]["evidence"]["kind"] == "two_flanking_anchors"
         assert not actual[0]["ambiguous"]
+
+
+def test_automatic_assembly_detection_rejects_input_changed_before_preparation(tmp_path, monkeypatch):
+    transcriptome = refinement.transcriptome
+    assembly_dir = tmp_path / 'assembled_transcripts_with_isoforms'
+    assembly_dir.mkdir()
+    assembly = assembly_dir / 'Plant_example_isoform.fa'
+    assembly.write_text('>TRINITY_DN1_c0_g1_i1\nATGAAATAA\n')
+    corset = tmp_path / 'corset_clusters' / 'Plant_example_corset.clusters.tsv'
+    corset.parent.mkdir()
+    corset.write_text('obsolete Corset output\n')
+    discover = transcriptome.discover_assemblies
+
+    def change_after_discovery(*args):
+        result = discover(*args)
+        assert result['Plant_example'][1:3] == ('trinity', None)
+        assembly.write_text('>TRINITY_DN1_c0_g1_i1\nATGCCCTAA\n')
+        return result
+
+    monkeypatch.setattr(transcriptome, 'discover_assemblies', change_after_discovery)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        transcriptome.prepare_assemblies(tmp_path, set(), tmp_path / 'prepared', 1, None,
+                                        refinement.FreshDigestBatch())
+
+
+def test_rna_bam_discovery_rejects_cross_species_aliases_and_reindexes_stale_index(tmp_path):
+    first = tmp_path / 'Plant_first.bam'
+    first.write_bytes(b'bam')
+    index = first.with_suffix('.bam.bai')
+    index.touch()
+    old = first.stat().st_mtime - 10
+    import os
+    os.utime(index, (old, old))
+    aliases = tmp_path / 'Plant_first'
+    aliases.mkdir()
+    (aliases / 'copy.bam').hardlink_to(first)
+    assert refinement.refinement_rna.discover(tmp_path, ['Plant_first']) == {
+        'Plant_first': [{'bam': str(first), 'index': None}]}
+    alias_index = aliases / 'copy.bam.bai'
+    alias_index.touch()
+    assert refinement.refinement_rna.discover(tmp_path, ['Plant_first']) == {
+        'Plant_first': [{'bam': str(aliases / 'copy.bam'), 'index': str(alias_index)}]}
+    (tmp_path / 'Plant_second.bam').symlink_to(first)
+    with pytest.raises(ValueError, match='assigned to multiple species'):
+        refinement.refinement_rna.discover(tmp_path, ['Plant_first', 'Plant_second'])

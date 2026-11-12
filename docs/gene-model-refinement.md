@@ -427,7 +427,8 @@ establish co-occurrence. The same full-path requirement applies to RNA BAMs. Pla
 the BAM reference dictionary and available sequence checksums, and generates
 an index in its own output if needed. A primary alignment with MAPQ at least
 20 must cover every coding block and match the strand and complete splice
-chain. An XS strand tag or the unambiguous splice orientation establishes the
+chain. Splice junctions must be encoded as CIGAR `N`. A strand-valued XS tag
+or the unambiguous splice orientation establishes the
 strand. Evidence records identify the BAM and supporting read. Exact matching
 paths from either input route support both existing annotated candidates and
 new predictions. Paths are indexed once for matching; partial paths and separately
@@ -446,8 +447,9 @@ to the parent `transcriptome_assembly` directory. An explicit
 Without an explicit `--edges` table, DIAMOND compares baseline proteins for
 species pairs that include a transcriptome. An inferred edge requires a
 reciprocal best match with at least 80% coverage in each protein and the
-configured minimum identity. Pairs with a second distinct match scoring at
-least 95% of the best score are left unresolved. The result supplies
+configured minimum identity. The best hit must pass those thresholds after
+ranking all reported matches. A second distinct hit within 5% of the best
+score leaves the pair unresolved, even if that rival has lower coverage. The result supplies
 sequence-only evidence for representative selection. Genomic prediction
 uses the existing synteny correspondence.
 
