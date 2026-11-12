@@ -263,7 +263,7 @@ def collect_expected_longest_records(task, *, historical_header_groups=False):
     transcript_total = 0
     cds_identifier_task = formatter.prepare_cds_identifier_task(task)
     source_check = SourceGeneSelection(task.get("gff_path"),
-        repair_locus_ids=formatter.gff_repair_mode_for_task(task) != "off")
+        repair_locus_ids=formatter.gff_repair_mode_for_task(task) != "off", species_prefix=task["species_prefix"])
 
     for header, sequence, _decision in formatter.iter_normalised_cds_records(cds_identifier_task):
         transcript_total += 1

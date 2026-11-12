@@ -1,10 +1,68 @@
 """Published RNA aliases and partial complementary phases preserve source models."""
 import gzip
+import json
 from pathlib import Path
 
 import pytest
 
 from workflow.tests.test_format_species_inputs import load_module, normalisation_bundle
+
+
+@pytest.mark.parametrize("provided,gene_prefix", [(True, ""), (False, ""), (True, "gene-")])
+def test_tair12_uses_agi_id_for_cds_and_gff(tmp_path, provided, gene_prefix):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGAAATAA", 0)]}], provided=provided)
+    task["species_prefix"] = "Arabidopsis_thaliana"
+    gene = "TAIR12_TAIR12_AT1G68290"
+    rna = "rna-" + gene
+    source = task["gff_path"].read_text().replace("g1", gene_prefix + gene).replace("t1", rna)
+    source = source.replace("ID=" + gene_prefix + gene, "ID=" + gene_prefix + gene + ";locus_tag=" + gene)
+    task["gff_path"].write_text(source)
+    if provided:
+        task["cds_path"].write_text(f">Arabidopsis_thaliana_{gene}\nATGAAATAA\n")
+    output = tmp_path / "output"
+    output.mkdir()
+
+    cds = module.format_cds(task, output, False, False, strict=True)
+    assert dict(module.iter_fasta_records(cds["output_path"])) == {
+        "Arabidopsis_thaliana_AT1G68290": "ATGAAATAA"
+    }
+    gff = module.format_gff(task, output, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(gff["output_path"], "rt") as handle:
+        attributes = {parts[2]: module.parse_gff_attributes(parts[8]) for line in handle
+                      if not line.startswith("#") and len(parts := line.rstrip().split("\t")) == 9}
+    assert attributes["gene"]["ID"] == ("AT1G68290",)
+    assert attributes["mRNA"]["ID"] == ("rna-AT1G68290",)
+    assert attributes["mRNA"]["Parent"] == ("AT1G68290",)
+    assert attributes["CDS"]["Parent"] == ("rna-AT1G68290",)
+    assert attributes["gene"]["Alias"] == (gene_prefix + gene,)
+    assert attributes["gene"]["locus_tag"] == ("AT1G68290",)
+    assert task["gff_path"].read_text() == source
+    audit = json.loads(Path(gff["repair_audit_path"]).read_text())
+    assert audit["locus_identity"]["tair12_gene_mappings"] == [
+        {"source_id": gene_prefix + gene, "target_id": "AT1G68290"}
+    ]
+    from validate_cds_gff_mapping import validate_single_species
+    result = validate_single_species(dict(index=1, species_prefix=task["species_prefix"], cds_file=cds["output_path"],
+        gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert result["ok"], result.get("error")
+    from validate_longest_cds_selection import collect_expected_longest_records
+    expected, ownership = collect_expected_longest_records(task)
+    assert list(expected) == ["Arabidopsis_thaliana_AT1G68290"]
+    assert ownership["source_gene_check"] == "explicit_parent"
+
+
+@pytest.mark.parametrize("other_id", ["AT1G68290", "TAIR12_AT1G68290", "rna-AT1G68290", "other;locus_tag=AT1G68290"])
+def test_tair12_rejects_colliding_canonical_feature_ids(tmp_path, other_id):
+    load_module()
+    from format_species_annotation.source_identity import locus_identity_audit
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGAAATAA", 0)]}])
+    task["species_prefix"] = "Arabidopsis_thaliana"
+    gene = "TAIR12_TAIR12_AT1G68290"
+    source = task["gff_path"].read_text().replace("g1", gene).replace("t1", "rna-" + gene)
+    task["gff_path"].write_text(source + f"chr1\tsrc\tgene\t20\t28\t.\t+\t.\tID={other_id}\n")
+    with pytest.raises(ValueError, match="TAIR12 canonical ID collision"):
+        locus_identity_audit(task)
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])

@@ -24,8 +24,9 @@ def aliases(value):
 
 
 class SourceGeneSelection:
-    def __init__(self, gff_path, *, repair_locus_ids=False):
+    def __init__(self, gff_path, *, repair_locus_ids=False, species_prefix=""):
         self.active = gff_path is not None
+        self.species_prefix = species_prefix + "_" if species_prefix else ""
         self.parents = defaultdict(set)
         self.genes = set()
         self.nodes_by_alias = defaultdict(set)
@@ -42,7 +43,8 @@ class SourceGeneSelection:
         missing_parent_axes = defaultdict(set)
         gtf_axes = defaultdict(set)
         gtf_gene_parents = defaultdict(set)
-        with open_text(source_annotation_path(gff_path, repair_locus_ids=repair_locus_ids), "rt", errors="replace") as handle:
+        view = source_annotation_path(gff_path, repair_locus_ids=repair_locus_ids, species_prefix=species_prefix)
+        with open_text(view, "rt", errors="replace") as handle:
             for line in handle:
                 if line.startswith("##FASTA"):
                     break
@@ -145,8 +147,9 @@ class SourceGeneSelection:
             return set()
         # Sequence/RNA identity takes precedence over a potentially erroneous
         # descriptive gene/locus tag (e.g. anonymous NCBI headers).
-        primary = {header.split()[0]}
-        local = re.match(r"^lcl\|.+_cds_(.+)_\d+$", header.split()[0])
+        record_id = header.split()[0]
+        primary = {record_id}
+        local = re.match(r"^lcl\|.+_cds_(.+)_\d+$", record_id)
         if local:
             primary.add(local.group(1))
         fields = header.split("||")
@@ -159,7 +162,9 @@ class SourceGeneSelection:
         location_roots = self.ncbi_location_roots(header)
         gene_tags = set(re.findall(r"\[gene=([^\]]+)\]", header))
         gene_tags.update(re.findall(r"(?<!\S)gene=([^\s\[\]]+)", header))
-        for tokens in (primary, gene_tags):
+        unprefixed = ({record_id.removeprefix(self.species_prefix)}
+                      if self.species_prefix and record_id.startswith(self.species_prefix) else set())
+        for tokens in (primary, unprefixed, gene_tags):
             found = set()
             for token in tokens:
                 for alias in aliases(token):
