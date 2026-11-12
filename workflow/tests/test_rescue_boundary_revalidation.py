@@ -74,6 +74,26 @@ def test_recover_canonical_nearby_splice_and_recompute_split_phases(strand):
 
 
 @pytest.mark.parametrize("strand", ["+", "-"])
+def test_splice_search_reads_each_boundary_window_once(strand, monkeypatch):
+    first, intron, last = "ATG" + "GAC" * 9, "GT" + "C" * 20 + "AG", "GAA" * 9 + "TAA"
+    dna = first + intron + last
+    model, genome = checked(dna, [[0, len(first) + 3, 0], [len(first + intron), len(dna), 0]],
+                            "M" + "D" * 9 + "E" * 9, strand)
+    fetch = genome.fetch
+    intervals = []
+
+    def counted(seqid, start, end):
+        intervals.append((start, end))
+        return fetch(seqid, start, end)
+
+    monkeypatch.setattr(genome, "fetch", counted)
+    choices, reason = boundaries._splice_choices(model, genome, len(intron))
+    expected = (-3, 0) if strand == "+" else (3, 0)
+    assert reason is None and expected in choices[0]
+    assert len(intervals) == 4
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
 def test_recover_donor_supported_start_from_all_nearby_positions(strand):
     donor = "M" + "A" * 90
     core = "GCT" * 90 + "TAA"
@@ -81,6 +101,28 @@ def test_recover_donor_supported_start_from_all_nearby_positions(strand):
     result = recheck(model, genome, donor)
     assert result["problems"] == [] and result["sequence"] == "ATG" + core
     assert result["query_start"] == 0 and result["paf"] == model["paf"]
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_start_search_reads_one_window_and_preserves_order(strand, monkeypatch):
+    upstream = "C" * 130 + "ATGATG"
+    coding = "GCT" * 10 + "TAA"
+    model, genome = checked(upstream + coding, [[len(upstream), len(upstream + coding), 0]],
+                            "M" + "A" * 10, strand)
+    fetch = genome.fetch
+    intervals = []
+
+    def counted(seqid, start, end):
+        intervals.append((start, end))
+        return fetch(seqid, start, end)
+
+    monkeypatch.setattr(genome, "fetch", counted)
+    starts = boundaries._starts(model, genome, 300, {"ATG"}, True)
+    field = 0 if strand == "+" else 1
+    boundary = model["cds"][0][field]
+    offsets = [blocks[0][field] - boundary for blocks in starts]
+    assert offsets == ([-3, -6] if strand == "+" else [3, 6])
+    assert len(intervals) == 1
 
 
 @pytest.mark.parametrize("problem", ["frameshift", "invalid_phase", "incomplete_frame",

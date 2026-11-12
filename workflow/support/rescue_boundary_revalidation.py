@@ -20,6 +20,8 @@ except ImportError:
     from .rescue_homology_policy import homology_supported
 
 _CANONICAL = {("GT", "AG"), ("GC", "AG"), ("AT", "AC")}
+_REVERSE_CANONICAL = {(str(Seq(donor).reverse_complement()), str(Seq(acceptor).reverse_complement()))
+                      for donor, acceptor in _CANONICAL}
 _RECHECKABLE = {"missing_start", "missing_stop", "noncanonical_splice"}
 _AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
 _SPLICE_RADIUS = 30
@@ -56,25 +58,46 @@ def _junction(model, previous, following, genome):
     return donor, acceptor
 
 
+def _splice_end_options(genome, seqid, exon, field, length):
+    """Read all dinucleotides at one adjustable exon boundary in one fetch."""
+    boundary = exon[field]
+    if field == 1:
+        if exon[0] < 0:
+            return []
+        first = max(boundary - _SPLICE_RADIUS, exon[0] + 1)
+        last = min(boundary + _SPLICE_RADIUS, length - 2)
+        shift = 0
+    else:
+        if exon[1] > length:
+            return []
+        first = max(boundary - _SPLICE_RADIUS, 2)
+        last = min(boundary + _SPLICE_RADIUS, exon[1] - 1)
+        shift = -2
+    if first > last:
+        return []
+    dna = genome.fetch(seqid, first + shift, last + shift + 2).upper()
+    return [(position - boundary, position, dna[i:i + 2])
+            for i, position in enumerate(range(first, last + 1))]
+
+
 def _splice_choices(model, genome, maximum_intron):
     choices = []
-    for i, (previous, following) in enumerate(zip(model["cds"], model["cds"][1:], strict=False)):
+    forward = model["strand"] == "+"
+    previous_field, following_field = (1, 0) if forward else (0, 1)
+    canonical = _CANONICAL if forward else _REVERSE_CANONICAL
+    direction = 1 if forward else -1
+    seqid = model["seqid"]
+    length = None
+    for previous, following in zip(model["cds"], model["cds"][1:], strict=False):
         if _junction(model, previous, following, genome) in _CANONICAL:
             choices.append([(0, 0)])
             continue
-        found = []
-        left_field, right_field = (1, 0) if model["strand"] == "+" else (0, 1)
-        for x in range(-_SPLICE_RADIUS, _SPLICE_RADIUS + 1):
-            for y in range(-_SPLICE_RADIUS, _SPLICE_RADIUS + 1):
-                p, c = previous.copy(), following.copy()
-                p[left_field] += x
-                c[right_field] += y
-                if not (0 <= p[0] < p[1] <= genome.get_reference_length(model["seqid"])
-                        and 0 <= c[0] < c[1] <= genome.get_reference_length(model["seqid"])):
-                    continue
-                intron = c[0] - p[1] if model["strand"] == "+" else p[0] - c[1]
-                if 4 <= intron <= maximum_intron and _junction(model, p, c, genome) in _CANONICAL:
-                    found.append((x, y))
+        if length is None:
+            length = genome.get_reference_length(seqid)
+        donors = _splice_end_options(genome, seqid, previous, previous_field, length)
+        acceptors = _splice_end_options(genome, seqid, following, following_field, length)
+        found = [(x, y) for x, p, donor in donors for y, c, acceptor in acceptors
+                 if (donor, acceptor) in canonical and 4 <= direction * (c - p) <= maximum_intron]
         if not found:
             return [], "no_nearby_canonical_splice"
         choices.append(found)
@@ -87,28 +110,39 @@ def _starts(model, genome, maximum, allowed, needed):
     if not needed:
         return [model["cds"]]
     first = model["cds"][0]
-    length = genome.get_reference_length(model["seqid"])
+    start, end = first[:2]
+    seqid = model["seqid"]
+    forward = model["strand"] == "+"
+    length = genome.get_reference_length(seqid)
+    minimum = -min(_SPLICE_RADIUS, end - start - 1)
+    maximum = min(maximum, start if forward else length - end)
+    if forward:
+        dna = genome.fetch(seqid, start - maximum, min(end, start - minimum + 3)).upper()
+    else:
+        dna = genome.fetch(seqid, max(start, end + minimum - 3), end + maximum).upper()
+        dna = str(Seq(dna).reverse_complement())
     result = []
+    tail = None
     # A prediction boundary may be off by one base. Examine all positions,
     # then require a complete, frame-consistent CDS and a full donor alignment.
-    for offset in range(-min(_SPLICE_RADIUS, first[1] - first[0] - 1), maximum + 1):
-        blocks = copy.deepcopy(model["cds"])
-        field = 0 if model["strand"] == "+" else 1
-        blocks[0][field] += -offset if model["strand"] == "+" else offset
-        a, b = blocks[0][:2]
-        if not 0 <= a < b <= length:
-            continue
-        pieces, needed_bases = [], 3
-        for exon_start, exon_end, _ in blocks:
-            extent = min(needed_bases, exon_end - exon_start)
-            piece = (genome.fetch(model["seqid"], exon_start, exon_start + extent) if model["strand"] == "+"
-                     else str(Seq(genome.fetch(model["seqid"], exon_end - extent, exon_end)).reverse_complement()))
-            pieces.append(piece.upper())
-            needed_bases -= extent
-            if not needed_bases:
-                break
-        start = "".join(pieces)
-        if start in allowed:
+    for offset in range(minimum, maximum + 1):
+        index = maximum - offset
+        codon = dna[index:index + 3]
+        if len(codon) < 3:
+            # A start codon can span a short first exon and the next exon(s).
+            if tail is None:
+                tail = ""
+                for exon_start, exon_end, _ in model["cds"][1:]:
+                    extent = min(2 - len(tail), exon_end - exon_start)
+                    piece = (genome.fetch(seqid, exon_start, exon_start + extent) if forward
+                             else str(Seq(genome.fetch(seqid, exon_end - extent, exon_end)).reverse_complement()))
+                    tail += piece.upper()
+                    if len(tail) == 2:
+                        break
+            codon += tail[:3 - len(codon)]
+        if codon in allowed:
+            blocks = copy.deepcopy(model["cds"])
+            blocks[0][0 if forward else 1] += -offset if forward else offset
             result.append(blocks)
     return result
 
