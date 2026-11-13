@@ -91,6 +91,7 @@ except ImportError:
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
 CONCRETE_CDS = re.compile('[ACGT]+')
+OWNERSHIP_ATTRIBUTES = frozenset(('ID', 'Parent', 'gene_id', 'transcript_id'))
 DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
                 minimum_coverage=0.70, minimum_identity=0.50, minimum_broad_coverage=0.90,
                 minimum_lower_coverage_identity=0.70, max_intron=20000,
@@ -1115,7 +1116,7 @@ def annotation_ownership_spans(gff_path, catalog):
             f = line.rstrip().split('\t')
             if len(f) != 9:
                 raise ValueError('Invalid annotation row')
-            parsed = parse_gff_attributes(f[8])
+            parsed = parse_gff_attributes(f[8], keys=OWNERSHIP_ATTRIBUTES)
             attr = {key: values[0] for key, values in parsed.items() if values}
             identifier = attr.get('ID', attr.get('transcript_id', attr.get('gene_id', '')))
             declared = parsed.get('Parent', ()) + parsed.get('gene_id', ()) + parsed.get('transcript_id', ())
@@ -1992,7 +1993,7 @@ def extend_gene_bounds(original, bounds):
             continue
         fields = line.rstrip().split('\t')
         if len(fields) == 9 and fields[2].lower().endswith('gene'):
-            parsed = parse_gff_attributes(fields[8])
+            parsed = parse_gff_attributes(fields[8], keys={'ID', 'gene_id'})
             identifier = next(iter(parsed.get('ID', parsed.get('gene_id', ()))), None)
             if identifier in bounds:
                 start, end = bounds[identifier]
@@ -2345,7 +2346,7 @@ def independent_source_phases(source_gff, options, originals):
             locus = fields[0], fields[6], int(fields[3]) - 1, int(fields[4])
             if locus not in positions:
                 continue
-            attrs = parse_gff_attributes(fields[8])
+            attrs = parse_gff_attributes(fields[8], keys={'Parent', 'transcript_id'})
             parents = attrs.get('Parent') or attrs.get('transcript_id', ())
             matches = {(*locus, parent) for parent in parents} & pending
             if len(parents) != 1:
