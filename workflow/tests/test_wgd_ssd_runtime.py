@@ -90,6 +90,9 @@ def test_real_native_count_synteny_ds_and_node_classification_with_cache(tmp_pat
     assert summary["species_synteny"]["Beta_two"]["num_blocks"] == 0
     assert all(row["event_support"] == "unresolved" for row in read_table(root / "wgd_events.tsv"))
     assert (root / "wgd_candidates.pdf").stat().st_size > 1000
+    assert (root / "wgd_species_tree.pdf").stat().st_size > 1000
+    assert (root / "wgd_species_tree.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert {"wgd_species_tree.pdf", "wgd_species_tree.png"}.issubset(summary["plot_hashes"])
     assert sentinel.read_text() == "keep existing orthofinder outputs"
     mtime = (root / "summary.json").stat().st_mtime_ns
     result = run_core(workspace)
@@ -132,6 +135,86 @@ def test_count_selection_keeps_missing_separate_from_zero(tmp_path):
     assert rows[0]["Alpha_one"] == "NA"
     assert len(rows) == 2
     assert read_table(output / "count_family_selection.tsv")[1]["selection"] == "excluded_root_clade_absence"
+
+
+def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path):
+    from zipfile import ZipFile
+
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    orthogroups = workspace / "output/orthofinder/Orthogroups"
+    (orthogroups / "Orthogroups.GeneCount.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\tTotal\nOG000\t2\t2\t1\t5\nOG001\t1\t1\t1\t3\n")
+    (orthogroups / "Orthogroups.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\n"
+        "OG000\tAlpha_one_a, Alpha_one_b\tBeta_two_a, Beta_two_b\tGamma_three_a\n"
+        "OG001\tAlpha_one_c\tBeta_two_c\tGamma_three_b\n")
+    archive = workspace / "rooted_tree.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("rooted_tree/OG000_root.nwk",
+                        "(((Alpha_one_a,Beta_two_a),(Alpha_one_b,Beta_two_b)),Gamma_three_a);")
+        stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["candidate_model"] == "rooted_gene_tree_duplication_score"
+    assert summary["num_input_gene_trees"] == 2
+    row, = read_table(root / "wgd_events.tsv")
+    assert row["event_support"] == "duplication-only-candidate"
+    assert float(row["duplication_score"]) == 0.5
+    assert not (root / "count_model.json").exists()
+    assert (root / "wgd_species_tree.png").stat().st_size > 1000
+
+
+def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
+    from zipfile import ZipFile
+
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    manifest = ["species_a\tspecies_b\tbed_a\tbed_b\tanchors\n"]
+    a, b, c = NAMES
+    for name in (a, b):
+        (workspace / f"{name}.bed").write_text("".join(
+            f"chr{copy}\t{i * 10}\t{i * 10 + 5}\t{name}_{copy}{i}\n"
+            for copy in ("a", "b") for i in range(5)))
+        (workspace / f"{name}.anchors").write_text("###\n" + "".join(
+            f"{name}_a{i}\t{name}_b{i}\t1\n" for i in range(5)))
+        manifest.append(f"{name}\t{name}\t{name}.bed\t{name}.bed\t{name}.anchors\n")
+    (workspace / "cross.anchors").write_text("".join("###\n" + "".join(
+        f"{a}_{copy}{i}\t{b}_{copy}{i}\t1\n" for i in range(5)) for copy in ("a", "b")))
+    manifest.append(f"{a}\t{b}\t{a}.bed\t{b}.bed\tcross.anchors\n")
+    (workspace / "cross.tsv").write_text("".join(manifest))
+    orthogroups = workspace / "output/orthofinder/Orthogroups"
+    (orthogroups / "Orthogroups.GeneCount.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\tTotal\n" + "".join(f"OG{i:03d}\t2\t2\t1\t5\n" for i in range(5)))
+    (orthogroups / "Orthogroups.tsv").write_text("Orthogroup\t" + "\t".join(NAMES) + "\n" + "".join(
+        f"OG{i:03d}\t{a}_a{i}, {a}_b{i}\t{b}_a{i}, {b}_b{i}\t{c}_a{i}\n" for i in range(5)))
+    (workspace / "cross_cds.tsv").write_text(f"species\tcds\n{a}\t{a}.fa\n{b}\t{b}.fa\n")
+    for name in (a, b):
+        (workspace / f"{name}.fa").write_text("".join(
+            f">{name}_{copy}{i}\nATG" + ("GCT" if copy == "a" else "GCA") * 90 + "\n"
+            for copy in ("a", "b") for i in range(5)))
+    with ZipFile(workspace / "rooted_tree.zip", "w") as stream:
+        for i in range(5):
+            stream.writestr(f"OG{i:03d}_root.nwk", f"((({a}_a{i},{b}_a{i}),({a}_b{i},{b}_b{i})),{c}_a{i});")
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
+                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    row, = read_table(root / "wgd_events.tsv")
+    pair, = read_table(root / "cross_synteny_pairs.tsv")
+    assert row["event_support"] == "duplication-and-synteny-candidate"
+    assert row["species_event_id"] == pair["species_event_id"]
+    assert pair["matched_paired_windows"] == "1" and pair["matched_families"] == "5"
+    assert {"cross_synteny_pairs.tsv", "cross_synteny_windows.tsv"} <= summary["output_hashes"].keys()
+    assert row["cross_ks_status"] == "inconclusive"
+    assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
+    assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
+    assert "wgd_cross_ks.png" in summary["plot_hashes"]
+    assert str(workspace / "cross.anchors") in summary["plan"]["input_hashes"]
+    assert (root / "wgd_species_tree.png").stat().st_size > 1000
 
 
 def test_boundary_uncertainty_root_and_nonmonotone_values_remain_unresolved(tmp_path):

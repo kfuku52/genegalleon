@@ -65,6 +65,259 @@ def test_event_support_is_an_evidence_rule_not_a_probability():
     assert not {"posterior", "probability", "ploidy"}.intersection(row)
 
 
+@pytest.mark.parametrize("observable,expected,status", [
+    (set(), "count-only-candidate", "insufficient_observability"),
+    ({"A"}, "count-only-candidate", "insufficient_observability"),
+    ({"A", "B"}, "unresolved", "assessed_below_threshold"),
+    ({"C", "D"}, "count-only-candidate", "insufficient_observability"),
+])
+def test_count_only_fallback_requires_insufficient_branch_synteny(observable, expected, status):
+    result = summarize_events([candidate()], [], {}, synteny_opportunity={"event_AB": observable})[0]
+    assert result["event_support"] == expected
+    assert result["synteny_status"] == status
+    assert result["num_synteny_observable_species"] == len(observable & {"A", "B"})
+
+
+@pytest.mark.parametrize("change", [
+    {"count_support": "background_compatible"}, {"count_support": "not_calibrated"},
+    {"count_support": "branch_burst_preferred"}, {"background_nuisance_bound_reached": "True"},
+    {"branch_burst_nuisance_bound_reached": "NA"}, {"descendant_taxa": "A,A"},
+])
+def test_missing_synteny_never_overrides_failed_count_evidence(change):
+    row = summarize_events([{**candidate(), **change}], [], {}, synteny_opportunity={})[0]
+    assert row["event_support"] == "unresolved"
+
+
+def test_count_only_event_does_not_assign_gene_node_origin():
+    row = {**anchor_rows(("A",), 1)[0], "gene_a": "A_a", "gene_b": "A_b"}
+    origin = combine_node("event_AB", [("A_a", "A_b")], pair_positions(),
+                          {("A_a", "A_b"): [row]}, {"event_AB": {"event_support": "count-only-candidate"}})
+    assert origin[0] == "unresolved"
+
+
+def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("rooted_tree/one_root.nwk", "((((A_a,B_a),(A_b,B_b)),((A_c,B_c),(A_d,B_d))),C_a);")
+        stream.writestr("rooted_tree/two_root.nwk", "((A_e,B_e),C_b);")
+        stream.writestr("rooted_tree/three_root.nwk", "((A_f,B_f),(A_g,B_g));")
+    rows, total = scan_duplications(tree, archive, 0.5)
+    assert total == 3 and len(rows) == 1
+    row = rows[0]
+    assert (row["num_supporting_families"], row["num_eligible_families"], row["duplication_score"]) == (1, 2, 0.5)
+    assert summarize_events(rows, [], {}, synteny_opportunity={})[0]["event_support"] == "duplication-only-candidate"
+    assert scan_duplications(tree, archive, 0.51)[0][0]["tree_support"] == "below_threshold"
+
+
+def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
+    event = {"species_event_id": "event_ABC", "descendant_taxa": "A,B,C", "tree_support": "tree_score_supported"}
+    daughters = {"event_ABC": ({"A", "B"}, {"C"})}
+    row = summarize_events([event], [], {}, synteny_opportunity={"event_ABC": {"A", "B"}},
+                           daughter_taxa=daughters)[0]
+    assert row["event_support"] == "duplication-only-candidate"
+    row = summarize_events([event], [], {}, synteny_opportunity={"event_ABC": {"A", "C"}},
+                           daughter_taxa=daughters)[0]
+    assert row["event_support"] == "unresolved"
+
+
+@pytest.mark.parametrize("case,status,event,matched", [
+    ("paired", "supports", "duplication-and-synteny-candidate", 1),
+    ("one_copy", "supports", "duplication-and-synteny-candidate", 1),
+    ("wrong_phase", "assessed_below_threshold", "unresolved", 0),
+    ("empty_self", "assessed_below_threshold", "unresolved", 0),
+    ("missing_self", "insufficient_observability", "duplication-only-candidate", 0),
+    ("no_cross_anchors", "insufficient_observability", "duplication-only-candidate", 0),
+])
+def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case, status, event, matched):
+    from zipfile import ZipFile
+
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_synteny import CrossSynteny
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    event_id = CladeIndex(tree).clade_id_for_node(tree.common_ancestor(["A", "B"]))
+    for species in ("A", "B"):
+        (tmp_path / f"{species}.bed").write_text("".join(
+            f"chr{copy}\t{i * 10}\t{i * 10 + 5}\t{species}_{copy}{i}\n"
+            for copy in ("a", "b") for i in range(5)))
+        (tmp_path / f"{species}.anchors").write_text(
+            "" if case == "empty_self" else "###\n" + "".join(
+                f"{species}_a{i}\t{species}_b{i}\t1\n" for i in range(5)))
+    copies = (("a", "b"), ("b", "a")) if case == "wrong_phase" else (("a", "a"), ("b", "b"))
+    if case == "one_copy":
+        copies = copies[:1]
+    if case == "no_cross_anchors":
+        copies = ()
+    (tmp_path / "cross.anchors").write_text("".join(
+        "###\n" + "".join(f"A_{a}{i}\tB_{b}{i}\t1\n" for i in range(5)) for a, b in copies))
+    pairs = [("A", "A", "A"), ("A", "B", "cross")]
+    if case != "missing_self":
+        pairs.append(("B", "B", "B"))
+    cross = CrossSynteny(tree, [
+        {"species_a": a, "species_b": b, "bed_a": tmp_path / f"{a}.bed", "bed_b": tmp_path / f"{b}.bed",
+         "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs], 1, age_species=("A", "B"),
+        trace_branches=(event_id,))
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        for i in range(5):
+            stream.writestr(f"family{i}_root.nwk", f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});")
+    rows, total = scan_duplications(tree, archive, 0.5, observe=cross.observe)
+    evidence, pair_rows, _ = cross.summarize()
+    assert total == 5 and rows[0]["num_supporting_families"] == 5
+    row, = summarize_events(rows, [], {}, cross_evidence=evidence)
+    assert row["synteny_status"] == status
+    assert row["event_support"] == event
+    pair, = pair_rows
+    assert pair["matched_paired_windows"] == (0 if case == "one_copy" else matched)
+    assert pair["matched_partial_only_windows"] == (matched if case == "one_copy" else 0)
+    assert len(cross.age_pairs) == (10 if matched and case != "one_copy" else 0)
+    assert bool(cross.traced_hits) == bool(matched)
+    if matched:
+        for branch, a, b, _, _, genes, blocks, positions in cross.traced_hits:
+            assert (branch, a, b) == (event_id, "A", "B")
+            assert ("A", "B", 1) in blocks
+            if case == "one_copy":
+                assert (("A", "A", 1) in blocks) != (("B", "B", 1) in blocks)
+            else:
+                assert set(blocks) == {("A", "A", 1), ("B", "B", 1), ("A", "B", 1), ("A", "B", 2)}
+            assert len(genes) == len(positions) == (3 if case == "one_copy" else 4)
+
+
+def test_cross_ks_coalesces_shared_copy_windows_and_families():
+    from workflow.support.wgd_cross_ks import component_medians
+
+    hits = [
+        ("f1", ("c1", 1), ("c2", 1), .5),
+        ("f2", ("c1", 2), ("c2", 1), .7),
+        ("f1", ("c3", 1), ("c4", 1), .9),
+        ("f3", ("c5", 1), ("c5", 2), 1.5),
+    ]
+    assert component_medians(hits) == [.7, 1.5]
+
+
+def test_cross_ks_support_conflict_and_missing_boundary():
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_ks import CrossKs
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,D:3):1,E:4);", "auto", True)
+    scan = CrossKs(tree, {}, {"seed": 7, "ks_bootstrap": 199, "min_cross_windows": 3}, ([], "family", {}))
+    node = tree.common_ancestor(["A", "B"])
+    event = scan.index.clade_id_for_node(node)
+    older = scan.index.clade_id_for_node(node.up)
+    next_older = scan.index.clade_id_for_node(node.up.up)
+
+    def bound(low, high):
+        return {"ci_lower": low, "ci_upper": high, "interval_status": "ok", "status": "ok",
+                "monotone_from_younger_node": "yes"}
+
+    def hits(value):
+        return [(f"f{i}", ("c1", i), ("c2", i), value) for i in range(5)]
+
+    bounds = {(sp, target): interval for sp in ("A", "B") for target, interval in (
+        (event, bound(.2, .3)), (older, bound(.7, .8)), (next_older, bound(1.2, 1.3)))}
+    a, b = (event, "A"), (event, "B")
+    candidate = {"species_event_id": event, "branch_id": 7, "event_support": "duplication-and-synteny-candidate"}
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(1.0)}, {a: 5, b: 5})
+    assert candidate["cross_ks_status"] == "discordant_focals"
+    assert candidate["event_support"] == "duplication-and-synteny-candidate"
+    assert focal_a["status"] == "supports_branch"
+    assert focal_b["status"] == "older_than_branch"
+    assert focal_b["placed_event_id"] == older
+    scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 5, b: 5})
+    assert candidate["cross_ks_status"] == "supports_branch"
+    del bounds["B", older]
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 5, b: 5})
+    assert candidate["cross_ks_status"] == "partial_support"
+    assert focal_b["status"] == "missing_divergence_boundary"
+    assert scan.place("A", event, (.28, .38), bounds, bounds["A", event], bounds["A", older])[0] == "overlaps_divergence_boundary"
+
+
+def test_cross_ks_selects_cds_without_accepting_ambiguous_ids(tmp_path):
+    from workflow.support.wgd_cross_ks import selected_cds
+
+    path = tmp_path / "a.fa"
+    path.write_text(">a\nATGGCTTAA\n>A_b\nATGTAAATG\n>A_other\nA\n")
+    source = {"cds": str(path), "genetic_code": 1}
+    sequences, rejected = selected_cds(source, "A", {"A_a", "A_b"})
+    assert sequences == {"A_a": ("ATGGCT", "MA")}
+    assert rejected == {"A_b": "invalid_cds"}
+    with path.open("a") as stream:
+        stream.write(">A_a\nATGGCT\n")
+    with pytest.raises(ValueError, match="Multiple CDS"):
+        selected_cds(source, "A", {"A_a"})
+
+
+def test_cross_ks_chooses_coverage_trio_and_uses_cds_only_outgroup(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_ks import CrossKs, boundary
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,(D:2,E:2):1):1,F:4);", "auto", True)
+    scan = CrossKs(tree, {leaf.name: {"genetic_code": 1} for leaf in tree.leaves()},
+                   {"seed": 7, "max_ks_families": 30}, ([], "family", {}))
+    branch = scan.index.clade_id_for_node(tree.common_ancestor(["A", "B"]))
+    a = ("A_copy1", "A_copy2")
+    scan.archived = {f"f{i}": {sp: f"{sp}_{i}" for sp in ("ABCD" if i < 25 else "ABCDE")} for i in range(30)}
+    scan.prepare([(branch, "A", "copy", a, ("c1", 1), ("c2", 1))],
+                 [{"species_event_id": branch, "tree_support": "tree_score_supported"}], {branch: {"supported": True}})
+    parent = scan.index.clade_id_for_node(scan.nodes[branch].up)
+    assert [(t.sister, t.outgroup) for t in scan.trios if t.species_event_id == parent] == [("C", "D")]
+    assert all("E" not in pair for pair in scan.calibration_pairs)
+    ds = {("A", "B"): .3, ("A", "C"): .6, ("B", "C"): .6,
+          ("A", "D"): 1.0, ("C", "D"): 1.0}
+    contrasts = [{"species_a": x, "species_b": y, "family_id": f"f{i}", "ks": value}
+                 for (x, y), value in ds.items() for i in range(30)]
+    bounds = scan.divergence_bounds(contrasts, tmp_path, wgd_ssd.write_table)
+    assert boundary(bounds["A", branch]) == pytest.approx((.3, .3))
+    assert boundary(bounds["A", parent]) == pytest.approx((.6, .6))
+    assert scan.place("A", branch, (.4, .5), bounds, bounds["A", branch], bounds["A", parent])[0] == "supports_branch"
+
+
+def test_cross_synteny_rejects_duplicate_pair_and_bad_anchor(tmp_path):
+    from workflow.support.wgd_cross_synteny import anchor_links, read_pairs
+
+    manifest = tmp_path / "pairs.tsv"
+    manifest.write_text("species_a\tspecies_b\tbed_a\tbed_b\tanchors\n"
+                        "A\tB\ta.bed\tb.bed\tab.anchors\nB\tA\tb.bed\ta.bed\tba.anchors\n")
+    with pytest.raises(ValueError, match="Duplicate cross-synteny pair"):
+        read_pairs(manifest, lambda path: tmp_path / path, {"A", "B"}, lambda _: None)
+    raw = tmp_path / "bad.anchors"
+    raw.write_text("###\nA_1\tB_missing\t1\n")
+    with pytest.raises(ValueError, match="outside its block or BED"):
+        anchor_links(raw, {"A_1": ("1", 0)}, {"B_1": ("1", 0)})
+
+
+def test_synteny_opportunity_distinguishes_zero_blocks_from_unavailable_ks():
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    ids = CladeIndex(tree)
+    event = ids.clade_id_for_node(tree.children[0])
+    root = ids.clade_id_for_node(tree)
+    interval = {"status": "ok", "interval_status": "ok", "monotone_from_younger_node": "yes"}
+    placer = KsBranchPlacer(tree, {("B", event): {**interval, "ci_lower": 0.1, "ci_upper": 0.2},
+                                   ("B", root): {**interval, "ci_lower": 0.3, "ci_upper": 0.4}})
+    summaries = {"A": {"num_blocks": 0}, "B": {"num_blocks": 3}, "C": {"num_blocks": 3}}
+    anchors = [{"species": "B", "ks_status": "ok", "ks": 0.25},
+               {"species": "C", "ks_status": "missing", "ks": "NA"}]
+    observed = wgd_ssd.observable_synteny(placer, summaries, anchors)
+    assert observed[event] == {"A", "B"}
+    assert root not in observed
+    assert not any("C" in names for names in observed.values())
+
+
 def test_event_summary_does_not_join_unrelated_species_to_candidate_branch():
     row = summarize_events([candidate()], anchor_rows(("C", "D")),
                            {name: {"num_annotated_loci": 20} for name in ("C", "D")}, positions=anchor_positions(anchor_rows(("C", "D"))))[0]
@@ -457,6 +710,65 @@ def test_long_labels_and_deep_topology_plots(tmp_path):
     wgd_ssd.plot_origins(tree, tmp_path)
     for name in ("wgd_candidates.pdf", "duplication_origins.pdf"):
         assert (tmp_path / name).stat().st_size > 1000
+
+
+def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from matplotlib.patches import ConnectionPatch
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    tree = read_tree("((Alpha:1,Beta:1):1,(Gamma:1,Delta:1):1);", "auto", True)
+    clades = CladeIndex(tree)
+    events = [
+        {"species_event_id": clades.clade_id_for_node(node), "branch_id": i, "descendant_taxa": clades.csv_for_node(node),
+         "event_support": "duplication-and-synteny-candidate", "duplication_score": .2, "cross_ks_status": "inconclusive"}
+        for i, node in enumerate(tree.children, 1)
+    ]
+    events[1]["cross_ks_status"] = "age_conflict"
+    estimate = {"median_ds": .383, "ci_lower": .372, "ci_upper": .396,
+                "younger_ds": .192, "younger_lower": .085, "younger_upper": .303, "younger_boundary_status": "ok",
+                "older_ds": .34, "older_lower": .173, "older_upper": .501, "older_boundary_status": "ok"}
+    focal_rows = [{**estimate, "species_event_id": events[i - 1]["species_event_id"], "branch_id": i,
+                   "focal": name, "num_estimated_pairs": n}
+                  for i, name, n in ((2, "Gamma", 0), (1, "Alpha", 2032), (1, "Beta", "1957"))]
+    focal_rows[0].update(median_ds="NA", ci_lower="NA", ci_upper="NA")
+    focal_rows[-1].update(ci_lower="NA", ci_upper="NA", older_boundary_status="nonmonotone_or_invalid_interval")
+    captured = []
+    savefig = Figure.savefig
+
+    def capture(fig, path, **kwargs):
+        if path.name.startswith("wgd_species_tree"):
+            tree_ax, label_ax, ds_ax = fig.axes
+            anchors = [link.xy1 for link in tree_ax.patches if isinstance(link, ConnectionPatch)]
+            names = {t.get_text(): t.get_position()[1] for t in label_ax.texts if t.get_color() == "#47545A"}
+            marks = [(tuple(line.get_xdata()), line.get_ydata()[0]) for line in ds_ax.lines]
+            unusable = [(tuple(line.get_xdata()), line.get_ydata()[0], line.get_marker(), line.get_linestyle())
+                        for line in ds_ax.lines if line.get_marker() == "x" or line.get_linestyle() == "--"]
+            branch_markers = [(line.get_marker(), line.get_ydata()[0])
+                              for line in tree_ax.lines if line.get_marker() != "None"]
+            legend = [label.get_text() for label in tree_ax.get_legend().get_texts()]
+            captured.append((anchors, names, marks, branch_markers, legend, unusable))
+        savefig(fig, path, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows)
+    assert len(captured) == 2
+    assert captured[0] == captured[1]
+    anchors, names, marks, branch_markers, legend, unusable = captured[0]
+    assert set(names) == {"Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"}
+    alpha, beta, gamma = (names[label] for label in ("Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"))
+    expected = [(0.5, (alpha + beta) / 2), (0.5, gamma)]
+    assert len(anchors) == len(expected)
+    for anchor, match in zip(sorted(anchors), sorted(expected), strict=True):
+        assert anchor == pytest.approx(match)
+    assert ((.383,), alpha) in marks and ((.372, .396), alpha) in marks
+    assert ((.383,), beta) in marks and ((.372, .396), beta) not in marks
+    assert ((.383,), gamma) not in marks
+    assert ((.173, .501), alpha - .23) in marks
+    assert unusable == [((.173, .501), beta - .23, "None", "--"), ((.34,), beta - .23, "x", "None")]
+    assert branch_markers == [("x", gamma)]
+    assert "dS age conflict" in legend and "dS inconclusive" not in legend
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):

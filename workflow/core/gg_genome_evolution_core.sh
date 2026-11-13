@@ -28,6 +28,12 @@ wgd_species_tree="${wgd_species_tree:-}"
 wgd_counts_file="${wgd_counts_file:-}"
 wgd_members_file="${wgd_members_file:-}"
 wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
+wgd_alpha="${wgd_alpha:-0.05}"
+wgd_gene_trees_file="${wgd_gene_trees_file:-}"
+wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
+wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
+wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
+wgd_min_duplication_score="${wgd_min_duplication_score:-0.01}"
 wgd_ks_bootstrap="${wgd_ks_bootstrap:-199}"
 wgd_seed="${wgd_seed:-1}"
 wgd_max_pairs="${wgd_max_pairs:-5000}"
@@ -382,8 +388,11 @@ run_wgd_ssd_stage() (
   python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
+    --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
+    --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
+    --cross-ks-cds "${wgd_cross_ks_cds_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
-    --count-bootstrap "${wgd_count_bootstrap}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
     --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \

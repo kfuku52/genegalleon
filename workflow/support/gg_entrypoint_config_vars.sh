@@ -416,6 +416,12 @@ wgd_species_tree
 wgd_counts_file
 wgd_members_file
 wgd_count_bootstrap
+wgd_alpha
+wgd_gene_trees_file
+wgd_cross_synteny_file
+wgd_cross_ks_cds_file
+wgd_min_cross_windows
+wgd_min_duplication_score
 wgd_ks_bootstrap
 wgd_seed
 wgd_max_pairs

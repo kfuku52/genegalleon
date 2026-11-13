@@ -9,6 +9,7 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -18,14 +19,20 @@ try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
+    from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
+    from wgd_tree_scan import scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
+    from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
+    from .wgd_tree_scan import scan_duplications
 
 
 def write_table(path, rows, fields):
@@ -71,6 +78,9 @@ def owned_identity():
         files.extend(root.rglob("*.py"))
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
               Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
+              Path(__file__).with_name("wgd_tree_scan.py").resolve(),
+              Path(__file__).with_name("wgd_cross_ks.py").resolve(),
+              Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
     return {"nwkit": nwkit.__version__, "ds": ds,
@@ -93,6 +103,22 @@ def make_plan(args):
     counts = resolve(args.counts, "output/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv")
     members = resolve(args.members, "output/orthofinder/Orthogroups/Orthogroups.tsv")
     inputs = {str(path): digest(path) for path in (tree_path, counts, members)}
+    tree_archive = resolve(args.gene_trees, "") if getattr(args, "gene_trees", "") else None
+    if tree_archive:
+        inputs[str(tree_archive)] = digest(tree_archive)
+    cross_manifest = getattr(args, "cross_synteny", "")
+    cross_pairs = None
+    if cross_manifest:
+        if tree_archive is None:
+            raise ValueError("Cross synteny requires --gene-trees for exact copy-level tree agreement")
+        cross_path = resolve(cross_manifest, "")
+        inputs[str(cross_path)] = digest(cross_path)
+
+        def hash_input(path):
+            if str(path) not in inputs:
+                inputs[str(path)] = digest(path)
+
+        cross_pairs = read_pairs(cross_path, lambda path: resolve(path, ""), set(names), hash_input)
     genomes_path = resolve(args.genomes, "input/wgd_genomes.tsv")
     if args.genomes or genomes_path.is_file():
         inputs[str(genomes_path)] = digest(genomes_path)
@@ -110,6 +136,16 @@ def make_plan(args):
             if row["species"] in codes:
                 raise ValueError("Duplicate species genetic code")
             codes[row["species"]] = int(row["genetic_code"])
+    cross_ks_manifest = getattr(args, "cross_ks_cds", "")
+    cross_ks_sources = {}
+    if cross_ks_manifest:
+        if cross_pairs is None:
+            raise ValueError("Cross-block Ks requires --cross-synteny")
+        path = resolve(cross_ks_manifest, "")
+        inputs[str(path)] = digest(path)
+        cross_ks_sources = cross_ks_cds_sources(path, workspace, set(names), codes, args.genetic_code)
+        for source in cross_ks_sources.values():
+            inputs[source["cds"]] = digest(source["cds"])
     seen = set()
     for genome in genomes:
         name = safe_token(genome["species"], "species")
@@ -137,11 +173,15 @@ def make_plan(args):
         "count_bootstrap", "ks_bootstrap", "seed", "max_pairs", "max_ks_families", "max_count_families",
         "diagonal_bound", "cscore", "self_hit_percent", "minimum_mapping_fraction", "alpha",
         "min_coverage", "min_blocks", "max_states", "max_iterations", "multiplicity")}
+    parameters["min_duplication_score"] = getattr(args, "min_duplication_score", 0.01)
+    parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
             or any(parameters[key] < 1 for key in ("max_pairs", "max_ks_families", "max_count_families",
                                                   "diagonal_bound", "min_blocks", "max_iterations"))
             or not 0 < args.cscore <= 1 or not 0 < args.minimum_mapping_fraction <= 1
             or not 0 < args.self_hit_percent <= 100 or not 0 < args.alpha < 1
+            or not 0 < parameters["min_duplication_score"] <= 1
+            or parameters["min_cross_windows"] < 1
             or not 0 < args.min_coverage <= 1 or args.max_states < 16 or args.multiplicity < 2):
         raise ValueError("Invalid WGD analysis parameters")
     tools = owned_identity()
@@ -149,7 +189,9 @@ def make_plan(args):
     inputs.update(tools["ds"]["source_hashes"])
     protect_output(args.outfile, inputs, workspace)
     return {"schema_version": 1, "workspace": str(workspace), "species_tree": str(tree_path),
-            "counts": str(counts), "members": str(members), "genomes": genomes, "species": names,
+            "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
+            "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources,
+            "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
             + ([str(code_file)] if not code_file.is_file() else [])}
@@ -289,12 +331,12 @@ def validated_counts(plan):
     return result
 
 
-def normalized_counts(plan, directory):
+def normalized_counts(plan, directory, tree=None, count_rows=None, minimum_families=2):
     names = plan["species"]
-    tree = species_tree(plan["species_tree"])
+    tree = tree if tree is not None else species_tree(plan["species_tree"])
     clades = [{leaf.name for leaf in child.leaves()} for child in tree.children]
     selected, audit = [], []
-    for family, values in validated_counts(plan):
+    for family, values in validated_counts(plan) if count_rows is None else count_rows.items():
         retained = all(any(values[name] is not None and values[name] > 0 for name in group) for group in clades)
         audit.append({"family_id": family, "selection": "root_clades_present" if retained else "excluded_root_clade_absence"})
         if retained:
@@ -306,7 +348,7 @@ def normalized_counts(plan, directory):
     for row in audit:
         if row["selection"] == "root_clades_present" and row["family_id"] not in chosen:
             row["selection"] = "not_sampled"
-    if len(selected) < 2:
+    if len(selected) < minimum_families:
         raise ValueError("At least two root-clade-present families are required")
     write_table(directory / "counts.tsv", selected, ["family_id", *names])
     write_table(directory / "count_family_selection.tsv", audit, ["family_id", "selection"])
@@ -371,13 +413,16 @@ def prepare_sources(plan, output, cpus):
     return positions, sequences, summaries, anchors
 
 
-def estimate_ks(plan, output, sequences, anchors, cpus):
+def estimate_ks(plan, output, sequences, anchors, cpus, family_tables=None):
     rng = random.Random(plan["parameters"]["seed"])
     codes = {source["species"]: source["genetic_code"] for source in plan["genomes"]}
     requests, selection = {}, []
     sequence_species = sorted(sequences)
+    anchor_pairs = defaultdict(set)
+    for row in anchors:
+        anchor_pairs[row["species"]].add(tuple(sorted((row["gene_a"], row["gene_b"]))))
     for name in sequence_species:
-        all_pairs = sorted({tuple(sorted((row["gene_a"], row["gene_b"]))) for row in anchors if row["species"] == name})
+        all_pairs = sorted(anchor_pairs[name])
         pairs = [pair for pair in all_pairs if all(gene in sequences[name] for gene in pair)]
         limit = plan["parameters"]["max_pairs"]
         if len(pairs) > limit:
@@ -390,7 +435,7 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
                 status = "cds_unavailable" if any(gene not in sequences[name] for gene in pair) else "not_sampled"
                 selection.append({"pair_id": "|".join(pair), "species_a": name, "species_b": name,
                                   "family_id": "", "pair_role": "self_anchor", "status": status, "dS": "NA"})
-    members, family_key, counts = _validated_family_tables(plan)
+    members, family_key, counts = family_tables or _validated_family_tables(plan)
     single_copy, audit = [], []
     for row in members:
         family = row[family_key]
@@ -425,19 +470,48 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
                 selection.append({"pair_id": "|".join((available[a], available[b])), "species_a": a,
                                   "species_b": b, "family_id": family, "pair_role": "single_copy_family_contrast",
                                   "status": "genetic_code_mismatch", "dS": "NA"})
-    reports, contrasts = {}, []
+    reports = estimate_pair_reports(output, sequences, codes, requests, cpus)
+    contrasts = []
+    for pair, info in requests.items():
+        row = reports["|".join(pair)]
+        selection.append({"pair_id": row["pair_id"], "species_a": info[0], "species_b": info[1],
+                          "family_id": info[2], "pair_role": info[3], "status": row["status"], "dS": row["dS"]})
+        if info[3] == "single_copy_family_contrast" and row["status"] == "ok":
+            contrasts.append({"species_a": info[0], "species_b": info[1], "family_id": info[2], "ks": row["dS"]})
+    write_table(output / "pair_selection.tsv", selection, ["pair_id", "species_a", "species_b", "family_id", "pair_role", "status", "dS"])
+    write_table(output / "ks_family_selection.tsv", audit, ["family_id", "selection"])
+    write_table(output / "family_ks_contrasts.tsv", contrasts, ["species_a", "species_b", "family_id", "ks"])
+    return reports, contrasts
+
+
+def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix=""):
+    # MAFFT's many short-lived files need not traverse a shared workspace mount.
+    if prefix and not os.environ.get("MAFFT_TMPDIR") and requests:
+        with tempfile.TemporaryDirectory(prefix="gg-wgd-mafft-", dir="/tmp") as scratch:
+            return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix,
+                                          {**os.environ, "MAFFT_TMPDIR": scratch})
+    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None)
+
+
+def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env):
+    reports = {}
+    by_code = defaultdict(list)
+    for pair, info in requests.items():
+        by_code[codes[info[0]]].append((pair, info))
+    options = {"env": align_env} if align_env is not None else {}
     for code in sorted(set(codes.values())):
-        selected = [(pair, info) for pair, info in requests.items() if codes[info[0]] == code]
+        selected = by_code[code]
         if not selected:
             continue
-        pairs_file, ds_file = output / f"aligned_pairs.code{code}.tsv", output / f"pair_ds.code{code}.tsv"
+        pairs_file, ds_file = output / f"{prefix}aligned_pairs.code{code}.tsv", output / f"{prefix}pair_ds.code{code}.tsv"
         with ThreadPoolExecutor(max_workers=cpus) as pool:
             with closing(ordered_bounded_results(pool,
-                    lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]], code),
+                    lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]],
+                                                       code, **options),
                     ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
                 write_table(pairs_file, aligned, PAIR_COLUMNS)
         run_tool(["cdskit", "dnds", "--pairs_file", pairs_file,
-                  "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"dnds.code{code}")
+                  "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"{prefix}dnds.code{code}")
         expected = {"|".join(pair) for pair, _ in selected}
         observed = set()
         for row in read_table(ds_file):
@@ -451,25 +525,65 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
             reports[pair_id] = row
         if observed != expected:
             raise ValueError("dS report does not cover all requested Ks pairs")
-        for pair, info in selected:
-            row = reports["|".join(pair)]
-            selection.append({"pair_id": row["pair_id"], "species_a": info[0], "species_b": info[1],
-                              "family_id": info[2], "pair_role": info[3], "status": row["status"], "dS": row["dS"]})
-            if info[3] == "single_copy_family_contrast" and row["status"] == "ok" and number(row["dS"]) is not None:
-                contrasts.append({"species_a": info[0], "species_b": info[1], "family_id": info[2], "ks": row["dS"]})
-    write_table(output / "pair_selection.tsv", selection, ["pair_id", "species_a", "species_b", "family_id", "pair_role", "status", "dS"])
-    write_table(output / "ks_family_selection.tsv", audit, ["family_id", "selection"])
-    write_table(output / "family_ks_contrasts.tsv", contrasts, ["species_a", "species_b", "family_id", "ks"])
-    return reports, contrasts
+    return reports
 
 
-def plot_candidates(rows, output):
+FOCAL_DS_STYLES = (
+    ("Copy-pair dS", "#262E3D", "o"),
+    ("Younger split", "#237A75", "|"),
+    ("Older split", "#9B5937", "|"),
+)
+
+
+def draw_focal_ks_intervals(ax, y, row):
+    estimates = [("ok", (row["median_ds"], row["ci_lower"], row["ci_upper"]))]
+    estimates.extend((row[f"{name}_boundary_status"], tuple(row[f"{name}_{field}"] for field in ("ds", "lower", "upper")))
+                     for name in ("younger", "older"))
+    has_estimate = False
+    for shift, (_, color, marker), (status, estimate) in zip((0, .23, -.23), FOCAL_DS_STYLES, estimates, strict=True):
+        center, lo, hi = map(number, estimate)
+        diagnostic = status == "nonmonotone_or_invalid_interval"
+        if status != "ok" and not diagnostic:
+            continue
+        if lo is not None and hi is not None and lo <= hi:
+            ax.plot((lo, hi), (y + shift,) * 2, color=color, lw=1.4, marker="|" if not shift else None, ms=5,
+                    ls="--" if diagnostic else "-")
+            has_estimate = True
+        if center is not None:
+            ax.plot(center, y + shift, marker="x" if diagnostic else marker, color=color, ms=3 if not shift else 4,
+                    ls="none", zorder=4)
+            has_estimate = True
+    if not has_estimate:
+        ax.text(.02, y, "No dS estimate", transform=ax.get_yaxis_transform(), va="center", fontsize=8, color="#646D78")
+
+
+def focal_ks_label(row):
+    return f"{row['focal']} (n={int(row['num_estimated_pairs']):,})"
+
+
+def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=()):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import ConnectionPatch, Patch
 
-    shown = sorted(rows, key=lambda row: float(row["likelihood_ratio_statistic"]), reverse=True)[:40]
+    tree_mode = duplication_threshold is not None
+    cross_mode = any(row.get("synteny_method") == "cross_block_correspondence" for row in rows)
+    age_styles = {"supports_branch": ("o", "#15504B", "dS supports placement"),
+                  "partial_support": ("o", "#9F620A", "dS supports one daughter"),
+                  "age_conflict": ("x", "#AD3232", "dS age conflict"),
+                  "discordant_focals": ("x", "#AD3232", "dS age conflict")}
+    metric = "duplication_score" if tree_mode else "likelihood_ratio_statistic"
+    cutoff = (f"duplication score >= {duplication_threshold:g} (exploratory)" if tree_mode else
+              f"search-wide P <= {alpha:g}")
+    styles = {"duplication-and-synteny-candidate" if tree_mode else "WGD-supported": (
+                  "#176B67", "", "Duplications + synteny" if tree_mode else "Counts + synteny"),
+              "duplication-only-candidate" if tree_mode else "count-only-candidate": (
+                  "#A34D22", "//", "Duplication-only candidate" if tree_mode else "Count-only candidate"),
+              "unresolved": ("#777777", "", "Unresolved")}
+    shown = sorted(rows, key=lambda row: float(row[metric]), reverse=True)[:40]
     labels = []
     for row in reversed(shown):
         taxa = next(csv.reader([row["descendant_taxa"]]))
@@ -478,16 +592,161 @@ def plot_candidates(rows, output):
             label += f" (+{len(taxa) - 2})"
         labels.append(label if len(label) <= 55 else label[:52] + "...")
     fig, ax = plt.subplots(figsize=(9, max(3, len(shown) * 0.25)))
-    ax.barh(labels,
-            [float(row["likelihood_ratio_statistic"]) for row in reversed(shown)],
-            color=["#197c53" if row["event_support"] == "WGD-supported" else "#777777" for row in reversed(shown)])
-    ax.set_xlabel("Conditional count-model likelihood-ratio statistic")
+    for i, row in enumerate(reversed(shown)):
+        color, hatch, _ = styles[row["event_support"]]
+        ax.barh(i, float(row[metric]), color=color, hatch=hatch, edgecolor=color)
+    ax.set_yticks(range(len(labels)), labels)
+    ax.set_xlabel("Supporting / eligible gene families (not a P-value)" if tree_mode else
+                  "Conditional count-model likelihood-ratio statistic")
+    if tree_mode:
+        ax.axvline(duplication_threshold, color="#555555", ls=":", lw=1)
     prefix = f"Top {len(shown)} of {len(rows)} " if len(shown) < len(rows) else ""
-    ax.set_title(prefix + "WGD candidates (green: combined evidence support)", fontsize=11)
+    ax.set_title(prefix + f"WGD candidates ({cutoff})", fontsize=11)
     ax.tick_params(axis="y", labelsize=8)
+    ax.legend(handles=[Patch(facecolor=c, hatch=h, edgecolor=c, label=label)
+                       for c, h, label in styles.values()], fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(output / "wgd_candidates.pdf")
     plt.close(fig)
+    if tree is None:
+        return
+
+    from nwkit.clade_index import CladeIndex
+
+    clades = CladeIndex(tree)
+    nodes = list(tree.traverse("preorder"))
+    index = {clades.clade_id_for_node(node): node for node in nodes}
+    events = {index[row["species_event_id"]]: row for row in rows}
+    if len(events) != len(rows) or tree in events:
+        raise ValueError("WGD candidates must map uniquely to non-root species branches")
+    x = {tree: 0.0}
+    for node in nodes[1:]:
+        x[node] = x[node.up] + node.dist
+    leaves = list(tree.leaves())
+    y = {node: len(leaves) - i - 1 for i, node in enumerate(leaves)}
+    for node in reversed(nodes):
+        if not node.is_leaf:
+            children = [y[child] for child in node.children]
+            y[node] = (min(children) + max(children)) / 2
+    by_node = defaultdict(list)
+    for row in focal_rows:
+        by_node[index[row["species_event_id"]]].append(row)
+    if by_node:
+        # Insert room around each annotated branch without changing root distances.
+        offset = 0
+        for node in sorted(nodes, key=y.get):
+            reserve = len(by_node.get(node, ())) * .58
+            y[node] += offset + reserve
+            offset += 2 * reserve
+        names = [leaf.name for leaf in leaves] + [focal_ks_label(row) for row in focal_rows]
+        widths = (8.25, max(2.85, 0.087 * max(map(len, names))), 4.1)
+        height = max(4.8, (max(y.values()) + 1) * .26 + 2)
+    else:
+        widths = (8.25, 2.75)
+        height = max(4, len(leaves) * .29 + 2)
+    fig, axes = plt.subplots(ncols=len(widths), figsize=(sum(widths), height),
+                             gridspec_kw={"width_ratios": widths, "wspace": 0.03})
+    ax, labels_ax = axes[:2]
+    labels_ax.sharey(ax)
+    if by_node:
+        ds_ax = axes[2]
+        ds_ax.sharey(ax)
+        ds_ax.set(xlabel="dS (focal species scale)")
+        ds_ax.set_axisbelow(True)
+        ds_ax.grid(axis="x", color="#E5E8EA", linewidth=.7)
+        ds_ax.tick_params(axis="x", labelsize=8)
+        for side in ("top", "left", "right"):
+            ds_ax.spines[side].set_visible(False)
+    for node in reversed(nodes):
+        if not node.is_leaf:
+            children = [y[child] for child in node.children]
+            ax.vlines(x[node], min(y[node], *children), max(y[node], *children), color="#9AA5AA", lw=1)
+        else:
+            labels_ax.text(0, y[node], node.name, va="center", fontsize=8.5)
+        if node is tree:
+            continue
+        row = events.get(node)
+        state = row["event_support"] if row else "unresolved"
+        color, hatch, _ = styles[state]
+        unobserved = (cross_mode and row and state == "unresolved" and
+                      row["synteny_status"] == "insufficient_observability")
+        if unobserved:
+            color = "#6B537F"
+        ax.plot((x[node.up], x[node]), (y[node], y[node]), color=color,
+                ls=":" if unobserved else "--" if hatch else "-",
+                lw=1.7 if unobserved else 1 if state == "unresolved" else 2.6)
+        age = age_styles.get(row.get("cross_ks_status")) if row else None
+        midpoint = (x[node.up] + x[node]) / 2
+        if age:
+            marker, edge, _ = age
+            ax.plot(midpoint, y[node], marker=marker, mec=edge, mfc="white", ms=5.5, mew=1.2, zorder=4)
+        if row and (state != "unresolved" or unobserved):
+            value = f"S={float(row[metric]):.2%}" if tree_mode else f"P={float(row['p_value']):.3g}"
+            ax.annotate(f"B{row['branch_id']}  {value}",
+                        (midpoint, y[node]), xytext=(0, 5),
+                        textcoords="offset points", ha="center", fontsize=7.5, color=color)
+        if node in by_node:
+            focals = sorted(by_node[node], key=lambda r: r["focal"])
+            # Continue the branch's own row to its dS tracks; this is not a tree edge.
+            leader = ConnectionPatch((midpoint, y[node]), (.12, y[node]), "data",
+                                     labels_ax.get_yaxis_transform(), axesA=ax, axesB=labels_ax,
+                                     color="#AFB8BE", lw=.65, linestyle=":", zorder=1, clip_on=False)
+            ax.add_artist(leader)
+            lanes = [y[node] + (len(focals) / 2 - .5 - i) for i in range(len(focals))]
+            labels_ax.plot((.12, .12), (lanes[-1], lanes[0]), color="#AFB8BE", lw=.75)
+            for lane, focal in zip(lanes, focals, strict=True):
+                labels_ax.plot((.12, .16), (lane, lane), color="#AFB8BE", lw=.75)
+                labels_ax.text(.20, lane, focal_ks_label(focal), va="center", fontsize=8, color="#47545A")
+                draw_focal_ks_intervals(ds_ax, lane, focal)
+    span = max(x.values()) or 1
+    labels_ax.set(xlim=(0, 1))
+    labels_ax.set_axis_off()
+    ax.set(xlim=(-span * .02, span * 1.02), ylim=(-1, max(y.values()) + 1), yticks=[],
+           xlabel="Distance from root (input branch units)")
+    for side in ("top", "left", "right"):
+        ax.spines[side].set_visible(False)
+    ax.set_title(f"WGD candidate branches | {cutoff}", loc="left")
+    handles = [Line2D([], [], color=c, ls="--" if h else "-", label=label)
+               for c, h, label in styles.values()]
+    if cross_mode:
+        handles.append(Line2D([], [], color="#6B537F", ls=":", label="Synteny unobserved; score below cutoff"))
+    shown_age = {row.get("cross_ks_status") for row in rows}
+    age_handles = [Line2D([], [], marker=marker, mec=edge, mfc="white", ls="none", label=label)
+                   for marker, edge, label in dict.fromkeys(style for state, style in age_styles.items() if state in shown_age)]
+    handles.extend(age_handles)
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0, -.11),
+              ncols=2 if cross_mode else 3, fontsize=8, frameon=False)
+    if by_node:
+        ds_ax.set_xlim(left=0, right=max(ds_ax.get_xlim()[1], .1) if ds_ax.has_data() else 1)
+        ds_handles = [Line2D([], [], color=color, marker=marker, lw=1.6, label=label)
+                      for label, color, marker in FOCAL_DS_STYLES]
+        if any(row[f"{name}_boundary_status"] == "nonmonotone_or_invalid_interval"
+               and number(row[f"{name}_ds"]) is not None for row in focal_rows for name in ("younger", "older")):
+            ds_handles.append(Line2D([], [], color="#646D78", marker="x", ls="--", label="Unusable split"))
+        ds_ax.legend(handles=ds_handles,
+                     loc="lower left", bbox_to_anchor=(0, 1.0), ncols=3, fontsize=8, frameon=False)
+    fig.subplots_adjust(left=0.07, right=0.97, bottom=0.19 if age_handles else 0.15, top=0.92)
+    for extension in ("pdf", "png"):
+        fig.savefig(output / f"wgd_species_tree.{extension}", dpi=175)
+    plt.close(fig)
+
+
+def observable_synteny(placer, summaries, anchors):
+    species_with_ks = {row["species"] for row in anchors
+                       if row["ks_status"] == "ok" and number(row["ks"]) is not None}
+    opportunity = defaultdict(set)
+    for name, summary in summaries.items():
+        # A successful zero-block scan is an observation, unlike missing
+        # sequences or blocks that cannot be placed on the species tree.
+        if summary.get("num_blocks") == 0:
+            branches = placer.lineage_branches(name)
+        elif name in species_with_ks:
+            branches = placer.observable_branches(name)
+        else:
+            continue
+        for branch in branches:
+            opportunity[branch].add(name)
+    return opportunity
 
 
 def run_analysis(plan, output, cpus):
@@ -495,21 +754,56 @@ def run_analysis(plan, output, cpus):
         raise ValueError("cpus must be positive")
     verify(plan)
     protect_output(output, plan["input_hashes"], Path(plan["workspace"]))
-    members, _ = validated_members(plan)
+    family_tables = _validated_family_tables(plan)
+    members, family_key, count_rows = family_tables
     validate_annotation_counts(plan, members)
-    del members
     tree = species_tree(plan["species_tree"])
     output.mkdir(parents=True, exist_ok=False)
-    normalized_counts(plan, output)
     p = plan["parameters"]
-    run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
-              "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
-              "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
-              "--max-states", p["max_states"], "--max-iterations", p["max_iterations"],
-              "--multiplicity", p["multiplicity"], "--outfile", output / "count_candidates.tsv",
-              "--model-out", output / "count_model.json"], output, "wgd-count")
+    tree_mode = bool(plan.get("gene_trees"))
+    normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
+    cross_evidence = None
+    cross_ks = None
+    plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
+    if tree_mode:
+        age_sources = plan.get("cross_ks_sources", {})
+        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources)
+                 if plan.get("cross_pairs") is not None else None)
+        by_family = {row[family_key]: row for row in members} if age_sources else {}
+
+        def family_members(family):
+            row = by_family.get(family)
+            return (None if row is None else
+                    {gene.strip() for name in plan["species"] if row[name] for gene in row[name].split(",")})
+
+        cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
+        raw_candidates, num_trees = scan_duplications(tree, plan["gene_trees"], p["min_duplication_score"],
+                                                      observe=cross.observe if cross is not None else None,
+                                                      family_members=family_members if cross_ks else None,
+                                                      observe_family=cross_ks.observe_family if cross_ks else None)
+        del by_family
+        if cross is not None:
+            cross_evidence, pair_rows, window_rows = cross.summarize()
+            write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
+            write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
+            if cross_ks:
+                cross_ks.prepare(cross.age_pairs, raw_candidates, cross_evidence)
+            del cross
+        if not raw_candidates:
+            raise ValueError("Duplication scoring needs at least one non-root internal species branch")
+        write_table(output / "duplication_candidates.tsv", raw_candidates, list(raw_candidates[0]))
+    else:
+        run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
+                  "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
+                  "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
+                  "--max-states", p["max_states"], "--max-iterations", p["max_iterations"],
+                  "--multiplicity", p["multiplicity"], "--outfile", output / "count_candidates.tsv",
+                  "--model-out", output / "count_model.json"], output, "wgd-count")
+        raw_candidates = read_table(output / "count_candidates.tsv")
+        num_trees = None
     positions, sequences, summaries, anchors = prepare_sources(plan, output, cpus)
-    reports, contrasts = estimate_ks(plan, output, sequences, anchors, cpus)
+    reports, contrasts = estimate_ks(plan, output, sequences, anchors, cpus, family_tables)
+    del family_tables, members, count_rows
     bounds = {}
     if contrasts:
         run_tool([sys.executable, "-m", "nwkit", "ksrate", "--infile", plan["species_tree"], "--input-rooted", "auto",
@@ -529,19 +823,52 @@ def run_analysis(plan, output, cpus):
         row.update(species_event_id=branch or "", placement_status=status)
     write_table(output / "anchor_evidence.tsv", anchors,
                 ["species", "block_id", "gene_a", "gene_b", "ks", "ks_status", "species_event_id", "placement_status"])
-    candidates = summarize_events(read_table(output / "count_candidates.tsv"), anchors, summaries,
-                                  p["min_coverage"], p["min_blocks"], {row["gene_id"]: row for row in positions})
+    daughter_taxa = None
+    if tree_mode:
+        from nwkit.clade_index import CladeIndex
+
+        clades = CladeIndex(tree)
+        daughter_taxa = {clades.clade_id_for_node(node): tuple(set(child.leaf_names()) for child in node.children)
+                         for node in tree.descendants() if not node.is_leaf}
+    candidates = summarize_events(raw_candidates, anchors, summaries,
+                                  p["min_coverage"], p["min_blocks"], {row["gene_id"]: row for row in positions},
+                                  synteny_opportunity=observable_synteny(ks_placer, summaries, anchors),
+                                  daughter_taxa=daughter_taxa, cross_evidence=cross_evidence)
+    if cross_evidence is not None:
+        for row in candidates:
+            row["synteny_method"] = "cross_block_correspondence"
+            row["minimum_cross_windows"] = p["min_cross_windows"]
+    age_summary, focal_rows = {}, ()
+    if cross_ks:
+        focal_rows = cross_ks.run(output, cpus, candidates, estimate_pair_reports, write_table)
+        plot_names += plot_cross_ks(focal_rows, output)
+        for row in candidates:
+            status = row["cross_ks_status"]
+            age_summary[status] = age_summary.get(status, 0) + 1
     write_table(output / "wgd_events.tsv", candidates, list(candidates[0]))
-    plot_candidates(candidates, output)
+    plot_candidates(candidates, output, tree=tree, alpha=p["alpha"],
+                    duplication_threshold=p["min_duplication_score"] if tree_mode else None, focal_rows=focal_rows)
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
                           if path.is_file() and path.suffix in {".tsv", ".json"}},
+        "plot_hashes": {name: digest(output / name) for name in plot_names},
         "num_positioned_genes": len(positions),
         "num_raw_anchor_rows": len(anchors), "num_ks_contrasts": len(contrasts), "species_synteny": summaries,
         "ks_boundary_ci_methods": sorted({row.get("ci_method", "not_reported") for row in bounds.values()}),
         "num_WGD_supported_candidates": sum(row["event_support"] == "WGD-supported" for row in candidates),
-        "interpretation": "Experimental one-event-at-a-time count scan plus branch-matched unquota synteny and Ks. Not a posterior, joint multi-event history, ploidy estimate, or validated allopolyploid model. Single-copy family contrasts may retain hidden paralogy. Missing synteny is not SSD evidence."})
+        "num_count_only_candidates": sum(row["event_support"] == "count-only-candidate" for row in candidates),
+        "num_duplication_only_candidates": sum(row["event_support"] == "duplication-only-candidate" for row in candidates),
+        "num_duplication_and_synteny_candidates": sum(
+            row["event_support"] == "duplication-and-synteny-candidate" for row in candidates),
+        "num_input_gene_trees": num_trees,
+        **({"cross_ks_branch_status_counts": age_summary} if cross_ks else {}),
+        "synteny_method": "cross_block_correspondence" if cross_evidence is not None else "self_synteny_ks",
+        "candidate_model": "rooted_gene_tree_duplication_score" if tree_mode else "native_gene_count",
+        "interpretation": ("Exploratory rooted gene-tree duplication scores. " if tree_mode else
+                           "Experimental one-event-at-a-time gene-count scan. ") +
+                          "Branch candidates are not gene-node origin labels or posterior probabilities. "
+                          "Missing synteny is not SSD evidence."})
 
 
 def same_species_cross_child_pairs(node, positions):
@@ -620,6 +947,8 @@ def classify(args):
     verify(summary["plan"])
     required = {"gene_positions.tsv", "anchor_evidence.tsv", "wgd_events.tsv"}
     if args.native_tree_likelihood:
+        if summary.get("candidate_model") == "rooted_gene_tree_duplication_score":
+            raise ValueError("Native tree likelihood requires a fitted count model, not duplication-score candidates")
         required.add("count_model.json")
     if not required.issubset(summary.get("output_hashes", {})):
         raise ValueError("WGD evidence lacks output integrity hashes; regenerate it")
@@ -769,16 +1098,16 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
-    for field in ("species-tree", "counts", "members", "genomes"):
+    for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-count-families", 10000),
-                           ("diagonal-bound", 300), ("min-blocks", 3), ("max-states", 256),
+                           ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
                            ("max-iterations", 200), ("multiplicity", 2)):
         plan.add_argument("--" + field, type=int, default=default)
     for field, default in (("cscore", 0.7), ("self-hit-percent", 98), ("minimum-mapping-fraction", 1),
-                           ("alpha", 0.05), ("min-coverage", 0.2)):
+                           ("alpha", 0.05), ("min-coverage", 0.2), ("min-duplication-score", 0.01)):
         plan.add_argument("--" + field, type=float, default=default)
     plan.add_argument("--outfile", required=True, type=Path)
     for name in ("contract", "verify", "run"):
