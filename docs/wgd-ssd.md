@@ -413,6 +413,11 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   The dS tracks use a separate axis
   and do not change the tree's branch units. `wgd_cross_ks.pdf` and
   `wgd_cross_ks.png` retain the standalone age diagnostics.
+- `cross_ks_matched_boundaries.tsv` re-estimates the gap between the two
+  boundary values on the same complete ortholog families, resampling each
+  family jointly. It diagnoses boundary ordering, not WGD age or a rate
+  difference between retained duplicates and single-copy genes. It does not
+  replace the primary boundary estimates or the branch call.
 
 Each family has an additional `wgd_ssd/<family>_wgd_ssd.zip` archive containing
 `duplication_origins.tsv`, `pair_evidence.tsv`, full-tree `reconciliation.tsv`,

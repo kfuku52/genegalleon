@@ -28,6 +28,62 @@ FOCAL_FIELDS = ("species_event_id", "branch_id", "focal", "status", "placed_even
                 "num_eligible_pairs", "num_estimated_pairs", "num_window_components", "median_ds",
                 "ci_lower", "ci_upper", "younger_ds", "younger_lower", "younger_upper",
                 "older_ds", "older_lower", "older_upper", "older_boundary_status", "younger_boundary_status")
+MATCHED_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "younger_outgroup",
+                  "older_sister", "older_outgroup", "num_complete_families", "younger_ds", "older_ds",
+                  "older_minus_younger", "gap_lower", "gap_upper", "status")
+
+
+def matched_boundary_gap(trio_young, trio_old, contrasts, draws, rng):
+    """Estimate boundary ordering while keeping all six measurements within each family."""
+    from nwkit.ksrate_model import corrected_ks
+
+    def pairs(trio):
+        return [tuple(sorted(taxa)) for taxa in ((trio.focal, trio.sister), (trio.focal, trio.outgroup),
+                                                 (trio.sister, trio.outgroup))]
+
+    keys = pairs(trio_young) + pairs(trio_old)
+    families = sorted(set.intersection(*(set(contrasts.get(key, {})) for key in keys)))
+    n = len(families)
+    if not n:
+        return n, None, None, None, None, None, "no_complete_families"
+    values = np.array([[contrasts[key][family] for key in keys] for family in families])
+    med = np.median(values, axis=0)
+    young, old = corrected_ks(*med[:3]), corrected_ks(*med[3:])
+    gap = old - young
+    if min(young, old) < 0:
+        return n, young, old, gap, None, None, "negative_correction"
+    if n < 3 or draws < 40:
+        return n, young, old, gap, None, None, "insufficient_family_bootstrap"
+    gaps = np.empty(draws)
+    for start in range(0, draws, 128):
+        end = min(start + 128, draws)
+        sample = rng.integers(n, size=(end - start, n))
+        first, second, third, fourth, fifth, sixth = np.median(values[sample], axis=1).T
+        gaps[start:end] = fourth + fifth - sixth - (first + second - third)
+    lo, hi = map(float, np.quantile(gaps, (.025, .975)))
+    return n, young, old, gap, lo, hi, "ordered" if lo > 0 else "reversed" if hi < 0 else "order_unresolved"
+
+
+def matched_boundary_rows(tree, focal_rows, trios, contrasts, parameters):
+    from nwkit.clade_index import CladeIndex
+
+    index = CladeIndex(tree)
+    parent_ids = {index.clade_id_for_node(node): index.clade_id_for_node(node.up) for node in tree.descendants()}
+    by_trio = {(t.focal, t.species_event_id): t for t in trios}
+    by_pair = defaultdict(dict)
+    for row in contrasts:
+        key = tuple(sorted((row["species_a"], row["species_b"])))
+        by_pair[key][row["family_id"]] = float(row["ks"])
+    rng = np.random.default_rng(parameters["seed"])
+    for row in focal_rows:
+        event, focal = row["species_event_id"], row["focal"]
+        younger = by_trio.get((focal, event))
+        older = by_trio.get((focal, parent_ids[event]))
+        trio_fields = (younger.sister, younger.outgroup) if younger else (None, None)
+        trio_fields += (older.sister, older.outgroup) if older else (None, None)
+        estimates = (matched_boundary_gap(younger, older, by_pair, parameters["ks_bootstrap"], rng)
+                     if younger and older else (0, None, None, None, None, None, "missing_trio"))
+        yield dict(zip(MATCHED_FIELDS, (event, row["branch_id"], focal, *trio_fields, *estimates), strict=True))
 
 
 def cross_ks_cds_sources(path, workspace, species, codes, default_code):
@@ -278,6 +334,8 @@ class CrossKs:
         write_table(output / "cross_ks_paralogs.tsv", audit, PAIR_FIELDS)
         rows = self.summarize(candidates, bounds, hits, totals)
         write_table(output / "cross_ks_focals.tsv", rows, FOCAL_FIELDS)
+        write_table(output / "cross_ks_matched_boundaries.tsv",
+                    matched_boundary_rows(self.tree, rows, self.trios, contrasts, self.parameters), MATCHED_FIELDS)
         return rows
 
     def divergence_bounds(self, contrasts, output, write_table):

@@ -225,6 +225,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
+    assert all(row["status"] == "missing_trio" for row in read_table(root / "cross_ks_matched_boundaries.tsv"))
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
     assert "wgd_cross_ks.png" in summary["plot_hashes"]
     assert str(workspace / "cross.anchors") in summary["plan"]["input_hashes"]

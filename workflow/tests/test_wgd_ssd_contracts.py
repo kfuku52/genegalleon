@@ -205,6 +205,23 @@ def test_cross_ks_coalesces_shared_copy_windows_and_families():
     assert component_medians(hits) == [.7, 1.5]
 
 
+def test_cross_ks_matched_boundaries_exclude_incomplete_families_and_keep_covariance():
+    import numpy as np
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_boundary_gap
+
+    younger = KsTrio("A", "B", "D", "B1", 1)
+    older = KsTrio("A", "C", "D", "B2", 2)
+    data = {pair: {str(i): v + i for i in range(10)}
+            for pair, v in {("A", "B"): 1, ("A", "C"): 2, ("A", "D"): 3,
+                            ("B", "D"): 3, ("C", "D"): 3}.items()}
+    data["A", "C"]["incomplete"] = 1e3
+    n, young, old, gap, lo, hi, status = matched_boundary_gap(younger, older, data, 199, np.random.default_rng(7))
+    assert (n, young, old, gap, lo, hi, status) == (10, 5.5, 6.5, 1, 1, 1, "ordered")
+    assert matched_boundary_gap(older, younger, data, 199, np.random.default_rng(7))[-1] == "reversed"
+
+
 def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     from workflow.support.wgd_cross_regions import summarize_regions
 
