@@ -29,6 +29,9 @@ from itertools import chain
 from pathlib import Path
 from urllib.parse import quote
 
+from Bio.Seq import Seq
+from cdskit.translate import translate_sequence_string
+
 try:
     import gene_model_transcriptome as transcriptome
     import refinement_rna
@@ -87,6 +90,7 @@ except ImportError:
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
+CONCRETE_CDS = re.compile('[ACGT]+')
 DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
                 minimum_coverage=0.70, minimum_identity=0.50, minimum_broad_coverage=0.90,
                 minimum_lower_coverage_identity=0.70, max_intron=20000,
@@ -2003,7 +2007,6 @@ def extend_gene_bounds(original, bounds):
 
 def analysis_coding_candidate(candidate, genetic_code=None):
     """Clip only already-known partial codon bases for the CDS analysis view."""
-    from Bio.Seq import Seq
     quality = candidate.get('quality', {})
     expected = str(candidate.get('protein', '')).upper()
     if not quality.get('usable') or not expected or '*' in expected:
@@ -2022,7 +2025,14 @@ def analysis_coding_candidate(candidate, genetic_code=None):
     trailing = len(coding) % 3
     coding = coding[:len(coding) - trailing]
     code = int(genetic_code if genetic_code is not None else quality.get('genetic_code', 1))
-    if not coding or str(Seq(coding).translate(table=code)).removesuffix('*') != expected:
+    # Catalog-admitted ordinary DNA uses the same translation kernel as
+    # catalog construction. Preserve Biopython's handling of other spellings
+    # and code overrides for direct callers.
+    if code == 1 and CONCRETE_CDS.fullmatch(coding):
+        translated = translate_sequence_string(coding, code, False)
+    else:
+        translated = str(Seq(coding).translate(table=code)) if coding else ''
+    if translated.removesuffix('*') != expected:
         raise ValueError('Analysis CDS does not reproduce the admitted protein')
     def clip(amount, at_start):
         while amount:
