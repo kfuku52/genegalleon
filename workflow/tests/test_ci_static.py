@@ -447,6 +447,14 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
     prepare = jobs["prepare-sif"]
     assert named_step(prepare, "Prepare exact SIF once")["with"]["validation-suite"] == "prepare"
     share = named_step(prepare, "Share uncached SIF with validation partitions")
+    export = load_workflow("tests.yml")["on"]["workflow_dispatch"]["inputs"]["export_validation_sif"]
+    assert export["type"] == "boolean"
+    assert export["default"] == "false"
+    assert " ".join(share["if"].split()) == (
+        "steps.sif.outputs.cache-hit != 'true' || "
+        "(github.event_name == 'workflow_dispatch' && inputs.export_validation_sif && "
+        "github.ref == format('refs/heads/{0}', github.event.repository.default_branch))"
+    )
     assert share["with"]["if-no-files-found"] == "error"
     assert share["with"]["retention-days"] == "1"
     assert "strategy" not in jobs["sif-python"]

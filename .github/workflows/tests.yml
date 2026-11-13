@@ -11,6 +11,11 @@ on:
         type: string
         required: false
         default: ""
+      export_validation_sif:
+        description: "Upload the exact validation SIF even when restored from cache"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -411,7 +416,10 @@ jobs:
           prepared-runtime-input: ${{ github.event_name == 'workflow_dispatch' && inputs.cached_runtime_input || '' }}
 
       - name: Share uncached SIF with validation partitions
-        if: steps.sif.outputs.cache-hit != 'true'
+        if: >-
+          steps.sif.outputs.cache-hit != 'true' ||
+          (github.event_name == 'workflow_dispatch' && inputs.export_validation_sif &&
+           github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: validation-sif
