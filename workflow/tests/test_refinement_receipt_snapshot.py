@@ -61,6 +61,25 @@ def test_same_receipt_and_output_bytes_with_one_fresh_read_per_command(tmp_path,
                       for p in directory.rglob('*') if p.is_file()}
 
 
+def test_stage_reuse_shares_full_verification_with_consumers(tmp_path, monkeypatch):
+    directory, key, receipts = publication(tmp_path)
+    measured = metrics(monkeypatch)
+    with snapshots.ReceiptSnapshot(rescue.verified) as proof:
+        assert proof.verify_reusable(directory, key)
+        reads = dict(measured)
+        assert reads['sha256_reads'] == len(json.loads((directory / 'receipt.json').read_text())['files']) + 1
+        proof.verify(receipts)
+        assert proof.verify_reusable(directory, key)
+        assert dict(measured) == reads
+    with pytest.raises(snapshots.ReceiptChanged):
+        with snapshots.ReceiptSnapshot(rescue.verified) as proof:
+            assert proof.verify_reusable(directory, key)
+            (directory / 'models.json').unlink()
+            proof.verify_reusable(directory, key)
+    with snapshots.ReceiptSnapshot(rescue.verified) as fresh:
+        assert not fresh.verify_reusable(directory, key)
+
+
 @pytest.mark.parametrize('target', ['member', 'receipt'])
 @pytest.mark.parametrize('mutation', ['rewrite', 'replace', 'remove', 'permission', 'symlink'])
 def test_verified_generation_cannot_refresh(tmp_path, target, mutation):

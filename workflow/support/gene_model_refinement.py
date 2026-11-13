@@ -662,8 +662,10 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
 
-    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
-    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
+    options = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
+    if receipt_snapshot is not None:
+        options['verify'] = receipt_snapshot.verify_reusable
+    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **options)
 
 
 @invocation_cached
@@ -681,8 +683,9 @@ def catalog_species(root, value, name):
         def guard():
             load(root, [name])
 
+        options = {'verify': _RECEIPT_SNAPSHOT.verify_reusable} if _RECEIPT_SNAPSHOT is not None else {}
         return rescue.stage(donor_cache(request), donor_catalog_relative(request, name),
-                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard)
+                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard, **options)
 
     def build(tmp):
         transcriptome_source = value['request'].get('transcriptome_sources', {}).get(name)
@@ -712,8 +715,6 @@ def catalog_species(root, value, name):
                     status = 'accepted' if candidate['quality'].get('valid_orf') else 'proposal'
                     set_representative_admission({'candidate': candidate, 'rna_paths': paths, 'status': status}, True, params)
         write_catalog(catalog, tmp)
-        # The integration contract is independent of catalog writer filenames.
-        atomic_json(tmp / 'catalog.json', catalog)
     return stage(root, Path('catalog') / name, {}, build, [name])
 
 
@@ -767,7 +768,7 @@ def catalog_index(root, value, predictions=False):
                 summary = build_store(directories, db)
             if work != tmp:
                 copied = tmp / db.name
-                copy_refinement_index(db, copied, digest(db))
+                copy_refinement_index(db, copied)
                 with copied.open('rb') as handle:
                     os.fsync(handle.fileno())
         summary['database'] = str((root / ('catalog_index_final' if predictions else 'catalog_index') / 'loci.sqlite3').resolve())
@@ -776,9 +777,14 @@ def catalog_index(root, value, predictions=False):
     return directory / 'loci.sqlite3'
 
 
-def copy_refinement_index(source, destination, expected_sha256):
-    shutil.copyfile(source, destination)
-    if digest(destination) != expected_sha256:
+def copy_refinement_index(source, destination, expected_sha256=None):
+    """Copy with a checksum in one pass and verify the expected source bytes."""
+    checksum = hashlib.sha256()
+    with source.open('rb') as original, destination.open('wb') as copy_file:
+        for chunk in iter(lambda: original.read(1024 * 1024), b''):
+            copy_file.write(chunk)
+            checksum.update(chunk)
+    if expected_sha256 is not None and checksum.hexdigest() != expected_sha256:
         raise OSError('Copied refinement SQLite index differs from its source database')
 
 
@@ -866,10 +872,10 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
     def build(tmp):
         edges = []
         sequence_edges = set()
-        valid = defaultdict(set)
-        for species, gene in iter_locus_keys(db):
-            valid[species].add(gene)
         if request['edges']:
+            valid = defaultdict(set)
+            for species, gene in iter_locus_keys(db):
+                valid[species].add(gene)
             for row in read_table(request['edges']):
                 a, b, ga, gb = (row[k] for k in ('species_a', 'species_b', 'gene_a', 'gene_b'))
                 if a == b or ga not in valid.get(a, set()) or gb not in valid.get(b, set()):
@@ -890,22 +896,16 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                 if sequence_only:
                     edges[-1]['comparison_basis'] = 'protein_alignment'
         if anchor_plan is not None:
-            aliases = {}
+            aliases, position_index = {}, {}
             for n in anchor_species:
                 prepared_snapshot.check([n])
-                lookup = {}
+                lookup, positions, tracks = {}, {}, defaultdict(list)
                 for g in iter_loci(db, n):
                     for token in {g['gene_id'], g['gene_id'].removeprefix(n + '_'),
                                   *(c['source_gene_id'] for c in g['candidates']), *(c.get('gene_token', '') for c in g['candidates'])}:
                         if token in lookup and lookup[token] != g['gene_id']:
                             raise ValueError('Ambiguous gene alias: ' + token)
                         lookup[token] = g['gene_id']
-                aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
-                              for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
-            position_index = {}
-            for n in anchor_species:
-                positions, tracks = {}, defaultdict(list)
-                for g in iter_loci(db, n):
                     blocks = [b for c in g['candidates'] for b in c['blocks']]
                     if not blocks:
                         continue
@@ -913,6 +913,8 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                                     end=max(b[1] for b in blocks))
                     positions[g['gene_id']] = position
                     tracks[g['seqid']].append(position)
+                aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
+                              for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
                 ordered = {seqid: sorted(genes, key=lambda g: g['start']) for seqid, genes in tracks.items()}
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
             with store_connection(db) as connection:
@@ -1015,7 +1017,18 @@ def select(root, value, predictions=False):
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     if predictions:
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
+        # Assembly-only targets have no genomic prediction or repair.
+        if set(target_species(value)) <= value['request'].get('transcriptome_sources', {}).keys():
+            initial = select(root, value)
+            dependencies['initial'] = digest(initial / 'receipt.json')
+
     def build(tmp):
+        if 'initial' in dependencies:
+            if json.loads((db.parent / 'summary.json').read_text())['accepted_prediction_count'] != 0:
+                raise ValueError('Assembly-only target has an unexpected genomic prediction')
+            for filename in ('selection.json', 'representative_map.tsv'):
+                shutil.copyfile(initial / filename, tmp / filename)
+            return
         edges = json.loads((directory / 'edges.json').read_text())
         selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
                                            min_support=params['min_support'], candidate_limit=params['candidate_limit'])
@@ -1622,22 +1635,30 @@ def predict_species(root, value, name, cpus=1):
                 if len(target['candidates']) > params['candidate_limit'] or len(donor_locus['candidates']) > params['candidate_limit']:
                     proposals.append({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor})
                     continue
-                baseline = next(c for c in target['candidates'] if c['candidate_id'] == decisions[name, target_gene]['candidate_id'])
                 # Intact concordant single coding paths need no predictor process.
                 for candidate in donor_locus['candidates'][:params['candidate_limit']]:
                     if not candidate['quality'].get('usable') or not candidate['protein']:
                         continue
-                    discrepancy = not baseline['quality'].get('valid_orf') or len(target['candidates']) < len(donor_locus['candidates']) or abs(len(candidate['protein']) - len(baseline['protein'])) > max(3, len(candidate['protein']) * .05)
+                    baseline_score = None
+                    discrepancy = (not target_baseline['quality'].get('valid_orf')
+                                   or len(target['candidates']) < len(donor_locus['candidates'])
+                                   or abs(len(candidate['protein']) - len(target_baseline['protein']))
+                                   > max(3, len(candidate['protein']) * .05))
                     if not discrepancy:
-                        score = pair_score(baseline, candidate)
-                        discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (not homology_supported(min(score.coverage_a, score.coverage_b), score.identity, params) or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
+                        baseline_score = pair_score(target_baseline, candidate)
+                        discrepancy = (not baseline_score.bounded and baseline_score.identity >= params['minimum_identity']
+                                       and (not homology_supported(min(baseline_score.coverage_a, baseline_score.coverage_b),
+                                                                  baseline_score.identity, params)
+                                            or (len(target_baseline['blocks']) > 1 and len(candidate['blocks']) > 1
+                                                and baseline_score.junction_similarity < 0.8)))
                     if not discrepancy:
                         continue
                     represented = False
                     for known in target['candidates']:
                         if not known['quality'].get('valid_orf'):
                             continue
-                        match = pair_score(known, candidate)
+                        match = (baseline_score if known is target_baseline and baseline_score is not None
+                                 else pair_score(known, candidate))
                         if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
                             represented = True
                             break
@@ -2873,7 +2894,10 @@ def inspect_stages(root, value):
         expected[str(Path('predictions') / name)] = {'dependencies': dependencies}
     expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'index': initial_index,
                                                         'predictions': predictions}}
-    expected['selection_final'] = {'dependencies': {**selection_dependencies, 'predictions': predictions, 'index': final_index}}
+    final_selection_dependencies = {**selection_dependencies, 'predictions': predictions, 'index': final_index}
+    if set(target_species(value)) <= request.get('transcriptome_sources', {}).keys():
+        final_selection_dependencies['initial'] = prediction_dependencies['initial']
+    expected['selection_final'] = {'dependencies': final_selection_dependencies}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}
     return {relative: rescue.verified(root / relative, {'plan': plan_hash, **key})

@@ -157,6 +157,41 @@ class ReceiptSnapshot:
                 raise ValueError('Stage dependency content changed: ' + str(path.parent))
             self.entries[path] = expected, proof, dict(receipt['files'])
 
+    def verify_reusable(self, directory, key):
+        """Verify a stage under its lock and retain that proof for its consumers.
+
+        A missing or initially corrupt publication can still be rebuilt. A
+        generation already observed by this command must remain stable.
+        """
+        self._open()
+        path = (directory / 'receipt.json').absolute()
+        if path in self.entries:
+            expected, _proof, _files = self.entries[path]
+            self.check({path: expected})
+            raw = path.read_bytes()
+            self.check({path: hashlib.sha256(raw).hexdigest()})
+            if json.loads(raw)['key'] != key:
+                raise ReceiptChanged('Stage dependency key changed: ' + str(path))
+            return True
+        try:
+            raw = path.read_bytes()
+            receipt = json.loads(raw)
+            if not isinstance(receipt, dict) or receipt.get('key') != key:
+                return False
+            files = receipt.get('files')
+            if not isinstance(files, dict) or not files:
+                return False
+            for member in files:
+                relative = Path(member)
+                if relative.is_absolute() or '..' in relative.parts or not (directory / relative).is_file():
+                    return False
+            self.verify({path: hashlib.sha256(raw).hexdigest()})
+            return True
+        except ReceiptChanged:
+            raise
+        except (OSError, ValueError):
+            return False
+
     def read_json_member(self, filename, expected, member):
         """Read a receipted small projection, with full first proof and fences.
 

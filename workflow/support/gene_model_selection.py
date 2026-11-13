@@ -262,6 +262,29 @@ def prepare_correspondence(node_keys, edges, *, coordinate_ambiguity=(), nonvoti
                               for (a, b), reason in sorted(omitted.items())]}
 
 
+def isolated_selection(locus, node, policy, candidate_limit, copy_ambiguity):
+    """Produce the ordinary one-locus decision without building a graph."""
+    records = locus["candidates"]
+    baseline = _baseline(locus, records)
+    if policy == "longest":
+        eligible = ([baseline] if locus.get("fixed_representative") else
+                    [candidate for candidate in records
+                     if candidate.get("origin", "original") == "original" or _eligible(candidate)])
+        selected = min(eligible or [baseline], key=lambda candidate: (-_length(candidate), _candidate_id(candidate)))
+        return _selection(selected, node, "longest", "longest_corrected_cds"), False
+    coordinates = locus.get("ambiguous_coordinates", False)
+    if coordinates or copy_ambiguity:
+        reason = "ambiguous_locus_coordinates" if coordinates else "unresolved_paralog_copy"
+        return _selection(baseline, node, "ambiguous_correspondence", reason), True
+    if len(records) > candidate_limit:
+        reason = "candidate_limit_exceeded"
+    elif not locus_can_vote(locus, candidate_limit):
+        reason = "no_eligible_candidate"
+    else:
+        reason = "no_trusted_crossspecies_correspondence"
+    return _selection(baseline, node, "insufficient_evidence", reason), False
+
+
 def select_representatives(catalogs: list[dict], edges: list[dict], policy: str = "conserved", *,
                            min_margin: float = 0.10, min_support: int = 2, min_identity: float = 0.35,
                            min_coverage: float = 0.75, candidate_limit: int = 32,

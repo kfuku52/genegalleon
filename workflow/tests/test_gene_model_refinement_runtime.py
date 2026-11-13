@@ -981,6 +981,11 @@ def test_fixed_panel_refinement_reuses_donors_and_isolates_genome_and_assembly_t
         assert set(recorded) == set(donors) - {name}
         cli('run', '--output', output, '--cpus', 2)
         cli('qc', '--output', output)
+        initial = output / 'selection_initial'
+        final = output / 'selection_final'
+        for filename in ('selection.json', 'representative_map.tsv'):
+            assert (final / filename).read_bytes() == (initial / filename).read_bytes()
+        assert json.loads((final / 'receipt.json').read_bytes())['key']['dependencies']['initial'] == refinement.digest(initial / 'receipt.json')
         sequence = output / 'effective/sequence'
         assert [r['species'] for r in refinement.read_table(sequence / 'inputs.tsv')] == [name]
         decision, = refinement.read_table(sequence / 'representative_map.tsv')

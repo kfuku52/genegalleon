@@ -22,9 +22,16 @@ after its original proof and each new alias pathname have been fenced.
 Input proofs are checked again after output hashing and before publication, and
 all used scopes are checked before successful command exit. No proof persists
 to a later CLI, and dependency receipt/content verification remains independent.
-This changes neither scientific admission nor output keys except the normal
-implementation fingerprint. Existing frozen plans require their original
-implementation; validation of a changed implementation uses a fresh plan.
+When a refinement stage reuses a completed publication, its first receipt
+and member check also establishes the proof for downstream stages in that
+command. A later guard checks the same generation. A fresh CLI verifies all
+required bytes again. Initially missing or invalid outputs can be rebuilt
+under the stage lock.
+
+These proofs preserve scientific admission. Assembly-only final selection
+also binds the initial selection receipt because an empty genomic overlay
+reuses that selection. Existing frozen plans require their original
+implementation. Validation of a changed implementation uses a fresh plan.
 
 Rescue finalization also shares its existing receipt proof with preparation
 checks nested inside comparison-key construction. See

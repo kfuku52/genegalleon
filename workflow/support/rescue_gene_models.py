@@ -652,7 +652,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None, verify=None):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +664,8 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_
         recover_publication(dest, journal, token)
         if guard:
             guard()
-        if verified(dest, key, hash_workers=hash_workers) and (reuse is None or reuse(dest)):
+        valid = verify(dest, key) if verify is not None else verified(dest, key, hash_workers=hash_workers)
+        if valid and (reuse is None or reuse(dest)):
             print(f"Reused {relative}", flush=True)
             return dest
         tmp = Path(tempfile.mkdtemp(prefix=".working-" + token + "-", dir=dest.parent))
