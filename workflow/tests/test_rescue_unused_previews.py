@@ -142,7 +142,7 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
             if corrupt_cache and calls["cache_check"] == 3:
                 raise ValueError("Verified toy prediction cache generation changed")
 
-    def sources_guard(current, names, kinds):
+    def sources_guard(current, names, kinds, *, verification=None):
         assert current is plan and names == [name] and kinds == ["genome", "fasta", "gff"]
         calls["verify_sources"] += 1
         for path, expected in inputs["files"].items():
@@ -191,7 +191,7 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
     with monkeypatch.context() as patch:
         patch.delenv("GG_GENOME_INDEX_CACHE", raising=False)
         patch.setattr(module, "prepared", lambda *_: None)
-        patch.setattr(module, "rescue_key", lambda *_: copy.deepcopy(key))
+        patch.setattr(module, "rescue_key", lambda *_, **_kwargs: copy.deepcopy(key))
         patch.setattr(module, "candidates", lambda *_: copy.deepcopy(regions))
         patch.setattr(module, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
         patch.setattr(module, "verify_sources", sources_guard)
@@ -203,7 +203,7 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
         patch.setattr(module, "refine_gemoma", gemoma_spy)
         patch.setattr(module, "plan_digest", lambda *_: "b" * 64)
         output = module.rescue(root, plan, name, 1)
-    assert calls["verify_sources"] == 2
+    assert calls["verify_sources"] == 4
     assert (output / "receipt.json").is_file()
     if storage == "compact":
         models = list(rescue_model_store.iter_models(output))

@@ -716,6 +716,7 @@ def test_genome_query_dedup_restores_exact_real_gff_and_each_candidate(hidden_mo
     full, unique = root / "full.fa", root / "unique.fa"
     full.write_text("".join(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n" for r in regions))
     mapping = rescue.write_unique_queries(regions, proteins, unique)
+    assert rescue.write_unique_queries(iter(regions), proteins) == mapping
     assert len(list(rescue.fasta_records(unique))) == 3 and len(mapping) == 5
     baseline, dedup, expanded = root / "full.gff", root / "unique.gff", root / "expanded.gff"
     for query, out, label in [(full, baseline, "full"), (unique, dedup, "unique")]:

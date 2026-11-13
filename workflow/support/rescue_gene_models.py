@@ -153,6 +153,7 @@ except ImportError:
 
 SCHEMA = 1
 INTERVAL_ARCHIVE = "intervals.zip"
+_STANDARD_STOP = re.compile(r"T(?:AA|AG|GA)")
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
               "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback",
@@ -1143,7 +1144,8 @@ def validate_model(model, genome, code, params):
                     str(Seq(acceptor).reverse_complement()), str(Seq(donor).reverse_complement()))
                 if splice not in {("GT", "AG"), ("GC", "AG"), ("AT", "AC")}:
                     problems.append("noncanonical_splice")
-    if set(seq) - set("ACGT"):
+    ambiguous_sequence = set(seq) - set("ACGT")
+    if ambiguous_sequence:
         problems.append("assembly_gap_or_ambiguity")
     span = genome.fetch(model["seqid"], min(e[0] for e in exons), max(e[1] for e in exons)).upper()
     gap_bases = len(span) - span.count("A") - span.count("C") - span.count("G") - span.count("T")
@@ -1171,8 +1173,16 @@ def validate_model(model, genome, code, params):
                     last[0] -= 3
             else:
                 problems.append("missing_stop")
-        translation = str(Seq(seq).translate(table=code))
-        if "*" in translation[:-1] or ("missing_stop" in problems and "*" in translation):
+        missing_stop = "missing_stop" in problems
+        if code == 1 and not ambiguous_sequence:
+            # Standard stop codons do not overlap one another. Only matches at
+            # codon boundaries before the terminal codon are internal stops.
+            limit = len(seq) if missing_stop else len(seq) - 3
+            internal_stop = any(match.start() % 3 == 0 for match in _STANDARD_STOP.finditer(seq, 0, limit))
+        else:
+            translation = str(Seq(seq).translate(table=code))
+            internal_stop = "*" in translation[:-1] or (missing_stop and "*" in translation)
+        if internal_stop:
             problems.append("internal_stop")
     return {**model, "cds": exons, "sequence": seq, "genetic_code": code, "assembly_ambiguous_bases": gap_bases,
             "problems": sorted(set(problems))}
@@ -1327,10 +1337,11 @@ def write_local_search_inputs(directory, windows, proteins, genome):
                 out.write(f">{region['id']}\n{sequence}\n")
 
 
-def write_unique_queries(regions, proteins, path):
+def write_unique_queries(regions, proteins, path=None):
     """Exact sequence equality only; map every original candidate to its first representative."""
     representatives, by_sequence = {}, {}
-    with path.open("w") as out:
+    with ExitStack() as stack:
+        out = stack.enter_context(path.open("w")) if path is not None else None
         for region in regions:
             sequence = proteins[region["donor"]][region["query"]]
             if region["id"] in representatives:
@@ -1339,7 +1350,8 @@ def write_unique_queries(regions, proteins, path):
             if representative is None:
                 representative = region["id"]
                 by_sequence[sequence] = representative
-                out.write(f">{representative}\n{sequence}\n")
+                if out is not None:
+                    out.write(f">{representative}\n{sequence}\n")
             representatives[region["id"]] = representative
     return representatives
 
@@ -1434,13 +1446,11 @@ TARGETED_VALIDATED = "targeted_validated.json"
 
 
 def rescue(root, plan, name, cpus, interval_workers=None, *, phase="all"):
-    if phase == "all":
-        return _rescue(root, plan, name, cpus, interval_workers, phase)
     with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=cpus)) as dependencies:
         return _rescue(root, plan, name, cpus, interval_workers, phase, dependencies)
 
 
-def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
+def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
     if phase not in {"all", "predict", "postprocess"}:
@@ -1461,8 +1471,6 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
             prepared(root, plan, donor)
 
     def current_key():
-        if dependencies is None:
-            return rescue_key(root, plan, name)
         return rescue_key(root, plan, name, dependency_snapshot=dependencies)
 
     prediction_stage = Path("miniprot_predictions") / name
@@ -1475,13 +1483,10 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
         except (FileNotFoundError, ValueError) as exc:
             raise ValueError(invalid_checkpoint) from exc
     key = current_key()
-    source_proof = FreshDigestBatch() if dependencies is not None else None
+    source_proof = FreshDigestBatch()
 
     def check_sources():
-        if source_proof is None:
-            verify_sources(plan, [name], ["genome", "fasta", "gff"])
-        else:
-            verify_sources(plan, [name], ["genome", "fasta", "gff"], verification=source_proof)
+        verify_sources(plan, [name], ["genome", "fasta", "gff"], verification=source_proof)
 
     check_sources()
     source = plan["request"]["sources"][name]
@@ -1603,6 +1608,15 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
                 return rescue_cached_validation.checked_prediction(model, raw_validation, genome,
                     source['genetic_code'], params, proteins[evidence['donor']][evidence['query']],
                     engine=sys.modules[__name__])
+
+            validation_runs = {}
+            def check_predictions(models, search):
+                audit = {}
+                yield from rescue_cached_validation.validate_cached(
+                    models, genome, source["genetic_code"], params, proteins, cpus, checked_prediction, audit)
+                if audit["workers"] > 1:
+                    validation_runs[search] = audit
+
             if checkpoint is None and storage["retain_search_inputs"]:
                 write_local_search_inputs(tmp, windows, proteins, genome)
             predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
@@ -1687,10 +1701,12 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
                     for line in expand_miniprot_lines(tmp / "genome.unique.gff", representatives):
                         expanded_digest.update(line.encode())
                         yield line
-                for model in iter_miniprot(hashed_expansion()):
-                    model["evidence"] = by_id[model["query"]]
-                    model["search"] = "genome_fallback"
-                    validated.append(checked_prediction(model))
+                def genome_predictions():
+                    for model in iter_miniprot(hashed_expansion()):
+                        model["evidence"] = by_id[model["query"]]
+                        model["search"] = "genome_fallback"
+                        yield model
+                validated.extend(check_predictions(genome_predictions(), "genome_fallback"))
                 expanded_genome_sha256 = expanded_digest.hexdigest()
                 # Only optional GeMoMa consumes unresolved after genome search;
                 # final placement and coding-path admission still run below.
@@ -1740,7 +1756,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
                                             'end': min(genome.get_reference_length(model['seqid']), b + padding)})
                 native_models, annevo_audit = annevo_gene_models.nominate(
                     plan['request'][engine], name, bounded_regions, proteins, genome, params, cpus=cpus, engine=engine)
-                native_checked = [checked_prediction(model) for model in native_models]
+                native_checked = list(check_predictions(native_models, engine))
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
                 atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
@@ -1750,22 +1766,25 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
                 native_models, genomewide_audit = rescue_native_genomewide.nominate(
                     plan['request']['oriongeno'], name, proteins, genome, placement_ownership,
                     params, tmp, cpus=cpus)
-                native_checked = [checked_prediction(model) for model in native_models]
+                native_checked = list(check_predictions(native_models, "oriongeno_genomewide"))
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
-                transferred_checked = [checked_prediction(model) for model in transferred]
-                annevo_gene_models.confirm_transferred_structure(native_checked, [*validated, *transferred_checked])
+                transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))
+                annevo_gene_models.confirm_transferred_structure(native_checked, chain(validated, transferred_checked))
                 validated.extend(transferred_checked)
                 validated.extend(native_checked)
             if cached:
                 cached.check()
             if searched_genome_ids:
-                covered = [r for r in candidate_regions if r["id"] in searched_genome_ids]
-                coverage_mapping = write_unique_queries(covered, proteins, tmp / "genome.covered.unique.fa")
+                covered = (r for r in candidate_regions if r["id"] in searched_genome_ids)
+                coverage_fasta = tmp / "genome.covered.unique.fa" if storage["retain_search_inputs"] else None
+                coverage_mapping = write_unique_queries(covered, proteins, coverage_fasta)
                 write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), coverage_mapping.items())
             memo = raw_validation.diagnostics()
             if checkpoint is not None:
                 memo["checkpoint_local_validation"] = state["local_validation_memo"]
+            if validation_runs:
+                memo["parallel_validation"] = validation_runs
             atomic_json(tmp / "raw_validation_memo.json", memo)
             placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
             models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
@@ -1851,9 +1870,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
             (tmp / "genome.covered.unique.fa").unlink(missing_ok=True)
     def guard():
         require_same_key(key, current_key())
-        if dependencies is not None:
-            check_sources()
-            verify_model_repair_targets(plan)
+        check_sources()
+        verify_model_repair_targets(plan)
         if checkpoint is not None:
             require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
 
@@ -1874,7 +1892,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies=None):
             require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
 
     return stage(root, relative, key, build, guard, hash_workers=cpus,
-                 publication_guard=publication_guard if dependencies is not None else None,
+                 publication_guard=publication_guard,
                  reuse=matches_checkpoint if checkpoint is not None else None)
 
 

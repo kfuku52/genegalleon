@@ -108,3 +108,17 @@ def test_empty_chain_and_out_of_bounds_keep_original_behavior(legacy_validator):
     for validator in (legacy_validator, rescue.validate_model):
         with pytest.raises(ValueError, match="Predicted CDS outside genome"):
             validator(model, genome, 1, PARAMS)
+
+
+@pytest.mark.parametrize("sequence,internal_stop", [
+    ("ATGTAACGGTAA", True),
+    ("ATGTACTGATAA", True),
+    ("ATGCTAAACTAA", False),
+    ("ATGTAGCAG", True),
+    ("ATGAGC", False),
+])
+def test_standard_stop_search_is_in_frame_and_excludes_the_terminal_codon(sequence, internal_stop):
+    model = {"seqid": "chr", "strand": "+", "cds": [[0, len(sequence), 0]],
+             "frameshift": False, "coverage": 1., "identity": 1.}
+    checked = rescue.validate_model(model, Genome(sequence), 1, PARAMS)
+    assert ("internal_stop" in checked["problems"]) == internal_stop
