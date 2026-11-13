@@ -1883,6 +1883,7 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
 
 def test_container_ghcr_resolves_moving_source_branches_once_per_build():
     workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
+    resolver = _read_text(CONTAINER_SCRIPTS_DIR / "resolve_source_revisions.sh")
 
     source_names = (
         "amalgkit",
@@ -1899,7 +1900,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
     for output_name in source_names:
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
 
-    assert "source container/source_branches.env" in workflow
+    assert 'source "${script_dir}/../source_branches.env"' in resolver
     assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
     for build_arg, output_name in (
