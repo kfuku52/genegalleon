@@ -36,11 +36,13 @@ BODY_FIELDS = frozenset({
 MAX_RECORD_BYTES = 64 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PAF = re.compile(r"\A(##?PAF\t)?([^\t\r\n]+)(\t[^\r\n]*)(\r?\n)?\Z")
+_JSON = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+_SORTED_JSON = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
 
 
 def _json(value, *, sort=False):
-    return json.dumps(value, ensure_ascii=False, allow_nan=False,
-                      separators=(",", ":"), sort_keys=sort).encode("utf-8")
+    encoder = _SORTED_JSON if sort else _JSON
+    return encoder.encode(value).encode("utf-8")
 
 
 def _codec(value):
