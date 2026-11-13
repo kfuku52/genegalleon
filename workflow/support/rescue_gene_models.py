@@ -2534,13 +2534,26 @@ def model_repair_candidates(models, ownership, species, source_gff):
 def consolidate(validated, existing, species, nearest=(), *, retained_paths=None):
     ownership = OwnershipIndex(existing)
     unique = {}
+    placement_problems = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
+    retained_paths = retained_paths or {}
+    previous_shape = None
     for model in validated:
         shape = coding_shape(model)
+        # Consecutive donor alignments often share the same target CDS. Its
+        # geometry and ownership are independent of donor evidence and status.
+        if shape != previous_shape:
+            start = min((e[0] for e in model["cds"]), default=0)
+            end = max((e[1] for e in model["cds"]), default=0)
+            model["start"], model["end"] = start, end
+            owners = ownership.overlapping(model)
+            identifiers = tuple(sorted({o["gene_id"] for o in owners if o.get("gene_id")})) if owners else None
+            previous_shape = shape
+        else:
+            model["start"], model["end"] = start, end
         # Historical status cannot replace current QC. Only source-bound,
         # unchanged complete CDS can retain their existing annotation position.
         model.pop('retained_coding_path', None)
-        previous = (retained_paths or {}).get(shape)
-        placement_problems = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
+        previous = retained_paths.get(shape)
         if (previous and not set(model['problems']) - placement_problems and model.get('sequence')
                 and hashlib.sha256(model['sequence'].encode()).hexdigest() == previous['sequence_sha256']):
             model['problems'] = sorted(set(model['problems']) - placement_problems)
@@ -2548,13 +2561,9 @@ def consolidate(validated, existing, species, nearest=(), *, retained_paths=None
             model['placement_evidence'] = {'classification': 'retained_annotation',
                 'basis': 'source_bound_previously_adopted_cds', 'orthology': 'unassigned', 'expected_copy': 'unassigned',
                 'current_assessment': model.get('placement_evidence')}
-        model["start"] = min((e[0] for e in model["cds"]), default=0)
-        model["end"] = max((e[1] for e in model["cds"]), default=0)
-        owners = ownership.overlapping(model)
-        if owners:
+        if identifiers is not None:
             model["problems"] = sorted(set(model["problems"]) | {"overlap_existing_annotation"})
-            identifiers = sorted({o["gene_id"] for o in owners if o.get("gene_id")})
-            model["revision_owner_ids"] = identifiers
+            model["revision_owner_ids"] = list(identifiers)
             model["revision_disposition"] = "existing_model_refinement" if len(identifiers) == 1 else "ambiguous_split_or_merge"
         model["status"] = "unresolved" if model["problems"] else "accepted"
         if model["status"] == "accepted":
@@ -2571,10 +2580,12 @@ def consolidate(validated, existing, species, nearest=(), *, retained_paths=None
     accepted = sorted(unique.values(), key=lambda m: (m["seqid"], m["start"], m["end"]))
     resolve_coding_paths(accepted, nearest)
     for model in validated:
-        shape = coding_shape(model)
-        if model["status"] == "duplicate_support" and unique[shape]["status"] == "unresolved":
+        if model["status"] != "duplicate_support":
+            continue
+        primary = unique[coding_shape(model)]
+        if primary["status"] == "unresolved":
             model["status"] = "unresolved"
-            model["problems"] = sorted(set(model["problems"]) | set(unique[shape]["problems"]))
+            model["problems"] = sorted(set(model["problems"]) | set(primary["problems"]))
     return validated
 
 
