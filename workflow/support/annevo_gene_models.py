@@ -359,36 +359,48 @@ def confirm_transferred_structure(native_models, transferred):
         donor, query = key(model)[1:3]
         return {**model, 'problems': [], 'support': [],
                 'evidence': {**model.get('evidence', {}), 'donor': donor, 'query': query}}
-    native_models = list(native_models)
-    native_keys = [(key(model), junctions(model)) for model in native_models]
-    wanted = set(native_keys)
-    wanted_queries = {query for query, _ in wanted}
+    native_models = iter(native_models)
+    first = next(native_models, None)
+    if first is None:
+        return
+    by_query = defaultdict(list)
     allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
-    by_structure = defaultdict(list)
-    if wanted:
-        for model in transferred:
-            if (not model.get('sequence') or not model.get('cds')
-                    or any(model.get('evidence', {}).get(e) for e in
-                           ('annevo', 'oriongeno', 'retained_annotation_candidate'))
-                    or set(model.get('problems', ())) - allowed):
-                continue
-            query = key(model)
-            if query in wanted_queries:
-                structure = query, junctions(model)
-                if structure in wanted:
-                    by_structure[structure].append(model)
-    for model, structure in zip(native_models, native_keys, strict=True):
+    for model in transferred:
+        if (not model.get('sequence') or not model.get('cds')
+                or any(model.get('evidence', {}).get(e) for e in
+                       ('annevo', 'oriongeno', 'retained_annotation_candidate'))
+                or set(model.get('problems', ())) - allowed):
+            continue
+        by_query[key(model)].append(model)
+    junction_index = {}
+    for model in chain((first,), native_models):
         engine = next(e for e in ('annevo', 'oriongeno') if model.get('evidence', {}).get(e))
         model['problems'] = [p for p in model['problems'] if p != engine + '_unconfirmed_coding_structure']
         whole_path = model.get('evidence', {}).get('genome_only')
-        same_junctions = by_structure.get(structure, ())
+        query = key(model)
+        matches_by_query = by_query.get(query, ())
+        if len(matches_by_query) < 2:
+            # A lookup miss or a single transfer needs no junction index.
+            same_junctions = (other for other in matches_by_query if junctions(other) == junctions(model))
+        else:
+            if query not in junction_index:
+                groups = defaultdict(list)
+                for other in matches_by_query:
+                    groups[junctions(other)].append(other)
+                junction_index[query] = groups
+            same_junctions = junction_index[query].get(junctions(model), ())
         if whole_path:
             # An unanchored candidate requires a mapping of both termini.
             shape = coding_shape(model)
             same_junctions = (other for other in same_junctions if coding_shape(other) == shape
                               and not {'missing_start', 'missing_stop'}.intersection(other.get('problems', ())))
-        support = checked_support(model)
-        matches = [other for other in same_junctions if compatible_paths(support, checked_support(other))]
+        support = None
+        matches = []
+        for other in same_junctions:
+            if support is None:
+                support = checked_support(model)
+            if compatible_paths(support, checked_support(other)):
+                matches.append(other)
         model['evidence'][engine]['genomic_structure_transfer'] = {
             'confirmed': bool(matches), 'counting_unit': 'same_donor_query_genomic_mapping',
             'scope': 'whole_coding_path' if whole_path else 'internal_junctions',
