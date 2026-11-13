@@ -2764,18 +2764,21 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                     if model["model_id"] in existing_ids:
                         raise ValueError("Rescued ID collides with original")
                     out.write(f">{model['model_id']}\n{model['sequence']}\n")
-            with open_text(Path(source["gff"])) as handle:
-                original = handle.read()
-            lines = original.splitlines(keepends=True)
-            boundary = next((i for i, line in enumerate(lines) if line.strip() == "##FASTA"), len(lines))
-            annotation, embedded = "".join(lines[:boundary]), "".join(lines[boundary:])
-            gff_ids = {attributes(line.rstrip().split("\t")[8])["ID"] for line in lines[:boundary]
-                       if not line.startswith("#") and len(line.rstrip().split("\t")) == 9
-                       and "ID" in attributes(line.rstrip().split("\t")[8])}
             mapping = json.loads((root / "prepared" / name / "mapping.json").read_text())
-            with gff.open("w") as out:
-                out.write(annotation)
-                if annotation and not annotation.endswith("\n"):
+            with open_text(Path(source["gff"])) as original, gff.open("w") as out:
+                gff_ids = set()
+                embedded_directive, last_line = "", ""
+                for line in original:
+                    if line.strip() == "##FASTA":
+                        embedded_directive = line
+                        break
+                    out.write(line)
+                    last_line = line
+                    if not line.startswith("#"):
+                        fields = line.rstrip().split("\t")
+                        if len(fields) == 9 and "ID" in (parsed := attributes(fields[8])):
+                            gff_ids.add(parsed["ID"])
+                if last_line and not last_line.endswith("\n"):
                     out.write("\n")
                 for model in models:
                     identifier = model["model_id"]
@@ -2820,11 +2823,12 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                         for i, (s, e, phase) in enumerate(alternative["cds"], 1):
                             out.write("\t".join([model["seqid"], "genegalleon_rescue", "CDS", str(s + 1), str(e), ".",
                                                 model["strand"], str(phase), f"ID={alt_id}.cds{i};Parent={alt_id}"]) + "\n")
-                out.write(embedded)
+                if embedded_directive:
+                    out.write(embedded_directive)
+                    shutil.copyfileobj(original, out)
             # Exercise the same full-ID annotation mapping used by downstream synteny.
             check = tmp / ("check_" + name)
             check.mkdir()
-            mapping = json.loads((root / "prepared" / name / "mapping.json").read_text())
             _, checked_mapping = prepare_rescue_genome(
                 {**source, "fasta": str(cds), "gff": str(gff), "feature": mapping["feature"],
                  "attribute": mapping["attribute"]}, check, "check", 1.0,
