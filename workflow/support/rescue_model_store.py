@@ -67,15 +67,27 @@ def _compress(value, codec, level):
 
 
 def _decompress(value, codec, *, expected_size=None):
+    limit = MAX_RECORD_BYTES if expected_size is None else min(MAX_RECORD_BYTES, expected_size)
     if codec == "gzip":
         reader = gzip.GzipFile(fileobj=io.BytesIO(value), mode="rb")
     else:
         import zstandard
-        reader = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(value))
+        decoder = zstandard.ZstdDecompressor()
+        try:
+            # SQLite bodies and overlays written here are single frames with
+            # a declared size. Keep the streaming path for older encodings
+            # and require the same bounds before allocating output.
+            size = zstandard.frame_content_size(value)
+            if 0 < size <= limit:
+                return decoder.decompress(value, allow_extra_data=False)
+        except zstandard.ZstdError:
+            # The streaming reader retains its existing behavior for frames
+            # with extra data and reports errors on undecodable content.
+            decoder = zstandard.ZstdDecompressor()
+        reader = decoder.stream_reader(io.BytesIO(value))
     with reader:
         # A writer comparing a stored body to known bytes needs at most one
         # extra byte to reject unequal bodies. Readers keep the full bound.
-        limit = MAX_RECORD_BYTES if expected_size is None else min(MAX_RECORD_BYTES, expected_size)
         result = reader.read(limit + 1)
     if len(result) > MAX_RECORD_BYTES:
         raise ValueError("Model-store record exceeds bounded buffer")

@@ -83,6 +83,20 @@ def test_stored_body_with_matching_prefix_is_rejected(tmp_path, codec):
             store._insert_body(database, body, 1, codec, packed_sha=sha)
 
 
+@pytest.mark.parametrize('frames', ['sized', 'unsized', 'concatenated'])
+def test_zstd_model_store_frame_fast_path_preserves_streamed_bytes_and_bound(monkeypatch, frames):
+    zstd = pytest.importorskip('zstandard')
+    data = b'bounded record'
+    first = zstd.ZstdCompressor(write_content_size=frames != 'unsized').compress(data)
+    encoded = first + zstd.ZstdCompressor().compress(b'another record') if frames == 'concatenated' else first
+    with closing(zstd.ZstdDecompressor().stream_reader(encoded)) as reader:
+        expected = reader.read(store.MAX_RECORD_BYTES + 1)
+    assert store._decompress(encoded, 'zstd') == expected
+    monkeypatch.setattr(store, 'MAX_RECORD_BYTES', len(data) - 1)
+    with pytest.raises(ValueError, match='Model-store record exceeds bounded buffer'):
+        store._decompress(encoded, 'zstd')
+
+
 def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_path, monkeypatch):
     records = [model(0, 'accepted'), model(1), model(2)]
     before, expected = published(tmp_path / 'direct', records, revisions=records)
