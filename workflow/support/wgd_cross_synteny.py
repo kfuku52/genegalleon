@@ -187,14 +187,19 @@ class CrossSynteny:
         index = CladeIndex(tree)
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
         beds, self_blocks = {}, {}
+        seen_genes = set()
         for row in pairs:
             for side in ("a", "b"):
                 sp = row[f"species_{side}"]
                 if sp not in beds:
                     beds[sp] = coordinates(row[f"bed_{side}"], sp)
+                    if not seen_genes.isdisjoint(beds[sp]):
+                        raise ValueError(f"Cross-synteny BED gene IDs are shared between species: {sp}")
+                    seen_genes.update(beds[sp])
             a, b = row["species_a"], row["species_b"]
             if a == b:
                 self_blocks[a] = anchor_links(row["anchors"], beds[a], beds[a], symmetric=True)
+        del seen_genes
         self.daughters = {}
         for row in pairs:
             a, b = row["species_a"], row["species_b"]

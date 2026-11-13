@@ -98,6 +98,8 @@ Paths are absolute or workspace-relative. Provide each genome's self
 comparison (same species on both sides) and one or more direct cross
 comparisons spanning the daughter lineages at each internal split.
 Species and BED gene IDs must match the input species and gene trees.
+BED gene IDs must be globally unique, and each archive member must name
+a family in the membership table and contain only its genes (subsets allowed).
 Use one BED per species and original `###`-delimited JCVI anchor files
 (plain or gzip), not lifted anchors or preassigned branch scores. This
 stage reads existing comparisons; it does not launch genome alignments.
@@ -130,9 +132,7 @@ are exploratory and are not calibrated WGD probabilities.
 With a cross-synteny manifest, optionally set `wgd_cross_ks_cds_file` to a
 TSV with columns `species` and `cds` (absolute or workspace-relative FASTA
 paths, optionally gzip-compressed). An empty `cds` cell uses the usual
-`input/species_cds` discovery. In this mode archive members must name a
-family from the membership table and contain only genes in that family
-(subsets are accepted). Use the same representative gene IDs in the CDS.
+`input/species_cds` discovery. Use the same representative gene IDs in the CDS.
 A species with CDS but no BED can supply ortholog
 distances for divergence calibration; it does not supply synteny evidence.
 

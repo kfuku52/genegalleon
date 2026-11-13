@@ -241,6 +241,21 @@ def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     assert summary[0]["regions"] == 2
 
 
+def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_synteny import CrossSynteny
+
+    tree = read_tree("((A,A_B),C);", "auto", True)
+    a, b, anchors = (tmp_path / name for name in ("a.bed", "b.bed", "cross.anchors"))
+    a.write_text("chr1\t0\t1\tA_B_g1\n")
+    b.write_text("chr1\t0\t1\tA_B_g1\n")
+    anchors.touch()
+    with pytest.raises(ValueError, match="gene IDs are shared between species"):
+        CrossSynteny(tree, [{"species_a": "A", "species_b": "A_B", "bed_a": a, "bed_b": b,
+                            "anchors": anchors}], 1)
+
+
 def test_nested_copy_overlap_distinguishes_window_and_gene_matches():
     from nwkit.clade_index import CladeIndex
     from nwkit.util import read_tree

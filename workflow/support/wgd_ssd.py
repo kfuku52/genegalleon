@@ -781,7 +781,7 @@ def run_analysis(plan, output, cpus):
         age_sources = plan.get("cross_ks_sources", {})
         cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources, trace_branches=None)
                  if plan.get("cross_pairs") is not None else None)
-        by_family = {row[family_key]: row for row in members} if age_sources else {}
+        by_family = {row[family_key]: row for row in members} if cross is not None else {}
 
         def family_members(family):
             row = by_family.get(family)
@@ -791,7 +791,7 @@ def run_analysis(plan, output, cpus):
         cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
         raw_candidates, num_trees = scan_duplications(tree, plan["gene_trees"], p["min_duplication_score"],
                                                       observe=cross.observe if cross is not None else None,
-                                                      family_members=family_members if cross_ks else None,
+                                                      family_members=family_members if cross is not None else None,
                                                       observe_family=cross_ks.observe_family if cross_ks else None)
         del by_family
         if cross is not None:
