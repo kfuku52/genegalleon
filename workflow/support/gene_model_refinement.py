@@ -737,44 +737,61 @@ def catalog_index(root, value, predictions=False):
         raise ValueError('Initial refinement index catalog receipts changed before final indexing')
 
     def build(tmp):
-        with scratch_build_directory(tmp) as work:
+        if predictions:
+            raw_summary = (initial_db.parent / 'summary.json').read_bytes()
+            if hashlib.sha256(raw_summary).hexdigest() != initial_files['summary.json']:
+                raise ValueError('Initial refinement index summary changed during copying')
+            summary = json.loads(raw_summary)
+            overlays = catalog_prediction_overlays(root, target_species(value))
+            first_overlay = next(overlays, None)
+            summary['accepted_prediction_count'] = 0
+        # Without accepted predictions a verified sequential copy is all the
+        # final index needs. Keep SQLite updates on local scratch when present.
+        scratch = (contextlib.nullcontext(tmp) if predictions and first_overlay is None
+                   else scratch_build_directory(tmp))
+        with scratch as work:
             db = work / 'loci.sqlite3'
             if predictions:
-                raw_summary = (initial_db.parent / 'summary.json').read_bytes()
-                if hashlib.sha256(raw_summary).hexdigest() != initial_files['summary.json']:
-                    raise ValueError('Initial refinement index summary changed during copying')
-                summary = json.loads(raw_summary)
                 copy_refinement_index(initial_db, db, initial_files[db.name])
-                accepted_count = 0
-                with contextlib.closing(sqlite3.connect(db)) as connection, connection:
-                    for name in target_species(value):
-                        additions = json.loads((root / 'predictions' / name / 'predictions.json').read_text())
-                        by_gene = defaultdict(list)
-                        for model in additions:
-                            if model['status'] == 'accepted':
-                                by_gene[model['gene_id']].append(model['candidate'])
-                        for gene, candidates in by_gene.items():
-                            locus = json.loads(connection.execute('SELECT json FROM loci WHERE species=? AND gene_id=?', (name, gene)).fetchone()[0])
-                            locus['candidates'].extend(candidates)
-                            for candidate in candidates:
-                                connection.execute('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)', (name, candidate['candidate_id'], gene))
-                            serialized = json.dumps(locus, sort_keys=True)
-                            connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
-                            accepted_count += len(candidates)
-                            summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
-                summary['accepted_prediction_count'] = accepted_count
-                summary['candidate_count'] += accepted_count
+                if first_overlay is not None:
+                    apply_catalog_predictions(db, summary, chain((first_overlay,), overlays))
             else:
                 summary = build_store(directories, db)
             if work != tmp:
-                copied = tmp / db.name
-                copy_refinement_index(db, copied)
-                with copied.open('rb') as handle:
+                copy_refinement_index(db, tmp / db.name)
+            if work != tmp or predictions:
+                with (tmp / db.name).open('rb') as handle:
                     os.fsync(handle.fileno())
         summary['database'] = str((root / ('catalog_index_final' if predictions else 'catalog_index') / 'loci.sqlite3').resolve())
         atomic_json(tmp / 'summary.json', summary)
     directory = stage(root, 'catalog_index_final' if predictions else 'catalog_index', {'dependencies': dependencies}, build)
     return directory / 'loci.sqlite3'
+
+
+def catalog_prediction_overlays(root, species):
+    for name in species:
+        by_gene = defaultdict(list)
+        for model in stream_json_array(root / 'predictions' / name / 'predictions.json'):
+            if model['status'] == 'accepted':
+                by_gene[model['gene_id']].append(model['candidate'])
+        for gene, candidates in by_gene.items():
+            yield name, gene, candidates
+
+
+def apply_catalog_predictions(db, summary, overlays):
+    accepted_count = 0
+    with contextlib.closing(sqlite3.connect(db)) as connection, connection:
+        for name, gene, candidates in overlays:
+            locus = load_locus(connection, name, gene)
+            locus['candidates'].extend(candidates)
+            connection.executemany('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)',
+                                   ((name, candidate['candidate_id'], gene) for candidate in candidates))
+            serialized = json.dumps(locus, sort_keys=True)
+            connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
+            accepted_count += len(candidates)
+            summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
+    summary['accepted_prediction_count'] = accepted_count
+    summary['candidate_count'] += accepted_count
 
 
 def copy_refinement_index(source, destination, expected_sha256=None):

@@ -1357,15 +1357,15 @@ def test_catalog_index_scratch_build_and_checked_publication(tmp_path, monkeypat
 
     monkeypatch.setattr(refinement, 'scratch_build_directory', scratch_directory)
     if predictions:
-        # The final stage must reuse the completed initial index while applying
-        # prediction overlays to its own copy.
+        # With no accepted predictions, copy the verified initial index
+        # directly into staging without importing or opening it for writes.
         @wraps(refinement.build_store)
         def unexpected_reimport(*args):
             pytest.fail('Final index re-imported the locus catalogs')
 
         monkeypatch.setattr(refinement, 'build_store', unexpected_reimport)
     assert refinement.catalog_index(root, value, predictions=predictions) == db
-    assert built == [expected]
+    assert built == ([] if predictions else [expected])
     assert db.read_bytes() == expected
     published = json.loads((db.parent / 'receipt.json').read_text())
     assert published['key'] == receipt['key']
