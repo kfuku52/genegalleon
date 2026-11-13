@@ -902,3 +902,139 @@ def test_real_miniprot_repairs_source_cds_mismatch_without_changing_coordinates(
     selected = (effective / "species_gff" / (target + ".gff3")).read_text()
     matching = [line for line in selected.splitlines() if "\tmRNA\t" in line and "ID=intact.long;" in line]
     assert len(matching) == 1
+
+
+def test_fixed_panel_refinement_reuses_donors_and_isolates_genome_and_assembly_targets(tmp_path):
+    fixture = import_module('test_rescue_gene_models_runtime')
+    data = fixture.hidden_models.__wrapped__(tmp_path)
+    _, names, truth = data
+    target, *donors = names
+    target_files = tmp_path / 'target_files'
+    for role in ('cds', 'gff', 'genome', 'busco'):
+        dst = target_files / role
+        dst.mkdir(parents=True)
+        source, = (tmp_path / role).glob(target + '.*')
+        source.rename(dst / source.name)
+    panel, _, _ = fixture.make_plan(data, directory_name='donors')
+    fixture.cli('prepare', '--output', panel)
+    rescue_root = tmp_path / 'target_rescue'
+    fixture.cli('plan', '--cds-dir', target_files / 'cds', '--gff-dir', target_files / 'gff',
+                '--genome-dir', target_files / 'genome', '--busco-dir', target_files / 'busco',
+                '--tree', tmp_path / 'tree.nwk', '--output', rescue_root, '--donor-plan', panel)
+    prepared = panel / 'prepared' / donors[0]
+    receipt_path = prepared / 'receipt.json'
+    receipt_before = receipt_path.read_bytes()
+    changed = json.loads(receipt_before)
+    changed['files']['unexpected.txt'] = hashlib.sha256(b'new').hexdigest()
+    (prepared / 'unexpected.txt').write_bytes(b'new')
+    refinement.atomic_json(receipt_path, changed)
+    result = subprocess.run([sys.executable, str(Path(refinement.rescue.__file__)), 'synteny',
+                             '--output', str(rescue_root), '--task-index', '1'],
+                            text=True, capture_output=True)
+    assert result.returncode and 'receipt changed' in result.stderr, result.stdout + result.stderr
+    receipt_path.write_bytes(receipt_before)
+    (prepared / 'unexpected.txt').unlink()
+    fixture.cli('run', '--output', rescue_root, '--cpus', 2)
+    rescue_plan = refinement.rescue.load(rescue_root)
+    assert rescue_plan['species'] == [target] and set(rescue_plan['donors'][target]) == set(donors)
+    genome_output = tmp_path / 'genomic'
+    cli('plan', '--rescue-output', rescue_root, '--output', genome_output)
+    cli('run', '--output', genome_output, '--cpus', 2)
+    cli('qc', '--output', genome_output)
+    genome_inputs = genome_output / 'effective/inputs.tsv'
+    assert [r['species'] for r in refinement.verify_inputs(genome_inputs)] == [target]
+    busco = import_module('gene_model_refinement_busco')
+    pairs = busco.input_pairs(genome_output, tmp_path / 'cds', three_stage=True)
+    assert [r['species'] for r in pairs] == [target]
+    assert Path(pairs[0]['pre_rescue']).parent == target_files / 'cds'
+    utr = tmp_path / 'genomic_utrs'
+    cli('reproject-utrs', '--source-output', genome_output,
+        '--source-receipt-sha256', refinement.digest(genome_output / 'effective/receipt.json'), '--output', utr)
+    assert {p.stem for p in (utr / 'effective/species_gff').glob('*.gff3')} == {target}
+    genomic_cds = genome_output / 'effective/species_cds' / (target + '.fa')
+    effective_cds = {sequence for _, _, sequence in fasta_records(genomic_cds)}
+    assert truth[8] in effective_cds
+    assert not effective_cds.intersection({truth[9], truth[10]})
+    assert set(p.name for p in (genome_output / 'predictions').iterdir()) == {target}
+    receipt = genome_output / 'effective/receipt.json'
+    before = (receipt.read_bytes(), receipt.stat().st_mtime_ns)
+    cache = tmp_path / 'gene_model_refinement_donor_cache'
+    donor_paths = sorted(cache.glob('catalog/*/receipt.json'))
+    assert len(donor_paths) == len(donors)
+    donor_mtimes = {p: p.stat().st_mtime_ns for p in donor_paths}
+
+    assemblies = tmp_path / 'assembly' / 'assembled_transcripts_with_isoforms'
+    assemblies.mkdir(parents=True)
+    baseline = ''.join(truth[2][i:i + 3] if 60 <= i < 420 and i % 9 == 0 else truth[0][i:i + 3]
+                       for i in range(0, len(truth[0]), 3))
+    for name in ('Assembly_first', donors[0]):
+        (assemblies / (name + '_isoform.fa')).write_text(
+            f'>TRINITY_DN1_c0_g1_i1\n{baseline}\n'
+            f'>TRINITY_DN1_c0_g1_i2\n{truth[0]}\n'
+        )
+    first_databases = None
+    for name in ('Assembly_first', donors[0]):
+        output = tmp_path / name
+        cli('plan', '--donor-plan', panel, '--target', name,
+            '--transcriptome-assembly-dir', assemblies.parent, '--output', output)
+        recorded = json.loads((output / 'plan.json').read_text())['request']['fixed_donors']
+        assert set(recorded) == set(donors) - {name}
+        cli('run', '--output', output, '--cpus', 2)
+        cli('qc', '--output', output)
+        sequence = output / 'effective/sequence'
+        assert [r['species'] for r in refinement.read_table(sequence / 'inputs.tsv')] == [name]
+        decision, = refinement.read_table(sequence / 'representative_map.tsv')
+        assert decision['source_transcript_id'] == 'TRINITY_DN1_c0_g1_i2', decision
+        assert not (output / 'effective/inputs.tsv').exists()
+        assert set(p.name for p in (output / 'predictions').iterdir()) == {name}
+        databases = {p: p.stat().st_mtime_ns for p in cache.glob('diamond/*/proteins.dmnd')}
+        assert len(databases) == len(donors)
+        if first_databases is not None:
+            assert databases == first_databases
+        first_databases = databases
+    assert len(list(cache.glob('protein_pairs/*/edges.json'))) == len(donors) * 2 - 1
+    assert (receipt.read_bytes(), receipt.stat().st_mtime_ns) == before
+    assert {p: p.stat().st_mtime_ns for p in donor_paths} == donor_mtimes
+    report = cli('run', '--output', genome_output, '--cpus', 2)
+    assert 'Reused effective' in report.stdout
+    assert (receipt.read_bytes(), receipt.stat().st_mtime_ns) == before
+
+
+def test_fixed_refinement_reuses_exact_real_miniprot_search(tmp_path, monkeypatch):
+    _, _, _, sources, truth = truth_fixture(tmp_path)
+    source = sources[0]
+    genome_path = Path(source['genome'])
+    code = source.get('genetic_code', 1)
+    source = {'genome': str(genome_path), 'genetic_code': code}
+    query = str(Seq(truth[sources[0]['species'], 'intact']['cds']).translate()).removesuffix('*')
+    donor = 'Donor_species'
+    proteins = {donor: {'protein_1': query}}
+    executable = refinement.shutil.which('miniprot')
+    request = {'fixed_donors': [donor], 'donor_plan_path': str(tmp_path / 'panel/plan.json'),
+               'files': {str(genome_path): refinement.digest(genome_path)},
+               'miniprot': {'path': executable, 'sha256': refinement.digest(executable)},
+               'implementation': refinement.implementation()}
+    # The enclosing runtime test covers real plan loads and input fences.
+    monkeypatch.setattr(refinement, 'load', lambda _root: request)
+    real_search = refinement.rescue.search_intervals
+    searches = []
+    def count(*args, **kwargs):
+        searches.append(kwargs['executable'])
+        return real_search(*args, **kwargs)
+    monkeypatch.setattr(refinement.rescue, 'search_intervals', count)
+
+    with refinement.indexed_genome(genome_path) as genome:
+        seqid = 'chr_intact'
+        end = genome.get_reference_length(seqid)
+        windows = {(seqid, 0, end): [{'id': 'query1', 'query': 'protein_1', 'donor': donor}]}
+        params = {'max_intron': 10000}
+        cold, warm = (tmp_path / stage for stage in ('cold', 'warm'))
+        cold.mkdir()
+        warm.mkdir()
+        first = refinement.search_refinement_intervals(tmp_path, request, cold, windows, proteins,
+                                                       genome, source, params, 1)
+        second = refinement.search_refinement_intervals(tmp_path, request, warm, windows, proteins,
+                                                        genome, source, params, 2)
+    assert first and first == second and searches == [executable]
+    for member in (refinement.rescue.INTERVAL_ARCHIVE, refinement.rescue.LOCAL_RECORDS):
+        assert (cold / member).read_bytes() == (warm / member).read_bytes()

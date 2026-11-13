@@ -24,6 +24,7 @@ class RefinementInputSnapshot:
         self.plan = None
         self.frozen = None
         self.plan_proof = _Proof()
+        self.predictor_proof = _Proof()
         self.groups = {}
         self.path_groups = {}
         self.expected = {}
@@ -59,7 +60,7 @@ class RefinementInputSnapshot:
         self.hash_owners.clear()
         self.physical_owners.clear()
         self.target_owners.clear()
-        self.root = self.plan = self.frozen = self.plan_proof = None
+        self.root = self.plan = self.frozen = self.plan_proof = self.predictor_proof = None
         self.closed = True
 
     def _failed(self, exc):
@@ -137,6 +138,16 @@ class RefinementInputSnapshot:
         except (OSError, ValueError) as exc:
             self._failed(exc)
 
+    def verify_predictor(self, path, expected):
+        """Hash a predictor once and fence its generation until publication."""
+        self._open()
+        try:
+            actual = self.predictor_proof.read([path])
+            if actual[str(Path(path).absolute())] != expected:
+                raise InputChanged('Frozen predictor changed: ' + str(path))
+        except (OSError, ValueError) as exc:
+            self._failed(exc)
+
     def check_all(self):
         self._open()
         if self.root is None:
@@ -145,6 +156,7 @@ class RefinementInputSnapshot:
             parsed, _sha = self.plan_proof.json(self.root / 'plan.json')
             if parsed != self.frozen or self.plan != self.frozen:
                 raise InputChanged('Frozen refinement plan changed during execution')
+            self.predictor_proof.check()
             for proof in self.groups.values():
                 proof.check()
         except (OSError, ValueError) as exc:

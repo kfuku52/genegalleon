@@ -209,6 +209,66 @@ Verified native ANNEVO GFF/receipts can supplement these candidates with
 Donor support is measured independently and all existing adoption gates remain;
 see [connection, provenance and masking comparison](annevo-model-improvement.md).
 
+## Use the same fixed donors for rescue and refinement
+
+Use one frozen donor-only rescue plan for the cohort and a separate rescue
+and refinement output directory per target. The panel specifies exact CDS,
+GFF, genome, BUSCO and genetic code inputs. See
+[preparing a fixed rescue donor panel](gene-model-rescue.md#fixed-donor-panel).
+
+For a genomic target, complete rescue with `--donor-plan /path/to/panel`
+first. Refinement takes the same donors and the verified target-to-donor
+synteny comparisons from the rescue publication. The target never serves as
+its own donor, even when it is a member of the panel.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output /path/to/targets/Genus_species/rescue \
+  --output /path/to/targets/Genus_species/refinement
+python workflow/support/gene_model_refinement.py run \
+  --output /path/to/targets/Genus_species/refinement --cpus 4
+```
+
+For a target that has assembled transcripts only, use the same panel and
+select its isoform FASTA from the standard assembly directory. A one-species
+`--transcriptome-inputs` manifest from `prepare-transcriptome` also works.
+DIAMOND compares the target to the fixed donor proteins using the same
+reciprocal-match and ambiguity rules as the existing sequence-only mode.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --donor-plan /path/to/panel --target Genus_species \
+  --transcriptome-assembly-dir /path/to/transcriptome_assembly \
+  --output /path/to/targets/Genus_species/refinement
+```
+
+Run it with the same `run` and `qc` commands as for a genomic target. Both routes
+publish selected CDS/protein inputs in `effective/sequence/inputs.tsv`; only
+genomic targets also publish `effective/inputs.tsv` with GFF and genome. For
+a genomic target with RNA evidence, the existing `--rna-bam-dir` or `--rna`
+interface accepts whole coding paths aligned to that genome. The sequence-only
+FASTA route does not turn assembly contigs into genomic coordinates.
+
+The donor representative stays fixed to the source baseline. Other annotated
+donor isoforms remain available to nominate local genomic predictions. The
+usual independent support and adoption checks still run on the target.
+Donor catalogs, DIAMOND databases, protein comparisons and identical local
+miniprot searches are cached by inputs and tool identity under
+`gene_model_refinement_donor_cache/` next to the panel. Keep the panel, caches
+and completed target directories available when adding targets. A new
+target does not invalidate existing results. A revised target or panel
+requires a new output directory; unchanged donor artifacts can still be reused.
+When targets have separate parent directories, set
+`GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE` (CLI `--comparison-cache` on
+`run`) to one shared directory to reuse matching genomic comparisons across
+revisions as well.
+
+The input-generation entrypoint accepts
+`GG_INPUT_GENE_MODEL_RESCUE_DONOR_PLAN=/path/to/panel` and, when discovering
+an assembly-only target, `GG_INPUT_GENE_MODEL_REFINEMENT_TARGET=Genus_species`.
+Use a separate workspace or explicit per-target output paths; a fixed-panel
+refinement publication contains one target.
+
 ## Run from input generation
 
 Set `run_gene_model_refinement=1` in

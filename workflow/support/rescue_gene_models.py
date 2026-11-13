@@ -312,6 +312,17 @@ def build_plan(args):
         species = [name for name in species if name not in excluded]
         if not species:
             raise ValueError("No CDS species found")
+        targets = species
+        donor_root = getattr(args, "donor_plan", None)
+        donor_plan = None
+        if donor_root is not None:
+            donor_root = donor_root.resolve(strict=True)
+            if root == donor_root or root.is_relative_to(donor_root) or donor_root.is_relative_to(root):
+                raise ValueError("Use separate output roots for the frozen donor pool and its targets")
+            donor_plan = load(donor_root)
+            if donor_plan["request"].get("fixed_donor_pool"):
+                raise ValueError("A target-only plan cannot define the donor pool")
+            species = sorted(set(targets) | set(donor_plan["species"]))
         tree_bytes = args.tree.read_bytes()
         tree = Phylo.read(io.StringIO(tree_bytes.decode("utf-8")), "newick")
         names = [tip.name for tip in tree.get_terminals()]
@@ -346,8 +357,8 @@ def build_plan(args):
                 codes[row["species"]] = int(row["genetic_code"])
                 if codes[row["species"]] not in CodonTable.unambiguous_dna_by_id:
                     raise ValueError("Unknown genetic code: " + row["species"])
-        sources = {}
-        for name in species:
+        sources = copy.deepcopy(donor_plan["request"]["sources"]) if donor_plan else {}
+        for name in targets:
             safe_token(name, "species")
             def discover(directory, suffixes, name=name):
                 matches = [p for p in directory.iterdir() if p.is_file() and extract_species_label(p.name) == name
@@ -363,9 +374,12 @@ def build_plan(args):
             code = codes.get(name, args.genetic_code)
             if code not in CodonTable.unambiguous_dna_by_id:
                 raise ValueError(f"Unknown genetic code for {name}")
-            sources[name] = {"species": name, "fasta": cds, "gff": gff, "genome": genome,
-                             "busco": busco, "quality": busco_quality(busco), "mode": "cds",
-                             "feature": args.feature, "attribute": args.attribute, "genetic_code": code}
+            source = {"species": name, "fasta": cds, "gff": gff, "genome": genome,
+                      "busco": busco, "quality": busco_quality(busco), "mode": "cds",
+                      "feature": args.feature, "attribute": args.attribute, "genetic_code": code}
+            if name in sources and sources[name] != source:
+                raise ValueError("A target in the fixed panel must use the same source inputs and settings: " + name)
+            sources[name] = source
         comparable = {tuple(s["quality"][k] for k in COMPARABLE_QUALITY) for s in sources.values()}
         if len(comparable) != 1:
             raise ValueError("Reference BUSCO scores must use the same lineage, version, mode, dataset date and marker count")
@@ -387,6 +401,31 @@ def build_plan(args):
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
+        if donor_plan:
+            prior = donor_plan["request"]
+            names = donor_plan["species"]
+            refs = donor_plan["common_references"]
+            if len(refs) != args.common_references or not set(refs) <= eligible:
+                raise ValueError("Frozen common references differ from requested reference settings")
+            path = str(donor_root / "plan.json")
+            request["files"][path] = plan_digest(donor_root, donor_plan)
+            for name in names:
+                for role in ("fasta", "gff", "genome", "busco"):
+                    path = sources[name][role]
+                    require_same_key(prior["files"][path], request["files"][path])
+            request["fixed_donor_pool"] = {"root": str(donor_root), "species": names,
+                                           "plan_sha256": request["files"][str(donor_root / "plan.json")]}
+            donor_receipts = {}
+            with ReceiptSnapshot(verified) as proof:
+                for name in names:
+                    key = {"plan": request["fixed_donor_pool"]["plan_sha256"], "species": name}
+                    directory = donor_root / "prepared" / name
+                    path = directory / "receipt.json"
+                    if not verified_dependency(proof, directory, key):
+                        raise ValueError("Frozen donor preparation is missing or corrupt: " + name)
+                    donor_receipts[name] = digest(path)
+                    proof.check({path: donor_receipts[name]})
+            request["fixed_donor_pool"]["prepared_receipts"] = donor_receipts
         request["output_storage"] = {"format": getattr(args, "model_storage", "compact"),
                                      "retain_search_inputs": bool(getattr(args, "retain_search_inputs", False))}
         repair_targets = getattr(args, "model_repair_targets", None)
@@ -400,10 +439,11 @@ def build_plan(args):
             request["files"][str(repair_targets)] = before
         prediction_cache = getattr(args, "prediction_cache", None)
         if prediction_cache:
-            request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, sources)
+            request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, targets)
+        prediction_sources = {name: sources[name] for name in targets}
         if getattr(args, "oriongeno_inputs", None):
             import annevo_gene_models
-            request["oriongeno"] = annevo_gene_models.freeze_inputs(args.oriongeno_inputs, sources, engine='oriongeno')
+            request["oriongeno"] = annevo_gene_models.freeze_inputs(args.oriongeno_inputs, prediction_sources, engine='oriongeno')
             request["files"].update(request["oriongeno"]["files"])
         if getattr(args, 'oriongeno_genomewide', False):
             if not request.get('oriongeno'):
@@ -412,7 +452,7 @@ def build_plan(args):
             request['oriongeno_genomewide'] = CONTRACT
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
-            request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, sources)
+            request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, prediction_sources)
             request["files"].update(request["annevo"]["files"])
         guide_stability = None
         if getattr(args, "guide_tree_receipt", None):
@@ -452,39 +492,47 @@ def build_plan(args):
             Phylo.write(tree, tmp / "selection.nwk", "newick", format_branch_length="%1.17g")
             write_tsv(tmp / "quality.tsv", ("leaf_name", "busco_complete_pct"),
                       [(n, sources[n]["quality"]["complete_pct"]) for n in species])
-            run(["nwkit", "sample", "--infile", tmp / "selection.nwk", "--outfile", tmp / "references.nwk",
+            if donor_plan:
+                donor_tree = copy.deepcopy(tree)
+                for name in set(species) - set(refs):
+                    donor_tree.prune(name)
+                Phylo.write(donor_tree, tmp / "references.nwk", "newick", format_branch_length="%1.17g")
+                write_tsv(tmp / "references.tsv", ("leaf_name",), [(n,) for n in refs])
+            else:
+                run(["nwkit", "sample", "--infile", tmp / "selection.nwk", "--outfile", tmp / "references.nwk",
                  "--n", args.common_references, "--method", "max-pd", "--trait", tmp / "quality.tsv",
                  "--filter", f"busco_complete_pct:ge:{args.minimum_busco}", "--rank", "busco_complete_pct:desc",
                  "--report", tmp / "references.tsv"], tmp, "select")
-            refs = [row["leaf_name"] for row in table(tmp / "references.tsv")]
+                refs = [row["leaf_name"] for row in table(tmp / "references.tsv")]
             if len(refs) != args.common_references or len(set(refs)) != len(refs) or not set(refs) <= eligible:
                 raise ValueError("NWKIT did not select the requested eligible reference set")
             distances = patristic_distances(tree)
-            neighbors = {n: sorted((m for m in species if m != n),
+            donor_names = set(donor_plan["species"] if donor_plan else species)
+            neighbors = {n: sorted((m for m in donor_names if m != n),
                                    key=lambda m: (distances[n][m], -sources[m]["quality"]["complete_pct"], m))[:args.nearest_references]
-                         for n in species}
+                         for n in targets}
             if guide_stability:
                 # Retain alternative supported neighbourhoods within a bounded
                 # extra budget; marker-panel agreement is not a bootstrap value.
-                for name in species:
+                for name in targets:
                     evidence = guide_stability[name]
                     if not evidence["stable"]:
-                        alternatives = (set(evidence["panel_0"]) | set(evidence["panel_1"])) & set(species) - {name}
+                        alternatives = (set(evidence["panel_0"]) | set(evidence["panel_1"])) & donor_names - {name}
                         ordered = sorted(alternatives - set(neighbors[name]),
                                          key=lambda m: (distances[name][m], -sources[m]["quality"]["complete_pct"], m))
                         neighbors[name] += ordered[:args.nearest_references]
-            donors = {n: sorted((set(refs) | set(neighbors[n])) - {n}) for n in species}
+            donors = {n: sorted((donor_names if donor_plan else set(refs) | set(neighbors[n])) - {n}) for n in targets}
             for name, rows in request.get("model_repair_targets", {}).get("by_species", {}).items():
-                if any(row["donor"] not in donors[name] for row in rows):
+                if name not in donors or any(row["donor"] not in donors[name] for row in rows):
                     raise ValueError("Model repair targets require selected donor species for: " + name)
-            pairs = sorted({tuple(sorted((n, m))) for n in species for m in donors[n]})
+            pairs = sorted({tuple(sorted((n, m))) for n in targets for m in donors[n]})
             jobs = [{"a": a, "b": b, "kind": "pair"} for a, b in pairs]
-            jobs += [{"a": n, "b": n, "kind": "self"} for n in species]
+            jobs += [{"a": n, "b": n, "kind": "self"} for n in targets]
             plan = {"request": request, "common_references": refs, "nearest_references": neighbors,
-                    "donors": donors, "species": species,
+                    "donors": donors, "species": targets,
                     "synteny_jobs": [{**job, "index": i, "id": f"comparison_{i:06d}"} for i, job in enumerate(jobs, 1)]}
             if guide_stability:
-                plan["guide_tree_stability"] = {n: guide_stability[n] for n in species}
+                plan["guide_tree_stability"] = {n: guide_stability[n] for n in targets}
             if guide_stability and digest_paths(request["files"]) != request["files"]:
                 raise ValueError("Guide evidence changed during reference selection")
             for file in ("selection.nwk", "quality.tsv", "references.nwk", "references.tsv"):
@@ -499,6 +547,9 @@ def load(root, *, inspect_only=False):
             or (not inspect_only and plan["request"]["tools"] != identities())):
         raise ValueError("Rescue schema/tools changed; use a new output directory")
     plan_digest(root, plan)
+    donor_pool = plan["request"].get("fixed_donor_pool")
+    if donor_pool and digest(Path(donor_pool["root"]) / "plan.json") != donor_pool["plan_sha256"]:
+        raise ValueError("Frozen donor plan changed")
     if plan["request"].get("guide_tree_receipt"):
         path = Path(plan["request"]["guide_tree_receipt"])
         if digest(path) != plan["request"]["files"][str(path)]:
@@ -668,6 +719,12 @@ def prepared(root, plan, name, source_snapshot=None):
             verify_sources(plan, [name], ["fasta", "gff", "genome"])
     guard()
     def build(tmp):
+        pool = plan["request"].get("fixed_donor_pool")
+        if pool and name in pool["species"]:
+            prior = Path(pool["root"]) / "prepared" / name
+            copy_verified_comparison(prior, tmp, {"plan": pool["plan_sha256"], "species": name},
+                                     receipt_sha256=pool.get("prepared_receipts", {}).get(name))
+            return
         genes, meta = prepare_rescue_genome(source, tmp, "genes", 1.0)
         atomic_json(tmp / "mapping.json", meta)
         atomic_json(tmp / "positions.json", [vars(g) for g in genes])
@@ -1168,7 +1225,7 @@ def archive_interval(archive, directory):
 
 
 def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None,
-                     retain_inputs=False, *, compact=False, deduplicate_queries=False):
+                     retain_inputs=False, *, compact=False, deduplicate_queries=False, executable="miniprot"):
     """Bound pending work and retain input order, with total threads <= cpus.
 
     Only the submitting thread fetches from pysam's seekable FASTA handle.
@@ -1189,7 +1246,7 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
         return []
     threads = cpus // workers
     def predict(directory, representatives):
-        run(["miniprot", "-u", "-T", code, "-t", threads, "-G", max_intron,
+        run([executable, "-u", "-T", code, "-t", threads, "-G", max_intron,
              "-N", MINIPROT_MAX_SECONDARY, f"--outs={MINIPROT_OUTPUT_SCORE_RATIO}",
              "--gff", directory / "region.fa", directory / "queries.fa"],
             directory, "miniprot", directory / "models.gff")
@@ -2863,6 +2920,8 @@ def parser():
     for name in ("cds-dir", "gff-dir", "genome-dir", "busco-dir", "tree", "output"):
         plan.add_argument("--" + name, type=Path, required=True)
     plan.add_argument("--common-references", type=int, default=5)
+    plan.add_argument("--donor-plan", type=Path,
+                      help="Frozen ordinary rescue plan defining donor-only sources and common references")
     plan.add_argument("--guide-tree-receipt", type=Path, help="Optional frozen pre-rescue BUSCO k-mer guide receipt")
     plan.add_argument("--nearest-references", type=int, default=3)
     plan.add_argument("--minimum-busco", type=float, default=90)
@@ -2905,7 +2964,7 @@ def parser():
     plan.add_argument("--terminal-max-unaligned-c-overhang", type=int, choices=(0, 1, 2), default=2)
     plan.add_argument("--gemoma-jar", type=Path, help="Optional GeMoMa refinement; requires Java and tblastn")
     plan.add_argument("--gemoma-java", default="java", help="Java executable compatible with the supplied GeMoMa jar")
-    for name in ("synteny", "rescue", "predict", "postprocess", "finalize", "run", "status", "qc",
+    for name in ("prepare", "synteny", "rescue", "predict", "postprocess", "finalize", "run", "status", "qc",
                  "worker-complete", "qc-inputs", "export-search-inputs", "export-models"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
@@ -2914,7 +2973,7 @@ def parser():
             cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
         if name in {"synteny", "run"}:
             cmd.add_argument("--comparison-cache", type=Path, help="Shared comparison cache (default: OUTPUT parent/gene_model_rescue_comparison_cache)")
-        if name in {"synteny", "rescue", "predict", "postprocess", "worker-complete", "qc-inputs"}:
+        if name in {"prepare", "synteny", "rescue", "predict", "postprocess", "worker-complete", "qc-inputs"}:
             cmd.add_argument("--task-index", type=int, help="One-based frozen job/species index; omit to run all")
         if name in {"export-search-inputs", "export-models"}:
             cmd.add_argument("--task-index", type=int, required=True, help="One-based frozen species index")
@@ -2976,6 +3035,11 @@ def main():
         count = len(plan["synteny_jobs"]) if args.command == "synteny" else len(plan["species"])
         if not 1 <= args.task_index <= count:
             p.error("task index outside frozen plan")
+    if args.command == "prepare":
+        names = [plan["species"][args.task_index - 1]] if args.task_index else plan["species"]
+        for name in names:
+            prepared(root, plan, name)
+        return
     if args.command == "export-search-inputs":
         print(export_worker_inputs(root, plan, plan["species"][args.task_index - 1], args.destination,
                                    combined=args.combined, cpus=args.cpus))

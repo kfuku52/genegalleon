@@ -2247,8 +2247,11 @@ def test_array_plan_rejects_escaping_species_and_download_filenames(tmp_path):
         assert not output.exists()
 
 
-@pytest.mark.parametrize(('combined', 'transcriptome'), [(False, False), (True, False), (True, True)])
-def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined, transcriptome):
+@pytest.mark.parametrize(('combined', 'transcriptome', 'fixed'), [
+    (False, False, False), (True, False, False), (True, True, False),
+    (True, False, True), (False, True, True),
+])
+def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined, transcriptome, fixed):
     import os
     plan = tmp_path / 'tmp' / 'plan.json'
     plan.parent.mkdir()
@@ -2281,6 +2284,10 @@ if mode == 'refinement_prepare' or mode == 'array_finalize' and os.environ.get('
     if os.environ['TEST_TRANSCRIPTOME'] == '1':
         request.update(edges='mixed_edges.tsv', transcriptome_sources={'E_f': {}})
         species.append('E_f')
+    if os.environ['TEST_FIXED'] == '1':
+        request['target_species'] = [species[-1]]
+        if request.get('transcriptome_sources'):
+            request['rescue_output'] = None
     (root / 'plan.json').write_text(json.dumps({'species': species, 'request': request}))
 print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue_synteny': 104, 'refinement_catalog': 105, 'refinement_correspondence': 106, 'refinement_predict': 107, 'refinement_finalize': 108, 'rescue_models': 109, 'rescue_finalize': 110, 'refinement_prepare': 111}[mode])
 ''')
@@ -2288,6 +2295,7 @@ print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('TEST_CALLS', str(calls))
     monkeypatch.setenv('TEST_TRANSCRIPTOME', str(int(transcriptome)))
+    monkeypatch.setenv('TEST_FIXED', str(int(fixed)))
     helper = SUPPORT_DIR.parent / 'gg_input_generation_array.py'
     result = run_python(helper, '--task-plan', str(plan), '--refinement', '--submit', '--max-running', '5',
                         '--rescue-max-running', '3', '--rescue-cpus', '8', '--rescue-memory', '64G', *(['--rescue'] if combined else []))
@@ -2298,6 +2306,13 @@ print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue
         assert '--wait' in submissions[5]['argv']
         assert '--dependency=afterok:110' in submissions[6]['argv'] and '--wait' in submissions[6]['argv']
         submissions = submissions[:3] + submissions[7:]
+    if fixed:
+        assert [row['mode'] for row in submissions] == ['array_prepare', 'array_worker', 'array_finalize',
+               'refinement_correspondence', 'refinement_predict', 'refinement_finalize']
+        assert '--array=1%3' in submissions[4]['argv']
+        assert '--dependency=afterok:106' in submissions[4]['argv']
+        assert '--dependency=afterok:107' in submissions[5]['argv']
+        return
     assert [row['mode'] for row in submissions] == ['array_prepare', 'array_worker', 'array_finalize',
            'rescue_synteny', 'refinement_catalog', 'refinement_correspondence', 'refinement_predict', 'refinement_finalize']
     assert all(row['refinement'] == '1' for row in submissions)

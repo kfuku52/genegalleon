@@ -631,6 +631,8 @@ gene_model_refinement_padding
 run_gene_model_rescue
 run_gene_model_rescue_swissprot
 gene_model_rescue_swissprot_dir
+gene_model_rescue_donor_plan
+gene_model_refinement_target
 gene_model_rescue_tree
 gene_model_rescue_guide_markers
 gene_model_rescue_guide_k

@@ -286,6 +286,7 @@ gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-${gene_model_rescue_
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-$(dirname "${gene_model_rescue_dir}")/busco_guide_sketch_cache}"
 case "${gene_model_rescue_guide_dir}" in /*) ;; *) gene_model_rescue_guide_dir="${PWD}/${gene_model_rescue_guide_dir}" ;; esac
 case "${gene_model_rescue_guide_cache}" in /*) ;; *) gene_model_rescue_guide_cache="${PWD}/${gene_model_rescue_guide_cache}" ;; esac
+case "${gene_model_rescue_donor_plan:-}" in ""|/*) ;; *) gene_model_rescue_donor_plan="${PWD}/${gene_model_rescue_donor_plan}" ;; esac
 case "${gene_model_rescue_tree}" in auto|/*) ;; *) gene_model_rescue_tree="${PWD}/${gene_model_rescue_tree}" ;; esac
 case "${gene_model_rescue_gemoma_jar}" in ""|/*) ;; *) gene_model_rescue_gemoma_jar="${PWD}/${gene_model_rescue_gemoma_jar}" ;; esac
 input_generation_tmp_root="${input_generation_root}/tmp"
@@ -2650,6 +2651,13 @@ prepare_gene_model_rescue() {
   if [[ -n "${assembly_dir}" ]]; then
     guide_assembly_args=(--transcriptome-assembly-dir "${assembly_dir}" --gff-dir "${species_gff_dir}" --genome-dir "${species_genome_dir}")
   fi
+  if [[ -n "${gene_model_rescue_donor_plan:-}" ]]; then
+    [[ "${rescue_tree}" != auto ]] || {
+      echo "Fixed donor rescue requires gene_model_rescue_tree with the target and fixed donors." >&2
+      return 1
+    }
+    rescue_args+=(--donor-plan "${gene_model_rescue_donor_plan}")
+  fi
   if [[ "${rescue_tree}" == auto ]]; then
     python "${gg_support_dir}/busco_guide_tree.py" build \
       --cds-dir "${species_cds_dir}" --full-dir "${species_busco_full_dir}" --short-dir "${species_busco_short_dir}" \
@@ -2761,12 +2769,20 @@ prepare_gene_model_refinement() {
     --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
     --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
+  if [[ -n "${gene_model_rescue_donor_plan:-}" ]]; then
+    refinement_args+=(--donor-plan "${gene_model_rescue_donor_plan}")
+  fi
+  if [[ -n "${gene_model_refinement_target:-}" ]]; then
+    refinement_args+=(--target "${gene_model_refinement_target}")
+  fi
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
     genomic_inputs=1
   elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]] ||
        { [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] &&
-         { [[ -z "${assembly_dir}" ]] || refinement_has_genomes; }; }; then
+         { [[ -n "${gene_model_rescue_donor_plan:-}" && -z "${gene_model_refinement_target:-}" ]] ||
+           { [[ -z "${gene_model_rescue_donor_plan:-}" ]] &&
+             { [[ -z "${assembly_dir}" ]] || refinement_has_genomes; }; }; }; }; then
     local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
     if [[ ! -s "${anchor_dir}/plan.json" ]]; then
       [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }

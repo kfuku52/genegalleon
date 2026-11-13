@@ -8,9 +8,10 @@ mapping. Library calls outside that command scope continue to perform fresh
 full-byte verification.
 
 Small plan JSON is read every time. Its whole value, original generation and
-pathname must match the first frozen copy. Implementation, runtime dependency
-and predictor identities are still checked ordinarily on each load. Input and
-plan changes are sticky failures, including same-byte atomic replacements;
+pathname must match the first frozen copy. Implementation and runtime dependencies are checked on each load. Predictor
+binaries are hashed once per command. Later checks verify the same file
+generation before reuse and publication. Input, predictor and plan changes
+are sticky failures, including same-byte atomic replacements;
 restoring an observed generation does not refresh a proof within that command.
 
 The existing preparation proof fences exact resolved targets, file identities,

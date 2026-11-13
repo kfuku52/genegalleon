@@ -284,10 +284,11 @@ def main():
         frozen_path = refinement_output / "plan.json"
         if frozen_path.exists():
             refinement = json.loads(frozen_path.read_text())
-            species_count = len(refinement["species"])
+            targets = refinement["request"].get("target_species")
+            species_count = len(targets if targets is not None else refinement["species"])
             anchor_output = refinement["request"].get("rescue_output")
             pair_count = 0
-            if anchor_output and (not refinement["request"].get("edges") or refinement["request"].get("transcriptome_sources")):
+            if anchor_output and targets is None and (not refinement["request"].get("edges") or refinement["request"].get("transcriptome_sources")):
                 anchor_plan = json.loads((Path(anchor_output) / "plan.json").read_text())
                 pairs = [j["index"] for j in anchor_plan["synteny_jobs"] if j["a"] != j["b"]]
                 pair_count = len(pairs)
@@ -298,7 +299,10 @@ def main():
             indices = list(range(1, species_count + 1))
             # Receipts are checked again by each idempotent worker. Retrying all
             # indices also revisits dependencies repaired by comparison retries.
-            catalog_id = dispatch("refinement_catalog", ["--array=" + array_expression(indices) + "%" + str(args.max_running)])
+            # Correspondence verifies/builds the shared donor catalogs and the
+            # target catalog. Keep donor indices out of fixed-panel arrays.
+            catalog_id = (dispatch("refinement_catalog", ["--array=" + array_expression(indices) + "%" + str(args.max_running)])
+                          if targets is None else "")
             dependencies = ":".join(job for job in (pair_id, catalog_id) if job)
             print(json.dumps({"refinement_species": species_count, "refinement_pairs": pair_count}))
         else:
@@ -309,7 +313,7 @@ def main():
             catalog_id = dispatch("refinement_catalog", ["--array=1-S%" + str(args.max_running)])
             dependencies = pair_id + ":" + catalog_id
             indices = None
-        graph_id = dispatch("refinement_correspondence", ["--dependency=afterok:" + dependencies])
+        graph_id = dispatch("refinement_correspondence", ["--dependency=afterok:" + dependencies] if dependencies else [])
         worker_id = dispatch("refinement_predict", ["--dependency=afterok:" + graph_id, "--array=" + (array_expression(indices) if indices else "1-S") + "%" + str(args.rescue_max_running or args.max_running)])
         dispatch("refinement_finalize", ["--dependency=afterok:" + worker_id])
 

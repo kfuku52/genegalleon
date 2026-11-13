@@ -210,7 +210,7 @@ def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, 
     return rescue.stage(output.parent, output.name, key, build, guard=guard, publication_guard=guard)
 
 
-def discover_assemblies(directory, excluded, proof):
+def discover_assemblies(directory, excluded, proof, *, only=None):
     """Find standard GeneGalleon assembly outputs for species without genomic inputs."""
     directory = Path(directory).resolve()
     if not directory.is_dir():
@@ -218,7 +218,7 @@ def discover_assemblies(directory, excluded, proof):
     result = {}
     for path in sorted((directory / 'assembled_transcripts_with_isoforms').glob('*_isoform.fa*')):
         name = path.name.removesuffix('.gz').removesuffix('_isoform.fa')
-        if name == path.name.removesuffix('.gz') or name in excluded or not path.is_file():
+        if name == path.name.removesuffix('.gz') or name in excluded or (only and name != only) or not path.is_file():
             continue
         rescue.safe_token(name, 'Transcriptome species')
         path = path.resolve()
@@ -246,9 +246,12 @@ def discover_assemblies(directory, excluded, proof):
     return result
 
 
-def prepare_assemblies(directory, excluded, output, cpus, genetic_codes, proof):
+def prepare_assemblies(directory, excluded, output, cpus, genetic_codes, proof, *, only=None):
     """Prepare and checksum all assembly-only species using the existing ORF workflow."""
-    assemblies = discover_assemblies(directory, excluded, proof)
+    if only is None:
+        assemblies = discover_assemblies(directory, excluded, proof)
+    else:
+        assemblies = discover_assemblies(directory, excluded, proof, only=only)
     if not assemblies:
         return {}, []
     codes = {}

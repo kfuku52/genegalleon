@@ -116,9 +116,10 @@ def reproject(source_output, output, expected_receipt, species=None):
     manifest = member(source / 'inputs.tsv')
     rows = list(csv.DictReader(io.StringIO(manifest.read_text()), delimiter='\t'))
     by_name = {row['species']: row for row in rows}
-    names = list(plan['species']) if species is None else list(species)
+    planned = plan.get('request', {}).get('target_species', plan['species'])
+    names = list(planned) if species is None else list(species)
     if (not names or len(set(names)) != len(names) or len(by_name) != len(rows)
-            or not set(names) <= set(by_name) or not set(names) <= set(plan['species'])):
+            or not set(names) <= set(by_name) or not set(names) <= set(planned)):
         raise ValueError('UTR species must be unique members of the source view')
     mapping = list(csv.DictReader(io.StringIO(member(source / 'representative_map.tsv').read_text()), delimiter='\t'))
     gene_ids = {}

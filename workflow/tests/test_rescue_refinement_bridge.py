@@ -392,7 +392,8 @@ def test_refinement_prediction_completes_genomic_terminus_before_normal_acceptan
     inputs.write_text('species\tcds\tgff\tgenome\tgenetic_code\n' + '\n'.join(rows) + '\n')
     edges.write_text('species_a\tgene_a\tspecies_b\tgene_b\n' + ''.join(
         f'Species_target\tSpecies_target_g\t{donor}\t{donor}_g\n' for donor in names[1:]))
-    def local_search(tmp, windows, proteins, genome, code, params, cpus, *, compact):
+    def local_search(tmp, windows, proteins, genome, code, params, cpus, *, compact, executable):
+        assert executable == str(predictor)
         return [dict(query=region['id'], seqid=region['id'], strand='+', cds=[[3, 18, 0]], frameshift=False,
                      coverage=.8, identity=1, query_start=1, query_end=5, query_length=5)
                 for regions in windows.values() for region in regions]

@@ -208,6 +208,8 @@ def _selection(candidate: dict, node: tuple[str, str], status: str, reason: str,
 def locus_can_vote(locus: dict, candidate_limit: int = 32) -> bool:
     """Admission predicate shared by in-memory and streaming graph selection."""
     records = locus.get("candidates", [])
+    if locus.get("fixed_representative") and records:
+        return len(records) <= candidate_limit and _eligible(_baseline(locus, records))
     return len(records) <= candidate_limit and any(_eligible(candidate) for candidate in records)
 
 
@@ -311,7 +313,7 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
             # scale, retaining its actual length and other quality penalties.
             longest = max((_length(candidate) for candidate in eligible), default=max(1, _length(baselines[node])))
             quality[node] = {_candidate_id(candidate): _quality(candidate, longest) for candidate in records}
-            options[node] = eligible
+            options[node] = ([baselines[node]] if is_eligible(baselines[node]) else []) if locus.get("fixed_representative") else eligible
             if len(records) > candidate_limit:
                 options[node] = []
     nodes = sorted(loci)
@@ -319,8 +321,9 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
         # Preserve the legacy longest contract for source annotations.  New
         # predictions additionally require explicit representative permission;
         # catalog acceptance alone only allows retaining an alternate path.
-        longest_options = {node: [candidate for candidate in candidates[node]
-                                 if candidate.get("origin", "original") == "original" or is_eligible(candidate)]
+        longest_options = {node: ([baselines[node]] if loci[node].get("fixed_representative") else
+                                 [candidate for candidate in candidates[node]
+                                  if candidate.get("origin", "original") == "original" or is_eligible(candidate)])
                            for node in nodes}
         return {"schema": 1, "policy": policy, "selections": [
             _selection(min(longest_options[node] or [baselines[node]],

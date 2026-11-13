@@ -233,7 +233,7 @@ def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
 
 
 def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, transcriptome_inputs=None, rna_bam_dir=None, transcriptome_assembly_dir=None,
-         assembly_genetic_codes=None, assembly_cpus=1, **parameters):
+         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
@@ -244,6 +244,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             transcriptome_proof.read([transcriptome_inputs])
             transcriptome_sources = transcriptome.read_sources(transcriptome_inputs)
         receipts = {}
+        pool = None
+        genomic_targets = []
         if rescue_output:
             if inputs:
                 raise ValueError('Choose --inputs or --rescue-output; explicit inputs must not be silently ignored')
@@ -254,6 +256,20 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
+            pool = anchors['request'].get('fixed_donor_pool')
+            if donor_plan and (not pool or Path(donor_plan).resolve() != Path(pool['root'])):
+                raise ValueError('Refinement donor plan must match the rescue donor plan')
+            if pool:
+                genomic_targets = anchors['species']
+                if target and target not in genomic_targets:
+                    raise ValueError('Requested refinement target does not match the rescue target')
+                if len(genomic_targets) != 1 or not augmented.is_dir():
+                    raise ValueError('Fixed-panel refinement requires completed rescue for exactly one genomic target')
+                target, = genomic_targets
+                used = set(anchors['donors'][target])
+                if used != set(pool['species']) - {target}:
+                    raise ValueError('Rescue donors differ from the fixed panel')
+                sources = {name: sources[name] for name in [target, *sorted(used)]}
             revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if augmented.exists():
                 for name in anchors['species']:
@@ -278,7 +294,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                 if not rescue.verified(augmented, augmented_key):
                     raise ValueError('Augmented rescue inputs incomplete or corrupt')
                 rows = read_table(augmented / 'inputs.tsv')
-                if len(rows) != len(sources) or {row['species'] for row in rows} != set(sources):
+                if len(rows) != len(anchors['species']) or {row['species'] for row in rows} != set(anchors['species']):
                     raise ValueError('Augmented rescue input species disagree with the anchor plan')
                 for row in rows:
                     source = sources[row['species']]
@@ -320,10 +336,49 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                                  'gff': resolve_path(row['gff']), 'genome': resolve_path(row['genome']),
                                  'genetic_code': int(row.get('genetic_code') or 1)}
             files = [str(Path(inputs).resolve())] if inputs else []
-        if transcriptome_assembly_dir and not transcriptome_inputs:
+            if donor_plan:
+                if inputs:
+                    raise ValueError('Fixed-panel genomic refinement requires a completed fixed-panel rescue')
+                donor_root = Path(donor_plan).resolve(strict=True)
+                donors = rescue.load(donor_root, inspect_only=True)
+                if donors['request'].get('fixed_donor_pool'):
+                    raise ValueError('A target rescue plan cannot define a donor panel')
+                pool = {'root': str(donor_root), 'species': donors['species'],
+                        'plan_sha256': rescue.plan_digest(donor_root, donors)}
+                sources = copy.deepcopy(donors['request']['sources'])
+        if transcriptome_assembly_dir and not transcriptome_inputs and not genomic_targets:
+            if pool and not target:
+                raise ValueError('Use --target to select one assembly from a fixed-panel assembly directory')
             transcriptome_sources, prepared_files = transcriptome.prepare_assemblies(
-                transcriptome_assembly_dir, sources, root / 'assembly_inputs', assembly_cpus, assembly_genetic_codes, transcriptome_proof)
+                transcriptome_assembly_dir, {} if pool else sources, root / 'assembly_inputs', assembly_cpus, assembly_genetic_codes,
+                transcriptome_proof, **({'only': target} if target else {}))
             files.extend(prepared_files)
+        if pool:
+            if not genomic_targets:
+                for name in transcriptome_sources:
+                    sources.pop(name, None)
+            fixed_donors = sorted(sources.keys() - set(genomic_targets))
+            targets = sorted(set(genomic_targets) | transcriptome_sources.keys())
+            if len(targets) != 1 or (genomic_targets and transcriptome_sources):
+                raise ValueError('Use a separate fixed-panel refinement output for each target')
+            if target and targets != [target]:
+                raise ValueError('Requested refinement target is absent from the inputs')
+            if edges:
+                raise ValueError('Fixed-panel refinement uses the rescue or protein correspondence')
+            donor_root = Path(pool['root'])
+            if root.is_relative_to(donor_root) or donor_root.is_relative_to(root):
+                raise ValueError('Use separate refinement and donor plan directories')
+            donor_plan_path = str(donor_root / 'plan.json')
+            donor_record = rescue.load(donor_root, inspect_only=True)
+            if rescue.plan_digest(donor_root, donor_record) != pool['plan_sha256']:
+                raise ValueError('Frozen donor plan changed')
+            expected_donors = {sources[name][role]: donor_record['request']['files'][sources[name][role]]
+                               for name in fixed_donors for role in ('fasta', 'gff', 'genome')}
+            transcriptome_proof.read(expected_donors, expected=expected_donors)
+            transcriptome_proof.read([donor_plan_path], expected={donor_plan_path: pool['plan_sha256']})
+            files.append(donor_plan_path)
+        elif target:
+            raise ValueError('--target requires a fixed donor plan')
         if sources.keys() & transcriptome_sources.keys():
             raise ValueError('A species may occur in only one of the genomic and transcriptome inputs')
         if not sources and not transcriptome_sources:
@@ -347,30 +402,32 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if any(int(params[k]) < 1 for k in ('min_support', 'max_intron', 'max_interval', 'candidate_limit')) or params['padding'] < 0:
             raise ValueError('Invalid resource/evidence bound')
         files += [s[k] for s in sources.values() for k in ('fasta', 'gff', 'genome')]
-        profiles = (read_profiles(species_profiles, sources) if species_profiles else
+        prediction_sources = {n: sources[n] for n in genomic_targets} if pool else sources
+        profiles = (read_profiles(species_profiles, prediction_sources) if species_profiles else
                     copy.deepcopy(anchors['request'].get('species_profiles', {})) if anchor_root else {})
         for optional in (edges, rna, species_profiles):
             if optional:
                 files.append(str(Path(optional).resolve()))
-        rna_bams = refinement_rna.discover(rna_bam_dir, sources) if rna_bam_dir else {}
+        rna_bams = refinement_rna.discover(rna_bam_dir, prediction_sources) if rna_bam_dir else {}
         files.extend(path for entries in rna_bams.values() for entry in entries for path in entry.values() if path)
         import annevo_gene_models
         inherited_annevo = anchors['request'].get('annevo') if anchor_root else None
         if inherited_annevo:
             annevo_gene_models.verify_inputs(inherited_annevo)
         annevo_table = annevo_inputs or (inherited_annevo['table'] if inherited_annevo else None)
-        annevo = annevo_gene_models.freeze_inputs(annevo_table, sources) if annevo_table else None
+        annevo = annevo_gene_models.freeze_inputs(annevo_table, prediction_sources) if annevo_table else None
         if annevo:
             annevo_gene_models.verify_inputs(annevo)
             files.extend(annevo['files'])
         inherited_oriongeno = anchors['request'].get('oriongeno') if anchor_root else None
         if inherited_oriongeno:
             annevo_gene_models.verify_inputs(inherited_oriongeno)
-        oriongeno = (annevo_gene_models.freeze_inputs(oriongeno_inputs, sources, engine='oriongeno')
+        oriongeno = (annevo_gene_models.freeze_inputs(oriongeno_inputs, prediction_sources, engine='oriongeno')
                      if oriongeno_inputs else copy.deepcopy(inherited_oriongeno))
         if oriongeno:
             files.extend(oriongeno['files'])
-        tool = shutil.which('miniprot') if sources and params['mode'] != 'off' else None
+        genomic_prediction = bool(genomic_targets if pool else sources) and params['mode'] != 'off'
+        tool = shutil.which('miniprot') if genomic_prediction else None
         reviews, publications, claimed = {}, {}, set()
         for key, approvals, publication, label in (
             ('split_model_merges', split_model_merges, 'split_model_candidates.json', 'Split model'),
@@ -432,6 +489,10 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             request['oriongeno'] = oriongeno
         if transcriptome_sources:
             request['transcriptome_sources'] = transcriptome_sources
+        if pool:
+            request['target_species'] = targets
+            request['fixed_donors'] = fixed_donors
+            request['donor_plan_path'] = donor_plan_path
         if not edges and transcriptome_sources and len(sources) + len(transcriptome_sources) > 1:
             diamond = shutil.which('diamond')
             if not diamond:
@@ -439,7 +500,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             request['transcriptome_diamond'] = {'path': diamond, 'sha256': digest(diamond)}
         if not edges and not anchor_root and not transcriptome_sources:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
-        if sources and params['mode'] != 'off' and not tool:
+        if genomic_prediction and not tool:
             raise ValueError('miniprot is required for prediction')
         transcriptome_proof.check()
         path = root / 'plan.json'
@@ -451,6 +512,37 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         value = {'request': request, 'species': sorted(sources.keys() | transcriptome_sources.keys())}
         atomic_json(path, value, immutable=True)
         return value
+
+
+def target_species(value):
+    return value['request'].get('target_species', value['species'])
+
+
+def donor_cache(request):
+    return Path(request['donor_plan_path']).parent.parent / 'gene_model_refinement_donor_cache'
+
+
+def donor_catalog_key(request, name):
+    source = request['sources'][name]
+    return {'schema': 1, 'species': name, 'genetic_code': source['genetic_code'],
+            'files': {role: request['files'][source[role]] for role in ('fasta', 'gff', 'genome')},
+            'implementation': request['implementation'], 'dependencies': request['dependencies']}
+
+
+def donor_catalog_relative(request, name):
+    key = json.dumps(donor_catalog_key(request, name), sort_keys=True).encode()
+    return Path('catalog') / hashlib.sha256(key).hexdigest()
+
+
+def catalog_directory(root, value, name):
+    request = value['request']
+    if name in request.get('fixed_donors', ()):
+        return donor_cache(request) / donor_catalog_relative(request, name)
+    return root / 'catalog' / name
+
+
+def catalog_hashes(root, value):
+    return {name: digest(catalog_directory(root, value, name) / 'receipt.json') for name in value['species']}
 
 
 def load(root, names=None):
@@ -488,15 +580,21 @@ def load(root, names=None):
         _INPUT_SNAPSHOT.verify_files(files)
     for key in ('miniprot', 'transcriptome_diamond'):
         tool = request.get(key)
-        if tool and digest(tool['path']) != tool['sha256']:
+        if not tool:
+            continue
+        if _INPUT_SNAPSHOT is not None:
+            _INPUT_SNAPSHOT.verify_predictor(tool['path'], tool['sha256'])
+        elif digest(tool['path']) != tool['sha256']:
             raise ValueError('Frozen predictor changed: ' + key)
     return value
 
 
 def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
     dependencies = key.get('dependencies', {})
-    snapshots = {root / 'catalog' / name / 'receipt.json': expected
-                 for name, expected in dependencies.get('catalog', {}).items()}
+    catalog_deps = dependencies.get('catalog', {})
+    value = json.loads((root / 'plan.json').read_text()) if catalog_deps else None
+    snapshots = {catalog_directory(root, value, name) / 'receipt.json': expected
+                 for name, expected in catalog_deps.items()}
     snapshots.update({root / directory / 'receipt.json': expected
                       for directory, expected in dependencies.get('index', {}).items()})
     for field, directory in (('correspondence', 'correspondence'), ('initial', 'selection_initial'), ('selection', 'selection_final')):
@@ -570,6 +668,22 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
 
 @invocation_cached
 def catalog_species(root, value, name):
+    request = value['request']
+    if name in request.get('fixed_donors', ()):
+        source = request['sources'][name]
+
+        def build_donor(tmp):
+            catalog = build_catalog(name, source['fasta'], source['gff'], source['genome'], source['genetic_code'])
+            for locus in catalog['loci']:
+                locus['fixed_representative'] = True
+            write_catalog(catalog, tmp)
+
+        def guard():
+            load(root, [name])
+
+        return rescue.stage(donor_cache(request), donor_catalog_relative(request, name),
+                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard)
+
     def build(tmp):
         transcriptome_source = value['request'].get('transcriptome_sources', {}).get(name)
         if transcriptome_source:
@@ -612,12 +726,12 @@ def catalog_index(root, value, predictions=False):
         initial_record = json.loads(initial_receipt)
         initial_files = initial_record['files']
         dependencies['index'] = {'catalog_index': hashlib.sha256(initial_receipt).hexdigest()}
-        for name in value['species']:
+        for name in target_species(value):
             predict_species(root, value, name)
-        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
+        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
     else:
         directories = [catalog_species(root, value, name) for name in value['species']]
-    dependencies['catalog'] = {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']}
+    dependencies['catalog'] = catalog_hashes(root, value)
     if predictions and initial_record['key']['dependencies']['catalog'] != dependencies['catalog']:
         raise ValueError('Initial refinement index catalog receipts changed before final indexing')
 
@@ -632,7 +746,7 @@ def catalog_index(root, value, predictions=False):
                 copy_refinement_index(initial_db, db, initial_files[db.name])
                 accepted_count = 0
                 with contextlib.closing(sqlite3.connect(db)) as connection, connection:
-                    for name in value['species']:
+                    for name in target_species(value):
                         additions = json.loads((root / 'predictions' / name / 'predictions.json').read_text())
                         by_gene = defaultdict(list)
                         for model in additions:
@@ -726,18 +840,27 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
 
 def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, prepared_snapshot=None):
     request = value['request']
-    dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+    dependencies = {'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     jobs = []
     if anchor_plan is not None:
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
+        dependencies['anchors'] = {}
         for job in jobs:
-            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
-                           prepared_snapshot=prepared_snapshot)
-        dependencies['anchors'] = {j['id']: digest(anchor_root / 'synteny' / j['id'] / 'receipt.json') for j in jobs}
+            directory = anchor_root / 'synteny' / job['id']
+            if 'fixed_donors' not in request:
+                rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
+                               prepared_snapshot=prepared_snapshot)
+            receipt = (directory / 'receipt.json').read_bytes()
+            if json.loads(receipt).get('key') != rescue.comparison_key(anchor_root, job, prepared_snapshot):
+                raise ValueError('Unverified synteny comparison: ' + job['id'])
+            dependencies['anchors'][job['id']] = hashlib.sha256(receipt).hexdigest()
         dependencies['prepared'] = {}
-        for name in request['sources']:
+        anchor_species = sorted({job[side] for job in jobs for side in ('a', 'b')})
+        if 'fixed_donors' not in request:
+            anchor_species = sorted(request['sources'])
+        for name in anchor_species:
             prepared_snapshot.prepared(name)
             dependencies['prepared'][name] = prepared_snapshot.receipt_digest(name)
     def build(tmp):
@@ -768,7 +891,7 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                     edges[-1]['comparison_basis'] = 'protein_alignment'
         if anchor_plan is not None:
             aliases = {}
-            for n in request['sources']:
+            for n in anchor_species:
                 prepared_snapshot.check([n])
                 lookup = {}
                 for g in iter_loci(db, n):
@@ -780,22 +903,28 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                 aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
                               for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
             position_index = {}
-            for n in request['sources']:
+            for n in anchor_species:
                 positions, tracks = {}, defaultdict(list)
                 for g in iter_loci(db, n):
                     blocks = [b for c in g['candidates'] for b in c['blocks']]
                     if not blocks:
                         continue
-                    position = dict(gene_id=g['gene_id'], seqid=g['seqid'], start=min(b[0] for b in blocks), end=max(b[1] for b in blocks))
+                    position = dict(gene_id=g['gene_id'], seqid=g['seqid'], start=min(b[0] for b in blocks),
+                                    end=max(b[1] for b in blocks))
                     positions[g['gene_id']] = position
                     tracks[g['seqid']].append(position)
                 ordered = {seqid: sorted(genes, key=lambda g: g['start']) for seqid, genes in tracks.items()}
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
             with store_connection(db) as connection:
                 for job in jobs:
-                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job, prepared_snapshot)):
-                        raise ValueError('Unverified synteny comparison')
-                    blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
+                    directory = anchor_root / 'synteny' / job['id']
+                    if _RECEIPT_SNAPSHOT is None:
+                        blocks = json.loads((directory / 'blocks.json').read_text())
+                    else:
+                        present, blocks = _RECEIPT_SNAPSHOT.read_json_member(
+                            directory / 'receipt.json', dependencies['anchors'][job['id']], 'blocks.json')
+                        if not present:
+                            raise ValueError('Synteny comparison has no receipted blocks')
                     for block in blocks:
                         anchor_pairs = [(aliases[job['a']].get(a), aliases[job['b']].get(b)) for a, b in block]
                         edges.extend(infer_flanked_loci(connection, job['a'], job['b'], anchor_pairs, position_index, request['parameters']))
@@ -811,9 +940,17 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
         if request.get('transcriptome_diamond'):
             with contextlib.ExitStack() as stack:
                 scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='transcriptome-proteins-', dir=tmp)))
-                edges.extend(refinement_transcriptome_edges.infer_edges(
-                    db, value['species'], request['transcriptome_sources'], request['transcriptome_diamond']['path'],
-                    request['parameters'], scratch, cpus))
+                executable = request['transcriptome_diamond']['path']
+                if 'target_species' in request:
+                    target, = request['target_species']
+                    donors = request['fixed_donors']
+                    edges.extend(refinement_transcriptome_edges.fixed_panel_edges(
+                        db, target, donors, executable, request['parameters'], scratch, cpus, donor_cache(request),
+                        {n: donor_catalog_key(request, n) for n in donors}, lambda: load(root)))
+                else:
+                    edges.extend(refinement_transcriptome_edges.infer_edges(
+                        db, value['species'], request['transcriptome_sources'], executable,
+                        request['parameters'], scratch, cpus))
         unique = {}
         for e in edges:
             key = tuple(sorted(((e['species_a'], e['gene_a']), (e['species_b'], e['gene_b']))))
@@ -874,16 +1011,16 @@ def select(root, value, predictions=False):
     directory = correspondence(root, value)
     params = value['request']['parameters']
     dependencies = {'correspondence': digest(directory / 'receipt.json'),
-                    'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+                    'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     if predictions:
-        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
+        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
     def build(tmp):
         edges = json.loads((directory / 'edges.json').read_text())
         selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
                                            min_support=params['min_support'], candidate_limit=params['candidate_limit'])
         if predictions:
-            repairs = (row for name in value['species']
+            repairs = (row for name in target_species(value)
                        for row in stream_json_array(root / 'predictions' / name / 'predictions.json')
                        if row.get('same_coordinate_source_repair'))
             selection = apply_same_coordinate_repairs(selection, repairs)
@@ -1387,15 +1524,59 @@ def import_rescue_revisions(models, catalog, edges, params, genome, resolve_dono
     return validated, proposals
 
 
+def search_refinement_intervals(root, request, tmp, windows, proteins, genome, source, params, cpus):
+    if not windows:
+        return []
+    code = source['genetic_code']
+    intron = params['max_intron']
+    executable = request['miniprot']['path']
+    if 'fixed_donors' not in request:
+        return rescue.search_intervals(tmp, windows, proteins, genome, code, intron, cpus,
+                                       compact=True, executable=executable)
+    key = {'schema': 1, 'genome': request['files'][source['genome']], 'code': code, 'max_intron': intron,
+           'miniprot': request['miniprot']['sha256'], 'implementation': request['implementation'],
+           'windows': [[list(window), [[region['id'], region['donor'], region['query'],
+                         hashlib.sha256(proteins[region['donor']][region['query']].encode()).hexdigest()]
+                        for region in regions]] for window, regions in windows.items()]}
+    relative = Path('miniprot') / hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+
+    def build_raw(work):
+        models = rescue.search_intervals(work, windows, proteins, genome, code, intron, cpus,
+                                         compact=True, executable=executable)
+        atomic_json(work / 'raw_models.json', models)
+
+    def guard():
+        load(root)
+
+    cache = rescue.stage(donor_cache(request), relative, key, build_raw, guard, publication_guard=guard)
+    receipt_path = cache / 'receipt.json'
+    receipt_sha = digest(receipt_path)
+    with ReceiptSnapshot(rescue.verified) as proof:
+        if not rescue.verified_dependency(proof, cache, key):
+            raise ValueError('Unverified refinement predictor cache')
+        present, models = proof.read_json_member(receipt_path, receipt_sha, 'raw_models.json')
+        if not present:
+            raise ValueError('Refinement predictor cache lacks its models')
+        record = json.loads(receipt_path.read_bytes())
+        proof.check({receipt_path: receipt_sha})
+        for member in (rescue.INTERVAL_ARCHIVE, rescue.LOCAL_RECORDS):
+            shutil.copyfile(cache / member, tmp / member)
+            if digest(tmp / member) != record['files'][member]:
+                raise ValueError('Refinement predictor diagnostics changed during copy')
+    return models
+
+
 @invocation_cached
 def predict_species(root, value, name, cpus=1):
+    if name not in target_species(value):
+        raise ValueError('Donor-only species has no refinement prediction: ' + name)
     initial = select(root, value)
     cat_dir = catalog_species(root, value, name)
     db = catalog_index(root, value)
     corr = correspondence(root, value)
     donor_names = prediction_donor_names(corr, name, value['species'])
     params, source = parameters_for(value['request'], name), value['request']['sources'].get(name)
-    dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+    dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': catalog_hashes(root, value),
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     revision_directory = revision_worker(value['request'], name)
@@ -1495,8 +1676,8 @@ def predict_species(root, value, name, cpus=1):
                 for region in regions:
                     region['end'] = end
                 bounded[seqid, start, end] = regions
-            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'],
-                                             params['max_intron'], cpus, compact=True) if windows else []
+            models = search_refinement_intervals(root, value['request'], tmp, bounded, proteins,
+                                                 genome, source, params, cpus)
             for model in models:
                 region = queries[model['query']]
                 model['seqid'] = region['seqid']
@@ -2285,7 +2466,7 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
     genome_admission = {(name, gene): status for name, gene, _, status, *_ in coding_audit}
     transcriptome_sources = request['transcriptome_sources']
     inputs, decisions = [], []
-    for name in sorted(request['sources'].keys() | transcriptome_sources.keys()):
+    for name in sorted(selected_by_species):
         rows = selected_by_species[name]
         cds_path, pep_path = (output / role / (name + '.fa') for role in ('species_cds', 'species_protein'))
         if name in request['sources']:
@@ -2330,17 +2511,19 @@ def finalize(root, value):
     final = select(root, value, predictions=True)
     db = catalog_index(root, value, predictions=True)
     dependencies = {'selection': digest(final / 'receipt.json'),
-                    'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+                    'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     def build(tmp):
-        selections = json.loads((final / 'selection.json').read_text())['selections']
+        targets = set(target_species(value))
+        selections = [row for row in json.loads((final / 'selection.json').read_text())['selections']
+                      if row['species'] in targets]
         selected_by_species = defaultdict(list)
         for selected_row in selections:
             selected_by_species[selected_row['species']].append(selected_row)
         merged_by_species, repaired_by_species, retired_by_species = {}, {}, {}
         merges, repairs = [], []
         request = value['request']
-        for name in sorted(request['sources']):
+        for name in sorted(targets & request['sources'].keys()):
             if parameters_for(request, name)['mode'] != 'conservative':
                 continue
             selected = {row['gene_id']: row for row in selected_by_species[name]}
@@ -2353,9 +2536,9 @@ def finalize(root, value):
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates', 'species_transcript', 'utr_audit'):
             (tmp / role).mkdir()
         map_path = tmp / 'representative_map.tsv'
-        if merges or repairs or request.get('transcriptome_sources'):
+        if merges or repairs or request.get('transcriptome_sources') or 'target_species' in request:
             rescue.write_tsv(map_path, MAP_FIELDS, [[row.get(k, '') for k in MAP_FIELDS]
-                             for name in sorted(request['sources']) for row in selected_by_species[name]
+                             for name in sorted(targets & request['sources'].keys()) for row in selected_by_species[name]
                              if row['gene_id'] not in retired_by_species.get(name, ())])
         else:
             shutil.copyfile(final / 'representative_map.tsv', map_path)
@@ -2366,7 +2549,7 @@ def finalize(root, value):
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         unpublished_candidates, utr_summaries = [], []
-        for name in sorted(request['sources']):
+        for name in sorted(targets & request['sources'].keys()):
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
             source = value['request']['sources'][name]
@@ -2621,47 +2804,64 @@ def inspect_stages(root, value):
         except OSError:
             return None
 
-    catalogs = {name: receipt_hash(Path('catalog') / name) for name in value['species']}
-    predictions = {name: receipt_hash(Path('predictions') / name) for name in value['species']}
+    catalog_dirs = {name: catalog_directory(root, value, name) for name in value['species']}
+    catalogs = {name: receipt_hash(path) for name, path in catalog_dirs.items()}
+    predictions = {name: receipt_hash(Path('predictions') / name) for name in target_species(value)}
     initial_index = {'catalog_index': receipt_hash(Path('catalog_index'))}
     final_index = {'catalog_index_final': receipt_hash(Path('catalog_index_final'))}
-    expected = {str(Path('catalog') / name): {} for name in value['species']}
+    fixed = set(value['request'].get('fixed_donors', ()))
+    expected = {str(Path('catalog') / name): {} for name in value['species'] if name not in fixed}
     expected['catalog_index'] = {'dependencies': {'catalog': catalogs}}
     correspondence_dependencies = {'catalog': catalogs, 'index': initial_index}
-    anchors = {}
     request = value['request']
+    anchors = {'donor_catalog/' + name: rescue.verified(catalog_dirs[name], donor_catalog_key(request, name))
+               for name in sorted(fixed)}
     if uses_rescue_correspondence(request):
         anchor_root = Path(request['rescue_output'])
         anchor_plan = rescue.load(anchor_root, inspect_only=True)
-        anchor_hashes = {}
-        for job in anchor_plan['synteny_jobs']:
-            if job['a'] == job['b']:
-                continue
-            directory = anchor_root / 'synteny' / job['id']
-            try:
-                anchor_hashes[job['id']] = digest(directory / 'receipt.json')
-                anchors['anchors/' + job['id']] = rescue.verified(directory, rescue.comparison_key(anchor_root, job))
-            except (OSError, ValueError, KeyError):
-                anchor_hashes[job['id']] = None
-                anchors['anchors/' + job['id']] = False
-        correspondence_dependencies['anchors'] = anchor_hashes
+        jobs = [job for job in anchor_plan['synteny_jobs'] if job['a'] != job['b']]
         prepared_hashes = {}
-        anchor_hash = digest(anchor_root / 'plan.json')
-        for name in request['sources']:
-            directory = anchor_root / 'prepared' / name
-            try:
-                prepared_hashes[name] = digest(directory / 'receipt.json')
-                anchors['prepared/' + name] = rescue.verified(directory, {'plan': anchor_hash, 'species': name})
-            except (OSError, ValueError):
-                prepared_hashes[name] = None
-                anchors['prepared/' + name] = False
+        anchor_hash = rescue.plan_digest(anchor_root, anchor_plan)
+        prepared_names = ({job[side] for job in jobs for side in ('a', 'b')}
+                          if 'fixed_donors' in request else request['sources'])
+        with ReceiptSnapshot(rescue.verified) as prepared_proof:
+            for name in sorted(prepared_names):
+                directory = anchor_root / 'prepared' / name
+                member = directory / 'receipt.json'
+                try:
+                    valid = rescue.verified_dependency(prepared_proof, directory, {'plan': anchor_hash, 'species': name})
+                    prepared_hashes[name] = digest(member) if valid else None
+                    if valid:
+                        prepared_proof.check({member: prepared_hashes[name]})
+                except (OSError, ValueError, KeyError):
+                    prepared_hashes[name] = None
+                anchors['prepared/' + name] = prepared_hashes[name] is not None
+            anchor_hashes = {}
+            for job in jobs:
+                directory = anchor_root / 'synteny' / job['id']
+                try:
+                    prepared = {name: prepared_hashes[name] for name in {job['a'], job['b']}}
+                    if not all(prepared.values()):
+                        raise ValueError('Prepared comparison inputs are unavailable')
+                    anchor_hashes[job['id']] = digest(directory / 'receipt.json')
+                    key = {'plan': anchor_hash, 'job': job, 'prepared': prepared}
+                    anchors['anchors/' + job['id']] = rescue.verified_dependency(prepared_proof, directory, key)
+                    if anchors['anchors/' + job['id']]:
+                        prepared_proof.check({directory / 'receipt.json': anchor_hashes[job['id']]})
+                except (OSError, ValueError, KeyError):
+                    anchor_hashes[job['id']] = None
+                    anchors['anchors/' + job['id']] = False
+            # Ordinary missing/corrupt results never acquire a proof. A change
+            # to a generation already verified during QC must still fail closed.
+            prepared_proof.check_all()
+        correspondence_dependencies['anchors'] = anchor_hashes
         correspondence_dependencies['prepared'] = prepared_hashes
     expected['correspondence'] = {'dependencies': correspondence_dependencies}
     selection_dependencies = {'correspondence': receipt_hash(Path('correspondence')), 'catalog': catalogs,
                               'index': initial_index}
     expected['selection_initial'] = {'dependencies': selection_dependencies}
     prediction_dependencies = {'initial': receipt_hash(Path('selection_initial')), **selection_dependencies}
-    for name in value['species']:
+    for name in target_species(value):
         dependencies = dict(prediction_dependencies)
         revision_directory = revision_worker(request, name)
         if revision_directory is not None:
@@ -2691,6 +2891,8 @@ def parser():
     prep.add_argument('--assembly-cpus', type=int, default=1)
     prep.add_argument('--transcriptome-inputs', type=Path, help='Assembly species TSV: species,cds,transcript_gene_map[,genetic_code]')
     prep.add_argument('--rescue-output', type=Path)
+    prep.add_argument('--donor-plan', type=Path, help='Frozen rescue donor plan for one transcriptome target; genomic targets inherit it from rescue')
+    prep.add_argument('--target', help='Species to discover in a shared transcriptome assembly directory')
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna-bam-dir', type=Path, help='Directory of species-named, genome-aligned RNA BAMs')
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
@@ -2748,14 +2950,14 @@ def _main():
              split_model_merges=args.split_model_merges, model_repairs=args.model_repairs,
              transcriptome_inputs=args.transcriptome_inputs, rna_bam_dir=args.rna_bam_dir,
              transcriptome_assembly_dir=args.transcriptome_assembly_dir,
-             assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus,
+             assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus, donor_plan=args.donor_plan, target=args.target,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:
         raise ValueError('--cpus must be positive')
     root = args.output.resolve()
     value = load(root)
-    names = value['species']
+    names = target_species(value) if args.command in {'predict', 'run'} else value['species']
     if args.task_index is not None:
         if not 1 <= args.task_index <= len(names):
             raise ValueError('Invalid task index')
@@ -2773,9 +2975,9 @@ def _main():
     if args.command in {'finalize', 'run'}:
         finalize(root, value)
     if args.command in {'status', 'qc'}:
-        if args.command == 'qc' and value['request']['sources']:
+        if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys():
             verify_inputs(root / 'effective' / 'inputs.tsv')
-        result = {'species': len(value['species']), 'stages': inspect_stages(root, value)}
+        result = {'species': len(target_species(value)), 'stages': inspect_stages(root, value)}
         if args.command == 'qc' and not all(result['stages'].values()):
             invalid = [name for name, valid in result['stages'].items() if not valid]
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))

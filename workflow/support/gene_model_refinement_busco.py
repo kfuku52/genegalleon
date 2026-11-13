@@ -242,6 +242,10 @@ def classify_accepted_path_support(models, species, selection, allowed_species):
     return counts, evidence
 
 
+def genomic_targets(request):
+    return set(request.get("target_species", request["sources"])) & request["sources"].keys()
+
+
 def collect_accepted_path_support(root, changes):
     """Extend a saved model summary from verified predictions without rereading rescue models."""
     from plot_gene_model_refinement import verified_json
@@ -251,7 +255,7 @@ def collect_accepted_path_support(root, changes):
     if (changes["plan_sha256"] != plan_hash
             or changes["effective_receipt_sha256"] != digest(root / "effective/receipt.json")
             or {s for s, c in changes["species"].items() if c["refinement_status"] == "analysed"}
-            != set(request["sources"])):
+            != genomic_targets(request)):
         raise ValueError("Saved model counts belong to another refinement publication")
     selection = changes["rescue_reference_selection"]
     updates = {}
@@ -339,19 +343,21 @@ def classify_rescue_support(models, species, rescued, plan):
 def input_pairs(root, cds_dir=None, *, three_stage=False, rescue_output=None):
     """Native sources are frozen; extra CDS-only species are explicit passthroughs."""
     plan = json.loads((root / "plan.json").read_text())
-    transcriptome_species = plan["request"].get("transcriptome_sources", {})
+    request = plan["request"]
+    transcriptome_species = request.get("transcriptome_sources", {})
+    targets = genomic_targets(request)
     effective = {r["species"]: r for r in verify_inputs(root / "effective" / "inputs.tsv")}
-    if set(effective) != set(plan["request"]["sources"]):
+    if set(effective) != targets:
         raise ValueError("Refinement species membership differs from the frozen plan")
     pairs = {}
-    for name, source in plan["request"]["sources"].items():
-        before = Path(source["fasta"])
-        if digest(before) != plan["request"]["files"][str(before)]:
+    for name in sorted(targets):
+        before = Path(request["sources"][name]["fasta"])
+        if digest(before) != request["files"][str(before)]:
             raise ValueError("Refinement source CDS changed: " + str(before))
         pairs[name] = {"species": name, "before": str(before), "after": effective[name]["cds"],
                        "refinement_status": "analysed", "reason": ""}
     seen = set()
-    if cds_dir:
+    if cds_dir and "target_species" not in request:
         for path in sorted(cds_dir.iterdir()):
             if path.name.startswith(".") or not path.is_file() or not re.search(r"\.(fa|fasta|fna)(\.gz)?$", path.name):
                 continue
@@ -758,7 +764,7 @@ def collect_model_changes(root, pairs, rescue_output=None):
     plan_hash = digest(root / "plan.json")
     request = json.loads((root / "plan.json").read_text())["request"]
     analysed = {r["species"] for r in pairs if r["refinement_status"] == "analysed"}
-    if analysed != set(request["sources"]):
+    if analysed != genomic_targets(request):
         raise ValueError("Model-count species differ from the refinement plan")
     stats, evidence = {}, {}
     batch = FreshDigestBatch()

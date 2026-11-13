@@ -497,6 +497,28 @@ standard genetic code 1 for this optional refinement. Ambiguous reference
 transcript mappings and references requiring complementary phase normalisation
 are recorded and skipped by GeMoMa; miniprot evidence remains.
 
+### Fixed donor panel
+
+Create a rescue plan using only the donor CDS, GFF, genome and comparable
+BUSCO inputs, then run `prepare --output /path/to/panel` once. This prepares
+the donor BED and proteins without running rescue or synteny. Target plans
+bind the receipts for those prepared donors. Keep the panel and its sources
+at their original paths.
+
+For each target, point `plan` at its own input directories and supply
+`--donor-plan /path/to/panel` and a tree containing the target and all donor
+tips. Set the same `--common-references` count as the panel. Rescue uses all
+panel members except the target itself; common references and the ranking of
+nearby donors remain available for the existing rescue evidence rules. The
+target and panel must use comparable BUSCO results. If the target itself is in
+the panel, use the same frozen input paths and settings for that species.
+
+Input generation exposes this as
+`GG_INPUT_GENE_MODEL_RESCUE_DONOR_PLAN=/path/to/panel`. Use an explicit
+`GG_INPUT_GENE_MODEL_RESCUE_TREE`, since the automatic guide only sees inputs
+in the target workspace. Use the resulting augmented publication directly in
+[fixed-panel refinement](gene-model-refinement.md#use-the-same-fixed-donors-for-rescue-and-refinement).
+
 ## Commands and outputs
 
 ```bash
