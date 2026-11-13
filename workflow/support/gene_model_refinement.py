@@ -1979,6 +1979,8 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
 
 
 def extend_gene_bounds(original, bounds):
+    if not bounds:
+        return original, []
     lines, changes = [], []
     for line in original.splitlines(keepends=True):
         if line.startswith('#') or not line.strip():
