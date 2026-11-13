@@ -24,8 +24,10 @@ import sqlite3
 import sys
 import tempfile
 import time
-from collections import defaultdict
-from itertools import chain
+from collections import defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor
+from itertools import chain, islice
+from multiprocessing import get_context
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1623,6 +1625,71 @@ def search_refinement_intervals(root, request, tmp, windows, proteins, genome, s
     return models
 
 
+def _nomination_indexes(targets, baseline, donors, params):
+    """Find donor coding paths that warrant a new predictor search."""
+    searches = []
+    target_baseline = targets[baseline]
+    for index, candidate in enumerate(donors):
+        if not candidate['quality'].get('usable') or not candidate['protein']:
+            continue
+        baseline_score = None
+        discrepancy = (not target_baseline['quality'].get('valid_orf')
+                       or len(targets) < len(donors)
+                       or abs(len(candidate['protein']) - len(target_baseline['protein']))
+                       > max(3, len(candidate['protein']) * .05))
+        if not discrepancy:
+            baseline_score = pair_score(target_baseline, candidate)
+            discrepancy = (not baseline_score.bounded and baseline_score.identity >= params['minimum_identity']
+                           and (not homology_supported(min(baseline_score.coverage_a, baseline_score.coverage_b),
+                                                      baseline_score.identity, params)
+                                or (len(target_baseline['blocks']) > 1 and len(candidate['blocks']) > 1
+                                    and baseline_score.junction_similarity < 0.8)))
+        if not discrepancy:
+            continue
+        for known in targets:
+            if not known['quality'].get('valid_orf'):
+                continue
+            match = (baseline_score if known is target_baseline and baseline_score is not None
+                     else pair_score(known, candidate))
+            if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
+                break
+        else:
+            searches.append(index)
+    return searches
+
+
+def _nomination_batch(rows, params):
+    return [_nomination_indexes(*row, params) if row is not None else [] for row in rows]
+
+
+def _ordered_nominations(inputs, params, cpus):
+    batch_size = 64
+    minimum_parallel_edges = 512
+    initial = list(islice(inputs, minimum_parallel_edges)) if cpus > 1 else []
+    remaining = chain(initial, inputs)
+    if len(initial) < minimum_parallel_edges:
+        for context, row in remaining:
+            yield context, _nomination_indexes(*row, params) if row is not None else []
+        return
+
+    def consume(batch):
+        contexts, future = batch
+        yield from zip(contexts, future.result(), strict=True)
+
+    # Genome/SQLite handles stay in the caller. Results are applied in edge
+    # order so query insertion and proposal order remain stable.
+    workers = min(cpus, 8)
+    pending = deque()
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
+        while batch := list(islice(remaining, batch_size)):
+            contexts, rows = zip(*batch, strict=True)
+            pending.append((contexts, executor.submit(_nomination_batch, rows, params)))
+            if len(pending) >= workers * 2:
+                yield from consume(pending.popleft())
+        while pending:
+            yield from consume(pending.popleft())
+
+
 @invocation_cached
 def predict_species(root, value, name, cpus=1):
     if name not in target_species(value):
@@ -1659,7 +1726,7 @@ def predict_species(root, value, name, cpus=1):
                          if (row['species'], row['gene_id']) in needed}
         proteins, windows, queries = {}, defaultdict(list), {}
         proposals = []
-        with store_connection(db) as connection:
+        def scoring_inputs(connection):
             for edge in edges:
                 if edge['ambiguous']:
                     continue
@@ -1670,8 +1737,9 @@ def predict_species(root, value, name, cpus=1):
                 target = loci[target_gene]
                 donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
                 target_candidate_id, target_status = decisions[name, target_gene]
-                target_baseline = next(c for c in target['candidates']
-                                       if c['candidate_id'] == target_candidate_id)
+                baseline = next(i for i, c in enumerate(target['candidates'])
+                                if c['candidate_id'] == target_candidate_id)
+                target_baseline = target['candidates'][baseline]
                 repair_only = (target_status == 'ambiguous_correspondence'
                                and same_coordinate_source_owner(
                                    {'seqid': target['seqid'], 'strand': target['strand'],
@@ -1680,45 +1748,29 @@ def predict_species(root, value, name, cpus=1):
                 if (target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates')
                         or (target_status == 'ambiguous_correspondence' and not repair_only)
                         or decisions[donor, donor_locus['gene_id']][1] == 'ambiguous_correspondence'):
-                    proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
+                    yield ({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor}, None)
                     continue
                 if not any(c['cds'] and c['blocks'] for c in target['candidates']):
-                    proposals.append({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor})
+                    yield ({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor}, None)
                     continue
                 if len(target['candidates']) > params['candidate_limit'] or len(donor_locus['candidates']) > params['candidate_limit']:
-                    proposals.append({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor})
+                    yield ({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor}, None)
                     continue
-                # Intact concordant single coding paths need no predictor process.
-                for candidate in donor_locus['candidates'][:params['candidate_limit']]:
-                    if not candidate['quality'].get('usable') or not candidate['protein']:
-                        continue
-                    baseline_score = None
-                    discrepancy = (not target_baseline['quality'].get('valid_orf')
-                                   or len(target['candidates']) < len(donor_locus['candidates'])
-                                   or abs(len(candidate['protein']) - len(target_baseline['protein']))
-                                   > max(3, len(candidate['protein']) * .05))
-                    if not discrepancy:
-                        baseline_score = pair_score(target_baseline, candidate)
-                        discrepancy = (not baseline_score.bounded and baseline_score.identity >= params['minimum_identity']
-                                       and (not homology_supported(min(baseline_score.coverage_a, baseline_score.coverage_b),
-                                                                  baseline_score.identity, params)
-                                            or (len(target_baseline['blocks']) > 1 and len(candidate['blocks']) > 1
-                                                and baseline_score.junction_similarity < 0.8)))
-                    if not discrepancy:
-                        continue
-                    represented = False
-                    for known in target['candidates']:
-                        if not known['quality'].get('valid_orf'):
-                            continue
-                        match = (baseline_score if known is target_baseline and baseline_score is not None
-                                 else pair_score(known, candidate))
-                        if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
-                            represented = True
-                            break
-                    if represented:
-                        continue
-                    blocks = [b for c in target['candidates'] for b in c['blocks']]
-                    start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
+                yield ((target_gene, donor, target, donor_locus['candidates'], repair_only),
+                       (target['candidates'], baseline, donor_locus['candidates']))
+
+        with store_connection(db) as connection:
+            for context, searches in _ordered_nominations(scoring_inputs(connection), params, cpus):
+                if isinstance(context, dict):
+                    proposals.append(context)
+                    continue
+                if not searches:
+                    continue
+                target_gene, donor, target, candidates, repair_only = context
+                blocks = [b for c in target['candidates'] for b in c['blocks']]
+                start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
+                for index in searches:
+                    candidate = candidates[index]
                     if end - start > params['max_interval']:
                         proposals.append({'gene_id': target_gene, 'status': 'interval_too_large', 'donor': donor})
                         continue

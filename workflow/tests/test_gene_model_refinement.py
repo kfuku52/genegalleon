@@ -64,6 +64,18 @@ def test_sequence_only_pair_has_no_splice_junction_term():
         assert (score.score, score.junction_similarity) == (1.0, 0.0)
 
 
+def test_parallel_refinement_nominations_preserve_edge_order():
+    known = {'protein': 'MAEDEKMF', 'blocks': [[0, 24, 0]],
+             'quality': {'valid_orf': True, 'usable': True}}
+    new = {**known, 'protein': 'W' * 18}
+    donor_paths = ([known], [known, new], [])
+    inputs = [(edge, ([known], 0, donor_paths[edge % 3]) if edge % 3 != 2 else None)
+              for edge in range(521)]
+    expected = [(edge, [1] if edge % 3 == 1 else []) for edge, _ in inputs]
+    assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 1)) == expected
+    assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 2)) == expected
+
+
 def test_initial_assembly_cds_preserves_baselines_and_rejects_unmapped_candidates(tmp_path):
     species = 'Species_assembly'
     fasta = tmp_path / 'cds.fa'
