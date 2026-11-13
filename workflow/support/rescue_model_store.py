@@ -64,14 +64,17 @@ def _compress(value, codec, level):
     return zstandard.ZstdCompressor(level=level, write_checksum=True).compress(value)
 
 
-def _decompress(value, codec):
+def _decompress(value, codec, *, expected_size=None):
     if codec == "gzip":
         reader = gzip.GzipFile(fileobj=io.BytesIO(value), mode="rb")
     else:
         import zstandard
         reader = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(value))
     with reader:
-        result = reader.read(MAX_RECORD_BYTES + 1)
+        # A writer comparing a stored body to known bytes needs at most one
+        # extra byte to reject unequal bodies. Readers keep the full bound.
+        limit = MAX_RECORD_BYTES if expected_size is None else min(MAX_RECORD_BYTES, expected_size)
+        result = reader.read(limit + 1)
     if len(result) > MAX_RECORD_BYTES:
         raise ValueError("Model-store record exceeds bounded buffer")
     return result
@@ -227,8 +230,8 @@ def _database(path):
     return db
 
 
-def _insert_body(db, body, level, codec, cache=None):
-    sha = hashlib.sha256(body).hexdigest()
+def _insert_body(db, body, level, codec, cache=None, *, packed_sha=None):
+    sha = hashlib.sha256(body).hexdigest() if packed_sha is None else packed_sha
     if cache is not None and sha in cache.cache:
         if cache.cache[sha] != body:
             raise ValueError("Model-store body hash collision")
@@ -237,7 +240,7 @@ def _insert_body(db, body, level, codec, cache=None):
     found = db.execute("SELECT data FROM bodies WHERE sha=?", (sha,)).fetchone()
     if found is None:
         db.execute("INSERT INTO bodies VALUES (?,?)", (sha, _compress(body, codec, level)))
-    elif _decompress(found[0], codec) != body:
+    elif _decompress(found[0], codec, expected_size=len(body)) != body:
         raise ValueError("Model-store body hash collision")
     if cache is not None:
         cache.remember(sha, body)
@@ -251,7 +254,7 @@ def _overlay(path):
 
 
 def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None, *, _encoded_envelope=None):
-    _insert_body(db, body, level, codec, cache)
+    _insert_body(db, body, level, codec, cache, packed_sha=envelope["body"])
     if _encoded_envelope is None:
         db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_json(envelope), codec, level)))
     else:
@@ -342,7 +345,7 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
                 shard_handle = _writer(tmp / shard, codec, compression_level)
                 shard_size, line = 0, 0
             shard_handle.write(packed)
-            _insert_body(body_db, body, compression_level, codec, body_cache)
+            _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=envelope["body"])
             if lookup_db is not None:
                 lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
                                   (fingerprint, ordinal, len(shards) - 1, line))
@@ -368,7 +371,7 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
                 if match is None:
                     raise ValueError("Partial record is not an exact model-store member")
                 # Verify equal body bytes, not only equal SHA, before referencing.
-                _insert_body(body_db, body, compression_level, codec, body_cache)
+                _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=envelope["body"])
                 if match[0] < last_partial_ordinal:
                     partial_ordered = False
                 last_partial_ordinal = match[0]

@@ -4,7 +4,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -69,6 +69,18 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     second = next(iterator)
     assert second == model(1)
     assert list(iterator) == []
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'zstd'])
+def test_stored_body_with_matching_prefix_is_rejected(tmp_path, codec):
+    if codec == 'zstd':
+        pytest.importorskip('zstandard')
+    body = b'expected body'
+    sha = hashlib.sha256(body).hexdigest()
+    with closing(store._database(tmp_path / 'bodies.sqlite')) as database:
+        database.execute('INSERT INTO bodies VALUES (?,?)', (sha, store._compress(body + b'extra', codec, 1)))
+        with pytest.raises(ValueError, match='Model-store body hash collision'):
+            store._insert_body(database, body, 1, codec, packed_sha=sha)
 
 
 def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_path, monkeypatch):
