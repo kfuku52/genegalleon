@@ -1267,6 +1267,11 @@ def apply_same_coordinate_repairs(selection, prediction_rows):
 def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     """Require target ownership, intact genomic ORF and independent support."""
     rna_rows = rna_path_index(rna_rows)
+    models = iter(models)
+    try:
+        first_model = next(models)
+    except StopIteration:
+        return []
     loci = {g['gene_id']: g for g in catalog['loci']}
     # Freeze the same species/locus predicates once. Scanning a cohort-wide
     # correspondence graph for every predicted coding path is quadratic.
@@ -1313,7 +1318,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
             i -= 1
         return False
     grouped = {}
-    for m in models:
+    for m in chain((first_model,), models):
         g = loci[m['gene_id']]
         candidate = {'seqid': m['seqid'], 'strand': m['strand'], 'blocks': m['cds'], 'cds': m['sequence'],
                      'origin': 'predicted', 'source_gene_id': g['candidates'][0]['source_gene_id'],
@@ -1633,7 +1638,6 @@ def predict_species(root, value, name, cpus=1):
         edges = json.loads((corr / 'edges.json').read_text())
         edges = [edge for edge in edges if edge.get('comparison_basis') != 'protein_alignment'
                  and name in (edge['species_a'], edge['species_b'])]
-        catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         loci = {g['gene_id']: g for g in catalog['loci']}
         needed = {(edge['species_' + side], edge['gene_' + side])
                   for edge in edges if not edge['ambiguous'] for side in ('a', 'b')}
@@ -1778,6 +1782,8 @@ def predict_species(root, value, name, cpus=1):
         rna = read_table(value['request']['rna']) if value['request']['rna'] else []
         rna.extend(refinement_rna.evidence_rows(name, source['genome'],
                                                value['request'].get('rna_bams', {}).get(name, []), validated, tmp))
+        if validated:
+            catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         predictions = classify_predictions(validated, catalog, edges, params, rna, value['request']['files'][source['genome']])
         atomic_json(tmp / 'predictions.json', predictions)
         atomic_json(tmp / 'nominations.json', {'queries': list(queries.values()), 'proposals': proposals})
