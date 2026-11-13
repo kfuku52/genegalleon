@@ -1867,8 +1867,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     "cached_search_contract": cached.search_contract if cached else None,
                     "cached_local_search_compatible": cached.local_search_compatible if cached else None,
                     "cached_genome_search_compatible": cached.genome_search_compatible if cached else None})
-        detected = {m["query"] for m in validated}
         def audit_rows():
+            detected = {m["query"] for m in validated}
             for m in models:
                 yield (m["query"], m["evidence"]["query"], m["status"], ",".join(m["problems"]),
                        m["coverage"], m["identity"], m.get("model_id", ""))
@@ -1877,7 +1877,6 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
                   audit_rows())
-        del detected
         if storage["format"] == "compact":
             # The audit was the final reader of the in-memory candidate list.
             # Release each record as its compact publication is written.
