@@ -29,7 +29,9 @@ Check-table group counts now mean
 ambiguous tips rather than GRAMPA's collapsed groups. Gene/tree IDs are
 run-local, and the first minimum-score candidate supplies the summary.
 The prepared inputs and literal filename inventory are published with the
-results. Each run uses an isolated temporary directory; all nine related
+results. The inventory is UTF-8 and uses physical newline boundaries, so
+characters such as Unicode line separators within filenames remain literal.
+Each run uses an isolated temporary directory; all nine related
 outputs use the existing recoverable bundle publisher. Failed computation or
 publication preserves previous results. Empty inputs with existing results
 fail rather than record those results as a new analysis.
