@@ -1902,15 +1902,16 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     return ''.join(lines)
 
 
-def _gff_source_graph(original):
-    """Parse source relationships once without retaining derived view edits."""
+def _gff_source_graph(original, *, retain_attributes=True):
+    """Parse source relationships, retaining decoded attributes only for callers that need them."""
     records, parents, implicit = [], {}, {}
     lines = original.splitlines(keepends=True) if isinstance(original, str) else original
     for line in lines:
         if line.strip() == '##FASTA':
             break
         if line.startswith('#') or not line.strip():
-            records.append((line, None, {}, []))
+            attributes, parent_ids = ({}, []) if retain_attributes else (None, ())
+            records.append((line, None, attributes, parent_ids))
             continue
         fields = line.rstrip().split('\t')
         if len(fields) != 9:
@@ -1918,7 +1919,7 @@ def _gff_source_graph(original):
         is_gtf = bool(re.match(r'^\s*[^\s=;]+\s+', fields[8]))
         parsed = parse_gff_attributes(fields[8])
         attributes = {key: values[0] for key, values in parsed.items() if values}
-        parent_ids = list(parsed.get('Parent', ()))
+        parent_ids = parsed.get('Parent', ())
         tid, gid = attributes.get('transcript_id'), attributes.get('gene_id')
         # GTF encodes its graph on every child rather than requiring ID/Parent rows.
         if tid and not attributes.get('ID') and fields[2].lower().endswith(('rna', 'transcript')):
@@ -1927,7 +1928,7 @@ def _gff_source_graph(original):
             attributes['ID'] = gid
         if not parent_ids and tid:
             parent_ids = [gid] if attributes.get('ID') == tid else [tid]
-            parent_ids = list(filter(None, parent_ids))
+            parent_ids = tuple(filter(None, parent_ids))
         if tid and gid:
             parents.setdefault(tid, set()).add(gid)
             implicit.setdefault(tid, (gid, fields[0], fields[6], []) )[3].append((int(fields[3]), int(fields[4])))
@@ -1955,7 +1956,8 @@ def _gff_source_graph(original):
             if additions:
                 fields[8] = fields[8].rstrip(';') + ';' + ';'.join(additions)
                 line = '\t'.join(fields) + '\n'
-        records.append((line, fields, attributes, parent_ids))
+        records.append((line, fields, attributes if retain_attributes else identifier,
+                        list(parent_ids) if retain_attributes else parent_ids))
     return records, parents, implicit
 
 
@@ -1964,6 +1966,10 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     if synthetic_parents_only and not retain_all:
         raise ValueError('Synthetic parent export requires the complete source graph')
     records, parents, implicit = source_graph
+
+    def record_id(value):
+        return value.get('ID') if isinstance(value, dict) else value
+
     if retain_all:
         transcript_ids = set(transcript_ids) | set(implicit)
     ancestors, pending = set(), list(transcript_ids)
@@ -1979,16 +1985,17 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     changed = True
     while changed and not retain_all:
         changed = False
-        for _, fields, attributes, parent_ids in records:
-            if fields is None or attributes.get('ID') in ancestors or attributes.get('ID') in excluded_coding_owners:
+        for _, fields, identifier, parent_ids in records:
+            identifier = record_id(identifier)
+            if fields is None or identifier in ancestors or identifier in excluded_coding_owners:
                 continue
             if descendants.intersection(parent_ids):
-                identifier = attributes.get('ID')
                 if identifier and identifier not in descendants:
                     descendants.add(identifier)
                     changed = True
     structural_parents = descendants | ancestors
-    lines, known_ids = [], {attrs['ID'] for _, f, attrs, _ in records if f is not None and 'ID' in attrs}
+    lines, known_ids = [], {identifier for _, fields, value, _ in records if fields is not None
+                           and (identifier := record_id(value)) is not None}
     gene_spans = defaultdict(list)
     for tid in sorted(transcript_ids & implicit.keys()):
         gid, seqid, strand, spans = implicit[tid]
@@ -2000,9 +2007,9 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
         if tid not in known_ids:
             kind = 'mRNA' if tid in coding_owners else 'transcript'
             lines.append(f'{seqid}\tGeneGalleon\t{kind}\t{start}\t{end}\t.\t{strand}\t.\tID={quote(tid, safe="._-:")};Parent={quote(gid, safe="._-:")};gene_id={quote(gid, safe="._-:")}\n')
-    for _, fields, attributes, parent_ids in records:
+    for _, fields, identifier, parent_ids in records:
         if (fields is not None and parent_ids and fields[2].lower().endswith(('rna', 'transcript'))
-                and (retain_all or attributes.get('ID') in selected_ancestors)):
+                and (retain_all or record_id(identifier) in selected_ancestors)):
             span = int(fields[3]), int(fields[4])
             for gid in parent_ids:
                 if gid not in known_ids:
@@ -2014,12 +2021,12 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     lines = ['##gff-version 3\n'] + synthesized_genes + lines
     if synthetic_parents_only:
         return ''.join(lines)
-    for line, fields, attributes, parent_ids in records:
+    for line, fields, identifier, parent_ids in records:
         if fields is None:
             if not line.startswith('##gff-version'):
                 lines.append(line)
             continue
-        identifier = attributes.get('ID', '')
+        identifier = record_id(identifier) or ''
         structural = identifier in transcript_ids or identifier in ancestors
         keep = retain_all or structural or identifier in descendants or (identifier not in coding_owners and bool(descendants.intersection(parent_ids)))
         if keep:
@@ -2576,7 +2583,7 @@ def apply_reviewed_phase_rows(graph, repairs):
     if not expected:
         return
     seen = set()
-    for i, (line, fields, attrs, parents) in enumerate(graph[0]):
+    for i, (_, fields, identifier, parents) in enumerate(graph[0]):
         if fields is None or fields[2] != 'CDS':
             continue
         keys = [(p, fields[0], fields[6], int(fields[3]) - 1, int(fields[4])) for p in parents]
@@ -2588,7 +2595,7 @@ def apply_reviewed_phase_rows(graph, repairs):
         seen.update(matches)
         fields = fields[:]
         fields[7] = str(expected[next(iter(matches))])
-        graph[0][i] = ('\t'.join(fields) + '\n', fields, attrs, parents)
+        graph[0][i] = ('\t'.join(fields) + '\n', fields, identifier, parents)
     if seen != expected.keys():
         raise ValueError('Reviewed phase correction did not match source CDS rows: '
                          + str(sorted(expected.keys() - seen)))
@@ -2708,7 +2715,7 @@ def finalize(root, value):
             else:
                 shutil.copyfile(source['gff'], source_annotation)
             original = source_annotation.read_bytes().decode('utf-8')
-            source_graph = _gff_source_graph(original)
+            source_graph = _gff_source_graph(original, retain_attributes=False)
             retired = retired_by_species.get(name, set())
             new_genes = merged_by_species.get(name, [])
             repaired = repaired_by_species.get(name, {})
