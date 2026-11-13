@@ -2820,7 +2820,7 @@ prepare_gene_model_refinement() {
 
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
-  python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
+  python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   if [[ -s "${gene_model_refinement_dir}/effective/sequence/inputs.tsv" ]]; then
     echo "Selected sequence inputs: ${gene_model_refinement_dir}/effective/sequence/inputs.tsv"
     [[ -s "${gene_model_refinement_dir}/effective/inputs.tsv" ]] || return 0
@@ -2988,7 +2988,7 @@ case "${input_generation_mode}" in
     [[ -z "${gene_model_rescue_comparison_cache}" ]] || refinement_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
     python "${gg_support_dir}/gene_model_refinement.py" "${refinement_command}" "${refinement_args[@]}"
     if [[ "${refinement_command}" == correspondence ]]; then
-      python "${gg_support_dir}/gene_model_refinement.py" select --output "${gene_model_refinement_dir}"
+      python "${gg_support_dir}/gene_model_refinement.py" select --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
     fi
     ;;
   refinement_finalize)
