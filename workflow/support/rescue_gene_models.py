@@ -1849,7 +1849,6 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         if genomewide_audit is not None:
             atomic_json(tmp / 'oriongeno_genomewide.json', rescue_native_genomewide.finish_audit(genomewide_audit, models))
         atomic_json(tmp / "placement_audit.json", placement)
-        write_rescue_models(tmp, models, source["genetic_code"], compact=storage["format"] == "compact")
         atomic_json(tmp / "search_inputs.json", {
             "schema": 1, "plan_sha256": plan_digest(root, plan),
             "source_files": {source[k]: plan["request"]["files"][source[k]] for k in ("genome", "fasta", "gff")},
@@ -1878,6 +1877,19 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
                   audit_rows())
+        del detected
+        if storage["format"] == "compact":
+            # The audit was the final reader of the in-memory candidate list.
+            # Release each record as its compact publication is written.
+            models.reverse()
+
+            def release_models():
+                while models:
+                    yield models.pop()
+
+            write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True)
+        else:
+            write_rescue_models(tmp, models, source["genetic_code"], compact=False)
         # Huge indexes are execution scratch, not reusable unverified outputs.
         (tmp / "genome.mpi").unlink(missing_ok=True)
         (tmp / "genome.fa").unlink(missing_ok=True)
