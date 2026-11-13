@@ -262,6 +262,23 @@ def test_nested_copy_overlap_distinguishes_window_and_gene_matches():
     assert (result["shared_window_pairs"], result["shared_gene_pairs"], result["shared_families"]) == (1, 0, 0)
 
 
+def test_paired_tree_support_uses_full_copy_groups_not_anchor_subclades(tmp_path):
+    from zipfile import ZipFile
+
+    from workflow.support.wgd_cross_support import paired_tree_support
+
+    primary, alternative = tmp_path / "root.zip", tmp_path / "ufboot.zip"
+    text = "((((A_x,B_x)14,C_x)97,((A_y,B_y)15,C_y)98)99,(D_x,E_x)99);"
+    for path, member in ((primary, "f_root.nwk"), (alternative, "f_generax.ufboot.nwk")):
+        with ZipFile(path, "w") as stream:
+            stream.writestr(member, text)
+    rows = [{"species_event_id": "clade", "branch_id": 3}]
+    hits = [("clade", "A", "B", ("chr1", 1), "f", ("A_x", "B_x", "A_y", "B_y"), (), ())]
+    result, = paired_tree_support(primary, alternative, rows, hits)
+    assert result["status"] == "all_splits_present"
+    assert [result[name] for name in ("duplication_support", "first_copy_support", "second_copy_support")] == [99, 97, 98]
+
+
 def test_cross_ks_support_conflict_and_missing_boundary():
     from nwkit.util import read_tree
 

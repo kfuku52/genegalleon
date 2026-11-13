@@ -1,4 +1,4 @@
-"""Check tree-matched paired anchors against split support from an independent archive."""
+"""Check tree-matched paired anchors against split support from a separate archive."""
 
 from collections import defaultdict
 from pathlib import PurePosixPath
@@ -57,6 +57,18 @@ def support_splits(tree, bits):
     return support
 
 
+def paired_copy_nodes(tree, leaves, by_node, bits, genes):
+    x, y, xx, yy = (leaves[gene] for gene in genes)
+    duplication = tree.common_ancestor([x, xx])
+    first = bits[x.name] | bits[y.name]
+    second = bits[xx.name] | bits[yy.name]
+    copies = [next((c for c in duplication.children if by_node[c] & needed == needed), None)
+              for needed in (first, second)]
+    if None in copies or copies[0] is copies[1]:
+        raise ValueError("Traced paired anchors do not split into the recorded duplication copies")
+    return duplication, *copies
+
+
 def paired_tree_support(tree_archive, support_archive, candidates, traced_hits):
     from nwkit.util import read_tree
 
@@ -84,8 +96,7 @@ def paired_tree_support(tree_archive, support_archive, candidates, traced_hits):
                     support = support_splits(other, bits)
                     state = "comparable"
             for event, a, b, (contig, window), _, genes, *_ in hits:
-                x, y, xx, yy = (leaves[gene] for gene in genes)
-                nodes = tree.common_ancestor([x, xx]), tree.common_ancestor([x, y]), tree.common_ancestor([xx, yy])
+                nodes = paired_copy_nodes(tree, leaves, by_node, bits, genes)
                 vals = tuple(support.get(split_id(by_node[node], universe)) for node in nodes)
                 status = state if state != "comparable" else (
                     "all_splits_present" if None not in vals else "split_not_supported_or_missing")
