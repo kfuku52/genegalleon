@@ -1445,6 +1445,48 @@ LOCAL_VALIDATED = "local_validated.jsonl.gz"
 TARGETED_VALIDATED = "targeted_validated.json"
 
 
+def write_rescue_models(directory, models, genetic_code, *, compact):
+    """Write candidate quality and revision views in original model order."""
+    revisions = {}
+
+    def with_quality(quality_writer):
+        for model in models:
+            quality = model_quality(model, genetic_code)
+            if compact:
+                model = model.copy()
+            model["quality_evidence"] = quality
+            owners = model.get("revision_owner_ids", ())
+            if len(owners) == 1 and not set(model["problems"]) - {"overlap_existing_annotation"}:
+                shape = (*coding_shape(model), owners[0])
+                evidence = {**model["evidence"], "alignment": {"coverage": model["coverage"],
+                            "identity": model["identity"], "problems": list(model["problems"])}}
+                if shape not in revisions:
+                    revisions[shape] = {**model, "support": []}
+                revisions[shape]["support"].append(evidence)
+            terminal = quality["terminal_alignment"]
+            alignment = quality["query_alignment"]
+            quality_writer.writerow((model["query"], model.get("model_id", ""), model["status"], quality["start_codon"],
+                terminal["n_aligned"], terminal["c_aligned"], ",".join(quality["donor_species"]), ",".join(quality["flags"]),
+                alignment["aligned_query_fraction"], alignment["internal_unaligned_query_fraction"]))
+            yield model
+
+    with (directory / "quality_flags.tsv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(("candidate", "model_id", "status", "start_codon", "donor_n_terminus_aligned",
+                         "donor_c_terminus_aligned", "donor_species", "flags", "donor_aligned_query_fraction",
+                         "donor_internal_unaligned_query_fraction"))
+        enriched = with_quality(writer)
+        if compact:
+            # The store consumes revisions after the main model stream.
+            write_model_store(directory, enriched, revisions=revisions.values())
+        else:
+            for _ in enriched:
+                pass
+            atomic_json(directory / "models.json", models)
+            atomic_json(directory / "revision_candidates.json", list(revisions.values()))
+            atomic_json(directory / "partial_models.json", [m for m in models if m.get("partial_evidence", {}).get("partial")])
+
+
 def rescue(root, plan, name, cpus, interval_workers=None, *, phase="all"):
     with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=cpus)) as dependencies:
         return _rescue(root, plan, name, cpus, interval_workers, phase, dependencies)
@@ -1806,25 +1848,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         check_sources()
         if genomewide_audit is not None:
             atomic_json(tmp / 'oriongeno_genomewide.json', rescue_native_genomewide.finish_audit(genomewide_audit, models))
-        for model in models:
-            model["quality_evidence"] = model_quality(model, source["genetic_code"])
         atomic_json(tmp / "placement_audit.json", placement)
-        revisions = {}
-        for model in models:
-            if len(model.get("revision_owner_ids", [])) != 1 or set(model["problems"]) - {"overlap_existing_annotation"}:
-                continue
-            shape = (*coding_shape(model), model["revision_owner_ids"][0])
-            evidence = {**model["evidence"], "alignment": {"coverage": model["coverage"],
-                        "identity": model["identity"], "problems": list(model["problems"])}}
-            if shape not in revisions:
-                revisions[shape] = {**model, "support": []}
-            revisions[shape]["support"].append(evidence)
-        if storage["format"] == "compact":
-            write_model_store(tmp, models, revisions=revisions.values())
-        else:
-            atomic_json(tmp / "models.json", models)
-            atomic_json(tmp / "revision_candidates.json", list(revisions.values()))
-            atomic_json(tmp / "partial_models.json", [m for m in models if m.get("partial_evidence", {}).get("partial")])
+        write_rescue_models(tmp, models, source["genetic_code"], compact=storage["format"] == "compact")
         atomic_json(tmp / "search_inputs.json", {
             "schema": 1, "plan_sha256": plan_digest(root, plan),
             "source_files": {source[k]: plan["request"]["files"][source[k]] for k in ("genome", "fasta", "gff")},
@@ -1843,16 +1868,6 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     "cached_search_contract": cached.search_contract if cached else None,
                     "cached_local_search_compatible": cached.local_search_compatible if cached else None,
                     "cached_genome_search_compatible": cached.genome_search_compatible if cached else None})
-        write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
-                  "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
-                  "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"),
-                  ((m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
-                    m["quality_evidence"]["terminal_alignment"]["n_aligned"],
-                    m["quality_evidence"]["terminal_alignment"]["c_aligned"],
-                    ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]),
-                    m["quality_evidence"]["query_alignment"]["aligned_query_fraction"],
-                    m["quality_evidence"]["query_alignment"]["internal_unaligned_query_fraction"])
-                   for m in models))
         detected = {m["query"] for m in validated}
         def audit_rows():
             for m in models:
