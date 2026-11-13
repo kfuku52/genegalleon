@@ -1614,31 +1614,41 @@ def predict_species(root, value, name, cpus=1):
         catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
         catalog['loci'] = list(iter_loci(db, name))
         edges = json.loads((corr / 'edges.json').read_text())
-        edges = [edge for edge in edges if edge.get('comparison_basis') != 'protein_alignment']
+        edges = [edge for edge in edges if edge.get('comparison_basis') != 'protein_alignment'
+                 and name in (edge['species_a'], edge['species_b'])]
         catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
-        loci = {(name, g['gene_id']): g for g in catalog['loci']}
-        decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
+        loci = {g['gene_id']: g for g in catalog['loci']}
+        needed = {(edge['species_' + side], edge['gene_' + side])
+                  for edge in edges if not edge['ambiguous'] for side in ('a', 'b')}
+        # The receipted map contains every selection's ID and status without
+        # the cohort-wide scoring and audit payloads from selection.json.
+        with (initial / 'representative_map.tsv').open(newline='', encoding='utf-8') as handle:
+            decisions = {(row['species'], row['gene_id']): (row['candidate_id'], row['status'])
+                         for row in csv.DictReader(handle, delimiter='\t')
+                         if (row['species'], row['gene_id']) in needed}
         proteins, windows, queries = {}, defaultdict(list), {}
         proposals = []
         with store_connection(db) as connection:
             for edge in edges:
-                if edge['ambiguous'] or name not in {edge['species_a'], edge['species_b']}:
+                if edge['ambiguous']:
                     continue
                 target_side = 'a' if edge['species_a'] == name else 'b'
                 donor_side = 'b' if target_side == 'a' else 'a'
                 target_gene = edge['gene_' + target_side]
                 donor = edge['species_' + donor_side]
-                target = loci[name, target_gene]
+                target = loci[target_gene]
                 donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
-                target_decision = decisions[name, target_gene]
+                target_candidate_id, target_status = decisions[name, target_gene]
                 target_baseline = next(c for c in target['candidates']
-                                       if c['candidate_id'] == target_decision['candidate_id'])
-                repair_only = (target_decision['status'] == 'ambiguous_correspondence'
+                                       if c['candidate_id'] == target_candidate_id)
+                repair_only = (target_status == 'ambiguous_correspondence'
                                and same_coordinate_source_owner(
                                    {'seqid': target['seqid'], 'strand': target['strand'],
                                     'cds': target_baseline['blocks'], 'sequence': target_baseline['cds']},
                                    target, catalog.get('genetic_code')) is not None)
-                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or (target_decision['status'] == 'ambiguous_correspondence' and not repair_only) or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
+                if (target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates')
+                        or (target_status == 'ambiguous_correspondence' and not repair_only)
+                        or decisions[donor, donor_locus['gene_id']][1] == 'ambiguous_correspondence'):
                     proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
                     continue
                 if not any(c['cds'] and c['blocks'] for c in target['candidates']):
