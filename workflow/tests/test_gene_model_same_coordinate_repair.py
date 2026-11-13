@@ -164,7 +164,8 @@ class SameCoordinateRepair(unittest.TestCase):
         for mutation in ("none", "before_guard", "during_build"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(prefix="same_coordinate_selection_toy_") as td:
                 root = Path(td)
-                (root / "plan.json").write_text("{}")
+                value = {"species": [SPECIES], "request": {"parameters": PARAMS}}
+                (root / "plan.json").write_text(json.dumps(value))
                 paths = {
                     "catalog": root / "catalog" / SPECIES,
                     "index": root / "catalog_index_final",
@@ -182,7 +183,6 @@ class SameCoordinateRepair(unittest.TestCase):
                     (directory / "receipt.json").write_text(json.dumps({
                         "key": key, "files": {member: refine.digest(directory / member)}}))
                 predictions = paths["predictions"] / "predictions.json"
-                value = {"species": [SPECIES], "request": {"parameters": PARAMS}}
                 if mutation == "before_guard":
                     predictions.write_text("[]")
                 original_stream = refine.stream_json_array
