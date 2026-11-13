@@ -138,6 +138,7 @@ wgd_alpha=0.05 # Search-wide conditional bootstrap P-value cutoff.
 wgd_gene_trees_file="" # Optional rooted *_root.nwk ZIP; selects duplication-score mode.
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.
+wgd_cross_tree_support_file="" # Optional GeneRax UFBoot tree ZIP for paired cross-block support diagnostics.
 wgd_min_cross_windows=3 # Minimum observable windows and, for support, concordant windows and distinct families per pair.
 wgd_min_duplication_score=0.01 # Minimum supporting / eligible families in duplication-score mode.
 wgd_ks_bootstrap=199 # Shared-family bootstrap for rate-corrected divergence boundaries.

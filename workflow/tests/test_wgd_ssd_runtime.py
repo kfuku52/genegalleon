@@ -198,8 +198,11 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     with ZipFile(workspace / "rooted_tree.zip", "w") as stream:
         for i in range(5):
             stream.writestr(f"OG{i:03d}_root.nwk", f"((({a}_a{i},{b}_a{i}),({a}_b{i},{b}_b{i})),{c}_a{i});")
+    with ZipFile(workspace / "boot.zip", "w") as stream:
+        stream.writestr("OG000_generax.ufboot.nwk", f"(({a}_a0,{b}_a0)100,({a}_b0,{b}_b0)88,{c}_a0);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
-                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv")
+                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
+                      wgd_cross_tree_support_file="boot.zip")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -213,6 +216,12 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert region["mode"] == "paired" and region["regions"] == "1"
     assert region["num_holdouts_losing_support"] == "1"
     assert "cross_synteny_regions.tsv" in summary["output_hashes"]
+    support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}
+    assert support["OG000"]["first_copy_support"] == "100.0"
+    assert support["OG000"]["second_copy_support"] == "88.0"
+    assert support["OG000"]["duplication_support"] == ""
+    assert support["OG001"]["status"] == "archive_missing"
+    assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))

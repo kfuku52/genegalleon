@@ -21,6 +21,7 @@ try:
     from parallel_io import ordered_bounded_results
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
+    from wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
     from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
@@ -31,6 +32,7 @@ except ImportError:
     from .parallel_io import ordered_bounded_results
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
+    from .wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
     from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
@@ -83,6 +85,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
+              Path(__file__).with_name("wgd_cross_support.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
@@ -122,6 +125,12 @@ def make_plan(args):
                 inputs[str(path)] = digest(path)
 
         cross_pairs = read_pairs(cross_path, lambda path: resolve(path, ""), set(names), hash_input)
+    support_archive = ""
+    if getattr(args, "cross_tree_support", ""):
+        if cross_pairs is None:
+            raise ValueError("Cross-tree support requires --cross-synteny")
+        support_archive = str(resolve(args.cross_tree_support, ""))
+        inputs[support_archive] = digest(support_archive)
     genomes_path = resolve(args.genomes, "input/wgd_genomes.tsv")
     if args.genomes or genomes_path.is_file():
         inputs[str(genomes_path)] = digest(genomes_path)
@@ -193,7 +202,7 @@ def make_plan(args):
     protect_output(args.outfile, inputs, workspace)
     return {"schema_version": 1, "workspace": str(workspace), "species_tree": str(tree_path),
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
-            "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources,
+            "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -793,6 +802,10 @@ def run_analysis(plan, output, cpus):
                                                                p["min_cross_windows"])
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
+            if plan.get("cross_tree_support"):
+                write_table(output / "cross_synteny_tree_support.tsv",
+                            paired_tree_support(plan["gene_trees"], plan["cross_tree_support"], raw_candidates,
+                                                cross.traced_hits), SUPPORT_FIELDS)
             if cross_ks:
                 cross_ks.prepare(cross.age_pairs, raw_candidates, cross_evidence)
             del cross
@@ -1105,7 +1118,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
-    for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds"):
+    for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
+                  "cross-tree-support"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("ks-bootstrap", 199), ("seed", 1),

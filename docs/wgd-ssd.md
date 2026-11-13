@@ -387,6 +387,12 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   each region on the synteny rule. These are sensitivity diagnostics; a
   region is not necessarily biologically independent, and the original
   candidate decision is unchanged.
+- Optionally set `wgd_cross_tree_support_file` to GeneGalleon's GeneRax
+  UFBoot ZIP (members named `*_generax.ufboot.nwk`) to write
+  `cross_synteny_tree_support.tsv`. This compares the duplication and both
+  copy splits for each paired hit by exact unrooted bipartition on the same
+  gene set. Missing or unmatched values stay empty; no threshold is applied
+  to the candidate decision. This does not test the root position.
 - With cross-block CDS inputs, `cross_ks_paralogs.tsv`,
   `cross_ks_orthologs.tsv`, and `cross_ks_focals.tsv` audit genes, selection,
   and focal placement. `cross_ks_boundaries.tsv` and `cross_ks_trios.tsv`
