@@ -1030,8 +1030,20 @@ def select(root, value, predictions=False):
                 shutil.copyfile(initial / filename, tmp / filename)
             return
         edges = json.loads((directory / 'edges.json').read_text())
-        selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
-                                           min_support=params['min_support'], candidate_limit=params['candidate_limit'])
+        # Graph components read loci in an order that is expensive on shared
+        # storage. Verify one sequential copy before opening it for selection.
+        scratch_context = (scratch_build_directory(db.parent) if 'fixed_donors' in value['request']
+                           else contextlib.nullcontext(db.parent))
+        with scratch_context as scratch:
+            selection_db = db
+            if scratch != db.parent:
+                receipt = (db.parent / 'receipt.json').read_bytes()
+                if hashlib.sha256(receipt).hexdigest() != dependencies['index'][db.parent.name]:
+                    raise ValueError('Refinement index receipt changed before selection')
+                selection_db = scratch / db.name
+                copy_refinement_index(db, selection_db, json.loads(receipt)['files'][db.name])
+            selection = select_from_store(selection_db, edges, policy=params['policy'], min_margin=params['min_margin'],
+                                          min_support=params['min_support'], candidate_limit=params['candidate_limit'])
         if predictions:
             repairs = (row for name in target_species(value)
                        for row in stream_json_array(root / 'predictions' / name / 'predictions.json')
