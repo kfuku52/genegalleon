@@ -1757,22 +1757,23 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 native_models, annevo_audit = annevo_gene_models.nominate(
                     plan['request'][engine], name, bounded_regions, proteins, genome, params, cpus=cpus, engine=engine)
                 native_checked = list(check_predictions(native_models, engine))
+                del native_models
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
                 atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
             if plan['request'].get('oriongeno_genomewide'):
                 import rescue_native_genomewide
                 require_same_key(rescue_native_genomewide.CONTRACT, plan['request']['oriongeno_genomewide'])
-                native_models, genomewide_audit = rescue_native_genomewide.nominate(
+                native_checked, genomewide_audit = rescue_native_genomewide.nominate(
                     plan['request']['oriongeno'], name, proteins, genome, placement_ownership,
-                    params, tmp, cpus=cpus)
-                native_checked = list(check_predictions(native_models, "oriongeno_genomewide"))
+                    params, tmp, cpus=cpus, validate=checked_prediction)
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
                 transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))
                 annevo_gene_models.confirm_transferred_structure(native_checked, chain(validated, transferred_checked))
                 validated.extend(transferred_checked)
                 validated.extend(native_checked)
+                del native_checked, transferred, transferred_checked
             if cached:
                 cached.check()
             if searched_genome_ids:

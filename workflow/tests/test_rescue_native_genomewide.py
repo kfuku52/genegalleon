@@ -120,6 +120,29 @@ def test_donor_aliases_and_native_predictions_are_not_independent_species(tmp_pa
     assert audit['path_status_counts'] == {'not_admitted': 1}
 
 
+def test_validation_during_nomination_preserves_order_and_audit(tmp_path):
+    genome, frozen, protein, _ = fixture(tmp_path, aliases=True, second_locus=True)
+    params = {**refinement.DEFAULTS, 'terminal_max_extension': 300}
+    proteins = {'Donor_one': {'p': protein, 'alias': protein}}
+    baseline, streamed = (tmp_path / name for name in ('baseline', 'streamed'))
+    baseline.mkdir()
+    streamed.mkdir()
+    with catalog.indexed_genome(genome) as sequence:
+        def validate(model):
+            return rescue.check_interval(rescue.validate_model(model, sequence, 1, params))
+
+        ownership = rescue.OwnershipIndex([])
+        raw, baseline_audit = native.nominate(frozen, 'Target_species', proteins, sequence,
+                                              ownership, params, baseline)
+        checked, streamed_audit = native.nominate(frozen, 'Target_species', proteins, sequence,
+                                                   ownership, params, streamed, validate=validate)
+        assert checked == [validate(model) for model in raw]
+    for audit in (baseline_audit, streamed_audit):
+        audit.pop('search_and_alignment_seconds')
+    assert streamed_audit == baseline_audit
+    assert streamed_audit['candidate_pairs'] == len(checked) == 8
+
+
 def test_frozen_gff_change_fails_before_search(tmp_path):
     genome, frozen, protein, _ = fixture(tmp_path)
     Path(frozen['predictions']['Target_species']['gff']).write_text('changed')

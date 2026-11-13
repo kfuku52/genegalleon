@@ -36,12 +36,14 @@ def _native():
     return annevo_gene_models
 
 
-def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1):
+def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None):
     """Search each eligible native isoform, retaining identical-protein aliases.
 
     There is no donor representation filter, candidate window or query cap. Search
     negatives are explicitly search negatives, not proof that no homolog exists.
     Only sequence-identical aliases share an alignment; loci/isoforms stay distinct.
+    Validate each result in the caller while the bounded scoring pool runs,
+    without retaining separate raw and validated lists.
     """
     if type(cpus) is not int or cpus < 1:
         raise ValueError('Native genomewide CPUs must be a positive integer')
@@ -82,12 +84,14 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     donor_aliases = defaultdict(list)
     for donor in sorted(set(proteins) - {name}):
         for query, protein in sorted(proteins[donor].items()):
-            donor_aliases[protein].append((donor, query))
+            token = 'orion_genome_query_' + hashlib.sha256(
+                json.dumps([name, donor, query], separators=(',', ':')).encode()).hexdigest()[:20]
+            donor_aliases[protein].append((donor, query, token))
     if not donor_aliases:
         raise ValueError('Genomewide native rescue has no external donor proteins')
     queries = {f'n{i}': protein for i, protein in enumerate(sorted(groups))}
     subjects = {f'd{i}': protein for i, protein in enumerate(sorted(donor_aliases))}
-    candidates = set()
+    candidates = defaultdict(set)
     search_dir = Path(directory) / 'native_genomewide_search'
     search_dir.mkdir()
     if queries:
@@ -101,20 +105,27 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
                '--out', search_dir / 'pairs.tsv', '--outfmt', '6', 'qseqid', 'sseqid',
                '--ultra-sensitive', '--masking', '0', '--comp-based-stats', '0', '--evalue', '1000',
                '--max-target-seqs', '0', '--max-hsps', '1', '--threads', cpus], search_dir, 'blastp')
+        subject_tokens = {token: token for token in subjects}
         with (search_dir / 'pairs.tsv').open() as stream:
             for line in stream:
                 fields = line.split()
                 if len(fields) != 2 or fields[0] not in queries or fields[1] not in subjects:
                     raise ValueError('Unknown genomewide protein search identifier')
-                candidates.add(tuple(fields))
+                candidates[fields[0]].add(subject_tokens[fields[1]])
         # Exact short peptides need not seed a DIAMOND alignment. Preserve all
         # exact matches independently of the search program's seeding heuristic.
         by_sequence = {protein: token for token, protein in subjects.items()}
-        candidates.update((token, by_sequence[protein]) for token, protein in queries.items() if protein in by_sequence)
+        for token, protein in queries.items():
+            if protein in by_sequence:
+                candidates[token].add(by_sequence[protein])
+    aligned_pairs = sum(map(len, candidates.values()))
     def comparisons():
-        for q, s in sorted(candidates):
-            yield q, s, queries[q], subjects[s]
+        # Preserve the original tuple order and release completed query groups.
+        for q in sorted(candidates):
+            for s in sorted(candidates.pop(q)):
+                yield q, s, queries[q], subjects[s]
     results = []
+    validation_seconds = 0.0
     for q, s, score in native._scored_pairs(comparisons(), cpus):
         alignment = {**score.as_dict(), 'junction_information_available': False,
                      'score_basis': 'protein_only_without_donor_junctions'}
@@ -123,23 +134,27 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
             problems.append('low_reciprocal_coverage')
         for path in groups[queries[q]]:
             rows[path['native_transcript_id']]['status'] = 'evaluated'
-            for donor, query in donor_aliases[subjects[s]]:
+            for donor, query, token in donor_aliases[subjects[s]]:
                 evidence = {'target': name, 'donor': donor, 'query': query, 'genome_only': True,
                             'placement': 'unanchored', 'orthology': 'unassigned', 'expected_copy': 'unassigned',
                             'native_search_scope': CONTRACT['scope'], 'oriongeno': {
                                 **prediction['identity'], 'native_transcript_id': path['native_transcript_id'],
                                 'native_gene_id': path['native_gene_id'], 'alignment': alignment}}
-                evidence['id'] = 'orion_genome_query_' + hashlib.sha256(
-                    json.dumps([name, donor, query], separators=(',', ':')).encode()).hexdigest()[:20]
-                results.append({'seqid': path['seqid'], 'strand': path['strand'], 'cds': copy.deepcopy(path['cds']),
-                                'query': evidence['id'], 'coverage': score.coverage_b, 'identity': score.identity,
-                                'frameshift': False, 'evidence': evidence, 'search': SEARCH,
-                                'oriongeno_problems': list(problems)})
+                evidence['id'] = token
+                model = {'seqid': path['seqid'], 'strand': path['strand'], 'cds': copy.deepcopy(path['cds']),
+                         'query': evidence['id'], 'coverage': score.coverage_b, 'identity': score.identity,
+                         'frameshift': False, 'evidence': evidence, 'search': SEARCH,
+                         'oriongeno_problems': list(problems)}
+                if validate is not None:
+                    validation_started = time.perf_counter()
+                    model = validate(model)
+                    validation_seconds += time.perf_counter() - validation_started
+                results.append(model)
     native.verify_inputs(frozen, [name])
     audit.update(unique_query_proteins=len(queries), unique_donor_proteins=len(subjects),
                  external_donor_records=sum(map(len, donor_aliases.values())),
-                 aligned_unique_protein_pairs=len(candidates), candidate_pairs=len(results),
-                 search_and_alignment_seconds=time.perf_counter() - started)
+                 aligned_unique_protein_pairs=aligned_pairs, candidate_pairs=len(results),
+                 search_and_alignment_seconds=time.perf_counter() - started - validation_seconds)
     (search_dir / 'donors.dmnd').unlink(missing_ok=True)
     return results, audit
 
