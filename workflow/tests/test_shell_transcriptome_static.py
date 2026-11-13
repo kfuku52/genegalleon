@@ -504,7 +504,7 @@ def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
         in text
     )
     assert (
-        'native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1'
+        'native_fastq_listing=$(discover_verified_native_fastq_files "${dir_species_fastq}") || exit 1'
         in text
     )
     assert 'mapfile -t files_fastq <<< "${native_fastq_listing}"' in text
@@ -566,7 +566,6 @@ def test_transcriptome_core_uses_type_f_for_fastq_find_patterns():
     expected_tokens = [
         'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_2.amalgkit.fastq.gz"',
         'find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz"',
@@ -580,7 +579,6 @@ def test_transcriptome_core_uses_type_f_for_fastq_find_patterns():
     banned_tokens = [
         'find "${dir_amalgkit_getfastq_sp}" -name "*_2.amalgkit.fastq.gz"',
         'find "${dir_amalgkit_getfastq_sp}" -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*_2.amalgkit.fastq.gz"',

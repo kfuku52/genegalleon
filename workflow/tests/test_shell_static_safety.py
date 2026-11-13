@@ -657,7 +657,7 @@ def test_core_scripts_use_mkdir_p_for_known_task_directories():
     assert 'mkdir "${sp_ub}.jcvi_dotplot"' not in genome_annotation
     assert 'mkdir -p "${sp_ub}.jcvi_dotplot"' in genome_annotation
     assert 'mkdir "${selected_fastq_dir}"' not in transcriptome
-    assert 'mkdir -p "${selected_fastq_dir}"' in transcriptome
+    assert 'mkdir -p "${selected_fastq_dir}"' not in transcriptome
     assert 'mkdir "${assembly_input_fastq_dir}"' not in transcriptome
     assert 'mkdir -p "${assembly_input_fastq_dir}"' in transcriptome
 
