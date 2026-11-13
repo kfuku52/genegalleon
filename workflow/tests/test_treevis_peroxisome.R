@@ -80,15 +80,20 @@ keys <- c('nucleus', 'cytoplasm', 'extracellular', 'mitochondrion', 'cell_membra
           'endoplasmic_reticulum', 'chloroplast', 'golgi_apparatus', 'lysosome_vacuole')
 for (key in keys) input$data[[paste0(prefix,key)]] <- c(0.1, 0.8, 0.9, NA, 0.5)
 p <- add_localization_column(list(tree=input),args)$localization
-stopifnot(inherits(p$layers[[1]]$geom, 'GeomRaster'),
+stopifnot(inherits(p$layers[[1]]$geom, 'GeomTile'),
           identical(as.character(p$data$label[1:4]), c('one','half','missing','zero')),
           length(levels(p$data$compartment)) == 10L,
           nrow(p$data) == 40L,
           identical(p$data$score[p$data$compartment == 'Nucleus'], c(0.9,0.8,NA,0.1)),
           identical(p$data$score[p$data$compartment == 'Peroxisome'], c(1,0.5,NA,0)))
 b <- ggplot_build(p)
+cells <- b$data[[1]]
 stopifnot(identical(b$plot$scales$get_scales('fill')$limits, c(0,1)),
-          b$data[[1]]$fill[3] == 'grey85')
+          cells$fill[3] == 'grey85',
+          identical(as.numeric(cells$x), rep(as.numeric(1:10), each=4)),
+          identical(as.numeric(cells$y), rep(as.numeric(1:4), 10)),
+          all(cells$xmax - cells$xmin == 1),
+          all(cells$ymax - cells$ymin == 1))
 input$data[[paste0(prefix,'peroxisome')]] <- NULL
 stopifnot(nrow(add_localization_column(list(tree=input),args)$localization$data) == 36L)
 input$data[[paste0(prefix,'nucleus')]][1] <- 1.1

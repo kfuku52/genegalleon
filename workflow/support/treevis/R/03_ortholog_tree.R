@@ -820,8 +820,8 @@ add_localization_column = function(g, args) {
         values
     }
 
-    # CDSKIT's multilabel scores are independent. Preserve their common
-    # 0–1 scale and render one pixel per tip and compartment.
+    # CDSKIT's multilabel scores share a 0–1 scale. Use vector cells so PDF
+    # viewers keep the edges sharp when zooming.
     compartments = c(
         nucleus='Nucleus', cytoplasm='Cytoplasm', extracellular='Extracellular',
         mitochondrion='Mitochondrion', cell_membrane='Cell membrane',
@@ -838,7 +838,7 @@ add_localization_column = function(g, args) {
             score=unlist(lapply(tips[, available, drop=FALSE], function(x) validate(as.numeric(x))),
                          use.names=FALSE))
         p = ggplot(tiles, aes(x=.data[['compartment']], y=.data[['label']], fill=.data[['score']])) +
-            geom_raster(interpolate=FALSE) +
+            geom_tile(width=1, height=1) +
             scale_fill_viridis_c(limits=c(0,1), breaks=c(0,0.5,1), na.value='grey85', name='Localization score') +
             labs(x=NULL, y=NULL) +
             theme_minimal(base_size=args[['font_size']]) +

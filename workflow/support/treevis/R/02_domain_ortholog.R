@@ -12,54 +12,49 @@ get_df_domain <- function(df_rps) {
   out_rows <- list()
   out_idx <- 1
   
-  # Preserve first-occurrence gene order and each group's original row order.
-  # Index once instead of scanning every hit for every query.
-  query_order <- unique(df_rps$qacc)
-  query_rows <- split(seq_len(nrow(df_rps)), match(df_rps$qacc, query_order))
-  missing_queries <- which(is.na(df_rps$qacc))
-  for (qacc in query_order) {
-    
-    if (is.na(qacc)) next
-    index <- query_rows[[as.character(match(qacc, query_order))]]
-    if (length(missing_queries)) {
-      # Logical row selection previously inserted all-NA rows for missing
-      # query IDs. Retain their source positions and first-row validation.
-      source_order <- order(c(index, missing_queries))
-      index <- c(index, rep(NA_integer_, length(missing_queries)))[source_order]
-    }
-    tmp <- df_rps[index, , drop = FALSE]
-    if (nrow(tmp) == 0) next
-    
-    qlen <- suppressWarnings(as.integer(tmp[1, "qlen"]))
-    if (is.na(qlen) || qlen <= 0) {
-      next
-    }
-    ymin <- tmp[1, "ymin"]
-    ymax <- tmp[1, "ymax"]
-    if (!is.finite(ymin) || !is.finite(ymax)) {
-      next
-    }
-    tmp$qstart <- suppressWarnings(as.integer(tmp$qstart))
-    tmp$qend <- suppressWarnings(as.integer(tmp$qend))
-    tmp <- tmp[is.finite(tmp$qstart) & is.finite(tmp$qend), , drop = FALSE]
-    if (nrow(tmp) == 0) next
-    tmp$qstart <- pmax(1L, pmin(qlen, tmp$qstart))
-    tmp$qend <- pmax(1L, pmin(qlen, tmp$qend))
-    tmp <- tmp[tmp$qstart <= tmp$qend, , drop = FALSE]
-    if (nrow(tmp) == 0) next
-    
+  # Convert coordinates once and index each query's hits in source order.
+  query_ids <- df_rps[['qacc']]
+  if (is.factor(query_ids)) query_ids <- as.character(query_ids)
+  known <- which(!is.na(query_ids))
+  query_order <- unique(query_ids[known])
+  query_rows <- split(known, match(query_ids[known], query_order))
+  first_missing <- match(TRUE, is.na(query_ids), nomatch=nrow(df_rps)+1L)
+  query_lengths <- suppressWarnings(as.integer(df_rps[['qlen']]))
+  starts <- suppressWarnings(as.integer(df_rps[['qstart']]))
+  ends <- suppressWarnings(as.integer(df_rps[['qend']]))
+  ymins <- df_rps[['ymin']]
+  ymaxs <- df_rps[['ymax']]
+  accessions <- df_rps[['sacc']]
+  for (query_index in seq_along(query_order)) {
+    qacc <- query_order[[query_index]]
+    index <- query_rows[[query_index]]
+    first <- index[[1]]
+    # The original logical subset placed an all-NA row at the first
+    # missing query, which invalidated the group if it preceded its hits.
+    if (first_missing < first) next
+    qlen <- query_lengths[first]
+    if (is.na(qlen) || qlen <= 0L) next
+    ymin <- ymins[first]
+    ymax <- ymaxs[first]
+    if (!is.finite(ymin) || !is.finite(ymax)) next
+
+    index <- index[is.finite(starts[index]) & is.finite(ends[index])]
+    start <- pmax(1L, pmin(qlen, starts[index]))
+    end <- pmax(1L, pmin(qlen, ends[index]))
+    keep <- start <= end & !is.na(accessions[index])
+    start <- start[keep]
+    end <- end[keep]
+    sacc <- accessions[index[keep]]
+    if (!length(start)) next
+
     # Create "events" for each domain start/end
     #   event = +1 when domain starts
     #   event = -1 when domain ends
     # Keep the original stable start-before-end ordering at tied positions.
     # Parallel vectors avoid repeated data-frame access in the event sweep.
-    event_pos <- c(tmp$qstart, tmp$qend + 1)
-    event_sacc <- c(tmp$sacc, tmp$sacc)
-    event_direction <- c(rep(+1, nrow(tmp)), rep(-1, nrow(tmp)))
-    keep <- stats::complete.cases(event_pos, event_sacc, event_direction)
-    event_pos <- event_pos[keep]
-    event_sacc <- event_sacc[keep]
-    event_direction <- event_direction[keep]
+    event_pos <- c(start, end + 1)
+    event_sacc <- c(sacc, sacc)
+    event_direction <- c(rep(+1, length(start)), rep(-1, length(start)))
     event_order <- order(event_pos)
     event_pos <- event_pos[event_order]
     event_sacc <- event_sacc[event_order]

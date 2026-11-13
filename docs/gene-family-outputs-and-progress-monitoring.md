@@ -760,6 +760,14 @@ command when logical deletion is intended.
 
 ## How to read `tree_plot`
 
+Tip labels condense repeated species prefixes and remove a redundant 1KP
+species suffix while retaining the scaffold and sample identifiers.
+`stat_branch2tree_plot.r --tip_label_table=PATH` can also display explicit
+labels for reference accessions. Supply a tab-separated table with the header
+`tip_id	display_label` and one row per tip to override. Use the exact
+analysis ID in `tip_id`. The tree, panel joins, and result tables continue
+to use that ID. When display labels collide, the original IDs are printed.
+
 Column widths are physical minima in millimetres. Each column reserves its data
 panel plus axes, legends, and margins; the PDF width is their sum. At the
 default figure height, adding or omitting a column does not resize the

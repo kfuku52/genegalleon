@@ -658,15 +658,11 @@ get_df_protein_backbone = function(df_rps, mode='one_line') {
             }
         }
     } else if (mode=='one_line') {
-        for (qacc in names(by_qacc_index)) {
-            qidx = by_qacc_index[[qacc]]
-            xend = suppressWarnings(as.numeric(df_rps[qidx[1], 'qlen']))
-            if (!is.finite(xend) || xend <= 0) {
-                next
-            }
-            rows[[idx]] = data.frame(x=0, xend=xend, label=qacc)
-            idx = idx + 1L
-        }
+        first = vapply(by_qacc_index, `[[`, integer(1), 1L, USE.NAMES=FALSE)
+        xend = suppressWarnings(as.numeric(df_rps[['qlen']][first]))
+        keep = is.finite(xend) & xend > 0
+        return(data.frame(x=rep(0, sum(keep)), xend=xend[keep], label=as.character(names(by_qacc_index))[keep],
+                          stringsAsFactors=FALSE))
     }
     if (length(rows) == 0) {
         df_pb = data.frame(x = numeric(0), xend = numeric(0), label = character(0))

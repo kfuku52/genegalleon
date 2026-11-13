@@ -378,12 +378,65 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
     return(g)
 }
 
+compact_tiplabel = function(id) {
+    if (startsWith(id, 'REF_')) return(id)
+    taxon = treevis_extract_species_label(id)
+    if (!nzchar(taxon)) return(id)
+    prefix = paste0(taxon, '_')
+    if (!startsWith(id, prefix)) return(id)
+    token = substring(id, nchar(prefix) + 1L)
+    while (startsWith(token, prefix)) {
+        token = substring(token, nchar(prefix) + 1L)
+    }
+    # 1KP appends the taxon after the accession. Keep any sample qualifier.
+    scaffold = regmatches(token, regexpr('^scaffold-[A-Z]{4}-[0-9]+-', token))
+    if (length(scaffold)) {
+        suffix = substring(token, nchar(scaffold) + 1L)
+        if (suffix == taxon || startsWith(suffix, paste0(taxon, '-'))) {
+            qualifier = substring(suffix, nchar(taxon) + 1L)
+            token = paste0(sub('-$', '', scaffold), qualifier)
+        }
+    }
+    if (nzchar(token)) paste0(prefix, token) else id
+}
+
+read_tiplabel_overrides = function(path, ids) {
+    table = utils::read.delim(path, colClasses='character', check.names=FALSE, quote='',
+                              comment.char='', na.strings=NULL)
+    if (!identical(names(table), c('tip_id', 'display_label')) ||
+        anyNA(table[['tip_id']]) || anyNA(table[['display_label']]) ||
+        any(!nzchar(trimws(table[['tip_id']]))) ||
+        any(!nzchar(trimws(table[['display_label']]))) ||
+        anyDuplicated(table[['tip_id']])) {
+        stop('Tip label TSV requires unique tip_id values and nonempty display_label values.')
+    }
+    if (any(!table[['tip_id']] %in% ids)) {
+        stop('Tip label TSV contains IDs absent from the plotted tree.')
+    }
+    setNames(table[['display_label']], table[['tip_id']])
+}
+
 add_tiplabel_column = function(g, args) {
     cat(as.character(Sys.time()), 'Adding tip label column.\n')
     df_tip = get_df_tip(g[['tree']])
     df_tip[,'x_dummy'] = 0
     df_tip[,'hjust'] = 0
-    g[['tiplabel']] = ggplot(df_tip, aes(x=x_dummy, y=label, label=label, hjust=hjust)) +
+    ids = as.character(df_tip[['label']])
+    if (anyNA(ids) || anyDuplicated(ids)) stop('Tree tips must have unique, nonmissing IDs.')
+    labels = vapply(ids, compact_tiplabel, character(1), USE.NAMES=FALSE)
+    aliases = args[['tip_label_table']]
+    if (!is.null(aliases) && nzchar(aliases)) {
+        overrides = read_tiplabel_overrides(aliases, ids)
+        has_override = ids %in% names(overrides)
+        labels[has_override] = unname(overrides[ids[has_override]])
+    }
+    # When abbreviations collide, keep each tip's complete ID visible.
+    while (anyDuplicated(labels)) {
+        collision = duplicated(labels) | duplicated(labels, fromLast=TRUE)
+        labels[collision] = ids[collision]
+    }
+    df_tip[['display_label']] = labels
+    g[['tiplabel']] = ggplot(df_tip, aes(x=x_dummy, y=label, label=.data[['display_label']], hjust=hjust)) +
         geom_text(size=args[['font_size']] * args[['font_size_factor']], colour=df_tip[['tiplab_color']]) +
         scale_x_continuous(limits=c(0, 1), expand=expansion(mult=0)) +
         theme_void() +
@@ -391,7 +444,6 @@ add_tiplabel_column = function(g, args) {
             plot.margin=unit(args[['margins']], "cm")
         )
     # Measure rendered glyphs, not a fraction of the requested figure width.
-    labels = as.character(df_tip[['label']])
     labels = labels[!is.na(labels)]
     text_mm = if (length(labels)) max(vapply(labels, function(label) {
         grid::convertWidth(grid::grobWidth(grid::textGrob(label,
