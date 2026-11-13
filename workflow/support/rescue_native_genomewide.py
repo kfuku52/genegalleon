@@ -161,36 +161,26 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
 
 def finish_audit(audit, models):
     """Account for every native path after the actual shared admission decision."""
-    admitted_statuses = {'accepted', 'duplicate_support', 'accepted_alternative_path'}
-    outcomes = {}
+    outcomes = defaultdict(list)
     for model in models:
-        if model.get('search') != SEARCH:
-            continue
-        evidence = model['evidence']
-        transcript = evidence['oriongeno']['native_transcript_id']
-        if transcript not in outcomes:
-            outcomes[transcript] = Counter(), set(), set(), set()
-        statuses, reasons, donors, model_ids = outcomes[transcript]
-        status = model['status']
-        statuses[status] += 1
-        reasons.update(model['problems'])
-        if status in admitted_statuses:
-            donors.add(evidence['donor'])
-            if model.get('model_id'):
-                model_ids.add(model['model_id'])
-    genes = defaultdict(set)
+        if model.get('search') == SEARCH:
+            outcomes[model['evidence']['oriongeno']['native_transcript_id']].append(model)
     for row in audit['paths']:
-        if row['status'] == 'evaluated':
-            outcome = outcomes.get(row['native_transcript_id'])
-            if outcome is None:
-                raise ValueError('Evaluated native path disappeared before admission')
-            statuses, reasons, donors, model_ids = outcome
-            row.update(status='admitted' if admitted_statuses & statuses.keys() else 'not_admitted',
-                       candidate_records=statuses.total(), admission_statuses=dict(statuses),
-                       reasons=sorted(reasons), external_donor_species=sorted(donors), model_ids=sorted(model_ids))
-        genes[row['status']].add(row['native_gene_id'])
+        if row['status'] != 'evaluated':
+            continue
+        records = outcomes[row['native_transcript_id']]
+        if not records:
+            raise ValueError('Evaluated native path disappeared before admission')
+        admitted = [m for m in records if m['status'] in {'accepted', 'duplicate_support', 'accepted_alternative_path'}]
+        row.update(status='admitted' if admitted else 'not_admitted',
+                   candidate_records=len(records), admission_statuses=dict(Counter(m['status'] for m in records)),
+                   reasons=sorted({p for m in records for p in m['problems']}),
+                   external_donor_species=sorted({m['evidence']['donor'] for m in admitted}),
+                   model_ids=sorted({m['model_id'] for m in admitted if m.get('model_id')}))
     audit['path_status_counts'] = dict(Counter(row['status'] for row in audit['paths']))
-    audit['native_gene_counts'] = {status: len(unique) for status, unique in genes.items()}
+    audit['native_gene_counts'] = dict(Counter(
+        status for status in audit['path_status_counts']
+        for _ in {row['native_gene_id'] for row in audit['paths'] if row['status'] == status}))
     audit['native_gene_count_note'] = 'A gene with multiple isoforms can occur in multiple status categories.'
     if sum(audit['path_status_counts'].values()) != audit['native_paths']:
         raise ValueError('Native path inventory does not reconcile')
