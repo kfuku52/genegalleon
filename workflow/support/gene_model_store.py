@@ -171,13 +171,14 @@ def iter_locus_keys(db, species=None):
             yield row[0], row[1]
 
 
-def iter_loci(db, species=None):
+def iter_loci(db, species=None, *, include=None):
     """Yield one decoded locus at a time in stable species/gene order."""
     with _connection(db) as connection:
-        cursor = connection.execute("SELECT json FROM loci ORDER BY species,gene_id") if species is None else connection.execute(
-            "SELECT json FROM loci WHERE species=? ORDER BY gene_id", (species,))
-        for row in cursor:
-            yield json.loads(row[0])
+        cursor = connection.execute("SELECT species,gene_id,json FROM loci ORDER BY species,gene_id") if species is None else connection.execute(
+            "SELECT species,gene_id,json FROM loci WHERE species=? ORDER BY gene_id", (species,))
+        for name, gene, payload in cursor:
+            if include is None or include((name, gene)):
+                yield json.loads(payload)
 
 
 def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
@@ -199,20 +200,18 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
         candidate_limit = selectionkwargs.get('candidate_limit', 32)
         policy = selectionkwargs.get('policy', 'conserved')
         nonvoting, coordinate_ambiguity = set(), set()
-        locus = None
         # Admission is streamed before component formation.  An excluded
         # coding locus must not bridge otherwise independent components or
         # push a valid component over its size cap.  Keep only key/boolean
         # metadata from this pass, never the decoded sequences.
-        for locus in iter_loci(connection):
-            node = str(locus["species"]), str(locus["gene_id"])
-            if node not in endpoints:
-                continue
-            if not locus_can_vote(locus, candidate_limit):
-                nonvoting.add(node)
-            if locus.get("ambiguous_coordinates", False):
-                coordinate_ambiguity.add(node)
-        del locus
+        if endpoints:
+            for locus in iter_loci(connection, include=endpoints.__contains__):
+                node = str(locus["species"]), str(locus["gene_id"])
+                if not locus_can_vote(locus, candidate_limit):
+                    nonvoting.add(node)
+                if locus.get("ambiguous_coordinates", False):
+                    coordinate_ambiguity.add(node)
+            locus = None
 
         def find(node):
             while parent[node] != node:
@@ -275,10 +274,11 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
             del catalogs
         # Most loci have no voting neighbors. Stream their records through one
         # cursor and compute the same isolated decision without building a graph.
-        for locus in iter_loci(connection):
+        def isolated(node):
+            return len(components[find(node)]) == 1
+
+        for locus in iter_loci(connection, include=isolated):
             node = str(locus["species"]), str(locus["gene_id"])
-            if len(components[find(node)]) != 1:
-                continue
             decision, ambiguous = isolated_selection(locus, node, policy, candidate_limit, node in prepared["ambiguity"])
             result["selections"].append(decision)
             total_metrics["loci"] += 1
