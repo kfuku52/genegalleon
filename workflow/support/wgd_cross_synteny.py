@@ -223,14 +223,7 @@ class CrossSynteny:
                         regions_for_age = None if age is None else tuple(
                             (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
                             for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
-                        trace = None
-                        if provenance is not None and status == "assessed":
-                            blocks = set().union(*provenance[window, genes])
-                            scopes = ((a, a), (b, b), (a, b))
-                            blocks = tuple(sorted((*scopes[side], block) for side, block in blocks))
-                            positions = tuple((sp, *window_for(beds[sp], gene)) for gene in genes
-                                              for sp in (a if gene in beds[a] else b,))
-                            trace = (a, b, blocks, positions)
+                        trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
                         self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace))
 
     def observe(self, branch, family, node):
@@ -246,7 +239,11 @@ class CrossSynteny:
                         for sp, pair, first, second in regions_for_age or ():
                             self.age_pairs.add((branch, sp, family, pair, *sorted((first, second))))
                         if trace is not None:
-                            a, b, blocks, positions = trace
+                            a, b, paths, beds = trace
+                            scopes = ((a, a), (b, b), (a, b))
+                            blocks = tuple(sorted((*scopes[side], block) for side, block in set().union(*paths)))
+                            positions = tuple((sp, *window_for(beds[sp], gene)) for gene in genes
+                                              for sp in (a if gene in beds[a] else b,))
                             self.traced_hits.add((branch, a, b, window, family, genes, blocks, positions))
 
     def summarize(self):
