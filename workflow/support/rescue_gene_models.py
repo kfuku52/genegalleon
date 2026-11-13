@@ -44,7 +44,7 @@ try:
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from model_protein_correspondence import reciprocal_matches
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
-    from refinement_receipt_snapshot import ReceiptSnapshot
+    from refinement_receipt_snapshot import ReceiptChanged, ReceiptSnapshot
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
     from rescue_boundary_revalidation import _alignment as complete_donor_alignment
@@ -102,7 +102,7 @@ except ImportError:
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .model_protein_correspondence import reciprocal_matches
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
-    from .refinement_receipt_snapshot import ReceiptSnapshot
+    from .refinement_receipt_snapshot import ReceiptChanged, ReceiptSnapshot
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
     from .rescue_boundary_revalidation import _alignment as complete_donor_alignment
@@ -1868,7 +1868,14 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         if not storage["retain_search_inputs"]:
             (tmp / "unresolved.unique.fa").unlink(missing_ok=True)
             (tmp / "genome.covered.unique.fa").unlink(missing_ok=True)
+    def check_dependencies():
+        try:
+            dependencies.check_all()
+        except ReceiptChanged as exc:
+            raise ValueError("Stage dependencies changed during execution; retry after they are complete") from exc
+
     def guard():
+        check_dependencies()
         require_same_key(key, current_key())
         check_sources()
         verify_model_repair_targets(plan)
@@ -1886,7 +1893,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         return True
 
     def publication_guard():
-        dependencies.check_all()
+        check_dependencies()
         source_proof.check()
         if checkpoint is not None:
             require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
