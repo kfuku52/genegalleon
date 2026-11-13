@@ -205,6 +205,25 @@ def test_cross_ks_coalesces_shared_copy_windows_and_families():
     assert component_medians(hits) == [.7, 1.5]
 
 
+def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
+    from workflow.support.wgd_cross_regions import summarize_regions
+
+    def hit(window, family, block, shared=False):
+        return ("branch", "A", "B", ("ctg", window), family, ("a", "b", "aa", "bb"),
+                (("A", "B", block),), (("A", "ctg", window), ("B", "chr", 1 if shared else window)))
+
+    hits = [hit(1, "shared", 10), hit(2, "shared", 20), hit(3, "other", 10)]
+    candidates = [{"species_event_id": "branch", "branch_id": 5}]
+    summary, details = summarize_regions(candidates, hits, {"branch": ({"A"}, {"B"})}, 2)
+    paired, all_hits = summary
+    assert paired["matched_windows"] == all_hits["matched_windows"] == 3
+    assert paired["regions"] == 2 and paired["num_holdouts_losing_support"] == 1
+    assert [r["supports_after_exclusion"] for r in details if r["mode"] == "paired"] == [0, 1]
+    summary, _ = summarize_regions(candidates, [*hits[:2], hit(3, "other", 10, shared=True)],
+                                   {"branch": ({"A"}, {"B"})}, 2)
+    assert summary[0]["regions"] == 2
+
+
 def test_cross_ks_support_conflict_and_missing_boundary():
     from nwkit.util import read_tree
 

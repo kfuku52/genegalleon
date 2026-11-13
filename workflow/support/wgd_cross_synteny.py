@@ -183,7 +183,7 @@ class CrossSynteny:
         self.age_species = set(age_species)
         self.age_pairs = set()
         self.traced_hits = set()
-        trace_branches = set(trace_branches)
+        trace_branches = None if trace_branches is None else set(trace_branches)
         index = CladeIndex(tree)
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
         beds, self_blocks = {}, {}
@@ -207,7 +207,7 @@ class CrossSynteny:
             branch = index.clade_id_for_node(node)
             self.daughters[branch] = tuple(set(child.leaf_names()) for child in node.children)
             observable = observable_windows(beds[a], cross[0])
-            provenance = defaultdict(set) if branch in trace_branches else None
+            provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
             if a in self_blocks and b in self_blocks:
                 paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance)
                 status = "assessed" if len(observable) >= min_windows else "insufficient_cross_anchors"

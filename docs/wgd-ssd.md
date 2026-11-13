@@ -381,6 +381,12 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   tree and inference output. Gray does not mean WGD was ruled out.
 - `cross_synteny_pairs.tsv` and `cross_synteny_windows.tsv` (with a cross
   manifest): per-pair coverage and exact matched-family evidence.
+- `cross_synteny_region_summary.tsv` and `cross_synteny_regions.tsv`: merge
+  tree-matched windows that share a source block or a window on either copy.
+  Report paired-only and all paths separately, with the effect of omitting
+  each region on the synteny rule. These are sensitivity diagnostics; a
+  region is not necessarily biologically independent, and the original
+  candidate decision is unchanged.
 - With cross-block CDS inputs, `cross_ks_paralogs.tsv`,
   `cross_ks_orthologs.tsv`, and `cross_ks_focals.tsv` audit genes, selection,
   and focal placement. `cross_ks_boundaries.tsv` and `cross_ks_trios.tsv`

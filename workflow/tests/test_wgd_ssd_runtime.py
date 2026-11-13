@@ -209,6 +209,10 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert row["species_event_id"] == pair["species_event_id"]
     assert pair["matched_paired_windows"] == "1" and pair["matched_families"] == "5"
     assert {"cross_synteny_pairs.tsv", "cross_synteny_windows.tsv"} <= summary["output_hashes"].keys()
+    region = read_table(root / "cross_synteny_region_summary.tsv")[0]
+    assert region["mode"] == "paired" and region["regions"] == "1"
+    assert region["num_holdouts_losing_support"] == "1"
+    assert "cross_synteny_regions.tsv" in summary["output_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))

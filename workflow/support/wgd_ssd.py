@@ -20,6 +20,7 @@ try:
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
     from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
@@ -29,6 +30,7 @@ except ImportError:
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from .wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
     from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
@@ -80,6 +82,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
+              Path(__file__).with_name("wgd_cross_regions.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
@@ -767,7 +770,7 @@ def run_analysis(plan, output, cpus):
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
         age_sources = plan.get("cross_ks_sources", {})
-        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources)
+        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources, trace_branches=None)
                  if plan.get("cross_pairs") is not None else None)
         by_family = {row[family_key]: row for row in members} if age_sources else {}
 
@@ -786,6 +789,10 @@ def run_analysis(plan, output, cpus):
             cross_evidence, pair_rows, window_rows = cross.summarize()
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
+            region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
+                                                               p["min_cross_windows"])
+            write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
+            write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
             if cross_ks:
                 cross_ks.prepare(cross.age_pairs, raw_candidates, cross_evidence)
             del cross
