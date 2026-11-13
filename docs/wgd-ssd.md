@@ -387,6 +387,11 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   each region on the synteny rule. These are sensitivity diagnostics; a
   region is not necessarily biologically independent, and the original
   candidate decision is unchanged.
+- `cross_synteny_nested_copies.tsv`: compare paired hits on nested branches
+  that pass the duplication-score cutoff. In species with paired paths on
+  both branches, report overlaps of unordered copy-window pairs, exact
+  gene pairs, and families separately. Overlap does not by itself establish
+  a common duplication; missing comparisons do not imply independence.
 - Optionally set `wgd_cross_tree_support_file` to GeneGalleon's GeneRax
   UFBoot ZIP (members named `*_generax.ufboot.nwk`) to write
   `cross_synteny_tree_support.tsv`. This compares the duplication and both

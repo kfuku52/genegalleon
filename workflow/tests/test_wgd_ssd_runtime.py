@@ -216,6 +216,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert region["mode"] == "paired" and region["regions"] == "1"
     assert region["num_holdouts_losing_support"] == "1"
     assert "cross_synteny_regions.tsv" in summary["output_hashes"]
+    assert read_table(root / "cross_synteny_nested_copies.tsv") == []
     support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}
     assert support["OG000"]["first_copy_support"] == "100.0"
     assert support["OG000"]["second_copy_support"] == "88.0"

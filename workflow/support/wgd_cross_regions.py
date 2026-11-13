@@ -7,6 +7,10 @@ REGION_SUMMARY = ("species_event_id", "branch_id", "mode", "matched_windows", "m
                   "supports_before_holdout", "num_holdouts_losing_support", "holds_after_every_one_region")
 REGION_DETAIL = ("species_event_id", "branch_id", "mode", "region", "matched_windows", "matched_families",
                  "num_original_blocks", "copy_contigs", "windows_after_exclusion", "supports_after_exclusion")
+NESTED_FIELDS = ("younger_event_id", "younger_branch_id", "older_event_id", "older_branch_id", "species",
+                 "younger_window_pairs", "older_window_pairs", "shared_window_pairs",
+                 "younger_gene_pairs", "older_gene_pairs", "shared_gene_pairs",
+                 "younger_families", "older_families", "shared_families")
 
 
 def components(hits):
@@ -96,3 +100,33 @@ def summarize_regions(candidates, traced_hits, daughters, floor):
                             "holds_after_every_one_region": int(supported and bool(regions) and lost == 0)})
             details.extend({**keys, **r} for r in regions)
     return summary, details
+
+
+def nested_copy_overlap(tree, candidates, traced_hits):
+    """Compare exact paired paths only, in species sampled at both nested branches."""
+    from nwkit.clade_index import CladeIndex
+
+    index = CladeIndex(tree)
+    supported = {r["species_event_id"]: r["branch_id"] for r in candidates
+                 if r["tree_support"] == "tree_score_supported"}
+    records = defaultdict(dict)
+    for event, a, b, _, family, genes, _, positions in traced_hits:
+        if len(genes) != 4 or event not in supported:
+            continue
+        for sp, i in ((a, 0), (b, 1)):
+            windows, pairs, families = records[event].setdefault(sp, (set(), set(), set()))
+            windows.add(tuple(sorted((positions[i][1:], positions[i + 2][1:]))))
+            pairs.add(tuple(sorted((genes[i], genes[i + 2]))))
+            families.add(family)
+    for node in tree.descendants("preorder"):
+        young = index.clade_id_for_node(node)
+        if young not in records:
+            continue
+        for parent in node.ancestors():
+            old = index.clade_id_for_node(parent)
+            if old not in records:
+                continue
+            for sp in sorted(records[young].keys() & records[old].keys()):
+                counts = [v for x, y in zip(records[young][sp], records[old][sp], strict=True)
+                          for v in (len(x), len(y), len(x & y))]
+                yield dict(zip(NESTED_FIELDS, (young, supported[young], old, supported[old], sp, *counts), strict=True))

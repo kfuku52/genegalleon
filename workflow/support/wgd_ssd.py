@@ -20,7 +20,7 @@ try:
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
-    from wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
+    from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
     from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
@@ -31,7 +31,7 @@ except ImportError:
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
-    from .wgd_cross_regions import REGION_DETAIL, REGION_SUMMARY, summarize_regions
+    from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
     from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
@@ -802,6 +802,8 @@ def run_analysis(plan, output, cpus):
                                                                p["min_cross_windows"])
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
+            write_table(output / "cross_synteny_nested_copies.tsv",
+                        nested_copy_overlap(tree, raw_candidates, cross.traced_hits), NESTED_FIELDS)
             if plan.get("cross_tree_support"):
                 write_table(output / "cross_synteny_tree_support.tsv",
                             paired_tree_support(plan["gene_trees"], plan["cross_tree_support"], raw_candidates,

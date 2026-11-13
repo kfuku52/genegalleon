@@ -224,6 +224,27 @@ def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     assert summary[0]["regions"] == 2
 
 
+def test_nested_copy_overlap_distinguishes_window_and_gene_matches():
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_regions import nested_copy_overlap
+
+    tree = read_tree("(((A,B),C),D);", "auto", True)
+    index = CladeIndex(tree)
+    young, old = (index.clade_id_for_node(tree.common_ancestor(taxa)) for taxa in (["A", "B"], ["A", "C"]))
+    candidates = [{"species_event_id": event, "branch_id": i, "tree_support": "tree_score_supported"}
+                  for i, event in enumerate((young, old), 1)]
+    hits = [(young, "A", "B", ("chr1", 1), "young", ("a", "b", "aa", "bb"), (),
+             (("A", "chr1", 1), ("B", "chr1", 1), ("A", "chr2", 1), ("B", "chr2", 1))),
+            (old, "C", "A", ("chr1", 1), "old", ("cc", "ax", "c", "ay"), (),
+             (("C", "chr1", 1), ("A", "chr2", 1), ("C", "chr2", 1), ("A", "chr1", 1)))]
+    result, = nested_copy_overlap(tree, candidates, hits)
+    assert result["species"] == "A"
+    assert (result["younger_branch_id"], result["older_branch_id"]) == (1, 2)
+    assert (result["shared_window_pairs"], result["shared_gene_pairs"], result["shared_families"]) == (1, 0, 0)
+
+
 def test_cross_ks_support_conflict_and_missing_boundary():
     from nwkit.util import read_tree
 
