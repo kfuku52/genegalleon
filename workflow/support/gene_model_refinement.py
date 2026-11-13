@@ -105,12 +105,17 @@ _RECEIPT_SNAPSHOT = None
 _INPUT_SNAPSHOT = None
 
 
+def _receipt_verifier(cpus):
+    """Bound parallel full-byte member hashing by the allocated CPUs."""
+    return functools.partial(rescue.verified, hash_workers=min(cpus, 4))
+
+
 @contextlib.contextmanager
-def invocation_context():
+def invocation_context(cpus=1):
     """Retain immutable dependency proofs only within an explicit command."""
     global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
     previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
-    snapshot = ReceiptSnapshot(rescue.verified)
+    snapshot = ReceiptSnapshot(_receipt_verifier(cpus))
     inputs = RefinementInputSnapshot()
     _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = {}, snapshot
     _INPUT_SNAPSHOT = inputs
@@ -2868,7 +2873,7 @@ def verify_inputs(inputs, field=None):
     return rows
 
 
-def inspect_stages(root, value):
+def inspect_stages(root, value, cpus=1):
     """Check the required dependency graph, including absent publications.
 
     A receipt's own key is not evidence that it belongs to this run or its
@@ -2876,6 +2881,7 @@ def inspect_stages(root, value):
     the current dependency receipts without building or repairing anything.
     """
     plan_hash = digest(root / 'plan.json')
+    verify = _receipt_verifier(cpus)
 
     def receipt_hash(relative):
         try:
@@ -2893,7 +2899,7 @@ def inspect_stages(root, value):
     expected['catalog_index'] = {'dependencies': {'catalog': catalogs}}
     correspondence_dependencies = {'catalog': catalogs, 'index': initial_index}
     request = value['request']
-    anchors = {'donor_catalog/' + name: rescue.verified(catalog_dirs[name], donor_catalog_key(request, name))
+    anchors = {'donor_catalog/' + name: verify(catalog_dirs[name], donor_catalog_key(request, name))
                for name in sorted(fixed)}
     if uses_rescue_correspondence(request):
         anchor_root = Path(request['rescue_output'])
@@ -2903,7 +2909,7 @@ def inspect_stages(root, value):
         anchor_hash = rescue.plan_digest(anchor_root, anchor_plan)
         prepared_names = ({job[side] for job in jobs for side in ('a', 'b')}
                           if 'fixed_donors' in request else request['sources'])
-        with ReceiptSnapshot(rescue.verified) as prepared_proof:
+        with ReceiptSnapshot(verify) as prepared_proof:
             for name in sorted(prepared_names):
                 directory = anchor_root / 'prepared' / name
                 member = directory / 'receipt.json'
@@ -2958,7 +2964,7 @@ def inspect_stages(root, value):
     expected['selection_final'] = {'dependencies': final_selection_dependencies}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}
-    return {relative: rescue.verified(root / relative, {'plan': plan_hash, **key})
+    return {relative: verify(root / relative, {'plan': plan_hash, **key})
             for relative, key in expected.items()} | anchors
 
 
@@ -3012,8 +3018,7 @@ def parser():
     return p
 
 
-def _main():
-    args = parser().parse_args()
+def _main(args):
     if args.command == 'prepare-transcriptome':
         transcriptome.prepare(args.assembly, args.species, args.output, args.genetic_code, args.cpus,
                               args.assembler, args.corset_clusters, args.gene_map)
@@ -3059,7 +3064,7 @@ def _main():
     if args.command in {'status', 'qc'}:
         if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys():
             verify_inputs(root / 'effective' / 'inputs.tsv')
-        result = {'species': len(target_species(value)), 'stages': inspect_stages(root, value)}
+        result = {'species': len(target_species(value)), 'stages': inspect_stages(root, value, args.cpus)}
         if args.command == 'qc' and not all(result['stages'].values()):
             invalid = [name for name, valid in result['stages'].items() if not valid]
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))
@@ -3068,8 +3073,9 @@ def _main():
 
 
 def main():
-    with invocation_context():
-        _main()
+    args = parser().parse_args()
+    with invocation_context(cpus=max(1, getattr(args, 'cpus', 1))):
+        _main(args)
 
 
 if __name__ == '__main__':
