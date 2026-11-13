@@ -187,9 +187,10 @@ def make_plan(args):
         "min_coverage", "min_blocks", "max_states", "max_iterations", "multiplicity")}
     parameters["min_duplication_score"] = getattr(args, "min_duplication_score", 0.01)
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
+    parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
             or any(parameters[key] < 1 for key in ("max_pairs", "max_ks_families", "max_count_families",
-                                                  "diagonal_bound", "min_blocks", "max_iterations"))
+                                                  "diagonal_bound", "min_blocks", "max_iterations", "count_bootstrap_workers"))
             or not 0 < args.cscore <= 1 or not 0 < args.minimum_mapping_fraction <= 1
             or not 0 < args.self_hit_percent <= 100 or not 0 < args.alpha < 1
             or not 0 < parameters["min_duplication_score"] <= 1
@@ -764,6 +765,11 @@ def observable_synteny(placer, summaries, anchors):
 def run_analysis(plan, output, cpus):
     if cpus < 1:
         raise ValueError("cpus must be positive")
+    p = plan["parameters"]
+    tree_mode = bool(plan.get("gene_trees"))
+    bootstrap_workers = p.get("count_bootstrap_workers", 1)
+    if not tree_mode and p["count_bootstrap"] and bootstrap_workers > cpus:
+        raise ValueError("WGD bootstrap workers exceed the allocated CPUs")
     verify(plan)
     protect_output(output, plan["input_hashes"], Path(plan["workspace"]))
     family_tables = _validated_family_tables(plan)
@@ -771,8 +777,6 @@ def run_analysis(plan, output, cpus):
     validate_annotation_counts(plan, members)
     tree = species_tree(plan["species_tree"])
     output.mkdir(parents=True, exist_ok=False)
-    p = plan["parameters"]
-    tree_mode = bool(plan.get("gene_trees"))
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
     cross_ks = None
@@ -815,12 +819,13 @@ def run_analysis(plan, output, cpus):
             raise ValueError("Duplication scoring needs at least one non-root internal species branch")
         write_table(output / "duplication_candidates.tsv", raw_candidates, list(raw_candidates[0]))
     else:
+        worker_args = ["--bootstrap-workers", str(bootstrap_workers)] if p["count_bootstrap"] and bootstrap_workers > 1 else []
         run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
                   "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
                   "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
                   "--max-states", p["max_states"], "--max-iterations", p["max_iterations"],
                   "--multiplicity", p["multiplicity"], "--outfile", output / "count_candidates.tsv",
-                  "--model-out", output / "count_model.json"], output, "wgd-count")
+                  "--model-out", output / "count_model.json", *worker_args], output, "wgd-count")
         raw_candidates = read_table(output / "count_candidates.tsv")
         num_trees = None
     positions, sequences, summaries, anchors = prepare_sources(plan, output, cpus)
@@ -1124,7 +1129,8 @@ def main():
                   "cross-tree-support"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
-    for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("ks-bootstrap", 199), ("seed", 1),
+    for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1),
+                           ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-count-families", 10000),
                            ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
                            ("max-iterations", 200), ("multiplicity", 2)):

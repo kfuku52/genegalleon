@@ -28,6 +28,7 @@ wgd_species_tree="${wgd_species_tree:-}"
 wgd_counts_file="${wgd_counts_file:-}"
 wgd_members_file="${wgd_members_file:-}"
 wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
+wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
 wgd_alpha="${wgd_alpha:-0.05}"
 wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
@@ -395,6 +396,7 @@ run_wgd_ssd_stage() (
     --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
     --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap-workers "${wgd_count_bootstrap_workers}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
     --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \

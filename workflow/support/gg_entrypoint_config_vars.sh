@@ -416,6 +416,7 @@ wgd_species_tree
 wgd_counts_file
 wgd_members_file
 wgd_count_bootstrap
+wgd_count_bootstrap_workers
 wgd_alpha
 wgd_gene_trees_file
 wgd_cross_synteny_file

@@ -763,6 +763,14 @@ def test_output_protection_preserves_curated_inputs_and_input_ancestors(tmp_path
     wgd_ssd.protect_output(workspace / "output/new", [source], workspace)
 
 
+def test_count_bootstrap_worker_budget_is_checked_before_outputs(tmp_path):
+    output = tmp_path / "out"
+    plan = {"parameters": {"count_bootstrap": 10, "count_bootstrap_workers": 3}}
+    with pytest.raises(ValueError, match="exceed the allocated CPUs"):
+        wgd_ssd.run_analysis(plan, output, cpus=2)
+    assert not output.exists()
+
+
 def test_classification_rejects_edited_evidence_table_before_running_tools(tmp_path, monkeypatch):
     species = tmp_path / "species.nwk"
     species.write_text("(A:1,B:1);\n")

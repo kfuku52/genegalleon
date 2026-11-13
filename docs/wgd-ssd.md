@@ -184,7 +184,10 @@ bootstrap P-values, not posterior probabilities or guaranteed error control
 against arbitrary heterogeneous SSD histories. Zero bootstrap replicates are
 an exploratory scan and cannot support a WGD origin. Inspect Monte Carlo
 error, nuisance parameter boundaries, and the competing branch-burst fit.
-Set `wgd_alpha` to change the search-wide conditional P-value cutoff
+Use `wgd_count_bootstrap_workers` with a NWKIT runtime that supports
+`wgd-count --bootstrap-workers` to run more than one null refit at a time.
+Do not exceed the allocated CPUs or memory for concurrent fits; the default
+is one worker. Set `wgd_alpha` to change the search-wide conditional P-value cutoff
 (default `0.05`). Both combined and count-only support require explicit
 non-boundary diagnostics for the event,
 background, and branch-burst fits. Missing diagnostics or a numerical bound in
