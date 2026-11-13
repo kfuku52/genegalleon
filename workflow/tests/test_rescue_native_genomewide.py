@@ -200,18 +200,21 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
     table.write_text(f'species\tgff\treceipt\n{target}\t{native_gff}\t{receipt}\n')
     old = directory / 'previous'
     args = rescue.parser().parse_args(['plan', '--cds-dir', str(directory/'cds'), '--gff-dir', str(directory/'gff'),
-        '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'),
+        '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'), '--genome-fallback', '0',
         '--tree', str(directory/'tree.nwk'), '--output', str(old), '--oriongeno-inputs', str(table)])
     plan = rescue.build_plan(args)
     for name in names:
         rescue.prepared(old, plan, name)
+
+    def build_empty_comparison(tmp, kind):
+        rescue.atomic_json(tmp / 'blocks.json', [])
+        if kind == 'pair':
+            # A completed pair comparison retains its raw alignment even with no hits.
+            (tmp / 'target.query.last').touch()
+
     for job in plan['synteny_jobs']:
         rescue.stage(old, Path('synteny')/job['id'], rescue.comparison_key(old, job),
-                     lambda tmp: rescue.atomic_json(tmp/'blocks.json', []))
-    # This fixture has no original nominated windows. Native rescue therefore
-    # supplies a real missing locus without relying on another search's hit.
-    monkeypatch.setattr(rescue, 'candidates', lambda *_: [])
-    monkeypatch.setattr(rescue, 'nominate_genome_only_candidates', lambda *_: ([], {}))
+                     lambda tmp, kind=job['kind']: build_empty_comparison(tmp, kind))
     for name in names:
         rescue.rescue(old, plan, name, 1)
     original = (old/'rescued'/target/'receipt.json').read_bytes()

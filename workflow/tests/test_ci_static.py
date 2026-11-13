@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -103,7 +104,23 @@ def test_publish_preparation_forwards_one_complete_source_snapshot(
         "GITHUB_EVENT_NAME": "release", "RELEASE_EVENT_TAG": "v1.2.3",
         "SECURITY_REFRESH_EPOCH": "2026-08-31",
     })
-    step = step_run(load_workflow(workflow_name)["jobs"][job_name], step_name)
+    job = load_workflow(workflow_name)["jobs"][job_name]
+    if workflow_name == "container-ghcr.yml":
+        github_env = tmp_path / "github_env"
+        env["GITHUB_ENV"] = str(github_env)
+        step = step_run(job, "Resolve moving source revisions")
+        resolved = subprocess.run(["bash", "-c", step], cwd=tmp_path, env=env, capture_output=True, text=True)
+        if resolution_fails:
+            assert resolved.returncode != 0
+            assert not github_env.exists()
+            return
+        assert resolved.returncode == 0, resolved.stderr
+        exported = dict(line.split("=", 1) for line in github_env.read_text().splitlines())
+        assert exported == values
+        env.update(exported)
+        resolver.unlink()  # Tag calculation must use the preflight snapshot.
+
+    step = step_run(job, step_name)
     completed = subprocess.run(["bash", "-c", step], cwd=tmp_path, env=env, capture_output=True, text=True)
     if resolution_fails:
         assert completed.returncode != 0
@@ -166,7 +183,7 @@ def test_workflows_limit_github_token_permissions_by_default():
     assert tests["permissions"] == {"contents": "read"}
     assert container["permissions"] == {"contents": "read"}
     assert release["permissions"] == {"contents": "read"}
-    assert container["jobs"]["check-trigger"]["permissions"] == {
+    assert container["jobs"]["prepare-build"]["permissions"] == {
         "contents": "read",
         "packages": "read",
     }
@@ -732,23 +749,18 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
 
 def test_scheduled_container_build_compares_resolved_inputs_with_published_image():
     workflow = load_workflow("container-ghcr.yml")
-    check_job = workflow["jobs"]["check-trigger"]
-    decision = step_run(check_job, "Decide whether a scheduled build is needed")
-    runtime_contracts = step_run(
-        workflow["jobs"]["build-and-push"],
-        "Validate repository-owned runtime contracts",
-    )
+    jobs = workflow["jobs"]
+    prepare = jobs["prepare-build"]
+    decision = step_run(prepare, "Decide whether a scheduled build is needed")
+    runtime_contracts = step_run(jobs["build-and-push"], "Validate repository-owned runtime contracts")
 
     assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
     assert workflow["on"]["schedule"] == [{"cron": "0 19 * * *"}]
-    assert named_step(check_job, "Checkout")["uses"].startswith("actions/checkout@")
-    assert named_step(check_job, "Set up Docker Buildx")["uses"].startswith(
-        "docker/setup-buildx-action@"
-    )
-    assert named_step(check_job, "Login to GHCR")["uses"].startswith("docker/login-action@")
-    assert decision.count("resolve_source_revisions.sh --format env --scope all") == 1
-    assert "if ! resolved_sources=" in decision
-    assert 'export "${variable}=${revision}"' in decision
+    assert prepare["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    for name in ("Set up Docker Buildx", "Login to GHCR"):
+        assert named_step(prepare, name)["if"] == "github.event_name == 'schedule'"
+    for name in ("Preflight env coverage check", "Resolve image tags"):
+        assert named_step(prepare, name)["if"] == "steps.decision.outputs.should_build == '1'"
     assert "GG_BUILD_PLATFORMS=linux/amd64" in decision
     assert "GG_BUILD_PLATFORMS=linux/arm64" in decision
     assert decision.count("--print-common-revision") == 2
@@ -756,18 +768,79 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert 'security_refresh_epoch="$(date -u +%F)"' in decision
     assert 'compute_build_input_hash.sh "${security_refresh_epoch}"' in decision
     assert (
-        check_job["outputs"]["security_refresh_epoch"]
+        prepare["outputs"]["security_refresh_epoch"]
         == "${{ steps.decision.outputs.security_refresh_epoch }}"
     )
     assert "container/scripts/compute_build_input_hash.sh" in decision
     assert "docker buildx imagetools inspect --format '{{json .Image}}'" in decision
     assert "container/scripts/check_published_build_input.py" in decision
-    assert "needs.check-trigger.outputs.should_build == '1'" in workflow["jobs"]["prepare-build"]["if"]
-    assert "upstream source resolution failed during preflight" in decision
+    assert jobs["build-and-push"]["if"] == "needs.prepare-build.outputs.should_build == '1'"
+    assert jobs["build-and-push"]["strategy"]["fail-fast"] == "true"
+    assert set(jobs["publish-manifest"]["needs"]) == {"prepare-build", "build-and-push"}
+    assert "needs.build-and-push.result == 'success'" in jobs["publish-manifest"]["if"]
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
     assert "workflow/tests/run_checks.py runtime --workers=4" in runtime_contracts
     assert '"${IMAGE}@${DIGEST}"' in runtime_contracts
+
+
+@pytest.mark.parametrize(("event", "published", "should_build"), [
+    ("schedule", "matching", "0"),
+    ("schedule", "outdated", "1"),
+    ("schedule", "unavailable", "1"),
+    ("workflow_dispatch", "matching", "1"),
+])
+def test_container_build_decision_uses_resolved_inputs(tmp_path, event, published, should_build):
+    prepare = load_workflow("container-ghcr.yml")["jobs"]["prepare-build"]
+    decision = step_run(prepare, "Decide whether a scheduled build is needed")
+    scripts = tmp_path / "container/scripts"
+    scripts.mkdir(parents=True)
+    repo = GITHUB_WORKFLOWS_DIR.parent.parent
+    shutil.copyfile(repo / "container/scripts/check_published_build_input.py",
+                    scripts / "check_published_build_input.py")
+    snapshot = "a" * 40
+    revision = "b" * 40
+    hashes = {"linux/amd64": "1" * 64, "linux/arm64": "2" * 64}
+    (scripts / "compute_build_input_hash.sh").write_text(
+        '[[ "$KFU52_NWKIT_REPO_SHA" == "$SNAPSHOT_REVISION" ]] || exit 1\n'
+        '[[ "$GG_BUILD_VCS_REF" == "$PUBLISHED_REVISION" ]] || exit 1\n'
+        'case "$GG_BUILD_PLATFORMS" in\n'
+        + "".join(f"{platform}) echo {digest} ;;\n" for platform, digest in hashes.items())
+        + '*) exit 1 ;;\nesac\n'
+    )
+    (tmp_path / "VERSION").write_text("1.2.3\n")
+    metadata = {
+        platform: {"config": {"Labels": {
+            "org.opencontainers.image.revision": revision,
+            "io.genegalleon.build-input": digest,
+        }}}
+        for platform, digest in hashes.items()
+    }
+    if published == "outdated":
+        metadata["linux/arm64"]["config"]["Labels"]["io.genegalleon.build-input"] = "old"
+    output = tmp_path / "outputs"
+    docker_calls = tmp_path / "docker_calls"
+    env = {
+        **os.environ,
+        "EVENT_NAME": event, "REPOSITORY": "example/genegalleon",
+        "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "DOCKER_CALLS": str(docker_calls), "IMAGE_METADATA": json.dumps(metadata),
+        "IMAGE_AVAILABLE": str(int(published != "unavailable")),
+        "SNAPSHOT_REVISION": snapshot, "KFU52_NWKIT_REPO_SHA": snapshot, "PUBLISHED_REVISION": revision,
+    }
+    fake_docker = """
+docker() {
+    printf '%s\\n' "$*" >> "$DOCKER_CALLS"
+    [[ "$IMAGE_AVAILABLE" == 1 ]] || return 1
+    printf '%s\\n' "$IMAGE_METADATA"
+}
+"""
+    result = subprocess.run(["bash", "-c", fake_docker + decision], cwd=tmp_path, env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert outputs["should_build"] == should_build, result.stderr
+    assert docker_calls.exists() == (event == "schedule")
 
 
 def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks():
