@@ -1,7 +1,7 @@
 """Write the SPAdes YAML dataset (using YAML-compatible JSON syntax)."""
 
+import argparse
 import json
-import sys
 from pathlib import Path
 
 
@@ -29,9 +29,18 @@ def dataset(left, right, single):
     return libraries
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("left_count", type=int)
+    parser.add_argument("right_count", type=int)
+    parser.add_argument("paths", nargs="*")
+    args = parser.parse_args()
+    paths, left = args.paths, args.left_count
+    right = left + args.right_count
+    libraries = dataset(paths[:left], paths[left:right], paths[right:])
+    args.output.write_text(json.dumps(libraries, indent=2) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
-    output, left_count, right_count, *paths = sys.argv[1:]
-    left_count = int(left_count)
-    right_end = left_count + int(right_count)
-    Path(output).write_text(json.dumps(dataset(paths[:left_count], paths[left_count:right_end], paths[right_end:]),
-                                      indent=2) + "\n", encoding="utf-8")
+    main()
