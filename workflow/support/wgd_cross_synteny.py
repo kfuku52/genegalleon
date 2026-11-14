@@ -21,6 +21,9 @@ PAIR_OUTPUT = ("species_event_id", "species_a", "species_b", "status", "observab
                "matched_partial_only_windows", "matched_families")
 WINDOW_OUTPUT = ("species_event_id", "species_a", "species_b", "contig", "window",
                  "paired", "partial_only", "matched_paired_families", "matched_partial_only_families")
+COVERAGE_OUTPUT = ("species_event_id", "species_a", "species_b", "num_cross_anchor_pairs",
+                   "num_archive_family_anchor_pairs", "num_observable_windows", "num_archive_family_windows",
+                   "archive_family_window_floor_met")
 
 
 def read_pairs(path, resolve, species, hash_input):
@@ -174,7 +177,7 @@ def correspondence(positions, left, right, cross, provenance=None):
 class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
-    def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=()):
+    def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -183,6 +186,9 @@ class CrossSynteny:
         self.age_species = set(age_species)
         self.age_pairs = set()
         self.traced_hits = set()
+        self.coverage = [] if audit_coverage else None
+        self.coverage_genes = set() if audit_coverage else None
+        self.archive_families = {}
         trace_branches = None if trace_branches is None else set(trace_branches)
         index = CladeIndex(tree)
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
@@ -212,6 +218,9 @@ class CrossSynteny:
             branch = index.clade_id_for_node(node)
             self.daughters[branch] = tuple(set(child.leaf_names()) for child in node.children)
             observable = observable_windows(beds[a], cross[0])
+            if self.coverage is not None:
+                self.coverage.append((branch, a, b, beds[a], cross[0], len(observable)))
+                self.coverage_genes.update(gene for pair in cross[0] for gene in pair)
             provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
             if a in self_blocks and b in self_blocks:
                 paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance)
@@ -230,6 +239,18 @@ class CrossSynteny:
                             for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
                         trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
                         self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace))
+
+    def observe_family(self, family, leaves):
+        for gene in self.coverage_genes.intersection(leaves):
+            self.archive_families[gene] = family
+
+    def coverage_rows(self):
+        for event, a, b, positions, links, observable in self.coverage:
+            both = {pair: blocks for pair, blocks in links.items() if pair[0] in self.archive_families
+                    and self.archive_families[pair[0]] == self.archive_families.get(pair[1])}
+            n = len(observable_windows(positions, both))
+            yield dict(zip(COVERAGE_OUTPUT, (event, a, b, len(links), len(both), observable, n,
+                                             int(n >= self.min_windows)), strict=True))
 
     def observe(self, branch, family, node):
         targets = self.matches.get(branch)

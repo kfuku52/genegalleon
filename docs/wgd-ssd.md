@@ -412,6 +412,10 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   tree and inference output. Gray does not mean WGD was ruled out.
 - `cross_synteny_pairs.tsv` and `cross_synteny_windows.tsv` (with a cross
   manifest): per-pair coverage and exact matched-family evidence.
+- `cross_synteny_archive_coverage.tsv`: counts direct anchor pairs and
+  observable windows before and after requiring both ends of each link to
+  be in the same archived gene tree. This diagnostic does not change the
+  candidate rule or require any particular duplication topology.
 - `cross_synteny_region_summary.tsv` and `cross_synteny_regions.tsv`: merge
   tree-matched windows that share a source block or a window on either copy.
   Report paired-only and all paths separately, with the effect of omitting

@@ -27,7 +27,7 @@ try:
         DuplicationTreeSupport,
         paired_tree_support,
     )
-    from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
+    from wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
     from wgd_tree_scan import scan_duplications
@@ -43,7 +43,7 @@ except ImportError:
         DuplicationTreeSupport,
         paired_tree_support,
     )
-    from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
+    from .wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
     from .wgd_tree_scan import scan_duplications
@@ -822,7 +822,8 @@ def run_analysis(plan, output, cpus):
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
         age_sources = plan.get("cross_ks_sources", {})
-        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources, trace_branches=None)
+        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources,
+                              trace_branches=None, audit_coverage=True)
                  if plan.get("cross_pairs") is not None else None)
         by_family = {row[family_key]: row for row in members} if cross is not None else {}
 
@@ -832,13 +833,19 @@ def run_analysis(plan, output, cpus):
                     {gene.strip(): name for name in plan["species"] if row[name].strip() for gene in row[name].split(",")})
 
         cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
+
+        def observe_family(family, leaves):
+            cross.observe_family(family, leaves)
+            if cross_ks is not None:
+                cross_ks.observe_family(family, leaves)
+
         support_file = plan.get("cross_tree_support")
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
                 observe=cross.observe if cross is not None else None,
                 family_members=family_members if cross is not None else None,
-                observe_family=cross_ks.observe_family if cross_ks else None,
+                observe_family=observe_family if cross is not None else None,
                 observe_duplications=support.observe if support else None)
         if support:
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
@@ -847,6 +854,7 @@ def run_analysis(plan, output, cpus):
             cross_evidence, pair_rows, window_rows = cross.summarize()
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
+            write_table(output / "cross_synteny_archive_coverage.tsv", cross.coverage_rows(), COVERAGE_OUTPUT)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
                                                                p["min_cross_windows"])
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
