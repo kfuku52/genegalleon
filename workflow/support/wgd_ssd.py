@@ -588,7 +588,8 @@ def draw_focal_ks_intervals(ax, y, row):
 
 
 def focal_ks_label(row):
-    return f"{row['focal']} (n={int(row['num_estimated_pairs']):,})"
+    components = f", c={int(row['num_window_components']):,}" if "num_window_components" in row else ""
+    return f"{row['focal']} (n={int(row['num_estimated_pairs']):,}{components})"
 
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=()):

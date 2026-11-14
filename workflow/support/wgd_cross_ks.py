@@ -29,7 +29,8 @@ PAIR_FIELDS = ("species_event_id", "focal", "family_id", "gene_a", "gene_b",
 FOCAL_FIELDS = ("species_event_id", "branch_id", "focal", "status", "placed_event_id",
                 "num_eligible_pairs", "num_estimated_pairs", "num_window_components", "median_ds",
                 "ci_lower", "ci_upper", "younger_ds", "younger_lower", "younger_upper",
-                "older_ds", "older_lower", "older_upper", "older_boundary_status", "younger_boundary_status")
+                "older_ds", "older_lower", "older_upper", "older_boundary_status", "younger_boundary_status",
+                "copy_interval_method")
 MATCHED_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "younger_outgroup",
                   "older_sister", "older_outgroup", "num_complete_families", "younger_ds", "older_ds",
                   "older_minus_younger", "gap_lower", "gap_upper", "status")
@@ -197,16 +198,13 @@ def component_medians(hits):
     return sorted(median(group) for group in groups.values())
 
 
-def median_interval(values, draws, rng):
-    if draws < 40:
+def copy_median_interval(values):
+    from nwkit.ksrate_model import median_order_statistic_interval
+
+    if not values:
         return None
-    # Bound temporary allocation even for a large genome or requested draw count.
-    estimates = np.empty(draws)
-    for start in range(0, draws, 128):
-        end = min(draws, start + 128)
-        sample = rng.choice(values, size=(end - start, len(values)), replace=True)
-        estimates[start:end] = np.median(sample, axis=1)
-    return tuple(float(x) for x in np.quantile(estimates, (0.025, 0.975)))
+    lo, hi = median_order_statistic_interval(values, .05)
+    return (lo, hi) if np.isfinite(lo) else None
 
 
 def boundary(row):
@@ -416,25 +414,23 @@ class CrossKs:
         return bounds
 
     def summarize(self, candidates, bounds, hits, totals):
-        rng = np.random.default_rng(self.parameters["seed"])
         by_event = defaultdict(list)
-        minimum = max(3, self.parameters["min_cross_windows"])
+        minimum = max(6, self.parameters["min_cross_windows"])
         for (event, focal), total in sorted(totals.items()):
             records = hits[event, focal]
             values = component_medians(records)
             node = self.nodes[event]
             younger = bounds.get((focal, event), {})
             older = bounds.get((focal, self.index.clade_id_for_node(node.up)), {})
-            ci = median_interval(values, self.parameters["ks_bootstrap"], rng) if len(values) >= minimum else None
+            ci = copy_median_interval(values) if len(values) >= minimum else None
             status, placed = "insufficient_window_components", ""
-            if len(values) >= minimum:
-                status = "insufficient_bootstrap_draws"
             if ci is not None:
                 status, placed = self.place(focal, event, ci, bounds, younger, older)
             row = {"species_event_id": event, "focal": focal, "status": status, "placed_event_id": placed,
                    "num_eligible_pairs": total, "num_estimated_pairs": len(records),
                    "num_window_components": len(values), "median_ds": median(values) if values else "NA",
-                   "ci_lower": ci[0] if ci else "NA", "ci_upper": ci[1] if ci else "NA"}
+                   "ci_lower": ci[0] if ci else "NA", "ci_upper": ci[1] if ci else "NA",
+                   "copy_interval_method": "component-median-order-statistic"}
             for name, data in (("younger", younger), ("older", older)):
                 row.update({name + "_ds": data.get("corrected_ks", "NA"), name + "_lower": data.get("ci_lower", "NA"),
                             name + "_upper": data.get("ci_upper", "NA"), name + "_boundary_status": boundary_status(data)})
@@ -516,7 +512,7 @@ def plot_cross_ks(rows, output):
     title = "WGD branch age checks" + (f" (first {len(shown)} of {len(rows)} focal estimates)" if len(rows) > len(shown) else "")
     ax.set_title(title, loc="left", pad=25)
     ax.legend(handles=[Line2D([], [], color=color, lw=width, label=label) for color, width, label in
-                      (("#262e3d", 2, "Copy-pair median and bootstrap interval"),
+                      (("#262e3d", 2, "Copy-pair median and order-statistic interval"),
                        ("#237a75", 4, "Younger divergence interval"), ("#9b5937", 4, "Older divergence interval"))],
               frameon=False, fontsize=8, ncols=3, loc="lower left", bbox_to_anchor=(-.02, 1))
     fig.subplots_adjust(left=.26, right=.77, bottom=max(.10, .34 / fig.get_figheight()), top=.86)

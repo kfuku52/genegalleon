@@ -160,10 +160,12 @@ Cross-code pairs are not estimated. Low-information alignments (fewer than
 The NWKIT `ksrate` model puts the younger and older species divergence boundaries
 on each focal species' dS scale, using conservative simultaneous
 pair-median intervals. Copy-pair observations sharing either genomic
-window or a family are grouped before bootstrapping their component medians.
-At least three components (or `wgd_min_cross_windows`, when larger) and
-40 bootstrap draws are required. A focal supports placement only when
-its whole interval lies between the two divergence intervals. Branch-level
+window or a family are grouped before taking the median across components.
+Its 95% order-statistic interval needs at least six components (or
+`wgd_min_cross_windows`, when larger); with fewer, only a point is shown.
+This interval assumes independent identically distributed component medians;
+grouping reduces dependence but does not establish that assumption. A focal
+supports placement only when its whole interval lies between the two divergence intervals. Branch-level
 support requires at least one supporting focal in every daughter lineage
 and no focal with a clearly older or younger interval. Missing or overlapping
 boundaries do not establish placement, but a usable boundary can still flag a
@@ -434,7 +436,7 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   species' dS tracks in the same PNG and PDF. Dots show copy-pair medians;
   colored ticks show rate-corrected species divergences, and horizontal
   segments show their available intervals. Each focal label gives the number
-  of copy pairs with usable dS (`n`), not the number of bootstrap components.
+  of copy pairs with usable dS (`n`) and the number of grouped components (`c`).
   Nonmonotone split estimates remain visible with crosses and dashed
   intervals, but are not treated as usable branch boundaries.
   The dS tracks use a separate axis

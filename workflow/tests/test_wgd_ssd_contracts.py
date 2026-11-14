@@ -205,6 +205,14 @@ def test_cross_ks_coalesces_shared_copy_windows_and_families():
     assert component_medians(hits) == [.7, 1.5]
 
 
+def test_copy_median_interval_requires_six_independent_components():
+    from workflow.support.wgd_cross_ks import copy_median_interval
+
+    assert copy_median_interval([.1, .2, .3, .4]) is None
+    assert copy_median_interval([.1, .2, .3, .4, .5]) is None
+    assert copy_median_interval([.1, .2, .3, .4, .5, .6]) == (.1, .6)
+
+
 def test_cross_ks_matched_boundaries_exclude_incomplete_families_and_keep_covariance():
     import numpy as np
     from nwkit.ksrate_model import KsTrio
@@ -365,22 +373,22 @@ def test_cross_ks_support_conflict_and_missing_boundary():
                 "monotone_from_younger_node": "yes"}
 
     def hits(value):
-        return [(f"f{i}", ("c1", i), ("c2", i), value) for i in range(5)]
+        return [(f"f{i}", ("c1", i), ("c2", i), value) for i in range(6)]
 
     bounds = {(sp, target): interval for sp in ("A", "B") for target, interval in (
         (event, bound(.2, .3)), (older, bound(.7, .8)), (next_older, bound(1.2, 1.3)))}
     a, b = (event, "A"), (event, "B")
     candidate = {"species_event_id": event, "branch_id": 7, "event_support": "duplication-and-synteny-candidate"}
-    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(1.0)}, {a: 5, b: 5})
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(1.0)}, {a: 6, b: 6})
     assert candidate["cross_ks_status"] == "discordant_focals"
     assert candidate["event_support"] == "duplication-and-synteny-candidate"
     assert focal_a["status"] == "supports_branch"
     assert focal_b["status"] == "older_than_branch"
     assert focal_b["placed_event_id"] == older
-    scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 5, b: 5})
+    scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 6, b: 6})
     assert candidate["cross_ks_status"] == "supports_branch"
     del bounds["B", older]
-    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 5, b: 5})
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 6, b: 6})
     assert candidate["cross_ks_status"] == "partial_support"
     assert focal_b["status"] == "missing_divergence_boundary"
     assert scan.place("A", event, (.28, .38), bounds, bounds["A", event], bounds["A", older])[0] == "overlaps_divergence_boundary"
@@ -913,8 +921,8 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                 "younger_ds": .192, "younger_lower": .085, "younger_upper": .303, "younger_boundary_status": "ok",
                 "older_ds": .34, "older_lower": .173, "older_upper": .501, "older_boundary_status": "ok"}
     focal_rows = [{**estimate, "species_event_id": events[i - 1]["species_event_id"], "branch_id": i,
-                   "focal": name, "num_estimated_pairs": n}
-                  for i, name, n in ((2, "Gamma", 0), (1, "Alpha", 2032), (1, "Beta", "1957"))]
+                   "focal": name, "num_estimated_pairs": n, "num_window_components": c}
+                  for i, name, n, c in ((2, "Gamma", 0, 0), (1, "Alpha", 2032, 13), (1, "Beta", "1957", 2))]
     focal_rows[0].update(median_ds="NA", ci_lower="NA", ci_upper="NA")
     focal_rows[-1].update(ci_lower="NA", ci_upper="NA", older_boundary_status="nonmonotone_or_invalid_interval")
     captured = []
@@ -944,8 +952,9 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
     anchors, names, marks, branch_markers, legend, unusable, evidence = captured[0]
     assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
     assert "Combined candidate; requires one-copy paths" in legend
-    assert set(names) == {"Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"}
-    alpha, beta, gamma = (names[label] for label in ("Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"))
+    labels = ("Alpha (n=2,032, c=13)", "Beta (n=1,957, c=2)", "Gamma (n=0, c=0)")
+    assert set(names) == set(labels)
+    alpha, beta, gamma = (names[label] for label in labels)
     expected = [(0.5, (alpha + beta) / 2), (0.5, gamma)]
     assert len(anchors) == len(expected)
     for anchor, match in zip(sorted(anchors), sorted(expected), strict=True):
