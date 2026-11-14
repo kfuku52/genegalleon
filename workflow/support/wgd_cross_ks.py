@@ -16,11 +16,23 @@ try:
     from fasta_sequence_store import fasta_records
     from pairwise_synteny import source_file
     from wgd_evidence import number, read_table
+    from wgd_ks_outgroups import (
+        OUTGROUP_FIELDS,
+        common_outgroup_requests,
+        common_outgroup_rows,
+        select_common_outgroups,
+    )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny import source_file
     from .wgd_evidence import number, read_table
+    from .wgd_ks_outgroups import (
+        OUTGROUP_FIELDS,
+        common_outgroup_requests,
+        common_outgroup_rows,
+        select_common_outgroups,
+    )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
 
 
@@ -265,6 +277,8 @@ class CrossKs:
         self.focals = ()
         self.calibration_pairs = set()
         self.trios = []
+        self.outgroup_selections = ()
+        self.outgroup_rows = ()
 
     def observe_family(self, family, leaves):
         if family in self.single_copy:
@@ -304,6 +318,10 @@ class CrossKs:
             _, trio, pairs = min(options, key=lambda item: (-item[0], item[1].sister, item[1].outgroup))
             self.trios.append(trio)
             self.calibration_pairs.update(pairs)
+        if limit := self.parameters.get("max_ks_outgroup_families", 0):
+            self.outgroup_selections = list(select_common_outgroups(
+                ((event, focal) for event, focal, *_ in self.pairs), self.trios, self.nodes, self.index,
+                self.archived, self.codes, limit, self.parameters["seed"]))
 
     def requests(self):
         calibration = defaultdict(list)
@@ -341,6 +359,9 @@ class CrossKs:
 
     def run(self, output, cpus, candidates, estimate, write_table, traced_hits=()):
         requested = self.requests()
+        outgroup_pairs = dict(common_outgroup_requests(self.outgroup_selections, self.archived))
+        for pair, info in outgroup_pairs.items():
+            requested.setdefault(pair, info)
         quartet_limit = self.parameters.get("max_ks_quartets", 0)
         selected = ()
         if quartet_limit:
@@ -392,6 +413,19 @@ class CrossKs:
         write_table(output / "cross_ks_matched_boundaries.tsv",
                     matched_boundary_rows(self.tree, rows, self.trios, by_pair, self.parameters), MATCHED_FIELDS)
         write_table(output / "cross_ks_matched_trios.tsv", matched_trio_rows(self.trios, by_pair), MATCHED_TRIO_FIELDS)
+        if self.parameters.get("max_ks_outgroup_families"):
+            sampled = defaultdict(dict)
+            audit = []
+            pair_fields = ("species_a", "species_b", "family_id", "gene_a", "gene_b", "status", "dS")
+            for pair, (a, b, family, _) in sorted(outgroup_pairs.items()):
+                status, value = results[pair]
+                if status == "ok":
+                    sampled[a, b][family] = float(value)
+                audit.append(dict(zip(pair_fields, (a, b, family, *pair, status, value), strict=True)))
+            write_table(output / "cross_ks_common_outgroup_pairs.tsv", audit, pair_fields)
+            mapping = {r["species_event_id"]: r["branch_id"] for r in candidates}
+            self.outgroup_rows = list(common_outgroup_rows(self.outgroup_selections, sampled, mapping))
+            write_table(output / "cross_ks_common_outgroups.tsv", self.outgroup_rows, OUTGROUP_FIELDS)
         if quartet_limit:
             write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
         return rows

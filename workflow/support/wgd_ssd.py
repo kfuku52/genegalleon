@@ -132,6 +132,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_cross_replication.py").resolve(),
               Path(__file__).with_name("wgd_cross_support.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
+              Path(__file__).with_name("wgd_ks_outgroups.py").resolve(),
               Path(__file__).with_name("wgd_quartet_ks.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
@@ -270,6 +271,11 @@ def make_plan(args):
             raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
         checkpoint = str(resolve(checkpoint, ""))
     parameters["max_ks_quartets"] = getattr(args, "max_ks_quartets", 0)
+    outgroup_limit = getattr(args, "max_ks_outgroup_families", 0)
+    if outgroup_limit < 0 or (outgroup_limit and not cross_ks_sources):
+        raise ValueError("Common-outgroup dS requires --cross-ks-cds and a nonnegative family cap")
+    if outgroup_limit:
+        parameters["max_ks_outgroup_families"] = outgroup_limit
     if parameters["max_ks_quartets"] and not cross_ks_sources:
         raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
@@ -705,7 +711,7 @@ def focal_ks_label(row):
 
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
-                    matched_trios=(), phase_diagnostics=()):
+                    matched_trios=(), phase_diagnostics=(), common_outgroups=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -806,6 +812,10 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             y[node] = (min(children) + max(children)) / 2
     by_node = defaultdict(list)
     trios = {(row["focal"], row["species_event_id"]): row for row in matched_trios}
+    gap_rows = defaultdict(list)
+    for row in common_outgroups:
+        if row["median_signed_gap"] is not None:
+            gap_rows[row["focal"], row["species_event_id"]].append(row)
     matched_seen = False
     for row in focal_rows:
         by_node[index[row["species_event_id"]]].append(row)
@@ -818,6 +828,9 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             offset += 2 * reserve
         names = [leaf.name for leaf in leaves] + [focal_ks_label(row) for row in focal_rows]
         widths = (8.25, max(2.85, 0.087 * max(map(len, names))), 4.1)
+        if gap_rows:
+            gap_name_width = max(len(row["common_outgroup"]) for group in gap_rows.values() for row in group)
+            widths += (3.15, max(1.4, .08 * (gap_name_width + 12)))
         height = max(4.8, (max(y.values()) + 1) * .26 + 2)
     else:
         widths = (8.25, 2.75)
@@ -835,6 +848,17 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         ds_ax.tick_params(axis="x", labelsize=8)
         for side in ("top", "left", "right"):
             ds_ax.spines[side].set_visible(False)
+    if gap_rows and by_node:
+        gap_ax, gap_labels = axes[3:]
+        gap_ax.sharey(ax)
+        gap_labels.sharey(ax)
+        gap_labels.set(xlim=(0, 1))
+        gap_labels.set_axis_off()
+        gap_ax.set(xlabel="Common outgroup: older − younger dS")
+        gap_ax.axvline(0, color="#A3ABB2", lw=.85, ls=":")
+        gap_ax.tick_params(axis="x", labelsize=8)
+        for side in ("top", "left", "right"):
+            gap_ax.spines[side].set_visible(False)
     for node in reversed(nodes):
         if not node.is_leaf:
             children = [y[child] for child in node.children]
@@ -886,6 +910,17 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                                     for boundary_node in (node, node.up))
                     matched_seen |= any(number(estimate.get("matched_median_ds")) is not None for estimate in matched)
                 draw_focal_ks_intervals(ds_ax, lane, focal, matched)
+                diagnostics = gap_rows.get((focal["focal"], focal["species_event_id"]), ())
+                for j, diagnostic in enumerate(diagnostics):
+                    ordinate = lane + ((len(diagnostics) - 1) / 2 - j) * .42
+                    point = float(diagnostic["median_signed_gap"])
+                    lo, hi = diagnostic["gap_lower"], diagnostic["gap_upper"]
+                    color = {"ordered": "#15504B", "reversed": "#AD3232"}.get(diagnostic["status"], "#586471")
+                    if lo is not None and hi is not None:
+                        gap_ax.hlines(ordinate, lo, hi, color=color, lw=1.15)
+                    gap_ax.plot(point, ordinate, ".", ms=5, color=color)
+                    name, count = diagnostic["common_outgroup"], diagnostic["num_measured_all_outgroups"]
+                    gap_labels.text(0, ordinate, f"{name}  n={count}", va="center", fontsize=6.5, color=color)
     span = max(x.values()) or 1
     labels_ax.set(xlim=(0, 1))
     labels_ax.set_axis_off()
@@ -1141,7 +1176,7 @@ def run_analysis(plan, output, cpus):
                     duplication_threshold=p["min_duplication_score"] if tree_mode else None,
                     focal_rows=focal_rows, region_rows=region_summary,
                     matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
-                    phase_diagnostics=phase_diagnostics)
+                    phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else ())
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
@@ -1402,7 +1437,8 @@ def main():
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
-                           ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-count-families", 10000),
+                           ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-ks-outgroup-families", 0),
+                           ("max-count-families", 10000),
                            ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
                            ("max-iterations", 200), ("multiplicity", 2)):
         plan.add_argument("--" + field, type=int, default=default)

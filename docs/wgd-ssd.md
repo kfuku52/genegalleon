@@ -242,6 +242,20 @@ intervals and crosses. When matched-family estimates are available for such a
 row, open diamonds and dotted intervals show the alternative split estimates.
 These are diagnostics and do not change the primary event-age decision.
 
+Set `wgd_max_ks_outgroup_families` above zero to check the boundary ordering
+with a common external species for both splits. Up to two outgroups outside
+both splits are chosen by phylogenetic proximity and archived-family
+coverage, before looking at dS. The same seeded family sample is measured for
+both outgroups, and only families with all required distances contribute.
+At the corresponding focal lane on the species tree, a separate signed
+axis shows the median of the per-family older-minus-younger corrected dS,
+its simultaneous order-statistic interval (when estimable), and the family
+count. A negative gap reverses the expected order; an interval crossing zero
+does not resolve it. The diagnostic assumes independent family observations
+and is not used to call or date a WGD. The summaries and input pair results
+are in `cross_ks_common_outgroups.tsv` and `cross_ks_common_outgroup_pairs.tsv`.
+The default zero skips the extra alignments.
+
 To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` can point to
 `summary.json` in a separate, completed run directory with its original
 `cross_ks_aligned_pairs.code*.tsv` files. The source bundle must not be the

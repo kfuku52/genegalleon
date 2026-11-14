@@ -1053,7 +1053,7 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
 
     def capture(fig, path, **kwargs):
         if path.name.startswith("wgd_species_tree"):
-            tree_ax, label_ax, ds_ax = fig.axes
+            tree_ax, label_ax, ds_ax = fig.axes[:3]
             anchors = [link.xy1 for link in tree_ax.patches if isinstance(link, ConnectionPatch)]
             names = {t.get_text(): t.get_position()[1] for t in label_ax.texts if t.get_color() == "#47545A"}
             marks = [(tuple(line.get_xdata()), line.get_ydata()[0]) for line in ds_ax.lines]
@@ -1069,7 +1069,13 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
             fig.canvas.draw()
             legend_extent = ds_ax.get_legend().get_window_extent(fig.canvas.get_renderer())
             assert legend_extent.x1 < fig.bbox.x1 and legend_extent.y1 < fig.bbox.y1
-            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend))
+            gap = ()
+            if len(fig.axes) > 3:
+                gap_ax, gap_labels = fig.axes[3:]
+                gap = ([label.get_text() for label in gap_labels.texts],
+                       [(line.get_xdata()[0], line.get_ydata()[0]) for line in gap_ax.lines if line.get_marker() == "."],
+                       [collection.get_segments()[0].tolist() for collection in gap_ax.collections])
+            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap))
         savefig(fig, path, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", capture)
@@ -1077,7 +1083,8 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                             region_rows=regions, matched_trios=matched_trios)
     assert len(captured) == 2
     assert captured[0] == captured[1]
-    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend = captured[0]
+    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap = captured[0]
+    assert not gap
     assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
     assert "Combined candidate; requires one-copy paths" in legend
     labels = ("Alpha (n=2,032, c=13)", "Beta (n=1,957, c=2)", "Gamma (n=0, c=0)")
@@ -1103,10 +1110,20 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                      synteny_block_definition="same_original_blocks_with_uniquely_concordant_four_copy_paths")
     phase = [{"species_event_id": events[0]["species_event_id"], "concordant_only_windows": 1}]
     regions.append({"species_event_id": events[0]["species_event_id"], "mode": "all", "supports_before_holdout": 1})
+    diagnostics = [
+        {"species_event_id": events[0]["species_event_id"], "focal": "Beta", "common_outgroup": outside,
+         "num_measured_all_outgroups": 9, "median_signed_gap": gap, "gap_lower": low, "gap_upper": high, "status": status}
+        for outside, gap, low, high, status in (("Gamma", -.2, -.4, -.1, "reversed"),
+                                               ("Delta", .3, None, None, "interval_unavailable"))]
     wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
-                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase)
+                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
+                            common_outgroups=diagnostics)
     assert "B1  S=20.00%  W=4  U=1" in captured[0][6][0]
     assert "Assessed; unique-path support below floor" in captured[0][4]
+    labels, points, intervals = captured[0][-1]
+    assert labels == ["Gamma  n=9", "Delta  n=9"]
+    assert points == [(-.2, beta + .21), (.3, beta - .21)]
+    assert intervals == [[[-.4, beta + .21], [-.1, beta + .21]]]
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):

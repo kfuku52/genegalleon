@@ -150,6 +150,7 @@ wgd_cross_require_unique_phase=0 # Require concordant-only four-copy paths to su
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.
 wgd_cross_ks_reuse_summary="" # Optional summary.json from a separate completed WGD run to reuse exact alignments.
 wgd_max_ks_quartets=0 # Optional maximum four-copy dS comparisons per branch and species pair; 0 disables.
+wgd_max_ks_outgroup_families=0 # Optional common-outgroup dS sensitivity family cap per branch and species.
 wgd_cross_tree_support_file="" # Optional GeneRax UFBoot tree ZIP for duplication and paired cross-block support diagnostics.
 wgd_min_cross_windows=3 # Minimum observable windows and, for support, concordant windows and distinct families per pair.
 wgd_min_duplication_score=0.01 # Minimum supporting / eligible families in duplication-score mode.
