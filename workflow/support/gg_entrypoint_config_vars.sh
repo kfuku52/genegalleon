@@ -422,6 +422,8 @@ wgd_count_scan_workers
 wgd_count_detection_tsv
 wgd_count_rate_groups_tsv
 wgd_count_fixed_events_tsv
+wgd_count_overlay_table
+wgd_count_overlay_model
 wgd_count_event_fractions
 wgd_count_family_gamma_shape
 wgd_alpha

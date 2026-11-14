@@ -21,6 +21,7 @@ try:
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
     from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
+    from wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from wgd_cross_phase import (
@@ -78,6 +79,7 @@ except ImportError:
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
     from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
+    from .wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from .wgd_cross_phase import (
@@ -181,6 +183,7 @@ def owned_identity():
         files.extend(root.rglob("*.py"))
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
               Path(__file__).with_name("wgd_alignment_reuse.py").resolve(),
+              Path(__file__).with_name("wgd_count_overlay.py").resolve(),
               Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
@@ -220,6 +223,15 @@ def make_plan(args):
     tree_archive = resolve(args.gene_trees, "") if getattr(args, "gene_trees", "") else None
     if tree_archive:
         inputs[str(tree_archive)] = digest(tree_archive)
+    overlay = getattr(args, "count_overlay_table", ""), getattr(args, "count_overlay_model", "")
+    if any(overlay) and (tree_archive is None or not all(overlay)):
+        raise ValueError("Count overlay requires --gene-trees and both a count TSV and model JSON")
+    overlay_paths = {}
+    if all(overlay):
+        for key, value in zip(("count_overlay_table", "count_overlay_model"), overlay, strict=True):
+            path = resolve(value, "")
+            inputs[str(path)] = digest(path)
+            overlay_paths[key] = str(path)
     cross_manifest = getattr(args, "cross_synteny", "")
     cross_pairs = None
     if cross_manifest:
@@ -434,7 +446,7 @@ def make_plan(args):
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
-            "count_bootstrap_checkpoint": checkpoint, **count_inputs,
+            "count_bootstrap_checkpoint": checkpoint, **count_inputs, **overlay_paths,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -840,7 +852,7 @@ def focal_ks_label(row):
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
                     matched_trios=(), phase_diagnostics=(), common_outgroups=(), terminal_rows=(),
-                    orientation_rows=(), copy_holdout=(), ds_method="yn00"):
+                    orientation_rows=(), copy_holdout=(), ds_method="yn00", count_overlay=(), count_alpha=.05):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -980,6 +992,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     else:
         widths = (8.25, 2.75)
         height = max(4, len(leaves) * .29 + 2)
+    if count_overlay:
+        widths += (2.8,)
     fig, axes = plt.subplots(ncols=len(widths), figsize=(sum(widths), height),
                              gridspec_kw={"width_ratios": widths, "wspace": 0.03})
     ax, labels_ax = axes[:2]
@@ -996,7 +1010,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         for side in ("top", "left", "right"):
             ds_ax.spines[side].set_visible(False)
     if gap_rows and by_node:
-        gap_ax, gap_labels = axes[3:]
+        gap_ax, gap_labels = axes[3:5]
         gap_ax.sharey(ax)
         gap_labels.sharey(ax)
         gap_labels.set(xlim=(0, 1))
@@ -1006,6 +1020,10 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         gap_ax.tick_params(axis="x", labelsize=8)
         for side in ("top", "left", "right"):
             gap_ax.spines[side].set_visible(False)
+    if count_overlay:
+        count_ax = axes[-1]
+        count_ax.sharey(ax)
+        draw_count_overlay(count_ax, {key: y[node] for key, node in index.items()}, count_overlay, count_alpha)
     for node in reversed(nodes):
         if not node.is_leaf:
             children = [y[child] for child in node.children]
@@ -1117,6 +1135,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                      ncols=2 if matched_seen or terminal or closed else 3, fontsize=8, frameon=False)
     top = min(.92, 1 - .95 / height) if closed else min(.92, 1 - .80 / height) if terminal else (
         min(.92, 1 - .64 / height) if matched_seen else .92)
+    if count_overlay:
+        top = min(top, 1 - 1.08 / height)
     bottom = 0.19 if age_handles else 0.15
     fig.subplots_adjust(left=0.07, right=0.97, bottom=bottom, top=top)
     if both_orientations:
@@ -1185,7 +1205,12 @@ def run_analysis(plan, output, cpus):
     members, family_key, count_rows = family_tables
     validate_annotation_counts(plan, members)
     tree = species_tree(plan["species_tree"])
+    count_overlay, count_alpha = (), .05
+    if "count_overlay_table" in plan:
+        count_overlay, count_alpha = load_count_overlay(tree, Path(plan["count_overlay_table"]), Path(plan["count_overlay_model"]))
     output.mkdir(parents=True, exist_ok=False)
+    if count_overlay:
+        write_table(output / "count_overlay.tsv", count_overlay, COUNT_OVERLAY_FIELDS)
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
     cross_ks = terminal = rooted_copy = None
@@ -1413,7 +1438,8 @@ def run_analysis(plan, output, cpus):
                     matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
                     phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
                     terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation,
-                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else (), ds_method=p.get("cross_ks_method", "yn00"))
+                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else (), ds_method=p.get("cross_ks_method", "yn00"),
+                    count_overlay=count_overlay, count_alpha=count_alpha)
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
@@ -1668,7 +1694,8 @@ def main():
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
                   "cross-tree-support", "count-bootstrap-checkpoint", "count-detection-tsv",
-                  "count-rate-groups-tsv", "count-fixed-events-tsv", "count-event-fractions", "count-family-gamma-shape"):
+                  "count-rate-groups-tsv", "count-fixed-events-tsv", "count-event-fractions", "count-family-gamma-shape",
+                  "count-overlay-table", "count-overlay-model"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--cross-ks-reuse-summary", action="append", default=[], metavar="SUMMARY_JSON")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")

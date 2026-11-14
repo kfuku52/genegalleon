@@ -468,6 +468,16 @@ events. Treat fits based on events selected from the same families as
 conditional sensitivity checks. Native gene-tree likelihood does not yet
 accept count models with fixed background events.
 
+In gene-tree duplication mode, supply a completed NWKIT count scan's TSV and
+JSON as `wgd_count_overlay_table` and `wgd_count_overlay_model` to add a
+separate axis to the same species tree. The input tree and candidate search
+must match the model and table; the point shows the search-wide P-value or,
+for an uncalibrated scan, the likelihood ratio. Symbols distinguish count
+support, branch-burst preference, and numerical bounds. The sample size is
+the number of families in the count fit, not the number of gene trees or dS
+pairs. Absent candidate branches have no mark. This overlay neither changes
+the branch colors nor combines the statistical evidence across analyses.
+
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in
 bootstrap P-values, not posterior probabilities or guaranteed error control

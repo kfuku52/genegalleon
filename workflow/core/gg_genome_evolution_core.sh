@@ -34,6 +34,8 @@ wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
 wgd_count_detection_tsv="${wgd_count_detection_tsv:-}"
 wgd_count_rate_groups_tsv="${wgd_count_rate_groups_tsv:-}"
 wgd_count_fixed_events_tsv="${wgd_count_fixed_events_tsv:-}"
+wgd_count_overlay_table="${wgd_count_overlay_table:-}"
+wgd_count_overlay_model="${wgd_count_overlay_model:-}"
 wgd_count_event_fractions="${wgd_count_event_fractions:-}"
 wgd_count_family_gamma_shape="${wgd_count_family_gamma_shape:-}"
 wgd_alpha="${wgd_alpha:-0.05}"
@@ -448,6 +450,7 @@ run_wgd_ssd_stage() (
     --count-scan-workers "${wgd_count_scan_workers}" \
     --count-detection-tsv "${wgd_count_detection_tsv}" --count-rate-groups-tsv "${wgd_count_rate_groups_tsv}" \
     --count-fixed-events-tsv "${wgd_count_fixed_events_tsv}" \
+    --count-overlay-table "${wgd_count_overlay_table}" --count-overlay-model "${wgd_count_overlay_model}" \
     --count-event-fractions "${wgd_count_event_fractions}" --count-family-gamma-shape "${wgd_count_family_gamma_shape}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \

@@ -221,10 +221,23 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         stream.writestr("rooted_tree/OG000_root.nwk",
                         "(((Alpha_one_a,Beta_two_a),(Alpha_one_b,Beta_two_b)),Gamma_three_a);")
         stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
+    overlay = {}
+    if holdout:
+        table, model = workspace / "events.tsv", workspace / "counts.json"
+        counts = workspace / "normalized.tsv"
+        counts.write_text("family_id\t" + "\t".join(NAMES) + "\nf1\t2\t2\t1\nf2\t1\t1\t1\n")
+        process = subprocess.run([sys.executable, "-m", "nwkit", "wgd-count", "--infile",
+                                  str(workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"),
+                                  "--counts", str(counts),
+                                  "--event-fractions", "0.5", "--family-gamma-shape", "none",
+                                  "--outfile", str(table), "--model-out", str(model)], capture_output=True, text=True,
+                                 timeout=90)
+        assert process.returncode == 0, process.stdout + process.stderr
+        overlay = {"wgd_count_overlay_table": table.name, "wgd_count_overlay_model": model.name}
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
                       wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)),
                       wgd_duplication_root_audit=str(int(holdout)), wgd_duplication_family_panels="3" if holdout else "0",
-                      wgd_duplication_copy_split_audit=str(int(holdout)))
+                      wgd_duplication_copy_split_audit=str(int(holdout)), **overlay)
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -247,6 +260,11 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
     copy_splits = root / "duplication_copy_splits.tsv"
     assert copy_splits.is_file() == holdout
     if holdout:
+        overlay_rows = read_table(root / "count_overlay.tsv")
+        assert len(overlay_rows) == 4
+        assert {r["count_support"] for r in overlay_rows} == {"not_calibrated"}
+        assert str(table) in summary["plan"]["input_hashes"] and str(model) in summary["plan"]["input_hashes"]
+        assert "count_overlay.tsv" in summary["output_hashes"]
         copied, = read_table(copy_splits)
         assert copied["same_tip_and_both_splits"] == "1" and copied["same_tip_and_both_splits_score"] == "0.5"
         assert copy_splits.name in summary["output_hashes"]
