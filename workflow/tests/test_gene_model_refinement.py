@@ -76,6 +76,25 @@ def test_parallel_refinement_nominations_preserve_edge_order():
     assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 2)) == expected
 
 
+def test_parallel_cold_catalog_cli_preserves_restart_and_qc(tmp_path, monkeypatch):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    root = tmp_path / 'parallel'
+    refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    monkeypatch.setenv('GG_MEM_TOOL_GB', '8')
+
+    def run(command):
+        return subprocess.check_output([sys.executable, '-B', refinement.__file__, command,
+                                        '--output', str(root), '--cpus', '2'], text=True)
+
+    assert run('catalog').count('Completed catalog/') == len(rows)
+    receipts = {path: path.read_bytes() for path in root.glob('catalog/*/receipt.json')}
+    assert len(receipts) == len(rows)
+    assert run('catalog').count('Reused catalog/') == len(rows)
+    assert receipts == {path: path.read_bytes() for path in receipts}
+    run('run')
+    assert all(json.loads(run('qc'))['stages'].values())
+
+
 def test_initial_assembly_cds_preserves_baselines_and_rejects_unmapped_candidates(tmp_path):
     species = 'Species_assembly'
     fasta = tmp_path / 'cds.fa'

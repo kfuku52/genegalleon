@@ -730,8 +730,69 @@ def catalog_species(root, value, name):
     return stage(root, Path('catalog') / name, {}, build, [name])
 
 
+def _build_catalog_worker(root, expected_plan, name):
+    with invocation_context():
+        value = load(root, [name])
+        rescue.require_same_key(expected_plan, value)
+        directory = catalog_species(root, value, name)
+        receipt = (directory / 'receipt.json').read_bytes()
+        request = value['request']
+        key = (donor_catalog_key(request, name) if name in request.get('fixed_donors', ())
+               else {'plan': rescue.plan_digest(root, value)})
+        rescue.require_same_key(key, json.loads(receipt)['key'])
+        return directory, hashlib.sha256(receipt).hexdigest()
+
+
+def _build_catalogs(root, value, names, cpus):
+    """Build independent cold catalogs within the command's resources."""
+    budget = os.environ.get('GG_MEM_TOOL_GB', '')
+    if cpus < 2 or len(names) < 2 or not budget.isdecimal() or int(budget) < 8:
+        return [catalog_species(root, value, name) for name in names]
+
+    directories = {name: catalog_directory(root, value, name) for name in names}
+    missing = [name for name, directory in directories.items() if not (directory / 'receipt.json').is_file()]
+    if len(missing) < 2:
+        return [catalog_species(root, value, name) for name in names]
+
+    # Estimate Python object storage from the annotation inputs, leaving space
+    # for the parent and decompression. RNA read evidence has a separate working set.
+    request = value['request']
+    assemblies = request.get('transcriptome_sources', {})
+    rna_bams = request.get('rna_bams', {})
+    annotation_sizes = []
+    for name in missing:
+        if request.get('rna') or rna_bams.get(name):
+            return [catalog_species(root, value, name) for name in names]
+        if name in assemblies:
+            source, fields = assemblies[name], ('fasta', 'transcript_gene_map')
+        else:
+            source, fields = request['sources'][name], ('fasta', 'gff')
+        annotation_sizes.append(sum(Path(source[field]).stat().st_size for field in fields))
+    if sum(sorted(annotation_sizes, reverse=True)[:2]) * 64 > (int(budget) - 4) * 1024 ** 3:
+        return [catalog_species(root, value, name) for name in names]
+
+    cold = set(missing)
+    for name in names:
+        if name not in cold:
+            directories[name] = catalog_species(root, value, name)
+
+    pending, receipts = deque(), {}
+    with ProcessPoolExecutor(max_workers=2, mp_context=get_context('spawn')) as executor:
+        for name in missing:
+            pending.append(executor.submit(_build_catalog_worker, root, value, name))
+            if len(pending) >= 4:
+                directory, sha = pending.popleft().result()
+                receipts[directory / 'receipt.json'] = sha
+        for future in pending:
+            directory, sha = future.result()
+            receipts[directory / 'receipt.json'] = sha
+    if _RECEIPT_SNAPSHOT is not None:
+        _RECEIPT_SNAPSHOT.verify(receipts)
+    return list(directories.values())
+
+
 @invocation_cached
-def catalog_index(root, value, predictions=False):
+def catalog_index(root, value, predictions=False, *, cpus=1):
     dependencies = {}
     if predictions:
         initial_db = catalog_index(root, value)
@@ -743,7 +804,7 @@ def catalog_index(root, value, predictions=False):
             predict_species(root, value, name)
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
     else:
-        directories = [catalog_species(root, value, name) for name in value['species']]
+        directories = _build_catalogs(root, value, value['species'], cpus)
     dependencies['catalog'] = catalog_hashes(root, value)
     if predictions and initial_record['key']['dependencies']['catalog'] != dependencies['catalog']:
         raise ValueError('Initial refinement index catalog receipts changed before final indexing')
@@ -863,7 +924,7 @@ def uses_rescue_correspondence(request):
 
 @invocation_cached
 def correspondence(root, value, cpus=1, comparison_cache=None):
-    db = catalog_index(root, value)
+    db = catalog_index(root, value, cpus=cpus)
     request = value['request']
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     if uses_rescue_correspondence(request):
@@ -3110,9 +3171,8 @@ def _main(args):
         if not 1 <= args.task_index <= len(names):
             raise ValueError('Invalid task index')
         names = [names[args.task_index - 1]]
-    if args.command in {'catalog', 'run'}:
-        for name in names:
-            catalog_species(root, value, name)
+    if args.command == 'catalog':
+        _build_catalogs(root, value, names, args.cpus)
     if args.command in {'correspondence', 'run'}:
         correspondence(root, value, args.cpus, args.comparison_cache)
     if args.command in {'select', 'run'}:
