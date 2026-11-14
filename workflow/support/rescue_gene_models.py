@@ -2557,18 +2557,20 @@ def consolidate(validated, existing, species, nearest=(), *, retained_paths=None
     unique = {}
     placement_problems = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
     retained_paths = retained_paths or {}
-    previous_shape = None
+    previous_axis, previous_blocks = None, None
     for model in validated:
-        shape = coding_shape(model)
         # Consecutive donor alignments often share the same target CDS. Its
         # geometry and ownership are independent of donor evidence and status.
-        if shape != previous_shape:
-            start = min((e[0] for e in model["cds"]), default=0)
-            end = max((e[1] for e in model["cds"]), default=0)
+        axis = model["seqid"], model["strand"]
+        blocks = model["cds"]
+        if axis != previous_axis or blocks != previous_blocks:
+            shape = coding_shape(model)
+            start = min((e[0] for e in blocks), default=0)
+            end = max((e[1] for e in blocks), default=0)
             model["start"], model["end"] = start, end
             owners = ownership.overlapping(model)
             identifiers = tuple(sorted({o["gene_id"] for o in owners if o.get("gene_id")})) if owners else None
-            previous_shape = shape
+            previous_axis, previous_blocks = axis, blocks
         else:
             model["start"], model["end"] = start, end
         # Historical status cannot replace current QC. Only source-bound,
