@@ -217,6 +217,20 @@ def component_medians(hits):
     return sorted(median(group) for group in groups.values())
 
 
+COPY_HOLDOUT_FIELDS = ("species_event_id", "branch_id", "focal", "num_estimated_pairs", "num_window_components",
+                       "point_ds", "drop_component_min", "drop_component_max", "status")
+
+
+def component_median_holdout_bounds(values):
+    """Return extrema of deleting one item from sorted component medians."""
+    if len(values) < 2:
+        return None, None
+    middle = len(values) // 2
+    if len(values) % 2 == 0:
+        return values[middle - 1], values[middle]
+    return median(values[middle - 1:middle + 1]), median(values[middle:middle + 2])
+
+
 def copy_median_interval(values):
     from nwkit.ksrate_model import median_order_statistic_interval
 
@@ -282,6 +296,7 @@ class CrossKs:
         self.outgroup_selections = ()
         self.outgroup_rows = ()
         self.terminal_rows = ()
+        self.copy_holdout_rows = ()
 
     def observe_family(self, family, leaves):
         if family in self.single_copy:
@@ -413,8 +428,12 @@ class CrossKs:
                 hits[key].append((family, first, second, float(ds)))
             audit.append(dict(zip(PAIR_FIELDS, (event, focal, family, *pair, *first, *second, status, ds), strict=True)))
         write_table(output / "cross_ks_paralogs.tsv", audit, PAIR_FIELDS)
-        rows = self.summarize(candidates, bounds, hits, totals)
+        holdout = [] if self.parameters.get("ks_component_holdout") else None
+        rows = self.summarize(candidates, bounds, hits, totals, holdout=holdout)
         write_table(output / "cross_ks_focals.tsv", rows, FOCAL_FIELDS)
+        if holdout is not None:
+            self.copy_holdout_rows = holdout
+            write_table(output / "cross_ks_component_holdout.tsv", holdout, COPY_HOLDOUT_FIELDS)
         by_pair = ortholog_distances(contrasts)
         write_table(output / "cross_ks_matched_boundaries.tsv",
                     matched_boundary_rows(self.tree, rows, self.trios, by_pair, self.parameters), MATCHED_FIELDS)
@@ -474,12 +493,19 @@ class CrossKs:
         write_table(output / "cross_ks_boundaries.tsv", bounds.values(), fields)
         return bounds
 
-    def summarize(self, candidates, bounds, hits, totals):
+    def summarize(self, candidates, bounds, hits, totals, *, holdout=None):
         by_event = defaultdict(list)
         minimum = max(6, self.parameters["min_cross_windows"])
+        ids = {row["species_event_id"]: row["branch_id"] for row in candidates} if holdout is not None else None
         for (event, focal), total in sorted(totals.items()):
             records = hits[event, focal]
             values = component_medians(records)
+            center = median(values) if values else None
+            if holdout is not None:
+                lo, hi = component_median_holdout_bounds(values)
+                status = "ok" if lo is not None else "single_component" if values else "no_measured_pairs"
+                result = (event, ids[event], focal, len(records), len(values), center, lo, hi, status)
+                holdout.append(dict(zip(COPY_HOLDOUT_FIELDS, result, strict=True)))
             node = self.nodes[event]
             younger = bounds.get((focal, event), {})
             older = bounds.get((focal, self.index.clade_id_for_node(node.up)), {})
@@ -489,7 +515,7 @@ class CrossKs:
                 status, placed = self.place(focal, event, ci, bounds, younger, older)
             row = {"species_event_id": event, "focal": focal, "status": status, "placed_event_id": placed,
                    "num_eligible_pairs": total, "num_estimated_pairs": len(records),
-                   "num_window_components": len(values), "median_ds": median(values) if values else "NA",
+                   "num_window_components": len(values), "median_ds": center if center is not None else "NA",
                    "ci_lower": ci[0] if ci else "NA", "ci_upper": ci[1] if ci else "NA",
                    "copy_interval_method": "component-median-order-statistic"}
             for name, data in (("younger", younger), ("older", older)):

@@ -327,6 +327,13 @@ not used to reject or move a WGD automatically: dS dates copy divergence,
 which can precede allopolyploidization. The diagnostic is not an independent
 P-value and does not change the original branch or gene-node classification.
 
+Set `wgd_ks_component_holdout=1` to display the minimum and maximum copy
+median after excluding any one linked component. This range is shown just
+below the focal dS point when the extrema differ, and written to
+`cross_ks_component_holdout.tsv` along with the observation and component
+counts. For zero or one component there is no holdout range. It measures
+influence, not confidence, and does not change the primary interval.
+
 With `wgd_max_ks_quartets` above zero, `cross_ks_quartets.tsv` adds a
 within-family check for combined candidates with paired paths and same-code
 CDS in both species. The limit is per branch and species pair; each selected

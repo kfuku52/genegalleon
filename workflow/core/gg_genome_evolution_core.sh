@@ -49,6 +49,7 @@ wgd_cross_ks_reuse_summary="${wgd_cross_ks_reuse_summary:-}"
 wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
 wgd_max_ks_outgroup_families="${wgd_max_ks_outgroup_families:-0}"
 wgd_max_terminal_ks_families="${wgd_max_terminal_ks_families:-0}"
+wgd_ks_component_holdout="${wgd_ks_component_holdout:-0}"
 wgd_cross_tree_support_file="${wgd_cross_tree_support_file:-}"
 wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
 wgd_min_duplication_score="${wgd_min_duplication_score:-0.01}"
@@ -423,6 +424,7 @@ run_wgd_ssd_stage() (
     --max-ks-quartets "${wgd_max_ks_quartets}" \
     --max-ks-outgroup-families "${wgd_max_ks_outgroup_families}" \
     --max-terminal-ks-families "${wgd_max_terminal_ks_families}" \
+    --ks-component-holdout "${wgd_ks_component_holdout}" \
     --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
     --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \

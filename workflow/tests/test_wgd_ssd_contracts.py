@@ -174,6 +174,17 @@ def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family
     assert missing["status"] == "not_assessed_both" and missing["shared_quartets"] is None
 
 
+@pytest.mark.parametrize("values", [[], [0.0], [0.0, 1.0], [0.0, 3.0, 3.0], [0.0, .3, .5, .8, 2., 3.]])
+def test_ks_component_holdout_extrema_match_exhaustive_deletions(values):
+    from statistics import median
+
+    from workflow.support.wgd_cross_ks import component_median_holdout_bounds
+
+    expected = [median(values[:i] + values[i + 1:]) for i in range(len(values))] if len(values) > 1 else []
+    bounds = component_median_holdout_bounds(values)
+    assert bounds == ((min(expected), max(expected)) if expected else (None, None))
+
+
 def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_path):
     from zipfile import ZipFile
 
@@ -1270,8 +1281,11 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                "shared_windows_a": 1, "shared_windows_b": 2}]
     wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
                             region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
-                            orientation_rows=shared)
+                            orientation_rows=shared, copy_holdout=[
+                                {"species_event_id": events[0]["species_event_id"], "focal": "Alpha", "status": "ok",
+                                 "drop_component_min": .36, "drop_component_max": .40}])
     assert any("U=1  R=1" in label for label in captured[-1][6][0])
+    assert "Range omitting one component" in captured[-1][8]
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):

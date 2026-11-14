@@ -314,6 +314,10 @@ def make_plan(args):
         raise ValueError("Terminal dS requires --cross-ks-cds and a nonnegative family cap")
     if terminal_limit:
         parameters["max_terminal_ks_families"] = terminal_limit
+    if getattr(args, "ks_component_holdout", 0):
+        if not cross_ks_sources:
+            raise ValueError("Copy dS component holdout requires --cross-ks-cds")
+        parameters["ks_component_holdout"] = 1
     if parameters["max_ks_quartets"] and not cross_ks_sources:
         raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
@@ -753,7 +757,7 @@ def focal_ks_label(row):
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
                     matched_trios=(), phase_diagnostics=(), common_outgroups=(), terminal_rows=(),
-                    orientation_rows=()):
+                    orientation_rows=(), copy_holdout=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -861,6 +865,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             y[node] = (min(children) + max(children)) / 2
     by_node = defaultdict(list)
     trios = {(row["focal"], row["species_event_id"]): row for row in matched_trios}
+    closed = {(row["focal"], row["species_event_id"]): row for row in copy_holdout
+              if row["status"] == "ok" and row["drop_component_min"] < row["drop_component_max"]}
     gap_rows = defaultdict(list)
     for row in common_outgroups:
         if row["median_signed_gap"] is not None:
@@ -974,6 +980,9 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                                     for boundary_node in (node, node.up))
                     matched_seen |= any(number(estimate.get("matched_median_ds")) is not None for estimate in matched)
                 draw_focal_ks_intervals(ds_ax, lane, focal, matched)
+                if sensitivity := closed.get((focal["focal"], focal["species_event_id"])):
+                    ds_ax.hlines(lane - .11, sensitivity["drop_component_min"], sensitivity["drop_component_max"],
+                                 color="#78536F", lw=1.3)
                 diagnostics = gap_rows.get((focal["focal"], focal["species_event_id"]), ())
                 for j, diagnostic in enumerate(diagnostics):
                     ordinate = lane + ((len(diagnostics) - 1) / 2 - j) * .42
@@ -1018,9 +1027,12 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             ds_handles.append(Line2D([], [], color="#646D78", marker="D", mfc="white", ls=":", label="Matched-family split"))
         if terminal:
             ds_handles.append(Line2D([], [], color="#405A83", marker="^", label="Terminal self anchors (b: blocks)"))
+        if closed:
+            ds_handles.append(Line2D([], [], color="#78536F", label="Range omitting one component"))
         ds_ax.legend(handles=ds_handles, loc="lower left", bbox_to_anchor=(0, 1.0),
-                     ncols=2 if matched_seen or terminal else 3, fontsize=8, frameon=False)
-    top = min(.92, 1 - .80 / height) if terminal else min(.92, 1 - .64 / height) if matched_seen else .92
+                     ncols=2 if matched_seen or terminal or closed else 3, fontsize=8, frameon=False)
+    top = min(.92, 1 - .95 / height) if closed else min(.92, 1 - .80 / height) if terminal else (
+        min(.92, 1 - .64 / height) if matched_seen else .92)
     bottom = 0.19 if age_handles else 0.15
     fig.subplots_adjust(left=0.07, right=0.97, bottom=bottom, top=top)
     if both_orientations:
@@ -1278,7 +1290,8 @@ def run_analysis(plan, output, cpus):
                     focal_rows=focal_rows, region_rows=region_summary,
                     matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
                     phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
-                    terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation)
+                    terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation,
+                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else ())
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
@@ -1541,6 +1554,7 @@ def main():
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-ks-outgroup-families", 0),
