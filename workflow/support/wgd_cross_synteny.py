@@ -242,7 +242,7 @@ class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
     def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
-                 *, reverse_cross=False, inputs=None, audit_phase=False, orientation_paths=False):
+                 *, reverse_cross=False, inputs=None, audit_phase=False, orientation_paths=False, reverse_phase=None):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -261,6 +261,12 @@ class CrossSynteny:
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
         beds, self_blocks = cross_synteny_inputs(pairs) if inputs is None else inputs
         self.daughters = {}
+        self.reverse = None
+        if reverse_phase is not None:
+            if reverse_cross:
+                raise ValueError("Cannot build the two orientations from a reverse scanner")
+            self.reverse = CrossSynteny(tree, (), min_windows, inputs=(beds, self_blocks), audit_phase=reverse_phase,
+                                        orientation_paths=True)
         for row in pairs:
             a, b = row["species_a"], row["species_b"]
             if a == b:
@@ -272,31 +278,41 @@ class CrossSynteny:
             if node.is_root:
                 continue
             branch = index.clade_id_for_node(node)
-            self.daughters[branch] = tuple(set(child.leaf_names()) for child in node.children)
-            observable = observable_windows(beds[a], cross[0])
-            if self.coverage is not None:
-                self.coverage.append((branch, a, b, beds[a], beds[b], cross[0], len(observable)))
-                self.coverage_genes.update(gene for pair in cross[0] for gene in pair)
-            provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
-            if a in self_blocks and b in self_blocks:
-                paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance)
-                status = "assessed" if len(observable) >= min_windows else "insufficient_cross_anchors"
-            else:
-                paired, partial = {}, {}
-                status = "missing_self_comparison"
-            entry = (a, b, status, observable, paired.keys(), partial.keys(), defaultdict(set), defaultdict(set))
-            self.entries[branch].append(entry)
-            age_pair = (a, b) if status == "assessed" and self.age_species.intersection((a, b)) else None
-            for regions, observed, age in ((paired, entry[6], age_pair), (partial, entry[7], None)):
-                for window, groups in regions.items():
-                    for genes in groups:
-                        regions_for_age = None if age is None else tuple(
-                            (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
-                            for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
-                        trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
-                        phase_pair = ((branch, a, b) if (audit_phase or orientation_paths)
-                                      and status == "assessed" and len(genes) == 4 else None)
-                        self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace, phase_pair))
+            daughters = tuple(set(child.leaf_names()) for child in node.children)
+            self._add_pair(branch, daughters, a, b, beds, self_blocks, cross, trace_branches)
+            if self.reverse is not None:
+                reverse_links, reverse_neighbors = {}, defaultdict(set)
+                for (x, y), ids in cross[0].items():
+                    reverse_links[y, x] = ids
+                    reverse_neighbors[y].add(x)
+                self.reverse._add_pair(branch, daughters, b, a, beds, self_blocks, (reverse_links, reverse_neighbors), ())
+
+    def _add_pair(self, branch, daughters, a, b, beds, self_blocks, cross, trace_branches):
+        self.daughters[branch] = daughters
+        observable = observable_windows(beds[a], cross[0])
+        if self.coverage is not None:
+            self.coverage.append((branch, a, b, beds[a], beds[b], cross[0], len(observable)))
+            self.coverage_genes.update(gene for pair in cross[0] for gene in pair)
+        provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
+        if a in self_blocks and b in self_blocks:
+            paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance)
+            status = "assessed" if len(observable) >= self.min_windows else "insufficient_cross_anchors"
+        else:
+            paired, partial = {}, {}
+            status = "missing_self_comparison"
+        entry = (a, b, status, observable, paired.keys(), partial.keys(), defaultdict(set), defaultdict(set))
+        self.entries[branch].append(entry)
+        age_pair = (a, b) if status == "assessed" and self.age_species.intersection((a, b)) else None
+        for regions, observed, age in ((paired, entry[6], age_pair), (partial, entry[7], None)):
+            for window, groups in regions.items():
+                for genes in groups:
+                    regions_for_age = None if age is None else tuple(
+                        (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
+                        for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
+                    trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
+                    phase_pair = ((branch, a, b) if (self.phases is not None or self.orientation_hits is not None)
+                                  and status == "assessed" and len(genes) == 4 else None)
+                    self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace, phase_pair))
 
     def observe_family(self, family, leaves):
         for gene in self.coverage_genes.intersection(leaves):

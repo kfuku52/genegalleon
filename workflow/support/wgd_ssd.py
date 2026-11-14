@@ -1149,10 +1149,10 @@ def run_analysis(plan, output, cpus):
             terminal_limit = p.get("max_terminal_ks_families", 0)
             inputs = cross_synteny_inputs(pairs) if audit_orientation or terminal_limit else None
             cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
-                                 trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs)
+                                 trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs,
+                                 reverse_phase=bool(p.get("cross_require_unique_phase")) if audit_orientation else None)
             if audit_orientation:
-                reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs,
-                                       audit_phase=bool(p.get("cross_require_unique_phase")), orientation_paths=True)
+                reverse, cross.reverse = cross.reverse, None
             if terminal_limit:
                 terminal = TerminalKs(tree, members, family_key, age_sources, inputs, terminal_limit, p["seed"])
             del inputs

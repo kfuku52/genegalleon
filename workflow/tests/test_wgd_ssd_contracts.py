@@ -401,9 +401,9 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
          "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs]
     inputs = cross_synteny_inputs(comparisons)
     cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,),
-                         audit_coverage=True, audit_phase=True, inputs=inputs)
-    reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, inputs=inputs)
-    separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True)
+                         audit_coverage=True, audit_phase=True, inputs=inputs, reverse_phase=True)
+    reverse = cross.reverse
+    separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, audit_phase=True, orientation_paths=True)
     assert reverse.summarize() == separate_reverse.summarize()
     archive = tmp_path / "trees.zip"
     with ZipFile(archive, "w") as stream:
@@ -413,8 +413,13 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
             else:
                 genes = f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});"
             stream.writestr(f"family{i}_root.nwk", genes)
-    rows, total = scan_duplications(tree, archive, 0.5, observe=cross.observe, observe_family=cross.observe_family)
+    def observe(event, family, node):
+        for scanner in (cross, reverse, separate_reverse):
+            scanner.observe(event, family, node)
+
+    rows, total = scan_duplications(tree, archive, 0.5, observe=observe, observe_family=cross.observe_family)
     assert reverse.summarize() == separate_reverse.summarize()
+    assert reverse.phases == separate_reverse.phases and reverse.orientation_hits == separate_reverse.orientation_hits
     coverage, _, reverse_floor = cross.nonreused_coverage_rows()
     assert coverage == list(cross.coverage_rows())
     if case == "positive_below_archive_floor":
