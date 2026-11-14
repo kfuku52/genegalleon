@@ -28,7 +28,11 @@ try:
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from wgd_rooted_copy_ks import (
-        RATE_BALANCE_FIELDS, ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, rooted_rate_balance,
+        RATE_BALANCE_FIELDS,
+        ROOTED_COPY_FIELDS,
+        ROOTED_COPY_SUMMARY,
+        rooted_copy_summary,
+        rooted_rate_balance,
         run_rooted_copy_ks,
     )
     from wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
@@ -48,7 +52,11 @@ except ImportError:
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from .wgd_rooted_copy_ks import (
-        RATE_BALANCE_FIELDS, ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, rooted_rate_balance,
+        RATE_BALANCE_FIELDS,
+        ROOTED_COPY_FIELDS,
+        ROOTED_COPY_SUMMARY,
+        rooted_copy_summary,
+        rooted_rate_balance,
         run_rooted_copy_ks,
     )
     from .wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
