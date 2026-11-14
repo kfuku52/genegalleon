@@ -850,6 +850,21 @@ def focal_ks_label(row):
     return f"{row['focal']} (n={int(row['num_estimated_pairs']):,}{components})"
 
 
+def fit_tree_branch_labels(fig, ax, labels):
+    if not labels:
+        return
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    pad = renderer.points_to_pixels(3)
+    for label in labels:
+        box = label.get_window_extent(renderer)
+        left = max(0, ax.bbox.x0 + pad - box.x0)
+        right = max(0, box.x1 - (ax.bbox.x1 - pad))
+        if left or right:
+            x, y = label.get_position()
+            label.set_position((x + (left - right) / renderer.points_to_pixels(1), y))
+
+
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
                     matched_trios=(), phase_diagnostics=(), common_outgroups=(), terminal_rows=(),
                     orientation_rows=(), copy_holdout=(), ds_method="yn00", count_overlay=(), count_alpha=.05):
@@ -1024,6 +1039,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         count_ax = axes[-1]
         count_ax.sharey(ax)
         draw_count_overlay(count_ax, {key: y[node] for key, node in index.items()}, count_overlay, count_alpha)
+    branch_labels = []
     for node in reversed(nodes):
         if not node.is_leaf:
             children = [y[child] for child in node.children]
@@ -1061,9 +1077,9 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                 windows += f"  U={phase_windows[row['species_event_id']]}"
             if windows and both_orientations and row["species_event_id"] in shared_windows:
                 windows += f"  R={shared_windows[row['species_event_id']]}"
-            ax.annotate(f"B{row['branch_id']}  {value}{windows}",
-                        (midpoint, y[node]), xytext=(0, 5),
-                        textcoords="offset points", ha="center", fontsize=7.5, color=color)
+            branch_labels.append(ax.annotate(f"B{row['branch_id']}  {value}{windows}",
+                                              (midpoint, y[node]), xytext=(0, 5),
+                                              textcoords="offset points", ha="center", fontsize=7.5, color=color))
         if node in by_node:
             focals = sorted(by_node[node], key=lambda r: r["focal"])
             # Continue the branch's own row to its dS tracks; this is not a tree edge.
@@ -1146,6 +1162,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             # The legend is anchored to an axis-relative position below the
             # panel. Increasing the bottom margin also shortens that panel.
             fig.subplots_adjust(bottom=bottom + (.02 - low) / 1.11)
+    fit_tree_branch_labels(fig, ax, branch_labels)
     for extension in ("pdf", "png"):
         fig.savefig(output / f"wgd_species_tree.{extension}", dpi=175)
     plt.close(fig)

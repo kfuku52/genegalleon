@@ -668,6 +668,27 @@ def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch
     assert audit["num_two_region_holdouts_losing_support"] is None
 
 
+def test_species_tree_label_stays_inside_its_axis_at_both_ends():
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from workflow.support.wgd_ssd import fit_tree_branch_labels
+
+    fig = Figure(figsize=(7, 3))
+    FigureCanvasAgg(fig)
+    tree, names = fig.subplots(ncols=2)
+    tree.set(xlim=(0, 1), ylim=(0, 3))
+    anchors = [(0.01, 2), (0.98, 1)]
+    labels = [tree.annotate("B123  S=1.94% W=11 U=9 R=8", point, xytext=(0, 5),
+                            textcoords="offset points", ha="center") for point in anchors]
+    fit_tree_branch_labels(fig, tree, labels)
+    fig.canvas.draw()
+    for point, label in zip(anchors, labels, strict=True):
+        box = label.get_window_extent()
+        assert tree.bbox.x0 < box.x0 < box.x1 < tree.bbox.x1 < names.bbox.x0
+        assert label.xy == point and label.get_position()[1] == 5
+
+
 def test_window_offset_shifts_observability_and_paths_in_both_references(tmp_path):
     from nwkit.util import read_tree
 
