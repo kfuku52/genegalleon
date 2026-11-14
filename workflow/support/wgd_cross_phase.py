@@ -111,13 +111,20 @@ def orientation_pair_key(family, genes, reverse=False):
     return family, *sorted(copies)
 
 
-def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reverse, *, unique=False):
+def paired_orientation_index(forward, reverse):
+    return oriented_pairings(forward, False, True), oriented_pairings(reverse, True, True)
+
+
+def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reverse, *, unique=False, unique_index=None):
     branches = {row["species_event_id"]: row["branch_id"] for row in candidates}
     reverse_status = {(r["species_event_id"], r["species_b"], r["species_a"]): r["status"] for r in second_rows}
     forward_status = {(r["species_event_id"], r["species_a"], r["species_b"]): r["status"] for r in first_rows}
 
     for want_unique in ((False, True) if unique else (False,)):
-        first, second = oriented_pairings(forward, False, want_unique), oriented_pairings(reverse, True, want_unique)
+        if want_unique:
+            first, second = paired_orientation_index(forward, reverse) if unique_index is None else unique_index
+        else:
+            first, second = oriented_pairings(forward, False, False), oriented_pairings(reverse, True, False)
         for (event, a, b), status in forward_status.items():
             pair = event, a, b
             x, y = first.get(pair, {}), second.get(pair, {})
@@ -135,8 +142,8 @@ def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reve
 
 
 def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor, *,
-                                reverse_windows=None, reverse_evidence=None):
-    first, second = oriented_pairings(forward, False, True), oriented_pairings(reverse, True, True)
+                                reverse_windows=None, reverse_evidence=None, unique_index=None):
+    first, second = paired_orientation_index(forward, reverse) if unique_index is None else unique_index
     support = defaultdict(set)
     retained = set()
     for row in orientation:

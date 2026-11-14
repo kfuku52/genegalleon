@@ -41,6 +41,7 @@ try:
         PHASE_FIELDS,
         QUARTET_PHASE_FIELDS,
         orientation_phase_overlap,
+        paired_orientation_index,
         phase_rows,
         quartet_phase_rows,
         require_paired_orientations,
@@ -113,6 +114,7 @@ except ImportError:
         PHASE_FIELDS,
         QUARTET_PHASE_FIELDS,
         orientation_phase_overlap,
+        paired_orientation_index,
         phase_rows,
         quartet_phase_rows,
         require_paired_orientations,
@@ -1504,15 +1506,18 @@ def run_analysis(plan, output, cpus):
                 write_table(output / "cross_synteny_orientation.tsv",
                             orientation_rows(raw_candidates, pair_rows, reverse_pairs, p["min_cross_windows"]),
                             ORIENTATION_OUTPUT)
+                unique = bool(p.get("cross_require_unique_phase"))
+                both = bool(p.get("cross_require_both_orientations"))
+                paired_index = paired_orientation_index(cross, reverse) if both else None
                 orientation = list(orientation_phase_overlap(raw_candidates, pair_rows, reverse_pairs, cross, reverse,
-                                                             unique=bool(p.get("cross_require_unique_phase"))))
+                                                             unique=unique, unique_index=paired_index))
                 write_table(output / "cross_synteny_orientation_quartets.tsv", orientation, ORIENTATION_PHASE_FIELDS)
-                if p.get("cross_require_both_orientations"):
+                if both:
                     reverse_windows = {}
                     both_hits = require_paired_orientations(cross_evidence, cross.daughters, orientation, cross,
                                                            reverse, p["min_cross_windows"], reverse_windows=reverse_windows,
-                                                           reverse_evidence=reverse_evidence)
-                del reverse
+                                                           reverse_evidence=reverse_evidence, unique_index=paired_index)
+                del reverse, paired_index
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "duplication_synteny_family_overlap.tsv",
                         duplication_synteny_overlap(raw_candidates, window_rows), OVERLAP_FIELDS)
