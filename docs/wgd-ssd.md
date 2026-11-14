@@ -176,7 +176,8 @@ do not count toward these floors. Observable pairs that fail the stricter
 rule remain assessed, so they cannot trigger a duplication-only fallback.
 The pair, window, and orientation audits still show the underlying paths
 and baseline support. The downstream cross-block copy-pair dS analysis
-also uses only concordant-only paths in this mode.
+also uses only concordant-only paths in this mode. The region holdout tables
+add a `unique_phase` mode to report dependence on any one genomic region.
 
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:

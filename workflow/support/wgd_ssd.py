@@ -1037,8 +1037,10 @@ def run_analysis(plan, output, cpus):
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
+            unique_hits = ({hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
+                           if p.get("cross_require_unique_phase") else None)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
-                                                               p["min_cross_windows"])
+                                                               p["min_cross_windows"], unique_phase_hits=unique_hits)
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
             write_table(output / "cross_synteny_nested_copies.tsv",
@@ -1048,15 +1050,11 @@ def run_analysis(plan, output, cpus):
                             paired_tree_support(plan["gene_trees"], plan["cross_tree_support"], raw_candidates,
                                                 cross.traced_hits), SUPPORT_FIELDS)
             if cross_ks:
-                strict_phase = p.get("cross_require_unique_phase")
-                if strict_phase:
-                    traced_ks_hits = {hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
-                    age_pairs = CrossKs.age_pairs_from_trace(traced_ks_hits, cross.age_species)
-                else:
-                    age_pairs = cross.age_pairs
+                age_pairs = (cross.age_pairs if unique_hits is None else
+                             CrossKs.age_pairs_from_trace(unique_hits, cross.age_species))
                 cross_ks.prepare(age_pairs, raw_candidates, cross_evidence)
                 if p.get("max_ks_quartets"):
-                    traced_ks_hits = traced_ks_hits if strict_phase else cross.traced_hits
+                    traced_ks_hits = cross.traced_hits if unique_hits is None else unique_hits
             del cross
         if not raw_candidates:
             raise ValueError("Duplication scoring needs at least one non-root internal species branch")

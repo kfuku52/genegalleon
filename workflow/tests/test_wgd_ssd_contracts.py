@@ -363,6 +363,11 @@ def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     summary, _ = summarize_regions(candidates, [*hits[:2], hit(3, "other", 10, shared=True)],
                                    {"branch": ({"A"}, {"B"})}, 2)
     assert summary[0]["regions"] == 2
+    strict, detail = summarize_regions(candidates, hits, {"branch": ({"A"}, {"B"})}, 2, unique_phase_hits=hits[1:])
+    assert [row["mode"] for row in strict] == ["paired", "all", "unique_phase"]
+    assert strict[-1]["matched_windows"] == 2 and strict[-1]["supports_before_holdout"] == 1
+    assert strict[-1]["num_holdouts_losing_support"] == 2
+    assert all(row["supports_after_exclusion"] == 0 for row in detail if row["mode"] == "unique_phase")
 
 
 def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):

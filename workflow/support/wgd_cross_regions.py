@@ -73,17 +73,24 @@ def support_after_holdouts(hits, daughters, floor):
     return has_support(initial_taxa), result
 
 
-def summarize_regions(candidates, traced_hits, daughters, floor):
+def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase_hits=None):
     by_branch = defaultdict(list)
     for hit in sorted(traced_hits):
         by_branch[hit[0]].append(hit)
+    unique_by_branch = defaultdict(list)
+    if unique_phase_hits is not None:
+        for hit in sorted(unique_phase_hits):
+            unique_by_branch[hit[0]].append(hit)
     summary, details = [], []
     for row in candidates:
         branch = row["species_event_id"]
         if branch not in daughters:
             continue
         hits = by_branch[branch]
-        for mode, selected in (("paired", [h for h in hits if len(h[5]) == 4]), ("all", hits)):
+        modes = [("paired", [h for h in hits if len(h[5]) == 4]), ("all", hits)]
+        if unique_phase_hits is not None:
+            modes.append(("unique_phase", unique_by_branch[branch]))
+        for mode, selected in modes:
             supported, regions = support_after_holdouts(selected, daughters[branch], floor)
             contigs = defaultdict(set)
             for hit in selected:
