@@ -399,8 +399,10 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   `wgd_candidates.pdf`, and `summary.json`: integrated evidence and provenance.
 - `wgd_species_tree.pdf` and `wgd_species_tree.png`: the full input species
   tree, with native branch IDs and scores or P-values for supported candidates.
-  Solid teal branches indicate combined support; dashed orange branches
-  indicate duplication-only or count-only candidates. With a cross
+  Teal branches indicate combined support; with cross synteny, dash-dot teal
+  indicates a candidate whose support requires one-copy paths. `W` counts
+  matched paired windows (not independent events or gene pairs). Dashed orange
+  indicates duplication-only or count-only candidates. With a cross
   manifest, dotted purple marks indicate unobserved synteny and a
   duplication score below the cutoff. Labels use only the supplied
   tree and inference output. Gray does not mean WGD was ruled out.

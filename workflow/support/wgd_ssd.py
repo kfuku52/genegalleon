@@ -591,7 +591,7 @@ def focal_ks_label(row):
     return f"{row['focal']} (n={int(row['num_estimated_pairs']):,})"
 
 
-def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=()):
+def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -601,6 +601,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
 
     tree_mode = duplication_threshold is not None
     cross_mode = any(row.get("synteny_method") == "cross_block_correspondence" for row in rows)
+    paired_regions = {row["species_event_id"]: row for row in region_rows if row["mode"] == "paired"}
     age_styles = {"supports_branch": ("o", "#15504B", "dS supports placement"),
                   "partial_support": ("o", "#9F620A", "dS supports one daughter"),
                   "age_conflict": ("x", "#AD3232", "dS age conflict"),
@@ -613,6 +614,19 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
               "duplication-only-candidate" if tree_mode else "count-only-candidate": (
                   "#A34D22", "//", "Duplication-only candidate" if tree_mode else "Count-only candidate"),
               "unresolved": ("#777777", "", "Unresolved")}
+    one_copy_style = "#176B67", "..", "Combined candidate; requires one-copy paths"
+
+    def row_style(row):
+        state = row["event_support"]
+        region = paired_regions.get(row.get("species_event_id"))
+        if (state == "duplication-and-synteny-candidate" and region is not None
+                and not int(region["supports_before_holdout"])):
+            return one_copy_style
+        return styles[state]
+
+    active_styles = [*styles.values()]
+    if any(row_style(row) == one_copy_style for row in rows):
+        active_styles.append(one_copy_style)
     shown = sorted(rows, key=lambda row: float(row[metric]), reverse=True)[:40]
     labels = []
     for row in reversed(shown):
@@ -623,7 +637,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         labels.append(label if len(label) <= 55 else label[:52] + "...")
     fig, ax = plt.subplots(figsize=(9, max(3, len(shown) * 0.25)))
     for i, row in enumerate(reversed(shown)):
-        color, hatch, _ = styles[row["event_support"]]
+        color, hatch, _ = row_style(row)
         ax.barh(i, float(row[metric]), color=color, hatch=hatch, edgecolor=color)
     ax.set_yticks(range(len(labels)), labels)
     ax.set_xlabel("Supporting / eligible gene families (not a P-value)" if tree_mode else
@@ -634,7 +648,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     ax.set_title(prefix + f"WGD candidates ({cutoff})", fontsize=11)
     ax.tick_params(axis="y", labelsize=8)
     ax.legend(handles=[Patch(facecolor=c, hatch=h, edgecolor=c, label=label)
-                       for c, h, label in styles.values()], fontsize=8, frameon=False)
+                       for c, h, label in active_styles], fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(output / "wgd_candidates.pdf")
     plt.close(fig)
@@ -697,13 +711,13 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             continue
         row = events.get(node)
         state = row["event_support"] if row else "unresolved"
-        color, hatch, _ = styles[state]
+        color, hatch, _ = row_style(row) if row else styles[state]
         unobserved = (cross_mode and row and state == "unresolved" and
                       row["synteny_status"] == "insufficient_observability")
         if unobserved:
             color = "#6B537F"
         ax.plot((x[node.up], x[node]), (y[node], y[node]), color=color,
-                ls=":" if unobserved else "--" if hatch else "-",
+                ls=":" if unobserved else "-." if hatch == ".." else "--" if hatch else "-",
                 lw=1.7 if unobserved else 1 if state == "unresolved" else 2.6)
         age = age_styles.get(row.get("cross_ks_status")) if row else None
         midpoint = (x[node.up] + x[node]) / 2
@@ -712,7 +726,9 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             ax.plot(midpoint, y[node], marker=marker, mec=edge, mfc="white", ms=5.5, mew=1.2, zorder=4)
         if row and (state != "unresolved" or unobserved):
             value = f"S={float(row[metric]):.2%}" if tree_mode else f"P={float(row['p_value']):.3g}"
-            ax.annotate(f"B{row['branch_id']}  {value}",
+            region = paired_regions.get(row["species_event_id"])
+            windows = f"  W={region['matched_windows']}" if region is not None and state == "duplication-and-synteny-candidate" else ""
+            ax.annotate(f"B{row['branch_id']}  {value}{windows}",
                         (midpoint, y[node]), xytext=(0, 5),
                         textcoords="offset points", ha="center", fontsize=7.5, color=color)
         if node in by_node:
@@ -736,8 +752,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     for side in ("top", "left", "right"):
         ax.spines[side].set_visible(False)
     ax.set_title(f"WGD candidate branches | {cutoff}", loc="left")
-    handles = [Line2D([], [], color=c, ls="--" if h else "-", label=label)
-               for c, h, label in styles.values()]
+    handles = [Line2D([], [], color=c, ls="-." if h == ".." else "--" if h else "-", label=label)
+               for c, h, label in active_styles]
     if cross_mode:
         handles.append(Line2D([], [], color="#6B537F", ls=":", label="Synteny unobserved; score below cutoff"))
     shown_age = {row.get("cross_ks_status") for row in rows}
@@ -800,6 +816,7 @@ def run_analysis(plan, output, cpus):
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
     cross_ks = None
+    region_summary = ()
     traced_ks_hits = ()
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
@@ -905,7 +922,8 @@ def run_analysis(plan, output, cpus):
             age_summary[status] = age_summary.get(status, 0) + 1
     write_table(output / "wgd_events.tsv", candidates, list(candidates[0]))
     plot_candidates(candidates, output, tree=tree, alpha=p["alpha"],
-                    duplication_threshold=p["min_duplication_score"] if tree_mode else None, focal_rows=focal_rows)
+                    duplication_threshold=p["min_duplication_score"] if tree_mode else None,
+                    focal_rows=focal_rows, region_rows=region_summary)
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())

@@ -886,6 +886,9 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
         for i, node in enumerate(tree.children, 1)
     ]
     events[1]["cross_ks_status"] = "age_conflict"
+    regions = [{"species_event_id": event["species_event_id"], "mode": "paired",
+                "matched_windows": 4 - i, "supports_before_holdout": int(i == 0)}
+               for i, event in enumerate(events)]
     estimate = {"median_ds": .383, "ci_lower": .372, "ci_upper": .396,
                 "younger_ds": .192, "younger_lower": .085, "younger_upper": .303, "younger_boundary_status": "ok",
                 "older_ds": .34, "older_lower": .173, "older_upper": .501, "older_boundary_status": "ok"}
@@ -908,14 +911,19 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
             branch_markers = [(line.get_marker(), line.get_ydata()[0])
                               for line in tree_ax.lines if line.get_marker() != "None"]
             legend = [label.get_text() for label in tree_ax.get_legend().get_texts()]
-            captured.append((anchors, names, marks, branch_markers, legend, unusable))
+            evidence = ([text.get_text() for text in tree_ax.texts],
+                        [line.get_linestyle() for line in tree_ax.lines if line.get_color() == "#176B67"])
+            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence))
         savefig(fig, path, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", capture)
-    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows)
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions)
     assert len(captured) == 2
     assert captured[0] == captured[1]
-    anchors, names, marks, branch_markers, legend, unusable = captured[0]
+    anchors, names, marks, branch_markers, legend, unusable, evidence = captured[0]
+    assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
+    assert "Combined candidate; requires one-copy paths" in legend
     assert set(names) == {"Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"}
     alpha, beta, gamma = (names[label] for label in ("Alpha (n=2,032)", "Beta (n=1,957)", "Gamma (n=0)"))
     expected = [(0.5, (alpha + beta) / 2), (0.5, gamma)]
