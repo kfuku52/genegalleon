@@ -2232,14 +2232,14 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
         by_owner[owner] = candidate
         ordered = sorted(tuple(b) for b in candidate['blocks'])
         indexes[owner] = [b[0] for b in ordered], ordered
-    source = selected_gff_rows(selected_gff_text, set(by_owner))
+    source = _selected_gff_source_rows(_gff_source_graph(selected_gff_text, retain_attributes=False), set(by_owner))
     records, used_ids, owner_shapes, exported = [], set(), defaultdict(lambda: defaultdict(list)), defaultdict(list)
     for line in source.splitlines(keepends=True):
         if line.startswith('#') or not line.strip():
             records.append((line, None, {}, {}))
             continue
         fields = line.rstrip('\r\n').split('\t')
-        attributes = parse_gff_attributes(fields[8])
+        attributes = parse_gff_attributes(fields[8], keys=OWNERSHIP_ATTRIBUTES)
         identifier = next(iter(attributes.get('ID', ())), None)
         if identifier:
             used_ids.add(identifier)
