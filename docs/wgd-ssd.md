@@ -179,6 +179,12 @@ and baseline support. The downstream cross-block copy-pair dS analysis
 also uses only concordant-only paths in this mode. The region holdout tables
 add a `unique_phase` mode to report dependence on any one genomic region.
 
+If a focal species has at least two assessed comparisons on the same branch,
+`cross_synteny_copy_replication.tsv` shows whether their paired paths use the
+same exact focal gene pairs in the same archived families. Strict mode also
+reports the overlap using only concordant-only paths. Shared focal genes or
+family trees make these checks dependent; they are not independent P-values.
+
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:
 

@@ -24,6 +24,7 @@ try:
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
+    from wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
         SUPPORT_FIELDS,
@@ -54,6 +55,7 @@ except ImportError:
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
+    from .wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from .wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
         SUPPORT_FIELDS,
@@ -127,6 +129,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
               Path(__file__).with_name("wgd_cross_phase.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
+              Path(__file__).with_name("wgd_cross_replication.py").resolve(),
               Path(__file__).with_name("wgd_cross_support.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("wgd_quartet_ks.py").resolve(),
@@ -1039,6 +1042,8 @@ def run_analysis(plan, output, cpus):
             write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
             unique_hits = ({hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
                            if p.get("cross_require_unique_phase") else None)
+            write_table(output / "cross_synteny_copy_replication.tsv",
+                        replicated_copy_rows(raw_candidates, pair_rows, cross.traced_hits, unique_hits), REPLICATION_FIELDS)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
                                                                p["min_cross_windows"], unique_phase_hits=unique_hits)
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
