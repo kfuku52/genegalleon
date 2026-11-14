@@ -2918,6 +2918,7 @@ def finalize(root, value, *, cpus=1):
                         predicted_rows.append(candidate_gff(gene, candidate, name))
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
                 gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
+            del original_transcripts, predicted_rows
             # Both annotation views now have their source rows. Release the
             # graph before building transcript sequences and the analysis GFF.
             derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
@@ -2930,6 +2931,7 @@ def finalize(root, value, *, cpus=1):
             with indexed_genome(source['genome']) as genome:
                 augmented, utr_audit, transcripts = transcript_utrs.complete(
                     paths['gff'].read_text(), original, genome, name, native_models)
+            del original, native_models
             paths['gff'].write_text(augmented)
             with paths['transcript'].open('w') as stream:
                 for tid, sequence in sorted(transcripts.items()):
@@ -2944,18 +2946,24 @@ def finalize(root, value, *, cpus=1):
                                   sum(bool(r.get('utr5', {}).get('length')) for r in utr_audit),
                                   sum(bool(r.get('utr3', {}).get('length')) for r in utr_audit),
                                   sum(bool(r.get('utr5', {}).get('length')) and bool(r.get('utr3', {}).get('length')) for r in utr_audit)))
+            del transcripts
             paths['analysis_gff'].write_text(analysis_gff_rows(augmented, analysis_candidates))
+            del analysis_candidates
             gene_bounds_audit.extend(dict(species=name, **row) for row in bound_changes)
             full_path.write_text(derived_original.rstrip() + '\n' + ''.join(additions) + (sep + embedded if sep else ''))
+            del derived_original, additions, embedded
             updates = {}
             selected_models = transcript_utrs.read_models(augmented, strict=False)
+            del augmented
             for record in utr_audit:
                 if 'utr5' not in record:
                     continue
                 tid = record['transcript_id']
                 updates[tid] = dict(model=selected_models[tid], exons=selected_models[tid]['exons'],
                                     choices={'5': record['utr5'], '3': record['utr3']})
+            del selected_models, utr_audit
             full_path.write_text(transcript_utrs.render(full_path.read_text(), updates))
+            del updates
             map_hashes = representative_map_proof.read([tmp / 'representative_map.tsv'])
             row = {'species': name, **{k: str((root / 'effective' / p.relative_to(tmp)).resolve()) for k, p in paths.items()},
                    'representative_map': str((root / 'effective' / 'representative_map.tsv').resolve()),
