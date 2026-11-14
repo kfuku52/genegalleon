@@ -422,6 +422,14 @@ with nonnegative branch lengths; a positive gap favors the expected split.
 `cross_ks_rooted_copy_summary.tsv` records measured quartets and distinct
 families. This diagnostic depends on the original gene tree and synteny,
 does not infer an absolute age, and does not change the WGD calls.
+`cross_ks_rooted_rate_balance.tsv` compares the two copy-specific distances
+across the same species split. It reports the absolute difference divided by
+their mean, summarized across family medians, with a pointwise order-statistic
+interval when there are enough families. Distances to the same outgroup
+also separate the two signed internal copy stems under an additive tree;
+a family passes only when all its usable paths give two positive stems.
+These are diagnostics of copy-specific rate differences and tree fit, not
+a conversion from dS to time or a correction applied to branch placement.
 
 Set `wgd_max_terminal_ks_families` above zero to inspect terminal copy splits
 in species with supplied self anchors and CDS. The analysis samples at most

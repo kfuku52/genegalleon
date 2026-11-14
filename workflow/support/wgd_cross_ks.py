@@ -27,7 +27,10 @@ try:
         sibling_panel_rows,
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
-    from wgd_rooted_copy_ks import ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, run_rooted_copy_ks
+    from wgd_rooted_copy_ks import (
+        RATE_BALANCE_FIELDS, ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, rooted_rate_balance,
+        run_rooted_copy_ks,
+    )
     from wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 except ImportError:
     from .fasta_sequence_store import fasta_records
@@ -44,7 +47,10 @@ except ImportError:
         sibling_panel_rows,
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
-    from .wgd_rooted_copy_ks import ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, run_rooted_copy_ks
+    from .wgd_rooted_copy_ks import (
+        RATE_BALANCE_FIELDS, ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, rooted_rate_balance,
+        run_rooted_copy_ks,
+    )
     from .wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 
 
@@ -486,6 +492,7 @@ class CrossKs:
                                             write_table, read_table)
             write_table(output / "cross_ks_rooted_copies.tsv", rooted_rows, ROOTED_COPY_FIELDS)
             write_table(output / "cross_ks_rooted_copy_summary.tsv", rooted_copy_summary(rooted_rows), ROOTED_COPY_SUMMARY)
+            write_table(output / "cross_ks_rooted_rate_balance.tsv", rooted_rate_balance(rooted_rows), RATE_BALANCE_FIELDS)
         if terminal is not None:
             pairs, summaries = terminal.summarize(results)
             self.terminal_rows = summaries

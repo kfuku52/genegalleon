@@ -353,6 +353,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert all(len(r["pair_statuses"].split(",")) == 10 for r in rooted_rows)
     assert len(read_table(root / "cross_ks_rooted_alignments.code1.tsv")) == 30
     assert "cross_ks_rooted_copy_summary.tsv" in summary["output_hashes"]
+    balance, = read_table(root / "cross_ks_rooted_rate_balance.tsv")
+    assert balance["species_a"] == a and balance["species_b"] == b
+    assert balance["num_families"] == "0" and balance["status"] == "no_usable_paths"
     if ds_method != "yn00":
         assert any(path.endswith("/dnds_mle.py") for path in summary["plan"]["input_hashes"])
         statuses = {row["status"] for row in read_table(root / "cross_ks_pair_ds.code1.tsv")}

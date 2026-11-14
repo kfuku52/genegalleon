@@ -702,6 +702,40 @@ def test_cross_synteny_node_paths_do_not_transfer_support_to_wrong_copy_or_branc
     assert node.props["cross_synteny_matched_paths"] == 1 and "duplication_origin" not in node.props
 
 
+def test_rooted_dS_path_balance_recovers_signed_stems_and_respects_copy_order():
+    from itertools import combinations
+
+    from workflow.support.wgd_rooted_copy_ks import rooted_path_balance, rooted_rate_balance
+
+    # Four pendant lengths, an outgroup arm, and the two stems at the split.
+    pendants = (.11, .22, .40, .50, .60)
+    first, second = .13, .24
+    parts = ({0, 1}, {2, 3})
+    distances = [pendants[i] + pendants[j] + sum(
+        stem for side, stem in zip(parts, (first, second), strict=True) if (i in side) != (j in side))
+        for i, j in combinations(range(5), 2)]
+    balance = rooted_path_balance(distances)
+    assert balance == pytest.approx((2 * (.9 - .33) / (.9 + .33), first, second))
+    pair_map = dict(zip(combinations(range(5), 2), distances, strict=True))
+    swap = (2, 3, 0, 1, 4)
+    swapped = [pair_map[tuple(sorted((swap[i], swap[j])))] for i, j in combinations(range(5), 2)]
+    assert rooted_path_balance(swapped) == pytest.approx((balance[0], second, first))
+    assert rooted_path_balance([0.] * 10)[0] is None
+
+    row = {"species_event_id": "event", "branch_id": 1, "species_a": "A", "species_b": "B",
+           "family_id": "duplicate", "status": "expected_best", "ten_ds": ",".join(map(str, distances))}
+    conflict = [*distances]
+    conflict[3] -= .80
+    assert rooted_path_balance(conflict)[1] < 0
+    combined, = rooted_rate_balance([row, {**row, "ten_ds": ",".join(map(str, conflict))},
+                                     {**row, "family_id": "other"}, {**row, "status": "dS_incomplete"}])
+    assert combined["num_complete_paths"] == 3 and combined["num_families"] == 2
+    assert combined["num_families_with_two_positive_stems_and_expected_split"] == 1
+    assert combined["status"] == "point_only" and combined["split_difference_lower"] is None
+    empty, = rooted_rate_balance([{**row, "status": "dS_incomplete"}])
+    assert empty["status"] == "no_usable_paths"
+
+
 def test_species_tree_label_stays_inside_its_axis_at_both_ends():
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure

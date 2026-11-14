@@ -8,7 +8,8 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from functools import lru_cache
-from math import isfinite
+from math import fsum, isfinite
+from statistics import median
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -30,6 +31,10 @@ ROOTED_COPY_FIELDS = ("species_event_id", "branch_id", "species_a", "species_b",
                       "shorter_copy_edge", "status")
 ROOTED_COPY_SUMMARY = (*ROOTED_COPY_FIELDS[:4], "sampled_quartets", "complete_quartets", "num_expected_best",
                        "num_other_best", "num_tied", "complete_families", "mixed_families")
+RATE_BALANCE_FIELDS = (*ROOTED_COPY_FIELDS[:4], "num_complete_paths", "num_families",
+                       "median_absolute_relative_split_difference", "split_difference_lower", "split_difference_upper",
+                       "num_families_with_two_positive_stems", "num_families_with_two_positive_stems_and_expected_split",
+                       "status")
 
 
 @lru_cache(maxsize=1)
@@ -202,3 +207,42 @@ def rooted_copy_summary(rows):
         values = (*key, len(group), sum(states[s] for s in complete), *counts, len(families),
                   sum(len(status) > 1 for status in families.values()))
         yield dict(zip(ROOTED_COPY_SUMMARY, values, strict=True))
+
+
+def rooted_path_balance(values):
+    """Compare two paths across the same split and recover signed internal stems."""
+    ab, aa, ab2, ao, ba2, bb, bo, a2b2, a2o, b2o = values
+    mean = (ab + a2b2) / 2
+    difference = abs(ab - a2b2) / mean if mean > 0 else None
+    # Mean cross-copy distance minus the mean same-copy distance removes the
+    # four terminal arms. Contrasts to the shared outgroup split that remainder.
+    total = fsum((aa, ab2, ba2, bb, -2 * ab, -2 * a2b2)) / 4
+    imbalance = fsum((ao, bo, -a2o, -b2o, -ab, a2b2)) / 2
+    return difference, (total + imbalance) / 2, (total - imbalance) / 2
+
+
+def rooted_rate_balance(rows):
+    from nwkit.ksrate_model import median_order_statistic_interval
+
+    groups = defaultdict(lambda: defaultdict(list))
+    complete = {"expected_best", "other_best", "tied"}
+    for row in rows:
+        key = tuple(row[field] for field in ROOTED_COPY_FIELDS[:4])
+        families = groups[key]
+        if row["status"] in complete:
+            values = tuple(map(float, row["ten_ds"].split(",")))
+            difference, first, second = rooted_path_balance(values)
+            if difference is not None:
+                tolerance = 1e-10 * max(1., max(values))
+                positive = min(first, second) > tolerance
+                families[row["family_id"]].append((difference, positive, positive and row["status"] == "expected_best"))
+    for key, families in sorted(groups.items()):
+        differences = [median(row[0] for row in family) for family in families.values()]
+        n = len(differences)
+        lo, hi = median_order_statistic_interval(differences, .05) if n else (-np.inf, np.inf)
+        values = (*key, sum(map(len, families.values())), n, median(differences) if n else None,
+                  lo if isfinite(lo) else None, hi if isfinite(hi) else None,
+                  sum(all(row[1] for row in family) for family in families.values()),
+                  sum(all(row[2] for row in family) for family in families.values()),
+                  "estimated" if isfinite(lo) else "point_only" if n else "no_usable_paths")
+        yield dict(zip(RATE_BALANCE_FIELDS, values, strict=True))
