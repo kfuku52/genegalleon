@@ -36,6 +36,7 @@ try:
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
         CrossSynteny,
+        cross_synteny_inputs,
         orientation_rows,
         read_pairs,
     )
@@ -63,6 +64,7 @@ except ImportError:
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
         CrossSynteny,
+        cross_synteny_inputs,
         orientation_rows,
         read_pairs,
     )
@@ -923,11 +925,16 @@ def run_analysis(plan, output, cpus):
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
         age_sources = plan.get("cross_ks_sources", {})
-        cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources,
-                              trace_branches=None, audit_coverage=True)
-                 if plan.get("cross_pairs") is not None else None)
-        reverse = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], reverse_cross=True)
-                   if p.get("cross_orientation_audit") else None)
+        cross = reverse = None
+        pairs = plan.get("cross_pairs")
+        if pairs is not None:
+            audit_orientation = p.get("cross_orientation_audit")
+            inputs = cross_synteny_inputs(pairs) if audit_orientation else None
+            cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
+                                 trace_branches=None, audit_coverage=True, inputs=inputs)
+            if audit_orientation:
+                reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs)
+            del inputs
         by_family = {row[family_key]: row for row in members} if cross is not None else {}
 
         def family_members(family):

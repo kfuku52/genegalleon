@@ -213,11 +213,29 @@ def correspondence(positions, left, right, cross, provenance=None):
     return paired, partial
 
 
+def cross_synteny_inputs(pairs):
+    """Parse shared coordinates and self links once, without retaining cross links."""
+    beds, self_blocks = {}, {}
+    seen_genes = set()
+    for row in pairs:
+        for side in ("a", "b"):
+            sp = row[f"species_{side}"]
+            if sp not in beds:
+                beds[sp] = coordinates(row[f"bed_{side}"], sp)
+                if not seen_genes.isdisjoint(beds[sp]):
+                    raise ValueError(f"Cross-synteny BED gene IDs are shared between species: {sp}")
+                seen_genes.update(beds[sp])
+        a, b = row["species_a"], row["species_b"]
+        if a == b:
+            self_blocks[a] = anchor_links(row["anchors"], beds[a], beds[a], symmetric=True)
+    return beds, self_blocks
+
+
 class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
     def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
-                 *, reverse_cross=False):
+                 *, reverse_cross=False, inputs=None):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -232,20 +250,7 @@ class CrossSynteny:
         trace_branches = None if trace_branches is None else set(trace_branches)
         index = CladeIndex(tree)
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
-        beds, self_blocks = {}, {}
-        seen_genes = set()
-        for row in pairs:
-            for side in ("a", "b"):
-                sp = row[f"species_{side}"]
-                if sp not in beds:
-                    beds[sp] = coordinates(row[f"bed_{side}"], sp)
-                    if not seen_genes.isdisjoint(beds[sp]):
-                        raise ValueError(f"Cross-synteny BED gene IDs are shared between species: {sp}")
-                    seen_genes.update(beds[sp])
-            a, b = row["species_a"], row["species_b"]
-            if a == b:
-                self_blocks[a] = anchor_links(row["anchors"], beds[a], beds[a], symmetric=True)
-        del seen_genes
+        beds, self_blocks = cross_synteny_inputs(pairs) if inputs is None else inputs
         self.daughters = {}
         for row in pairs:
             a, b = row["species_a"], row["species_b"]

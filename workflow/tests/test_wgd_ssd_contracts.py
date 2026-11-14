@@ -198,7 +198,7 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     from nwkit.clade_index import CladeIndex
     from nwkit.util import read_tree
 
-    from workflow.support.wgd_cross_synteny import CrossSynteny
+    from workflow.support.wgd_cross_synteny import CrossSynteny, cross_synteny_inputs
     from workflow.support.wgd_tree_scan import scan_duplications
 
     tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
@@ -220,15 +220,20 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     pairs = [("A", "A", "A"), ("A", "B", "cross")]
     if case != "missing_self":
         pairs.append(("B", "B", "B"))
-    cross = CrossSynteny(tree, [
+    comparisons = [
         {"species_a": a, "species_b": b, "bed_a": tmp_path / f"{a}.bed", "bed_b": tmp_path / f"{b}.bed",
-         "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs], 1, age_species=("A", "B"),
-        trace_branches=(event_id,))
+         "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs]
+    inputs = cross_synteny_inputs(comparisons)
+    cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,), inputs=inputs)
+    reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, inputs=inputs)
+    separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True)
+    assert reverse.summarize() == separate_reverse.summarize()
     archive = tmp_path / "trees.zip"
     with ZipFile(archive, "w") as stream:
         for i in range(5):
             stream.writestr(f"family{i}_root.nwk", f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});")
     rows, total = scan_duplications(tree, archive, 0.5, observe=cross.observe)
+    assert reverse.summarize() == separate_reverse.summarize()
     evidence, pair_rows, _ = cross.summarize()
     assert total == 5 and rows[0]["num_supporting_families"] == 5
     row, = summarize_events(rows, [], {}, cross_evidence=evidence)
