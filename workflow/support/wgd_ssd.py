@@ -14,6 +14,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from functools import partial
+from math import isfinite
 from pathlib import Path
 
 try:
@@ -1208,9 +1209,13 @@ def replot(args):
             raise ValueError(f"WGD plot input changed: {name}")
         inputs[path] = expected
         data = read_table(path)
+        conversions = [(key, float) for key in numeric] + [(key, int) for key in integers]
         for row in data:
-            row.update((key, number(row[key])) for key in numeric)
-            row.update((key, int(row[key])) for key in integers)
+            for key, cast in conversions:
+                value = cast(row[key]) if row[key] not in {"", "NA"} else None
+                if value is not None and not isfinite(value):
+                    raise ValueError(f"Nonfinite plot value in {name}: {key}")
+                row[key] = value
         return data
 
     if digest(tree_path) != inputs[tree_path]:
@@ -1241,7 +1246,7 @@ def replot(args):
         "common_outgroups": rows("cross_ks_common_outgroups.tsv", numeric=("median_signed_gap", "gap_lower", "gap_upper")),
         "terminal_rows": rows("terminal_ks_summary.tsv", numeric=("median_copy_ds", "copy_lower", "copy_upper"),
                               integers=("six_pair_families", "original_blocks")),
-        "orientation_rows": rows("cross_synteny_orientation_quartets.tsv", numeric=("shared_windows_a", "shared_windows_b")),
+        "orientation_rows": rows("cross_synteny_orientation_quartets.tsv", integers=("shared_windows_a", "shared_windows_b")),
         "copy_holdout": rows("cross_ks_component_holdout.tsv", numeric=("drop_component_min", "drop_component_max")),
     }
     output.mkdir(parents=True, exist_ok=False)

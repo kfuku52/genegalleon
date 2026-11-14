@@ -111,11 +111,15 @@ def test_replot_replaces_only_the_count_panel_and_rejects_tampering(tmp_path, co
     tree.write_text("((A:1,B:1):1,C:2);\n")
     events = source / "wgd_events.tsv"
     events.write_text("species_event_id\tevent_support\n" + row["species_event_id"] + "\tunresolved\n")
+    gaps = source / "cross_ks_common_outgroups.tsv"
+    gaps.write_text("median_signed_gap\tgap_lower\tgap_upper\n-.2\t-.8\t.3\n")
+    orientation = source / "cross_synteny_orientation_quartets.tsv"
+    orientation.write_text("shared_windows_a\tshared_windows_b\n1\t\n")
     (source / "summary.json").write_text(json.dumps({
         "schema_version": 1, "candidate_model": "rooted_gene_tree_duplication_score",
         "plan": {"species_tree": str(tree), "input_hashes": {str(tree): wgd_ssd.digest(tree)},
                  "parameters": {"alpha": .05, "min_duplication_score": .01}, "gene_trees": "archive.zip"},
-        "output_hashes": {"wgd_events.tsv": wgd_ssd.digest(events)},
+        "output_hashes": {p.name: wgd_ssd.digest(p) for p in (events, gaps, orientation)},
     }))
     args = SimpleNamespace(evidence=source, output=out, count_overlay_table=table, count_overlay_model=None)
     with pytest.raises(ValueError, match="requires both"):
@@ -137,4 +141,7 @@ def test_replot_replaces_only_the_count_panel_and_rejects_tampering(tmp_path, co
     (candidates, options), = saved
     assert candidates == [{"species_event_id": row["species_event_id"], "event_support": "unresolved"}]
     assert options["count_overlay"][0]["p_value"] == .05 and options["count_alpha"] == .1
+    assert options["common_outgroups"] == [{"median_signed_gap": -.2, "gap_lower": -.8, "gap_upper": .3}]
+    assert options["orientation_rows"] == [{"shared_windows_a": 1, "shared_windows_b": None}]
+    assert type(options["orientation_rows"][0]["shared_windows_a"]) is int
     assert events.read_bytes() == original
