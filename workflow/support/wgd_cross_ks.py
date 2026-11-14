@@ -18,9 +18,13 @@ try:
     from wgd_evidence import number, read_table
     from wgd_ks_outgroups import (
         OUTGROUP_FIELDS,
+        SISTER_FIELDS,
         common_outgroup_requests,
         common_outgroup_rows,
         select_common_outgroups,
+        select_sister_panels,
+        sibling_panel_requests,
+        sibling_panel_rows,
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
@@ -30,9 +34,13 @@ except ImportError:
     from .wgd_evidence import number, read_table
     from .wgd_ks_outgroups import (
         OUTGROUP_FIELDS,
+        SISTER_FIELDS,
         common_outgroup_requests,
         common_outgroup_rows,
         select_common_outgroups,
+        select_sister_panels,
+        sibling_panel_requests,
+        sibling_panel_rows,
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from .wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
@@ -295,6 +303,7 @@ class CrossKs:
         self.trios = []
         self.outgroup_selections = ()
         self.outgroup_rows = ()
+        self.sister_panels = ()
         self.terminal_rows = ()
         self.copy_holdout_rows = ()
 
@@ -340,6 +349,9 @@ class CrossKs:
             self.outgroup_selections = list(select_common_outgroups(
                 ((event, focal) for event, focal, *_ in self.pairs), self.trios, self.nodes, self.index,
                 self.archived, self.codes, limit, self.parameters["seed"]))
+            if self.parameters.get("ks_sister_panels"):
+                self.sister_panels = list(select_sister_panels(
+                    self.outgroup_selections, self.nodes, self.archived, self.codes, limit, self.parameters["seed"]))
 
     def requests(self):
         calibration = defaultdict(list)
@@ -379,6 +391,9 @@ class CrossKs:
         requested = self.requests()
         outgroup_pairs = dict(common_outgroup_requests(self.outgroup_selections, self.archived))
         for pair, info in outgroup_pairs.items():
+            requested.setdefault(pair, info)
+        sister_pairs = dict(sibling_panel_requests(self.sister_panels, self.archived))
+        for pair, info in sister_pairs.items():
             requested.setdefault(pair, info)
         quartet_limit = self.parameters.get("max_ks_quartets", 0)
         selected = ()
@@ -451,6 +466,16 @@ class CrossKs:
             mapping = {r["species_event_id"]: r["branch_id"] for r in candidates}
             self.outgroup_rows = list(common_outgroup_rows(self.outgroup_selections, sampled, mapping))
             write_table(output / "cross_ks_common_outgroups.tsv", self.outgroup_rows, OUTGROUP_FIELDS)
+            if self.parameters.get("ks_sister_panels"):
+                audit = []
+                for pair, (a, b, family, _) in sorted(sister_pairs.items()):
+                    status, value = results[pair]
+                    if status == "ok":
+                        sampled[a, b][family] = float(value)
+                    audit.append(dict(zip(pair_fields, (a, b, family, *pair, status, value), strict=True)))
+                write_table(output / "cross_ks_sister_panel_pairs.tsv", audit, pair_fields)
+                write_table(output / "cross_ks_sister_panels.tsv",
+                            sibling_panel_rows(self.sister_panels, sampled, mapping), SISTER_FIELDS)
         if quartet_limit:
             write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
         if terminal is not None:

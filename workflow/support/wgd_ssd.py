@@ -320,6 +320,10 @@ def make_plan(args):
         raise ValueError("Common-outgroup dS requires --cross-ks-cds and a nonnegative family cap")
     if outgroup_limit:
         parameters["max_ks_outgroup_families"] = outgroup_limit
+    if getattr(args, "ks_sister_panels", 0):
+        if not outgroup_limit:
+            raise ValueError("Sister dS panels require a positive --max-ks-outgroup-families")
+        parameters["ks_sister_panels"] = 1
     terminal_limit = getattr(args, "max_terminal_ks_families", 0)
     if terminal_limit < 0 or (terminal_limit and not cross_ks_sources):
         raise ValueError("Terminal dS requires --cross-ks-cds and a nonnegative family cap")
@@ -1599,6 +1603,7 @@ def main():
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--ks-sister-panels", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-ks-method", choices=CROSS_DS_METHODS, default="yn00")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),

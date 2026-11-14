@@ -321,6 +321,16 @@ and is not used to call or date a WGD. The summaries and input pair results
 are in `cross_ks_common_outgroups.tsv` and `cross_ks_common_outgroup_pairs.tsv`.
 The default zero skips the extra alignments.
 
+With common-outgroup dS enabled, `wgd_ks_sister_panels=1` adds comparisons
+with up to one additional sister species at each split. Alternatives are
+chosen before measuring dS, on the same genetic code and archived-family
+coverage shared by the already selected species. All sisters and outgroups
+in a focal panel use the intersection of complete families so changing
+sisters does not also change the family sample. See
+`cross_ks_sister_panels.tsv` and `cross_ks_sister_panel_pairs.tsv`. A focal
+with no supported alternative adds no panel; the main outgroup plot and
+WGD calls are unchanged.
+
 To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` accepts
 one or more newline-separated `summary.json` paths in separate, completed
 run directories with their original `cross_ks_aligned_pairs.code*.tsv`

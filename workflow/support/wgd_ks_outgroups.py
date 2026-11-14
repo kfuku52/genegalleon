@@ -10,6 +10,7 @@ import numpy as np
 OUTGROUP_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "older_sister", "common_outgroup",
                    "num_eligible_families", "num_sampled_families", "num_measured_all_outgroups", "younger_median_ds",
                    "older_median_ds", "median_signed_gap", "gap_lower", "gap_upper", "status")
+SISTER_FIELDS = OUTGROUP_FIELDS[:-1] + ("num_sister_combinations", "status")
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,67 @@ class CommonOutgroups:
             (self.focal, self.younger), (self.focal, self.older), (self.younger, outside),
             (self.older, outside), (self.focal, outside),
         ))
+
+
+@dataclass(frozen=True)
+class SisterPanel:
+    event: str
+    focal: str
+    choices: tuple
+    outgroups: tuple
+    eligible: int
+    families: tuple
+
+
+def select_sister_panels(selections, nodes, archived, codes, maximum, seed):
+    from itertools import product
+
+    archive_by_species = defaultdict(set)
+    for family, species in archived.items():
+        for name in species:
+            archive_by_species[name].add(family)
+    for row in selections:
+        if not row.outgroups:
+            continue
+        node = nodes[row.event]
+        young_groups = [set(c.leaf_names()) for c in node.children]
+        young = set().union(*(g for g in young_groups if row.focal not in g))
+        old = set(node.up.leaf_names()) - set(node.leaf_names())
+        required = (row.focal, row.younger, row.older, *row.outgroups)
+        common = set.intersection(*(archive_by_species[name] for name in required))
+        young_options, old_options = [row.younger], [row.older]
+        for alternatives, options in ((young, young_options), (old, old_options)):
+            compatible = ((-len(common & archive_by_species[sp]), sp) for sp in alternatives - set(options)
+                          if codes.get(sp) == codes[row.focal] and common & archive_by_species[sp])
+            best = min(compatible, default=None)
+            if best:
+                options.append(best[1])
+                common &= archive_by_species[best[1]]
+        if len(young_options) == len(old_options) == 1:
+            continue
+        families = sorted(common)
+        random.Random(seed).shuffle(families)
+        yield SisterPanel(row.event, row.focal, tuple(product(young_options, old_options)), row.outgroups,
+                          len(common), tuple(families[:maximum]))
+
+
+def sibling_panel_requests(panels, archived):
+    selections = (CommonOutgroups(p.event, p.focal, a, b, p.outgroups, p.eligible, p.families)
+                  for p in panels for a, b in p.choices)
+    yield from common_outgroup_requests(selections, archived)
+
+
+def sibling_panel_rows(panels, sampled, branch_ids):
+    denominator = sum(len(p.choices) * len(p.outgroups) for p in panels)
+    for panel in panels:
+        selections = [CommonOutgroups(panel.event, panel.focal, a, b, panel.outgroups, panel.eligible, panel.families)
+                      for a, b in panel.choices]
+        required = {key for row in selections for out in row.outgroups for key in row.pair_keys(out)}
+        families = set(panel.families)
+        complete = set.intersection(*(sampled.get(key, {}).keys() & families for key in required))
+        same_families = {key: {f: sampled[key][f] for f in complete} if complete else {} for key in required}
+        for row in common_outgroup_rows(selections, same_families, branch_ids, denominator=denominator):
+            yield {**row, "num_sister_combinations": len(panel.choices)}
 
 
 def select_common_outgroups(focals, trios, nodes, index, archived, codes, maximum, seed):
@@ -76,10 +138,11 @@ def common_outgroup_requests(selections, archived):
                     yield (genes[a], genes[b]), (a, b, family, "common_outgroup")
 
 
-def common_outgroup_rows(selections, sampled, branch_ids):
+def common_outgroup_rows(selections, sampled, branch_ids, *, denominator=None):
     from nwkit.ksrate_model import median_order_statistic_interval
 
-    denominator = sum(len(row.outgroups) for row in selections)
+    if denominator is None:
+        denominator = sum(len(row.outgroups) for row in selections)
     for row in selections:
         if not row.outgroups:
             values = (row.event, branch_ids[row.event], row.focal, row.younger, row.older, None, 0, 0, 0,

@@ -5,6 +5,9 @@ from workflow.support.wgd_ks_outgroups import (
     common_outgroup_requests,
     common_outgroup_rows,
     select_common_outgroups,
+    select_sister_panels,
+    sibling_panel_requests,
+    sibling_panel_rows,
 )
 
 
@@ -52,3 +55,27 @@ def test_common_outgroup_contrasts_keep_negative_values_and_exclude_incomplete_f
         assert diagnostic["status"] == "interval_unavailable"
     sampled["P", "X"] = {}
     assert {r["status"] for r in common_outgroup_rows([row], sampled, {"event": 2})} == {"no_complete_families"}
+
+
+def test_sister_panel_keeps_every_comparison_on_the_same_measured_families():
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    tree = read_tree("(((F,(Y,Z)),(X,W)),(O,P));", "auto", True, quiet=True)
+    event_node = tree.common_ancestor(["F", "Y", "Z"])
+    event = CladeIndex(tree).clade_id_for_node(event_node)
+    primary = CommonOutgroups(event, "F", "Y", "X", ("O", "P"), 30, ())
+    archive = {str(i): {name: f"{name}_{i}" for name in "FYZXWOP" if (name, i) != ("W", 0)} for i in range(30)}
+    codes = dict.fromkeys("FYZXWOP", 1)
+    panel, = select_sister_panels([primary], {event: event_node}, archive, codes, 40, 9)
+    assert set(panel.choices) == {("Y", "X"), ("Y", "W"), ("Z", "X"), ("Z", "W")}
+    assert len(panel.families) == panel.eligible == 29 and "0" not in panel.families
+    measured = {}
+    for _, (a, b, family, _) in sibling_panel_requests([panel], archive):
+        measured.setdefault((a, b), {})[family] = 1.0
+    measured["P", "Z"].pop("1")
+    rows = list(sibling_panel_rows([panel], measured, {event: 6}))
+    assert len(rows) == 8
+    assert {row["num_measured_all_outgroups"] for row in rows} == {28}
+    assert {row["num_sister_combinations"] for row in rows} == {4}
+    assert {row["status"] for row in rows} == {"order_unresolved"}
