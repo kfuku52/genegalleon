@@ -465,8 +465,9 @@ and positive retention. The fixed events are in every model, including the
 simulated null, and their branches are excluded from the candidate search.
 The bootstrap does not account for estimation or selection of the supplied
 events. Treat fits based on events selected from the same families as
-conditional sensitivity checks. Native gene-tree likelihood does not yet
-accept count models with fixed background events.
+conditional sensitivity checks. Native gene-tree likelihood supports fixed
+background doublings and scores only origin at the additional candidate;
+it does not support fixed background triplications.
 
 In gene-tree duplication mode, supply a completed NWKIT count scan's TSV and
 JSON as `wgd_count_overlay_table` and `wgd_count_overlay_model` to add a
@@ -666,7 +667,9 @@ root prior, sampling and one candidate doubling**. It is not the probability
 that WGD occurred, a parameter/tree posterior, or an independent significance
 test. It does not change the evidence-rule classification. The complete
 per-candidate table is retained even when its candidate differs from the
-LCA-mapped branch. Multiple-event histories are not jointly inferred.
+LCA-mapped branch. When fixed background doublings are supplied, they
+contribute to both likelihoods, but only the additional candidate can
+contribute to its node-origin probability. Events are not jointly inferred.
 
 ## Outputs and Validation
 

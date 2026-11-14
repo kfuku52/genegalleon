@@ -1558,8 +1558,6 @@ def classify(args):
     if args.native_tree_likelihood:
         if summary.get("candidate_model") == "rooted_gene_tree_duplication_score":
             raise ValueError("Native tree likelihood requires a fitted count model, not duplication-score candidates")
-        if summary["plan"].get("count_fixed_events_tsv"):
-            raise ValueError("Native tree likelihood does not support fixed background genome events")
         required.add("count_model.json")
     if not required.issubset(summary.get("output_hashes", {})):
         raise ValueError("WGD evidence lacks output integrity hashes; regenerate it")

@@ -198,9 +198,16 @@ def test_wgd_stage_forwards_fixed_background_events(tmp_path):
     model = json.loads((root / "count_model.json").read_text())
     assert [event["branch_id"] for event in model["fixed_background_events"]] == [1]
     assert {int(row["branch_id"]) for row in read_table(root / "count_candidates.tsv")} == {2, 3, 4}
-    with pytest.raises(ValueError, match="does not support fixed background"):
-        classify(SimpleNamespace(native_tree_likelihood=1, evidence=root,
-                                 species_tree=Path(summary["plan"]["species_tree"])))
+    gene = tmp_path / "gene.nwk"
+    gene.write_text("((Alpha_one_a,Beta_two_a),Gamma_three_a);\n")
+    output = tmp_path / "family"
+    native = subprocess.run([sys.executable, str(HELPER), "classify", "--gene-tree", str(gene), "--species-tree",
+                             summary["plan"]["species_tree"], "--evidence", str(root), "--family-id", "sample",
+                             "--output", str(output), "--native-tree-likelihood", "1"],
+                            capture_output=True, text=True, timeout=90)
+    assert native.returncode == 0, native.stdout + native.stderr
+    likelihood = json.loads((output / "native_tree_likelihood.json").read_text())
+    assert likelihood["fixed_background_events"] == model["fixed_background_events"]
 
 
 @pytest.mark.parametrize("holdout", [False, True])

@@ -29,7 +29,7 @@ def load_count_overlay(tree, table, model_file):
     model = json.loads(model_file.read_text(encoding="utf-8"))
     if model.get("schema_version") != 1 or model.get("method") != "native-linear-DL-retained-WGM-count-v1":
         raise ValueError("Unrecognized native WGD count overlay model")
-    mapping, _ = model_mapping({**model, "fixed_background_events": ()}, design)
+    mapping, _ = model_mapping(model, design)
     expected = {}
     for item in model["candidates"]:
         event, burst = item["event"], item["branch_burst"]
