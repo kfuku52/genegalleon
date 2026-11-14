@@ -39,7 +39,8 @@ def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, mon
 
 
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
-def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp_path, codec):
+@pytest.mark.parametrize('workers', [1, 4])
+def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp_path, codec, workers):
     records = [model(0, 'accepted'), model(1), model(2, 'accepted'), model(3)]
     source, before = published(tmp_path, records, partial=[records[3], records[1], records[3]], codec=codec)
     original = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
@@ -48,7 +49,8 @@ def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp
     appended = {**model(4, 'accepted'), 'sequence': 'ATGAAATAA', 'cds': [[6, 15, 0]]}
     revisions = [{**model(2), 'support': [{'new': 'proof'}]}]
     output = tmp_path / 'result'
-    result = patch_model_store(source, output, changes, appended=[appended], revisions=revisions)
+    result = patch_model_store(source, output, changes, appended=[appended], revisions=revisions,
+                               publication_workers=workers)
     receipt(output)
     expected = [changes.get(i, m) for i, m in enumerate(records)] + [appended]
     assert json.dumps(list(store.iter_models(output)), ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
@@ -109,14 +111,15 @@ def test_context_selection_finishes_generation_fence_after_last_match(tmp_path):
         list(iterator)
 
 
-def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeypatch):
+@pytest.mark.parametrize('workers', [1, 4])
+def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeypatch, workers):
     source, _ = published(tmp_path, [model(0), model(1)])
     from workflow.support import rescue_model_store_patch as patch
     original, changed = patch._copy, False
     def replace(*args):
         nonlocal changed
         original(*args)
-        if not changed:
+        if not changed and args[0].name.startswith('models-000000.'):
             changed = True
             path = source / 'model_store/bodies.sqlite'
             replacement = source / 'new-body'
@@ -124,7 +127,7 @@ def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeyp
             replacement.replace(path)
     monkeypatch.setattr(patch, '_copy', replace)
     with pytest.raises(ValueError, match='changed'):
-        patch_model_store(source, tmp_path / 'output', {})
+        patch_model_store(source, tmp_path / 'output', {}, publication_workers=workers)
     assert not (tmp_path / 'output/model_store').exists()
 
 

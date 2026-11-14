@@ -11,8 +11,10 @@ from pathlib import Path
 
 try:
     import rescue_model_store as store
+    from stage_output_hashes import hash_paths
 except ImportError:
     from . import rescue_model_store as store
+    from .stage_output_hashes import hash_paths
 
 
 def _copy(source, destination, expected):
@@ -43,7 +45,7 @@ def _same_json_value(a, b):
 
 
 def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,
-                      append_partial_evidence=False):
+                      append_partial_evidence=False, publication_workers=1):
     """Amend decisions without rewriting unselected DNA bodies or candidates.
 
     Existing coordinates, sequences, predictor values and partial evidence must
@@ -51,6 +53,8 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
     Unknown fields and original shard/partial ordering survive unchanged. The
     enclosing ordinary rescue stage supplies the new producer receipt.
     """
+    if type(publication_workers) is not int or publication_workers < 1:
+        raise ValueError('Model-store publication workers must be a positive integer')
     root, source_store = store._layout(source)
     destination = Path(destination)
     if (destination.resolve() == root.resolve() or root.resolve() in destination.resolve().parents
@@ -98,14 +102,25 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         output = copy.deepcopy(manifest)
         normalized = set()
         ordered_changes = sorted(changes)
+        unchanged, affected_shards = [], []
         for shard in manifest['shards']:
-            name = shard['path']
             first = bisect.bisect_left(ordered_changes, shard['first'])
             last = bisect.bisect_left(ordered_changes, shard['first'] + shard['count'], lo=first)
+            if first == last:
+                unchanged.append(source_store / shard['path'])
+            else:
+                affected_shards.append((shard, first, last))
+
+        def copy_shard(path):
+            name = str(path.relative_to(source_store))
+            expected = manifest['files'][name]
+            _copy(path, temporary / name, expected)
+            return expected
+
+        hash_paths(source_store, unchanged, workers=publication_workers, hash_function=copy_shard)
+        for shard, first, last in affected_shards:
+            name = shard['path']
             affected = set(ordered_changes[first:last])
-            if not affected:
-                _copy(source_store / name, temporary / name, manifest['files'][name])
-                continue
             seen = 0
             with store._writer(temporary / name, manifest['codec'], manifest['compression_level']) as out:
                 for envelope in store._lines(source_store / name, manifest['codec'], manifest['files'][name]):
@@ -215,17 +230,15 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             databases.remove(db)
         output['counts'].update(models=count + len(appended), **overlay_counts)
         output['scopes']['models'] = ['bodies.sqlite', *[s['path'] for s in output['shards']]]
-        output['files'] = {str(p.relative_to(temporary)): store._digest(p)
-                           for p in sorted(temporary.rglob('*')) if p.is_file()}
+        files = (p for p in temporary.rglob('*') if p.is_file())
+        hashes = hash_paths(temporary, files, workers=publication_workers, hash_function=store._digest)
+        output['files'] = dict(sorted(hashes.items()))
         (temporary / 'manifest.json').write_bytes(store._json(output) + b'\n')
         store._check_key(source, key, 'models')
         if (store._receipt(root)[1] != receipt_sha
                 or any(store._stat(store._member(root, name)) != before for name, before in stats.items())):
             raise ValueError('Patch source generation changed during publication')
-        for path in temporary.rglob('*'):
-            if path.is_file():
-                with path.open('rb') as handle:
-                    os.fsync(handle.fileno())
+        store._sync_files((p for p in temporary.rglob('*') if p.is_file()), publication_workers)
         os.rename(temporary, target)
         store._sync_directory(target.parent)
         return output

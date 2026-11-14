@@ -126,6 +126,16 @@ def _sync_file(path):
         os.fsync(handle.fileno())
 
 
+def _sync_files(paths, workers):
+    if workers == 1:
+        for path in paths:
+            _sync_file(path)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for batch in batched(paths, workers * 16):
+                list(executor.map(_sync_file, batch))
+
+
 def _safe_member(value):
     if (not isinstance(value, str) or not value or "\\" in value
             or any(ord(c) < 32 for c in value)):
@@ -322,14 +332,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
                     if copied[name] != expected:
                         raise OSError(f"Copied model-store member differs: {name}")
         (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
-        if publication_workers == 1:
-            for path in staging.iterdir():
-                _sync_file(path)
-        else:
-            # All staged files must be durable before the single rename.
-            with ThreadPoolExecutor(max_workers=publication_workers) as executor:
-                for paths in batched(staging.iterdir(), publication_workers * 16):
-                    list(executor.map(_sync_file, paths))
+        _sync_files(staging.iterdir(), publication_workers)
         os.rename(staging, target)
         _sync_directory(target.parent)
         return manifest

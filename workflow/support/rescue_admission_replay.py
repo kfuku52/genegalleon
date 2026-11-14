@@ -430,7 +430,8 @@ def rescue(root, plan, name, cpus):
         changed = {i: m for i, m in current.items() if hashlib.sha256(store._json(m)).digest() != fingerprints[i]}
         manifest = patch_model_store(old_worker, tmp, changed, appended=extra,
                                      revisions=revisions.values(), frozen_key=raw_key,
-                                     append_partial_evidence=native_audit is not None)
+                                     append_partial_evidence=native_audit is not None,
+                                     publication_workers=min(cpus, 4))
         # Copy every other receipt member without truncating a shared inode.
         mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
                    'split_model_candidates.json', 'model_repair_candidates.json',
