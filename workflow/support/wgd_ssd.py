@@ -56,8 +56,15 @@ try:
     from wgd_rooted_copy_ks import RootedCopyKs
     from wgd_taxon_holdout import HOLDOUT_FIELDS
     from wgd_terminal_ks import TerminalKs
+    from wgd_tree_scan import (
+        COPY_SPLIT_FIELDS,
+        PANEL_FIELDS,
+        PANEL_SUMMARY_FIELDS,
+        ROOT_FIELDS,
+        FamilyPanels,
+        scan_duplications,
+    )
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from wgd_tree_scan import COPY_SPLIT_FIELDS, PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
@@ -98,8 +105,15 @@ except ImportError:
     from .wgd_rooted_copy_ks import RootedCopyKs
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
     from .wgd_terminal_ks import TerminalKs
+    from .wgd_tree_scan import (
+        COPY_SPLIT_FIELDS,
+        PANEL_FIELDS,
+        PANEL_SUMMARY_FIELDS,
+        ROOT_FIELDS,
+        FamilyPanels,
+        scan_duplications,
+    )
     from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from .wgd_tree_scan import COPY_SPLIT_FIELDS, PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 
 
 CROSS_DS_METHODS = ("yn00", "gy94", "gy94-regularized")
