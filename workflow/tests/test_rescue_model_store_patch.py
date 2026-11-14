@@ -44,6 +44,26 @@ def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, mon
 
 
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
+def test_parallel_patch_matches_serial_across_changed_shards(tmp_path, codec):
+    records = [model(i) for i in range(12)]
+    source, before = published(tmp_path, records, codec=codec)
+    assert len(before['shards']) >= 8
+    changes = {i: {**row, 'new_admission_metadata': {'index': i}} for i, row in enumerate(records)}
+    serial, parallel = tmp_path / 'serial', tmp_path / 'parallel'
+    expected = patch_model_store(source, serial, changes)
+    assert patch_model_store(source, parallel, changes, publication_workers=4) == expected
+    receipt(parallel)
+    assert list(store.iter_models(parallel)) == list(changes.values())
+
+    broken = {**changes, 9: {**changes[9], 'sequence': 'ATGCCCTAA'}}
+    failed = tmp_path / 'failed'
+    with pytest.raises(ValueError, match='predictor/DNA'):
+        patch_model_store(source, failed, broken, publication_workers=4)
+    assert not (failed / 'model_store').exists()
+    assert not list(failed.glob('.model-patch-*'))
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'auto'])
 @pytest.mark.parametrize('workers', [1, 4])
 def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp_path, codec, workers):
     records = [model(0, 'accepted'), model(1), model(2, 'accepted'), model(3)]
