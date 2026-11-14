@@ -397,6 +397,15 @@ def make_plan(args):
     tools = owned_identity()
     inputs.update(tools["source_hashes"])
     inputs.update(tools["ds"]["source_hashes"])
+    if cross_ks_sources:
+        from inspect import signature
+
+        import cdskit.sequence_selection
+
+        if "identifiers" not in signature(cdskit.sequence_selection.fasta_records).parameters:
+            raise ValueError("Cross-block dS needs CDSKIT FASTA selection support; update the GeneGalleon runtime")
+        sequence_source = Path(cdskit.sequence_selection.__file__).resolve()
+        inputs[str(sequence_source)] = digest(sequence_source)
     reuse = getattr(args, "cross_ks_reuse_summary", ())
     if isinstance(reuse, str):
         reuse = [reuse]

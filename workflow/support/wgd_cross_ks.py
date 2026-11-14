@@ -176,10 +176,8 @@ def selected_cds(source, species, genes):
                 raise ValueError(f"Ambiguous requested CDS alias for {species}: {alias}")
             aliases[alias] = gene
     records, rejected, seen = {}, {}, set()
-    for identifier, _, dna in fasta_records(Path(source["cds"])):
-        gene = aliases.get(identifier)
-        if gene is None:
-            continue
+    for identifier, _, dna in fasta_records(Path(source["cds"]), identifiers=aliases):
+        gene = aliases[identifier]
         if gene in seen:
             raise ValueError(f"Multiple CDS records match {gene}")
         seen.add(gene)
