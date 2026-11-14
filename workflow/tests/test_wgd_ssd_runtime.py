@@ -393,6 +393,20 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert support["OG000"]["second_copy_support"] == "88.0"
     assert support["OG000"]["duplication_support"] == ""
     assert support["OG001"]["status"] == "archive_missing"
+    paths = read_table(root / "cross_synteny_node_paths.tsv")
+    assert len(paths) == 5 and all(path["used_in_candidate_mode"] == "1" for path in paths)
+    if ds_method == "yn00":
+        gene = tmp_path / "cross_node.nwk"
+        gene.write_text(f"((({a}_a0,{b}_a0),({a}_b0,{b}_b0)),{c}_a0);\n")
+        classification = tmp_path / "cross_node"
+        classify(SimpleNamespace(evidence=root, species_tree=Path(summary["plan"]["species_tree"]), gene_tree=gene,
+                                 output=classification, family_id="OG000", species_parser="extended-taxonomic",
+                                 species_regex="", species_map="", proximal_distance=10, native_tree_likelihood=0))
+        path, = read_table(classification / "cross_synteny_node_evidence.tsv")
+        assert path["mapping_status"] == "exact_node_match"
+        origin, = read_table(classification / "duplication_origins.tsv")
+        assert origin["classification"] == "unresolved" and origin["gene_clade_id"] == path["gene_clade_id"]
+        assert "cross_synteny_matched_paths=1" in (classification / "classified_gene_tree.nhx").read_text()
     assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10

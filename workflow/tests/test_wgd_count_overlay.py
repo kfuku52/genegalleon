@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from workflow.support.wgd_count_overlay import load_count_overlay
+from workflow.support.wgd_count_overlay import draw_count_overlay, load_count_overlay
 
 
 @pytest.fixture
@@ -44,6 +44,9 @@ def test_overlay_reuses_bootstrap_threshold_and_prior_alpha(count_bundle):
     _, _, bundle = count_bundle
     (row,), alpha = load_count_overlay(*bundle())
     assert row["p_value"] == .05 and alpha == .1
+    assert row["num_bootstrap_exceedances"] == 1
+    assert row["mc_p_lower"] == pytest.approx(1 - .975 ** (1 / 39))
+    assert .10 < row["mc_p_upper"] < .15
     assert row["overlay_status"] == "count_supported"
 
 
@@ -66,3 +69,31 @@ def test_overlay_displays_negative_aic_and_distinguishes_a_nuisance_bound(count_
     model["candidates"][0]["branch_burst"]["nuisance_bound_reached"] = True
     row["branch_burst_nuisance_bound_reached"] = "True"
     assert load_count_overlay(*bundle())[0][0]["overlay_status"] == "count_bound"
+
+
+def test_count_plot_labels_significant_branches_at_their_unchanged_p_values(count_bundle):
+    from matplotlib.figure import Figure
+
+    _, _, bundle = count_bundle
+    (row,), alpha = load_count_overlay(*bundle())
+    other = {**row, "species_event_id": "other", "branch_id": 99, "p_value": .5,
+             "overlay_status": "background_compatible", "mc_p_lower": .4, "mc_p_upper": .6}
+    axis = Figure().subplots()
+    draw_count_overlay(axis, {row["species_event_id"]: 2.5, "other": 2.84}, [row, other], alpha)
+    annotation, = axis.texts
+    assert annotation.get_text() == f"B{row['branch_id']}"
+    assert annotation.xy == (.05, 2.5)
+    assert axis.lines[-1].get_xdata()[0] == .5
+    assert axis.collections[-1].get_segments()[0].tolist() == [[.4, 2.84], [.6, 2.84]]
+
+
+@pytest.mark.parametrize(("draw", "p_value", "status", "boundary"), [
+    (0., .025, "count_supported_conditional", "mc_p_lower"),
+    (5., 1., "background_compatible", "mc_p_upper"),
+])
+def test_mc_interval_includes_zero_and_one_at_binomial_boundaries(count_bundle, draw, p_value, status, boundary):
+    model, row, bundle = count_bundle
+    model["bootstrap_max_statistics"] = [draw] * 39
+    row.update(p_value=p_value, count_support=status)
+    (result,), _ = load_count_overlay(*bundle())
+    assert result[boundary] == float(draw > 0)

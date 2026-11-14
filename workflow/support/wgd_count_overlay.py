@@ -10,7 +10,8 @@ except ImportError:
     from .wgd_evidence import number, read_table
 
 COUNT_OVERLAY_FIELDS = ("species_event_id", "branch_id", "num_families", "num_bootstrap", "likelihood_ratio_statistic", "p_value",
-                        "burst_minus_event_aic", "count_support", "overlay_status")
+                        "burst_minus_event_aic", "count_support", "overlay_status",
+                        "num_bootstrap_exceedances", "mc_p_lower", "mc_p_upper")
 STYLE = {
     "count_supported": ("D", "#286447", "Conditional count support"),
     "count_bound": ("x", "#9E5131", "Nuisance bound"),
@@ -24,6 +25,7 @@ def load_count_overlay(tree, table, model_file):
     from nwkit.wgd_count import _count_tree
     from nwkit.wgd_count_fit import bootstrap_exceedances
     from nwkit.wgd_tree import model_mapping
+    from scipy.special import betaincinv
 
     design, _, _ = _count_tree(tree)
     model = json.loads(model_file.read_text(encoding="utf-8"))
@@ -63,8 +65,16 @@ def load_count_overlay(tree, table, model_file):
         diff = max(0., 2 * (event["log_likelihood"] - fit["log_likelihood"]))
         aic_diff = burst["aic"] - event["aic"]
         probability = number(row.get("p_value"))
-        pv = ((1 + int(bootstrap_exceedances(p_values, [SimpleNamespace(improvement=diff)])[0])) / (1 + len(p_values))
-              if calibrated else None)
+        if calibrated:
+            draws = len(p_values)
+            exceedances = int(bootstrap_exceedances(p_values, [SimpleNamespace(improvement=diff)])[0])
+            pv = (1 + exceedances) / (1 + draws)
+            # Exact pointwise interval for the underlying exceedance rate,
+            # conditional on the fitted null, not uncertainty in its fit.
+            lo = float(betaincinv(exceedances, draws - exceedances + 1, .025)) if exceedances else 0.
+            hi = float(betaincinv(exceedances + 1, draws - exceedances, .975)) if exceedances < draws else 1.
+        else:
+            pv = exceedances = lo = hi = None
         bounds = (event["nuisance_bound_reached"], fit["nuisance_bound_reached"], burst["nuisance_bound_reached"])
         status = ("not_calibrated" if pv is None else "background_compatible" if pv > alpha else
                   "branch_burst_preferred" if aic_diff <= 0 else "count_supported_conditional")
@@ -80,7 +90,8 @@ def load_count_overlay(tree, table, model_file):
             raise ValueError("Count overlay TSV and JSON do not describe the same fit")
         display = ("count_bound" if any(bounds) else "count_supported" if status == "count_supported_conditional" else
                    "ssd_preferred" if status == "branch_burst_preferred" else status)
-        values = (event_id, design.branch_ids[node], n, len(p_values), lr, probability, aic, status, display)
+        values = (event_id, design.branch_ids[node], n, len(p_values), lr, probability, aic, status, display,
+                  exceedances, lo, hi)
         rows.append(dict(zip(COUNT_OVERLAY_FIELDS, values, strict=True)))
     if expected:
         raise ValueError("Count overlay TSV does not cover the complete model candidate search")
@@ -95,7 +106,8 @@ def draw_count_overlay(ax, positions, rows, alpha):
     n = rows[0]["num_families"]
     draws = rows[0]["num_bootstrap"]
     detail = f"n={n:,} families, {draws:,} draws" if calibrated else f"n={n:,} families"
-    ax.set_xlabel(f"{axis_name}\n({detail})", fontsize=9)
+    uncertainty = "\nBars: 95% Monte Carlo intervals" if calibrated else ""
+    ax.set_xlabel(f"{axis_name}\n({detail}){uncertainty}", fontsize=9)
     ax.set_axisbelow(True)
     ax.grid(axis="x", color="#E5E8EA", linewidth=.7)
     ax.tick_params(axis="both", labelsize=8, left=False, labelleft=False)
@@ -109,7 +121,13 @@ def draw_count_overlay(ax, positions, rows, alpha):
             continue
         x = row["p_value"] if calibrated else row["likelihood_ratio_statistic"]
         marker, color, _ = STYLE[row["overlay_status"]]
-        ax.plot(x, positions[row["species_event_id"]], marker=marker, color=color, ls="none", ms=4.2)
+        y = positions[row["species_event_id"]]
+        if calibrated:
+            ax.hlines(y, row["mc_p_lower"], row["mc_p_upper"], color=color, lw=.75, alpha=.6)
+        ax.plot(x, y, marker=marker, color=color, ls="none", ms=4.2)
+        if calibrated and x <= alpha:
+            ax.annotate(f"B{row['branch_id']}", (x, y), xytext=(4, 0), textcoords="offset points",
+                        va="center", color=color, fontsize=7)
     states = {row["overlay_status"] for row in rows}
     handles = [Line2D([], [], marker=marker, color=color, ls="none", label=label)
                for status, (marker, color, label) in STYLE.items() if status in states]

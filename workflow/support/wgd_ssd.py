@@ -23,6 +23,7 @@ try:
     from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from wgd_cross_node import CROSS_PATH_FIELDS, NODE_PATH_FIELDS, cross_node_rows, cross_paths, load_family_paths
     from wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from wgd_cross_phase import (
         ORIENTATION_PHASE_FIELDS,
@@ -81,6 +82,7 @@ except ImportError:
     from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from .wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from .wgd_cross_node import CROSS_PATH_FIELDS, NODE_PATH_FIELDS, cross_node_rows, cross_paths, load_family_paths
     from .wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from .wgd_cross_phase import (
         ORIENTATION_PHASE_FIELDS,
@@ -188,6 +190,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
+              Path(__file__).with_name("wgd_cross_node.py").resolve(),
               Path(__file__).with_name("wgd_cross_overlap.py").resolve(),
               Path(__file__).with_name("wgd_cross_phase.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
@@ -991,6 +994,12 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         return (leaf.name if row is None else
                 f"{leaf.name} (n={row['six_pair_families']:,}, b={row['original_blocks']:,})")
 
+    if count_overlay:
+        # Almost equal ordinates hide distinct count markers, especially
+        # several nested branches with P=1. Preserve the input tip order.
+        previous = -1.0
+        for node in sorted(nodes, key=y.get):
+            y[node] = previous = max(y[node], previous + .34)
     if by_node or terminal:
         # Insert room around each annotated branch without changing root distances.
         offset = 0
@@ -1006,7 +1015,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         height = max(4.8, (max(y.values()) + 1) * .26 + 2)
     else:
         widths = (8.25, 2.75)
-        height = max(4, len(leaves) * .29 + 2)
+        height = max(4, (max(y.values()) + 1) * .29 + 2)
     if count_overlay:
         widths += (2.8,)
     fig, axes = plt.subplots(ncols=len(widths), figsize=(sum(widths), height),
@@ -1351,6 +1360,9 @@ def run_analysis(plan, output, cpus):
             write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
             unique_hits = ({hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
                            if p.get("cross_require_unique_phase") else None)
+            write_table(output / "cross_synteny_node_paths.tsv",
+                        cross_paths(cross.traced_hits, cross.phases, both_hits,
+                                    require_unique=bool(p.get("cross_require_unique_phase"))), CROSS_PATH_FIELDS)
             write_table(output / "cross_synteny_copy_replication.tsv",
                         replicated_copy_rows(raw_candidates, pair_rows, cross.traced_hits, unique_hits), REPLICATION_FIELDS)
             two_regions = [] if p.get("cross_two_region_holdout") else None
@@ -1580,7 +1592,7 @@ def classify(args):
     args.output.mkdir(parents=True, exist_ok=False)
     for node in tree.traverse():
         for prop in ("duplication_origin", "conditional_wgd_probability", "mul_mapping_status", "mul_dl_duplication",
-                     "mul_gene_node", "mul_best_hypotheses", "mul_optimal_mappings"):
+                     "mul_gene_node", "mul_best_hypotheses", "mul_optimal_mappings", "cross_synteny_matched_paths"):
             node.props.pop(prop, None)
     event_source = "nhx" if any("D" in node.props or "H" in node.props for node in tree.traverse()) else "lca"
     command = [sys.executable, "-m", "nwkit", "reconcile", "--infile", args.gene_tree,
@@ -1611,6 +1623,11 @@ def classify(args):
     result, pair_rows = [], []
     reconciliation = read_table(args.output / "reconciliation.tsv")
     leaf_mapping = {row["gene_name"]: row for row in reconciliation if row["event_type"] == "leaf"}
+    if "cross_synteny_node_paths.tsv" in summary["output_hashes"]:
+        names = {name: row["species_name"] for name, row in leaf_mapping.items() if row["mapping_status"] == "mapped"}
+        paths = load_family_paths(evidence / "cross_synteny_node_paths.tsv", args.family_id)
+        write_table(args.output / "cross_synteny_node_evidence.tsv",
+                    cross_node_rows(tree, clades, names, events, reconciliation, paths), NODE_PATH_FIELDS)
     species_clades = CladeIndex(species)
     terminal_branches = {species_clades.clade_id_for_node(leaf) for leaf in species.leaves()}
     for row in reconciliation:

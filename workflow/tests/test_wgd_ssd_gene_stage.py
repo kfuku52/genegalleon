@@ -54,6 +54,7 @@ def test_gene_origin_stage_forwards_parameters_uses_full_tree_and_caches(tmp_pat
         family_inventory_path,
         query_id_extractor,
     )
+    from workflow.support.wgd_cross_node import CROSS_PATH_FIELDS
 
     workspace = tmp_path / "workspace"
     inputs = workspace / "input"
@@ -88,6 +89,9 @@ def test_gene_origin_stage_forwards_parameters_uses_full_tree_and_caches(tmp_pat
                                                  "ks_status", "species_event_id", "placement_status"], [])
     write_tsv(evidence / "wgd_events.tsv", ["species_event_id", "event_support"], [])
     evidence_outputs = [evidence / name for name in ("gene_positions.tsv", "anchor_evidence.tsv", "wgd_events.tsv")]
+    cross_paths = evidence / "cross_synteny_node_paths.tsv"
+    write_tsv(cross_paths, CROSS_PATH_FIELDS, [])
+    evidence_outputs.append(cross_paths)
     if (evidence / "count_model.json").is_file():
         evidence_outputs.append(evidence / "count_model.json")
     (evidence / "summary.json").write_text(json.dumps({
@@ -173,6 +177,7 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     assert sum(row["classification"] == "unresolved" for row in origins) == 2
     assert {row["event_source"] for row in origins} == {"lca"}
     assert "duplication_origin=SSD-supported" in (results / "classified_gene_tree.nhx").read_text()
+    assert read_tsv(results / "cross_synteny_node_evidence.tsv") == []
     reconciliation = read_tsv(results / "reconciliation.tsv")
     assert {row["gene_name"] for row in reconciliation if row["event_type"] == "leaf"} == set(genes)
     assert {row["mapping_status"] for row in reconciliation} == {"mapped"}
@@ -206,6 +211,7 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     assert sources["full_species_tree"]["path"] == "input/species.full.nwk"
     assert sources["species_map"]["sha256"] == digest(species_map)
     assert sources["genome_evidence"]["path"] == "output/genome_evolution/wgd_ssd"
+    assert sources["cross_node_evidence"]["sha256"] == digest(SUPPORT / "wgd_cross_node.py")
     assert not any(row["path"].endswith("species.pruned.nwk") for row in provenance["inputs"])
     previous = snapshot(result_zip, manifest)
     # A fresh worker must register cached outputs without publishing them again.

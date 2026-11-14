@@ -163,6 +163,16 @@ shows the score with those families removed from the numerator and denominator.
 The subtraction uses all matched paths even in the strict-phase sensitivity
 run. Exclusion is conditioned on the evidence and is not an independent
 test. The default scores and calls are unchanged.
+
+`cross_synteny_node_paths.tsv` retains exact four-gene paths, including which
+pass the selected phase/reference filter. Passing the filter does not imply
+that the branch meets the window or duplication-score thresholds. Per-family
+classification joins these records by the four literal gene IDs, two copy
+groups, and reconciled species branch. `cross_synteny_node_evidence.tsv`
+records exact matches and discrepancies. `cross_synteny_matched_paths` in
+NHX counts exact matches that pass the configured filter; it is not a
+WGD/SSD assignment or a probability. The existing node colors and origin
+rules do not change.
 Use one BED per species and original `###`-delimited JCVI anchor files
 (plain or gzip), not lifted anchors or preassigned branch scores. This
 stage reads existing comparisons; it does not launch genome alignments.
@@ -476,8 +486,11 @@ must match the model and table; the point shows the search-wide P-value or,
 for an uncalibrated scan, the likelihood ratio. Symbols distinguish count
 support, branch-burst preference, and numerical bounds. The sample size is
 the number of families in the count fit, not the number of gene trees or dS
-pairs. Absent candidate branches have no mark. This overlay neither changes
-the branch colors nor combines the statistical evidence across analyses.
+pairs. Calibrated points include pointwise 95% Clopper-Pearson intervals for
+the null exceedance rate, reflecting simulation error only, not uncertainty
+in the fitted null or simultaneous coverage across branches. Absent
+candidate branches have no mark. This overlay neither changes the branch
+colors nor combines the statistical evidence across analyses.
 
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in

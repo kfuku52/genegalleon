@@ -668,6 +668,40 @@ def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch
     assert audit["num_two_region_holdouts_losing_support"] is None
 
 
+def test_cross_synteny_node_paths_do_not_transfer_support_to_wrong_copy_or_branch():
+    from collections import defaultdict
+
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_node import cross_node_rows, cross_paths
+    from workflow.support.wgd_cross_phase import record_phase
+
+    tree = read_tree("(((A_a,B_a),(B_b,A_b)),C_c);", "auto", True)
+    index = CladeIndex(tree)
+    event = "AB"
+    node = tree.common_ancestor(["A_a", "A_b"])
+    clade = index.clade_id_for_node(node)
+    hit = (event, "A", "B", ("chr", 1), "family", ("A_a", "B_a", "A_b", "B_b"), (), ())
+    phases = defaultdict(dict)
+    record_phase(phases, hit[:3], hit[3], hit[4], hit[5], 1)
+    row, = cross_paths([hit, hit], phases, {hit}, require_unique=True)
+    assert row["used_in_candidate_mode"] == row["both_orientations"] == 1
+    row = {k: str(v) for k, v in row.items()}
+    mappings = {gene: gene[0] for gene in tree.leaf_names()}
+    reconcile = {"event_type": "duplication", "gene_clade_id": clade, "mapping_status": "mapped",
+                 "event_status": "resolved", "species_event_id": event}
+    states = {event: {"event_support": "duplication-and-synteny-candidate"}}
+    matched, discordant, unavailable = cross_node_rows(tree, index, mappings, states, [reconcile], [
+        row, {**row, "gene_b": "B_b", "gene_b2": "B_a"}, {**row, "gene_b": "B_missing"}])
+    assert matched["mapping_status"] == "exact_node_match" and matched["gene_clade_id"] == clade
+    assert discordant["mapping_status"] == "copy_split_mismatch"
+    assert unavailable["mapping_status"] == "genes_not_in_family_tree"
+    different, = cross_node_rows(tree, index, mappings, states, [{**reconcile, "species_event_id": "older"}], [row])
+    assert different["mapping_status"] == "species_branch_mismatch"
+    assert node.props["cross_synteny_matched_paths"] == 1 and "duplication_origin" not in node.props
+
+
 def test_species_tree_label_stays_inside_its_axis_at_both_ends():
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
