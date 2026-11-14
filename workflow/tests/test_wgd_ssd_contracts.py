@@ -1398,6 +1398,15 @@ def test_count_worker_budget_is_checked_before_outputs(tmp_path, parameter):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("draws,tree_mode", [(3, False), (-1, False), (9, True)])
+def test_background_adequacy_rejects_invalid_count_or_tree_mode_before_outputs(tmp_path, draws, tree_mode):
+    output = tmp_path / "out"
+    plan = {"parameters": {"count_background_adequacy_draws": draws}, "gene_trees": "root.zip" if tree_mode else ""}
+    with pytest.raises(ValueError, match="gene-count mode and at least four draws"):
+        wgd_ssd.run_analysis(plan, output, cpus=1)
+    assert not output.exists()
+
+
 def test_classification_rejects_edited_evidence_table_before_running_tools(tmp_path, monkeypatch):
     species = tmp_path / "species.nwk"
     species.write_text("(A:1,B:1);\n")

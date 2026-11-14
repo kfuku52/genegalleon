@@ -354,6 +354,11 @@ def make_plan(args):
         parameters["cross_require_both_orientations"] = 1
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
+    adequacy = getattr(args, "count_background_adequacy_draws", 0)
+    if adequacy:
+        if adequacy < 4 or tree_archive is not None:
+            raise ValueError("Count background adequacy requires gene-count mode and at least four draws")
+        parameters["count_background_adequacy_draws"] = adequacy
     for key in ("count_event_fractions", "count_family_gamma_shape"):
         value = getattr(args, key, "")
         if value:
@@ -1316,6 +1321,11 @@ def run_analysis(plan, output, cpus):
             if tree_mode:
                 raise ValueError("Count event fractions and family gamma shape require gene-count mode")
             count_input_args.extend((option, p[key]))
+    adequacy = p.get("count_background_adequacy_draws", 0)
+    if adequacy:
+        if adequacy < 4 or tree_mode:
+            raise ValueError("Count background adequacy requires gene-count mode and at least four draws")
+        count_input_args.extend(("--background-adequacy-draws", str(adequacy)))
     bootstrap_workers = p.get("count_bootstrap_workers", 1)
     scan_workers = p.get("count_scan_workers", 1)
     if not tree_mode and scan_workers > cpus:
@@ -1865,6 +1875,7 @@ def main():
     plan.add_argument("--ks-rooted-copies", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-ks-method", choices=CROSS_DS_METHODS, default="yn00")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
+                           ("count-background-adequacy-draws", 0),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-ks-outgroup-families", 0),
                            ("max-terminal-ks-families", 0),

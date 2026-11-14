@@ -143,18 +143,22 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     result = run_core(workspace, GG_TASK_CPUS="2", wgd_count_scan_workers="2",
                       wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2",
                       wgd_count_event_fractions="0.5", wgd_count_family_gamma_shape="none",
+                      wgd_count_background_adequacy_draws="9",
                       wgd_count_bootstrap_checkpoint="bootstrap.json")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
     assert summary["plan"]["parameters"]["count_scan_workers"] == 2
     assert summary["plan"]["parameters"]["count_bootstrap_workers"] == 2
+    assert summary["plan"]["parameters"]["count_background_adequacy_draws"] == 9
     model = json.loads((root / "count_model.json").read_text())
     checkpoint = workspace / "bootstrap.json"
     assert json.loads(checkpoint.read_text())["statistics"] == model["bootstrap_max_statistics"]
     assert summary["plan"]["count_bootstrap_checkpoint"] == str(checkpoint)
     assert "bootstrap.json" not in summary["output_hashes"]
     assert len(model["bootstrap_max_statistics"]) == 2
+    assert model["background_adequacy"]["num_draws"] == 9
+    assert "count_model.json" in summary["output_hashes"]
     assert len(model["candidates"]) == 4
     assert model["event_fractions"] == [0.5] and model["family_rate_scales"] == [1.0]
     assert all(row["event_fraction"] == "0.5" for row in read_table(root / "count_candidates.tsv"))

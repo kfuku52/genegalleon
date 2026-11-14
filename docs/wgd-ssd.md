@@ -529,6 +529,12 @@ bootstrap P-values, not posterior probabilities or guaranteed error control
 against arbitrary heterogeneous SSD histories. Zero bootstrap replicates are
 an exploratory scan and cannot support a WGD origin. Inspect Monte Carlo
 error, nuisance parameter boundaries, and the competing branch-burst fit.
+With a runtime that supports `wgd-count --background-adequacy-draws`, set
+`wgd_count_background_adequacy_draws` in count mode (default 0, or at least 4).
+The diagnostic compares the fitted background to measured tip copy counts,
+zero/multiple-copy frequencies, and within-family clade/complement contrasts.
+It preserves original missingness and selection, and writes descriptive ranges
+and joint discrepancies into `count_model.json`, without changing WGD calls.
 Use `wgd_count_bootstrap_workers` with a NWKIT runtime that supports
 `wgd-count --bootstrap-workers` to run more than one null refit at a time.
 Use `wgd_count_scan_workers` with `wgd-count --scan-workers` to parallelize
