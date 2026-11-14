@@ -283,9 +283,10 @@ def eligible(context):
 
 
 def reset_admission(model):
-    result = copy.deepcopy({key: value for key, value in model.items() if key not in MUTABLE})
-    result['problems'] = sorted(set(result.get('problems', ())) - POST)
-    return result
+    """Clear the derived decisions from one privately decoded replay record."""
+    for key in MUTABLE & model.keys():
+        del model[key]
+    model['problems'] = sorted(set(model.get('problems', ())) - POST)
 
 
 def read_retained(root, plan, name, previous_worker, receipt_sha, batch, history):
@@ -397,15 +398,17 @@ def rescue(root, plan, name, cpus, *, dependencies):
         manifest, manifest_sha = store._manifest(old_worker / 'model_store')
         r.require_same_key(raw_key['manifest_sha256'], manifest_sha)
         counts = {'raw_records': manifest['counts']['models']}
-        selected = dict(store.iter_model_items(old_worker, context_filter=eligible, frozen_key=raw_key,
-                                               verification=batch, scan_workers=min(cpus, 8)))
+        current = dict(store.iter_model_items(old_worker, context_filter=eligible, frozen_key=raw_key,
+                                              verification=batch, scan_workers=min(cpus, 8)))
         for ordinal, primary in store._iter(old_worker, 'accepted', verification=batch, with_ordinals=True):
-            if ordinal not in selected or store._json(selected[ordinal]) != store._json(primary):
+            if ordinal not in current or store._json(current[ordinal]) != store._json(primary):
                 raise ValueError('Prior primary is not an eligible, identical raw candidate')
-        fingerprints = {i: hashlib.sha256(store._json(m)).digest() for i, m in selected.items()}
-        partials = {i: copy.deepcopy(m.get('partial_evidence')) for i, m in selected.items()}
-        current = {i: reset_admission(m) for i, m in selected.items()}
-        selected.clear()
+        fingerprints = {i: hashlib.sha256(store._json(m)).digest() for i, m in current.items()}
+        partials = {i: copy.deepcopy(m.get('partial_evidence')) for i, m in current.items()}
+        # Each decoded row is independent. Its fingerprint and partial
+        # evidence above preserve the pre-admission values for comparison.
+        for model in current.values():
+            reset_admission(model)
         if any(m.get('evidence', {}).get(engine) and not plan['request'].get(engine)
                for m in current.values() for engine in ('annevo', 'oriongeno')):
             raise ValueError('Native evidence is not enabled by its frozen producer plan')
@@ -418,7 +421,7 @@ def rescue(root, plan, name, cpus, *, dependencies):
                     for donor in [name, *plan['donors'][name]]}
         native_audit = None
         with indexed_genome(source['genome']) as genome:
-            extra, historical = r.revalidate_retained_coding_paths(retained, list(current.values()), genome,
+            extra, historical = r.revalidate_retained_coding_paths(retained, current.values(), genome,
                                                                   source['genetic_code'], params, proteins, name)
             models = [*current.values(), *extra]
             for model in models:
@@ -449,7 +452,7 @@ def rescue(root, plan, name, cpus, *, dependencies):
                 targeted = r.replay_model_repair_search(search_archive, targets, ownership, proteins,
                                                         genome, source['genetic_code'], params)
             r.atomic_json(tmp / 'model_repair_candidates.json',
-                          r.model_repair_candidates([*models, *targeted], ownership, name, source['gff']))
+                          r.model_repair_candidates(chain(models, targeted), ownership, name, source['gff']))
             r.verify_model_repair_targets(plan)
         if native_audit is not None:
             import rescue_native_genomewide

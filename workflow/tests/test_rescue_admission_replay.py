@@ -336,7 +336,8 @@ def test_native_unconfirmed_and_structural_failures_are_not_cleared():
                    'frameshift', 'internal_stop', 'invalid_phase', 'assembly_gap_within_model_span'):
         row = {'problems': [reason, 'competing_new_models'], 'status': 'unresolved'}
         assert not replay.eligible(row)
-        assert replay.reset_admission(row)['problems'] == [reason]
+        replay.reset_admission(row)
+        assert row == {'problems': [reason]}
 
 
 @pytest.mark.parametrize('completed', [None, 'donor-only'], indirect=True)
