@@ -69,6 +69,9 @@ presence_absence_target_species="${presence_absence_target_species:-}"
 presence_absence_selection_species="${presence_absence_selection_species:-}"
 presence_absence_query_label="${presence_absence_query_label:-id}"
 presence_absence_label_map="${presence_absence_label_map:-}"
+presence_absence_taxonomy="${presence_absence_taxonomy:-off}"
+presence_absence_taxonomy_groups="${presence_absence_taxonomy_groups:-}"
+presence_absence_taxonomy_ranks="${presence_absence_taxonomy_ranks:-auto}"
 presence_absence_focus_species="${presence_absence_focus_species:-}"
 presence_absence_legend_columns="${presence_absence_legend_columns:-auto}"
 # Preserve caller-relative paths before core helpers change directories.
@@ -76,6 +79,10 @@ for presence_input in presence_absence_family_manifest presence_absence_query_me
   case "${!presence_input}" in ""|/*) ;; *) printf -v "${presence_input}" '%s/%s' "${PWD}" "${!presence_input}" ;; esac
 done
 unset presence_input
+case "${presence_absence_taxonomy}" in
+  off|auto|/*) ;;
+  *) presence_absence_taxonomy="${PWD}/${presence_absence_taxonomy}" ;;
+esac
 if [[ -n "${presence_absence_family_manifest}" && "${presence_absence_ortholog_basis}" != "query_gene" ]]; then
   echo 'presence_absence_family_manifest requires presence_absence_ortholog_basis=query_gene' >&2
   exit 1
@@ -605,6 +612,21 @@ run_presence_absence_summary_for_source() {
     --focus_species="${presence_absence_focus_species}"
     --legend_columns="${presence_absence_legend_columns}"
   )
+  if [[ "${presence_absence_taxonomy}" != off ]]; then
+    local taxonomy_lineage="${presence_absence_taxonomy}"
+    if [[ "${taxonomy_lineage}" == auto ]]; then
+      taxonomy_lineage="${gg_workspace_output_dir}/species_taxonomy/species_lineage.tsv"
+    fi
+    if [[ ! -f "${taxonomy_lineage}" || ! -r "${taxonomy_lineage}" ]]; then
+      echo "Cannot read presence/absence taxonomy lineage: ${taxonomy_lineage}. Enable run_species_taxonomy=1 or set presence_absence_taxonomy to a readable lineage TSV." >&2
+      return 1
+    fi
+    plot_common_args+=(
+      --taxonomy_lineage="${taxonomy_lineage}"
+      --taxonomy_groups="${presence_absence_taxonomy_groups}"
+      --taxonomy_ranks="${presence_absence_taxonomy_ranks}"
+    )
+  fi
   if [[ -n "${file_species_tree_ci}" ]]; then plot_common_args+=(--species_tree_ci="${file_species_tree_ci}"); fi
   if [[ -n "${file_species_tree_support}" ]]; then plot_common_args+=(--support_tree="${file_species_tree_support}"); fi
   if [[ -n "${file_busco_table}" ]]; then plot_common_args+=(--busco_table="${file_busco_table}"); fi

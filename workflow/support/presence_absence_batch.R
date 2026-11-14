@@ -61,7 +61,7 @@ gg_render_presence_batch <- function(arguments, renderer) {
     unlink(c(staged, setdiff(backups, retained)))
   }, add = TRUE)
   for (job in jobs) {
-    inputs <- grepl("^--(species_tree|species_tree_ci|support_tree|species_mapping_tree|busco_table|long_table|label_map|ortholog_[a-z_]+_table)=", job)
+    inputs <- grepl("^--(species_tree|species_tree_ci|support_tree|species_mapping_tree|busco_table|long_table|label_map|taxonomy_lineage|ortholog_[a-z_]+_table)=", job)
     for (argument in job[inputs]) {
       path <- sub("^--[^=]+=", "", argument)
       if (file.exists(path) && !dir.exists(path)) observe(path)

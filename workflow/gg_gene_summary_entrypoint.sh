@@ -160,6 +160,9 @@ presence_absence_target_species="${presence_absence_target_species:-}" # Species
 presence_absence_selection_species="${presence_absence_selection_species:-}" # Comma-separated species whose exact ortholog union is preserved; empty means all family species.
 presence_absence_query_label="${presence_absence_query_label:-id}" # id|label for query-anchor column labels; identifiers remain unchanged.
 presence_absence_label_map="${presence_absence_label_map:-}" # Display-only TSV with kind (family|column), id, label.
+presence_absence_taxonomy="${presence_absence_taxonomy:-off}" # off, auto, or a species_lineage.tsv path.
+presence_absence_taxonomy_groups="${presence_absence_taxonomy_groups:-}" # Comma-separated NCBI ancestor TaxIDs for the group column.
+presence_absence_taxonomy_ranks="${presence_absence_taxonomy_ranks:-auto}" # auto or comma-separated NCBI ranks.
 presence_absence_focus_species="${presence_absence_focus_species:-}" # Comma-separated plotted species to outline.
 presence_absence_legend_columns="${presence_absence_legend_columns:-auto}" # auto|1|2|3 for the ortholog glyph legend.
 
