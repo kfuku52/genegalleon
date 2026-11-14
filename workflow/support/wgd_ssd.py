@@ -57,7 +57,7 @@ try:
     from wgd_taxon_holdout import HOLDOUT_FIELDS
     from wgd_terminal_ks import TerminalKs
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from wgd_tree_scan import PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
+    from wgd_tree_scan import COPY_SPLIT_FIELDS, PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
@@ -99,7 +99,7 @@ except ImportError:
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
     from .wgd_terminal_ks import TerminalKs
     from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from .wgd_tree_scan import PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
+    from .wgd_tree_scan import COPY_SPLIT_FIELDS, PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 
 
 CROSS_DS_METHODS = ("yn00", "gy94", "gy94-regularized")
@@ -269,7 +269,7 @@ def make_plan(args):
         raise ValueError("Duplication taxon holdout must be 0 or 1")
     if parameters["duplication_taxon_holdout"] and tree_archive is None:
         raise ValueError("Duplication taxon holdout requires --gene-trees")
-    for audit in ("duplication_coverage_audit", "duplication_root_audit"):
+    for audit in ("duplication_coverage_audit", "duplication_root_audit", "duplication_copy_split_audit"):
         if getattr(args, audit, 0):
             if tree_archive is None:
                 raise ValueError(f"{audit.replace('_', ' ').capitalize()} requires --gene-trees")
@@ -1196,6 +1196,7 @@ def run_analysis(plan, output, cpus):
         holdout_rows = [] if p.get("duplication_taxon_holdout") else None
         duplication_coverage = [] if p.get("duplication_coverage_audit") else None
         root_audit = [] if p.get("duplication_root_audit") else None
+        copy_splits = [] if p.get("duplication_copy_split_audit") else None
         panel_count = p.get("duplication_family_panels", 0)
         panels = FamilyPanels(panel_count, p["seed"]) if panel_count else None
         panel_output = []
@@ -1208,13 +1209,15 @@ def run_analysis(plan, output, cpus):
                 observe_duplications=observe_support if support or rooted_copy is not None else None, holdout_output=holdout_rows,
                 coverage_output=duplication_coverage, root_output=root_audit,
                 observe_topology=terminal.observe if terminal is not None else None,
-                panels=panels, panel_output=panel_output)
+                panels=panels, panel_output=panel_output, copy_split_output=copy_splits)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if duplication_coverage is not None:
             write_table(output / "duplication_coverage.tsv", duplication_coverage, DUPLICATION_COVERAGE_FIELDS)
         if root_audit is not None:
             write_table(output / "duplication_root_orientations.tsv", root_audit, ROOT_FIELDS)
+        if copy_splits is not None:
+            write_table(output / "duplication_copy_splits.tsv", copy_splits, COPY_SPLIT_FIELDS)
         if panels is not None:
             detail, summary = panel_output
             write_table(output / "duplication_family_panels.tsv", detail, PANEL_FIELDS)
@@ -1617,6 +1620,7 @@ def main():
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-coverage-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-root-audit", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--duplication-copy-split-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-family-panels", type=int, default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)

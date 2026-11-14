@@ -203,7 +203,8 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
                       wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)),
-                      wgd_duplication_root_audit=str(int(holdout)), wgd_duplication_family_panels="3" if holdout else "0")
+                      wgd_duplication_root_audit=str(int(holdout)), wgd_duplication_family_panels="3" if holdout else "0",
+                      wgd_duplication_copy_split_audit=str(int(holdout)))
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -223,7 +224,12 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
     assert orientation.is_file() == holdout
     panels = root / "duplication_family_panels.tsv"
     assert panels.is_file() == holdout
+    copy_splits = root / "duplication_copy_splits.tsv"
+    assert copy_splits.is_file() == holdout
     if holdout:
+        copied, = read_table(copy_splits)
+        assert copied["same_tip_and_both_splits"] == "1" and copied["same_tip_and_both_splits_score"] == "0.5"
+        assert copy_splits.name in summary["output_hashes"]
         assert summary["plan"]["parameters"]["duplication_family_panels"] == 3
         assert sum(int(row["families_in_panel"]) for row in read_table(panels)) == 2
         audited, = read_table(coverage)

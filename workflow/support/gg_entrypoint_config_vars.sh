@@ -428,6 +428,7 @@ wgd_gene_trees_file
 wgd_duplication_taxon_holdout
 wgd_duplication_coverage_audit
 wgd_duplication_root_audit
+wgd_duplication_copy_split_audit
 wgd_duplication_family_panels
 wgd_cross_synteny_file
 wgd_cross_orientation_audit

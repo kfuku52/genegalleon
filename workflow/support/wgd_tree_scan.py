@@ -20,6 +20,16 @@ PANEL_FIELDS = ("species_event_id", "branch_id", "panel", "families_in_panel", "
                 "supporting_families", "score", "meets_cutoff")
 PANEL_SUMMARY_FIELDS = ("species_event_id", "branch_id", "num_panels", "num_testable_panels", "num_panels_meeting_cutoff",
                         "minimum_panel_score", "maximum_panel_score", "baseline_score")
+COPY_SPLIT_FIELDS = ("species_event_id", "branch_id", "eligible_families", "supporting_families",
+                     "same_tip_in_every_daughter", "same_tip_set", "both_copy_splits", "same_tip_and_both_splits",
+                     "same_tip_and_both_splits_score")
+
+
+def follows_daughter_split(copy, observed, daughters):
+    if len(copy.children) != len(daughters):
+        return False
+    groups = tuple(observed[child] for child in copy.children)
+    return all(any(group & daughter == group for group in groups) for daughter in daughters)
 
 
 class FamilyPanels:
@@ -97,7 +107,7 @@ def alternate_root_votes(tree, observed, eligible_daughters):
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
                       observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None,
-                      root_output=None, observe_topology=None, panels=None, panel_output=None):
+                      root_output=None, observe_topology=None, panels=None, panel_output=None, copy_split_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -120,6 +130,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
     eligible, hits = Counter(), Counter()
     complete, partial_hits = Counter(), Counter()
     alternate, alternate_elsewhere = Counter(), Counter()
+    copy_splits = [Counter() for _ in range(4)] if copy_split_output is not None else None
     families = set()
     with ZipFile(archive_path) as archive:
         for member in archive.infolist():
@@ -164,7 +175,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                 left, right = (observed[c] for c in gene.children)
                 if left & right and all(left & daughter and right & daughter for daughter in branches[union][2]):
                     supported.add(union)
-                    if observe is not None or observe_duplications is not None:
+                    if observe is not None or observe_duplications is not None or copy_splits is not None:
                         duplication_nodes.append((union, gene))
             full = observed[tree]
             if observe_family is not None:
@@ -207,17 +218,29 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                         seen.add(union)
             if holdout is not None:
                 holdout.observe(tree, observed, supported)
-            if observe is not None or observe_duplications is not None:
+            if observe is not None or observe_duplications is not None or copy_splits is not None:
                 family_nodes = []
+                split_votes = [set() for _ in range(4)] if copy_splits is not None and duplication_nodes else None
                 for mask, gene in duplication_nodes:
-                    _, sisters, _, branch = branches[mask]
+                    _, sisters, daughters, branch = branches[mask]
                     if full & sisters:
                         if observe is not None:
                             observe(branch, family, gene)
                         if observe_duplications is not None:
                             family_nodes.append((branch, gene))
+                        if split_votes is not None:
+                            first, second = gene.children
+                            left, right = observed[first], observed[second]
+                            same = all(left & right & daughter for daughter in daughters)
+                            split = all(follows_daughter_split(copy, observed, daughters) for copy in (first, second))
+                            for vote, passes in zip(split_votes, (same, left == right, split, same and split), strict=True):
+                                if passes:
+                                    vote.add(mask)
                 if family_nodes:
                     observe_duplications(family, tree, family_nodes, expected)
+                if split_votes is not None:
+                    for counts, votes in zip(copy_splits, split_votes, strict=True):
+                        counts.update(votes)
     if not families:
         raise ValueError("Gene-tree archive contains no *_root.nwk families")
     rows = []
@@ -242,6 +265,10 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             values = (branch, branch_ids[node], n, support, alternate[mask], alternate_elsewhere[mask],
                       (support + alternate[mask]) / n if n else None)
             root_output.append(dict(zip(ROOT_FIELDS, values, strict=True)))
+        if copy_splits is not None:
+            values = (branch, branch_ids[node], n, support, *(counts[mask] for counts in copy_splits),
+                      copy_splits[-1][mask] / n if n else None)
+            copy_split_output.append(dict(zip(COPY_SPLIT_FIELDS, values, strict=True)))
     rows.sort(key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"]))
     if holdout is not None:
         holdout_output.extend(holdout.rows(rows))

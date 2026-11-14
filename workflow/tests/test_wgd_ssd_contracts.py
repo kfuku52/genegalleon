@@ -251,6 +251,35 @@ def test_duplication_family_panels_are_disjoint_stable_and_have_missing_status(t
     assert summary["baseline_score"] == .5
 
 
+def test_duplication_copy_split_audit_requires_the_same_duplication_node(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("(((A:1,B:1):1,(C:1,D:1):1):1,E:3);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        for key, newick in {
+            "joint": "((((A_a,B_a),(C_a,D_a)),((A_b,B_b),(C_b,D_b))),E_a);",
+            "complementary": "((((A_a,B_a),C_a),((A_b,B_b),D_b)),E_a);",
+            "different_nodes": ("(((((A_c,C_c),(B_c,D_c)),((A_d,C_d),(B_d,D_d))),"
+                                "(((A_e,B_e),C_e),((A_f,B_f),D_f))),E_c);"),
+            "no_sister": "(((A_g,B_g),(C_g,D_g)),((A_h,B_h),(C_h,D_h)));",
+        }.items():
+            stream.writestr(f"{key}_root.nwk", newick)
+    audit = []
+    observed = scan_duplications(tree, archive, .01, copy_split_output=audit)
+    assert observed == scan_duplications(tree, archive, .01)
+    clade = next(row for row in observed[0] if row["descendant_taxa"] == "A,B,C,D")
+    row = next(row for row in audit if row["species_event_id"] == clade["species_event_id"])
+    assert (row["eligible_families"], row["supporting_families"]) == (3, 3)
+    assert [row[k] for k in ("same_tip_in_every_daughter", "same_tip_set", "both_copy_splits",
+                             "same_tip_and_both_splits")] == [2, 2, 3, 1]
+    assert row["same_tip_and_both_splits_score"] == 1 / 3
+
+
 def test_duplication_coverage_audit_only_projects_taxa_missing_from_the_family(tmp_path):
     from zipfile import ZipFile
 

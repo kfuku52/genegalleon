@@ -126,6 +126,16 @@ a different branch under the archived root. The any-orientation score is a
 descriptive upper bound on votes on one branch, not a preferred rooting,
 a root confidence interval, or a replacement for the archived-root score.
 
+Set `wgd_duplication_copy_split_audit=1` to write `duplication_copy_splits.tsv`.
+It counts voting families with a node that retains at least one identical
+species in both copies of every daughter lineage, identical species sets
+in both copies, or the original species daughter split in both immediate
+copy clades. The last criterion is exact, not a test of unresolved gene
+nodes or deeper splits. The joint column requires both reciprocal retention
+and both matching splits at the same duplication node. Families count once
+per branch and criterion. True WGD with reciprocal gene loss, incomplete
+sampling, or gene-tree discordance can fail these checks; no calls change.
+
 `wgd_duplication_family_panels` optionally partitions the gene-tree archive
 into 2 to 64 disjoint panels by a seeded hash of the family ID. This makes
 the assignment independent of archive order and keeps all eligible and

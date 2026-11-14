@@ -146,6 +146,7 @@ wgd_gene_trees_file="" # Optional rooted *_root.nwk ZIP; selects duplication-sco
 wgd_duplication_taxon_holdout=0 # Audit branch scores after excluding each species; requires rooted gene trees.
 wgd_duplication_coverage_audit=0 # Audit duplication scores after projecting away taxa missing from each family.
 wgd_duplication_root_audit=0 # Audit votes possible with a different root on the same topology.
+wgd_duplication_copy_split_audit=0 # Audit reciprocal species retention and both copy-tree daughter splits.
 wgd_duplication_family_panels=0 # Number of disjoint panels for a family-score sensitivity audit; 0 disables.
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
 wgd_cross_orientation_audit=0 # Audit coverage/support after reversing the cross-anchor window reference.

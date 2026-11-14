@@ -40,6 +40,7 @@ wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
 wgd_duplication_coverage_audit="${wgd_duplication_coverage_audit:-0}"
 wgd_duplication_root_audit="${wgd_duplication_root_audit:-0}"
+wgd_duplication_copy_split_audit="${wgd_duplication_copy_split_audit:-0}"
 wgd_duplication_family_panels="${wgd_duplication_family_panels:-0}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
 wgd_cross_orientation_audit="${wgd_cross_orientation_audit:-0}"
@@ -419,6 +420,7 @@ run_wgd_ssd_stage() (
     --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
     --duplication-coverage-audit "${wgd_duplication_coverage_audit}" \
     --duplication-root-audit "${wgd_duplication_root_audit}" \
+    --duplication-copy-split-audit "${wgd_duplication_copy_split_audit}" \
     --duplication-family-panels "${wgd_duplication_family_panels}" \
     --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
     --cross-orientation-audit "${wgd_cross_orientation_audit}" \
