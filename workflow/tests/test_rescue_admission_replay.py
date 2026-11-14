@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -210,17 +211,27 @@ def test_parallel_prepare_can_resume_after_one_donor_copy_fails(completed, tmp_p
     output = tmp_path / 'new-generation'
     plan = replay.build_plan(previous, producer, output)
     copy_verified = rescue.copy_verified_comparison
+    target = output / 'prepared/Target_species/receipt.json'
+    target_published = Event()
+    stage = rescue.stage
 
     def fail_donor(source, destination, key, workers):
         if source.name == 'Relative_species':
+            assert target_published.wait(timeout=30)
             raise OSError('failed donor copy')
         return copy_verified(source, destination, key, workers)
 
+    def record_publication(root, relative, *args, **kwargs):
+        directory = stage(root, relative, *args, **kwargs)
+        if directory == target.parent:
+            target_published.set()
+        return directory
+
     with monkeypatch.context() as patch:
         patch.setattr(rescue, 'copy_verified_comparison', fail_donor)
+        patch.setattr(rescue, 'stage', record_publication)
         with pytest.raises(OSError, match='failed donor copy'):
             replay.prepare(output, plan, 2)
-    target = output / 'prepared/Target_species/receipt.json'
     inode = target.stat().st_ino
     assert not (output / 'prepared/Relative_species').exists()
     assert not (output / 'synteny').exists()
