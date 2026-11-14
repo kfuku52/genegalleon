@@ -39,6 +39,7 @@ wgd_alpha="${wgd_alpha:-0.05}"
 wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
 wgd_duplication_coverage_audit="${wgd_duplication_coverage_audit:-0}"
+wgd_duplication_root_audit="${wgd_duplication_root_audit:-0}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
 wgd_cross_orientation_audit="${wgd_cross_orientation_audit:-0}"
 wgd_cross_require_unique_phase="${wgd_cross_require_unique_phase:-0}"
@@ -406,6 +407,7 @@ run_wgd_ssd_stage() (
     --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
     --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
     --duplication-coverage-audit "${wgd_duplication_coverage_audit}" \
+    --duplication-root-audit "${wgd_duplication_root_audit}" \
     --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
     --cross-orientation-audit "${wgd_cross_orientation_audit}" \
     --cross-require-unique-phase "${wgd_cross_require_unique_phase}" \

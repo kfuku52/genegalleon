@@ -12,10 +12,54 @@ except ImportError:
 
 COVERAGE_FIELDS = ("species_event_id", "branch_id", "eligible_complete", "eligible_partial", "support_complete",
                    "support_partial_projected", "complete_case_score", "partial_case_score", "projected_score")
+ROOT_FIELDS = ("species_event_id", "branch_id", "eligible_families", "rooted_supporting_families",
+               "extra_families_under_alternate_root", "extra_families_with_other_rooted_branch",
+               "any_orientation_score")
+
+
+def alternate_root_votes(tree, observed, eligible_daughters):
+    """Check the two possible child groups for each direction at a three-way junction."""
+    above = {tree: 0}
+    votes = set()
+
+    def consider(left, right):
+        combined = left | right
+        daughters = eligible_daughters.get(combined)
+        if daughters and left & right and all(left & d and right & d for d in daughters):
+            votes.add(combined)
+
+    for node in tree.traverse("preorder"):
+        children = node.children
+        if not children:
+            continue
+        outside = above.pop(node)
+        groups = tuple(observed[c] for c in children)
+        if len(groups) == 2:
+            a, b = groups
+            if outside:
+                consider(a, outside)
+                consider(b, outside)
+            above[children[0]], above[children[1]] = outside | b, outside | a
+        else:
+            if not outside and len(groups) == 3:
+                a, b, c = groups
+                consider(a, b)
+                consider(a, c)
+                consider(b, c)
+            prefix = outside
+            for child, group in zip(children, groups, strict=True):
+                above[child] = prefix
+                prefix |= group
+            suffix = 0
+            for child, group in zip(reversed(children), reversed(groups), strict=True):
+                above[child] |= suffix
+                suffix |= group
+    return votes
 
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
-                      observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None):
+                      observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None,
+                      root_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -37,6 +81,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
     prefix = re.compile(r"^(" + "|".join(map(re.escape, sorted(taxa, key=lambda name: (-len(name), name)))) + r")_(?=.)")
     eligible, hits = Counter(), Counter()
     complete, partial_hits = Counter(), Counter()
+    alternate, alternate_elsewhere = Counter(), Counter()
     families = set()
     with ZipFile(archive_path) as archive:
         for member in archive.infolist():
@@ -85,7 +130,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             full = observed[tree]
             if observe_family is not None:
                 observe_family(family, leaves)
-            projected = {}
+            projected, root_eligible = {}, {}
             for mask, (_, sisters, daughters, _) in branches.items():
                 if full & sisters and all(full & daughter for daughter in daughters):
                     eligible[mask] += 1
@@ -96,6 +141,13 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                             complete[mask] += 1
                         else:
                             projected[full & mask] = mask, daughters
+                    if root_output is not None:
+                        root_eligible[mask] = daughters
+            if root_eligible:
+                new_votes = alternate_root_votes(tree, observed, root_eligible) - supported
+                alternate.update(new_votes)
+                if supported & root_eligible.keys():
+                    alternate_elsewhere.update(new_votes)
             if projected:
                 # Each eligible split still has observed daughters and a sister,
                 # so projected clades cannot coincide with another eligible split.
@@ -141,6 +193,10 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                       support / full if full else None, projected / partial if partial else None,
                       (support + projected) / n if n else None)
             coverage_output.append(dict(zip(COVERAGE_FIELDS, values, strict=True)))
+        if root_output is not None:
+            values = (branch, branch_ids[node], n, support, alternate[mask], alternate_elsewhere[mask],
+                      (support + alternate[mask]) / n if n else None)
+            root_output.append(dict(zip(ROOT_FIELDS, values, strict=True)))
     rows.sort(key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"]))
     if holdout is not None:
         holdout_output.extend(holdout.rows(rows))

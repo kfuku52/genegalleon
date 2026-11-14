@@ -202,7 +202,8 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
                         "(((Alpha_one_a,Beta_two_a),(Alpha_one_b,Beta_two_b)),Gamma_three_a);")
         stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
-                      wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)))
+                      wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)),
+                      wgd_duplication_root_audit=str(int(holdout)))
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -218,12 +219,19 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
     assert (holdout_path.name in summary["output_hashes"]) == holdout
     coverage = root / "duplication_coverage.tsv"
     assert coverage.is_file() == holdout
+    orientation = root / "duplication_root_orientations.tsv"
+    assert orientation.is_file() == holdout
     if holdout:
         audited, = read_table(coverage)
         assert audited["eligible_complete"] == "2" and audited["eligible_partial"] == "0"
         assert audited["projected_score"] == audited["complete_case_score"] == "0.5"
         assert audited["partial_case_score"] == ""
         assert coverage.name in summary["output_hashes"]
+        oriented, = read_table(orientation)
+        assert oriented["rooted_supporting_families"] == "1"
+        assert oriented["extra_families_under_alternate_root"] == "0"
+        assert oriented["any_orientation_score"] == "0.5"
+        assert orientation.name in summary["output_hashes"]
         estimates = read_table(holdout_path)
         assert {r["excluded_taxon"] for r in estimates} == set(NAMES)
         assert all(r["species_event_id"] == row["species_event_id"] for r in estimates)

@@ -117,6 +117,15 @@ check can recover votes lost to missing taxa, but presence-dependent
 selection, gene-tree error, and sparse sampling can also change these
 scores. It does not alter default calls or provide a P-value.
 
+Set `wgd_duplication_root_audit=1` to write
+`duplication_root_orientations.tsv`. For each family, examine which binary
+duplications could appear by changing only the root direction on its
+existing topology, without rearranging splits or resolving polytomies.
+Report the number of extra eligible families and how many already vote on
+a different branch under the archived root. The any-orientation score is a
+descriptive upper bound on votes on one branch, not a preferred rooting,
+a root confidence interval, or a replacement for the archived-root score.
+
 ### Sparse Cross-Species Synteny
 
 In duplication-score mode, set `wgd_cross_synteny_file` to a TSV with

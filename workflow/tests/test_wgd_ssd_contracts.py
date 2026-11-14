@@ -191,6 +191,46 @@ def test_duplication_coverage_audit_only_projects_taxa_missing_from_the_family(t
     assert inner["support_complete"] == 0 and inner["support_partial_projected"] == 1
 
 
+@pytest.mark.parametrize("newick", [
+    "((A_1:1,((A_2:1,B_2:1):1,C_1:1):1):1,B_1:1);",
+    "((A_1:1,B_1:1):1,(A_2:1,B_2:1):1,C_1:1);",
+    "((A_1:1,B_1:1):1,(A_2:1,B_2:1):1,C_1:1,C_2:1);",
+    "(((A_1:1,B_1:1):1,(A_2:1,B_2:1):1):1,C_1:1);",
+])
+def test_duplication_root_orientations_match_explicit_rerooting(tmp_path, newick):
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    species = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+
+    def archive_for(source):
+        archive = BytesIO()
+        with ZipFile(archive, "w") as handle:
+            handle.writestr("family_root.nwk", source)
+        return archive
+
+    # Mark the supplied direction even when its top-level node is polytomous.
+    votes = []
+    tree = read_tree(newick, 1, True, rooted="yes", quiet=True)
+    diagnostics = []
+    [baseline], _ = scan_duplications(species, archive_for("[&R]" + newick), .01, root_output=diagnostics)
+    for i, node in enumerate(tree.traverse()):
+        if node is tree:
+            continue
+        copy = tree.copy(method="deepcopy")
+        copy.set_outgroup(list(copy.traverse())[i])
+        [candidate], _ = scan_duplications(species, archive_for(copy.write(parser=1)), .01)
+        votes.append(candidate["num_supporting_families"])
+    [audit] = diagnostics
+    assert audit["rooted_supporting_families"] == baseline["num_supporting_families"]
+    assert audit["extra_families_under_alternate_root"] == max(0, *votes) * (1 - baseline["num_supporting_families"])
+    assert audit["any_orientation_score"] == max(baseline["num_supporting_families"], *votes)
+
+
 def test_duplication_scan_uses_membership_species_when_prefixes_overlap(tmp_path):
     from zipfile import ZipFile
 
