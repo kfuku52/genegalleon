@@ -41,9 +41,14 @@ def test_rewrite_table_preserves_csv_records_and_logical_ordinals(tmp_path):
 
 def test_rewrite_table_still_enforces_csv_field_limit(tmp_path):
     source = tmp_path / 'audit.tsv'
-    source.write_text('query\tnote\n' + 'x' * (csv.field_size_limit() + 1) + '\tnote\n')
-    with pytest.raises(csv.Error, match='field larger than field limit'):
-        replay._rewrite_table(source, tmp_path / 'too-large.tsv', {}, [], tuple, 1)
+    limit = 16
+    source.write_text('query\tnote\n' + 'x' * (limit + 1) + '\tnote\n')
+    previous = csv.field_size_limit(limit)
+    try:
+        with pytest.raises(csv.Error, match='field larger than field limit'):
+            replay._rewrite_table(source, tmp_path / 'too-large.tsv', {}, [], tuple, 1)
+    finally:
+        csv.field_size_limit(previous)
 
 
 @pytest.fixture
