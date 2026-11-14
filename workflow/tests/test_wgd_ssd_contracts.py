@@ -1486,6 +1486,30 @@ def test_long_labels_and_deep_topology_plots(tmp_path):
         assert (tmp_path / name).stat().st_size > 1000
 
 
+def test_origin_plot_shows_path_count_without_relabeling_node(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from nwkit.util import read_tree
+
+    tree = read_tree("((A_a:1,A_b:1):1,B_a:2);", 1, True, quiet=True)
+    mapped = tree.children[0]
+    mapped.add_prop("duplication_origin", "unresolved")
+    mapped.add_prop("cross_synteny_matched_paths", 3)
+    observed = []
+
+    def inspect(figure, *_args, **_kwargs):
+        ax, = figure.axes
+        points = [(line.get_marker(), line.get_color(), tuple(line.get_xdata())) for line in ax.lines]
+        assert any(marker == "o" and color == "#777777" and xs == (1,) for marker, color, xs in points)
+        assert any(marker == "D" and xs == (1,) for marker, _, xs in points)
+        observed.extend(t.get_text() for t in ax.texts)
+        legend, = figure.legends
+        assert "Exact synteny path count" in [t.get_text() for t in legend.get_texts()]
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    wgd_ssd.plot_origins(tree, tmp_path)
+    assert "3" in observed and mapped.props["duplication_origin"] == "unresolved"
+
+
 def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
     from matplotlib.figure import Figure
     from matplotlib.patches import ConnectionPatch

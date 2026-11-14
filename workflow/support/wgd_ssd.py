@@ -1862,6 +1862,7 @@ def plot_origins(tree, output):
             x[child] = x[node] + 1
     longest_name = max(len(leaf.name) for leaf in leaves)
     fig, ax = plt.subplots(figsize=(max(10, longest_name * 0.07 + 5), max(3, len(leaves) * 0.22)))
+    matched_paths = False
     for node in tree.traverse("postorder"):
         if node.children:
             y[node] = sum(y[child] for child in node.children) / len(node.children)
@@ -1872,12 +1873,21 @@ def plot_origins(tree, output):
             ax.annotate(node.name, (x[node], y[node]), xytext=(4, 0), textcoords="offset points", va="center", fontsize=8)
         elif "duplication_origin" in node.props:
             ax.plot(x[node], y[node], "o", color=colors[node.props["duplication_origin"]], markersize=4)
+            if count := node.props.get("cross_synteny_matched_paths", 0):
+                matched_paths = True
+                ax.plot(x[node], y[node], marker="D", mfc="none", mec="#246E83", ms=7, ls="none", zorder=4)
+                ax.annotate(str(count), (x[node], y[node]), xytext=(5, 5), textcoords="offset points",
+                            color="#246E83", fontsize=7, zorder=5)
     depth = max(1, max(x.values()))
     ax.set_xlim(-0.03 * depth, depth * (1 + max(0.25, min(1.5, longest_name / 60))))
     ax.set_ylim(-1, len(leaves))
     ax.axis("off")
-    ax.legend(handles=[Line2D([], [], color=color, marker="o", label=status) for status, color in colors.items()], loc="upper left", bbox_to_anchor=(0, 1.08), frameon=False, ncol=3, fontsize=8)
-    fig.tight_layout()
+    handles = [Line2D([], [], color=color, marker="o", label=status) for status, color in colors.items()]
+    if matched_paths:
+        handles.append(Line2D([], [], marker="D", mfc="none", mec="#246E83", ls="none", label="Exact synteny path count"))
+    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(.02, .995),
+               frameon=False, ncol=len(handles), fontsize=8)
+    fig.tight_layout(rect=(0, 0, 1, 1 - .27 / fig.get_figheight()))
     fig.savefig(output / "duplication_origins.pdf")
     plt.close(fig)
 

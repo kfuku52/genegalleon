@@ -171,8 +171,9 @@ classification joins these records by the four literal gene IDs, two copy
 groups, and reconciled species branch. `cross_synteny_node_evidence.tsv`
 records exact matches and discrepancies. `cross_synteny_matched_paths` in
 NHX counts exact matches that pass the configured filter; it is not a
-WGD/SSD assignment or a probability. The existing node colors and origin
-rules do not change.
+WGD/SSD assignment or a probability. The gene-tree figure places an unfilled
+diamond and the path count around each matched node; its original origin
+color and classification are unchanged.
 Use one BED per species and original `###`-delimited JCVI anchor files
 (plain or gzip), not lifted anchors or preassigned branch scores. This
 stage reads existing comparisons; it does not launch genome alignments.
