@@ -132,7 +132,7 @@ def qualifying(groups):
 
 def cross_window_groups(positions, cross):
     groups = defaultdict(set)
-    for (x, y), ids in cross.items():
+    for (x, y), ids in cross:
         window = window_for(positions, x)
         for block in ids:
             groups[window, block].add((x, y))
@@ -140,7 +140,12 @@ def cross_window_groups(positions, cross):
 
 
 def observable_windows(positions, cross):
-    return {window for (window, _), _ in qualifying(cross_window_groups(positions, cross))}
+    return {window for (window, _), _ in qualifying(cross_window_groups(positions, cross.items()))}
+
+
+def archive_window_floor(coverage_rows):
+    return {(row["species_event_id"], row["species_a"], row["species_b"]): row["archive_family_window_floor_met"]
+            for row in coverage_rows}
 
 
 def has_nonreused_anchors(tuples):
@@ -266,7 +271,7 @@ class CrossSynteny:
             self.daughters[branch] = tuple(set(child.leaf_names()) for child in node.children)
             observable = observable_windows(beds[a], cross[0])
             if self.coverage is not None:
-                self.coverage.append((branch, a, b, beds[a], cross[0], len(observable)))
+                self.coverage.append((branch, a, b, beds[a], beds[b], cross[0], len(observable)))
                 self.coverage_genes.update(gene for pair in cross[0] for gene in pair)
             provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
             if a in self_blocks and b in self_blocks:
@@ -292,34 +297,39 @@ class CrossSynteny:
             self.archive_families[gene] = family
 
     def _covered_windows(self, audit_nonreuse):
-        for event, a, b, positions, links, observable in self.coverage:
-            both = {pair: blocks for pair, blocks in links.items() if pair[0] in self.archive_families
-                    and self.archive_families[pair[0]] == self.archive_families.get(pair[1])}
+        families = self.archive_families
+        for event, a, b, positions, other_positions, links, observable in self.coverage:
+            both = [(pair, blocks) for pair, blocks in links.items() if pair[0] in families
+                    and families[pair[0]] == families.get(pair[1])]
             grouped = cross_window_groups(positions, both)
             eligible = list(qualifying(grouped)) if audit_nonreuse else qualifying(grouped)
             n = len({window for (window, _), _ in eligible})
             coverage = dict(zip(COVERAGE_OUTPUT, (event, a, b, len(links), len(both), observable, n,
                                                   int(n >= self.min_windows)), strict=True))
-            nonreuse = None
+            nonreuse = reverse = None
             if audit_nonreuse:
                 raw_count, archive_count = (
                     len({window for (window, _), pairs in rows if has_nonreused_anchors(pairs)})
-                    for rows in (qualifying(cross_window_groups(positions, links)), eligible))
+                    for rows in (qualifying(cross_window_groups(positions, links.items())), eligible))
                 nonreuse = dict(zip(NONREUSE_OUTPUT, (event, a, b, observable, raw_count, n, archive_count,
                                                      int(raw_count >= self.min_windows),
                                                      int(archive_count >= self.min_windows)), strict=True))
-            yield coverage, nonreuse
+                reversed_groups = cross_window_groups(other_positions, (((y, x), ids) for (x, y), ids in both))
+                reverse = (event, b, a), len({window for (window, _), _ in qualifying(reversed_groups)}) >= self.min_windows
+            yield coverage, nonreuse, reverse
 
     def coverage_rows(self):
-        for coverage, _ in self._covered_windows(False):
+        for coverage, _, _ in self._covered_windows(False):
             yield coverage
 
     def nonreused_coverage_rows(self):
-        coverage, nonreuse = [], []
-        for old, strict in self._covered_windows(True):
+        coverage, nonreuse, reverse = [], [], {}
+        for old, strict, reversed_floor in self._covered_windows(True):
             coverage.append(old)
             nonreuse.append(strict)
-        return coverage, nonreuse
+            key, passes = reversed_floor
+            reverse[key] = passes
+        return coverage, nonreuse, reverse
 
     def observe(self, branch, family, node):
         targets = self.matches.get(branch)
@@ -341,7 +351,7 @@ class CrossSynteny:
                                               for sp in (a if gene in beds[a] else b,))
                             self.traced_hits.add((branch, a, b, window, family, genes, blocks, positions))
 
-    def summarize(self, *, include_windows=True):
+    def summarize(self, *, include_windows=True, archive_floor=None):
         branches, pairs, windows = {}, [], []
         for branch, entries in self.entries.items():
             observed_species, supported_species = set(), set()
@@ -349,9 +359,12 @@ class CrossSynteny:
                 assert (paired | partial) <= observable
                 assert full_hits.keys() <= paired and partial_hits.keys() <= partial
                 families = set().union(*full_hits.values(), *partial_hits.values())
+                supports = len(full_hits) + len(partial_hits) >= self.min_windows and len(families) >= self.min_windows
+                if status == "assessed" and not supports and archive_floor is not None and not archive_floor[branch, a, b]:
+                    status = "insufficient_archive_anchors"
                 if status == "assessed":
                     observed_species.update((a, b))
-                    if len(full_hits) + len(partial_hits) >= self.min_windows and len(families) >= self.min_windows:
+                    if supports:
                         supported_species.update((a, b))
                 key = {"species_event_id": branch, "species_a": a, "species_b": b}
                 pairs.append({**key, "status": status, "observable_windows": len(observable),

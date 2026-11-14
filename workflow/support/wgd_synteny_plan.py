@@ -138,7 +138,7 @@ def main(argv=None):
             seen.add(pair)
             if row["status"] == "assessed":
                 assessed.add(pair)
-            elif row["status"] not in {"insufficient_cross_anchors", "missing_self_comparison"}:
+            elif row["status"] not in {"insufficient_cross_anchors", "insufficient_archive_anchors", "missing_self_comparison"}:
                 raise ValueError(f"Unrecognized pair evidence status: {row['status']}")
     for output, other in ((args.pairs_out, args.audit_out), (args.audit_out, args.pairs_out)):
         protect_output(output, inputs | {other.resolve()}, workspace)

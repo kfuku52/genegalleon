@@ -67,3 +67,21 @@ def test_planner_cli_writes_pairwise_schema_and_protects_inputs(tmp_path):
     assert "comparisons_planned" in audit.read_text()
     with pytest.raises(ValueError, match="Refusing to replace"):
         main([*args, str(pairs)])
+
+
+def test_planner_accepts_archive_limited_pair_evidence(tmp_path):
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("((A:1,B:1):1,C:2);\n")
+    manifest = tmp_path / "cross.tsv"
+    manifest.write_text("species_a\tspecies_b\tbed_a\tbed_b\tanchors\n"
+                        "A\tA\tA.bed\tA.bed\tA.anchors\nB\tB\tB.bed\tB.bed\tB.anchors\n"
+                        "A\tB\tA.bed\tB.bed\tAB.anchors\n")
+    for name in ("A.bed", "B.bed", "A.anchors", "B.anchors", "AB.anchors"):
+        (tmp_path / name).touch()
+    evidence = tmp_path / "evidence.tsv"
+    evidence.write_text("species_a\tspecies_b\tstatus\nA\tB\tinsufficient_archive_anchors\n")
+    pairs, audit = tmp_path / "next.tsv", tmp_path / "audit.tsv"
+    main(["--workspace", str(tmp_path), "--species-tree", str(tree), "--cross-synteny", str(manifest),
+          "--pair-evidence", str(evidence), "--audit-out", str(audit), "--pairs-out", str(pairs)])
+    assert len(pairs.read_text().splitlines()) == 1
+    assert "unassessed_pairs_exhausted" in audit.read_text()

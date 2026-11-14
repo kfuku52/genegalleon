@@ -189,6 +189,8 @@ def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
     ("one_copy", "supports", "duplication-and-synteny-candidate", 1),
     ("wrong_phase", "assessed_below_threshold", "unresolved", 0),
     ("empty_self", "assessed_below_threshold", "unresolved", 0),
+    ("missing_archive_anchors", "insufficient_observability", "duplication-only-candidate", 0),
+    ("positive_below_archive_floor", "supports", "duplication-and-synteny-candidate", 1),
     ("missing_self", "insufficient_observability", "duplication-only-candidate", 0),
     ("no_cross_anchors", "insufficient_observability", "duplication-only-candidate", 0),
 ])
@@ -198,7 +200,7 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     from nwkit.clade_index import CladeIndex
     from nwkit.util import read_tree
 
-    from workflow.support.wgd_cross_synteny import CrossSynteny, cross_synteny_inputs
+    from workflow.support.wgd_cross_synteny import CrossSynteny, archive_window_floor, cross_synteny_inputs
     from workflow.support.wgd_tree_scan import scan_duplications
 
     tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
@@ -208,7 +210,7 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
             f"chr{copy}\t{i * 10}\t{i * 10 + 5}\t{species}_{copy}{i}\n"
             for copy in ("a", "b") for i in range(5)))
         (tmp_path / f"{species}.anchors").write_text(
-            "" if case == "empty_self" else "###\n" + "".join(
+            "" if case in {"empty_self", "missing_archive_anchors"} else "###\n" + "".join(
                 f"{species}_a{i}\t{species}_b{i}\t1\n" for i in range(5)))
     copies = (("a", "b"), ("b", "a")) if case == "wrong_phase" else (("a", "a"), ("b", "b"))
     if case == "one_copy":
@@ -224,25 +226,42 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
         {"species_a": a, "species_b": b, "bed_a": tmp_path / f"{a}.bed", "bed_b": tmp_path / f"{b}.bed",
          "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs]
     inputs = cross_synteny_inputs(comparisons)
-    cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,), inputs=inputs)
+    cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,),
+                         audit_coverage=True, inputs=inputs)
     reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, inputs=inputs)
     separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True)
     assert reverse.summarize() == separate_reverse.summarize()
     archive = tmp_path / "trees.zip"
     with ZipFile(archive, "w") as stream:
         for i in range(5):
-            stream.writestr(f"family{i}_root.nwk", f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});")
-    rows, total = scan_duplications(tree, archive, 0.5, observe=cross.observe)
+            if case == "missing_archive_anchors" or (case == "positive_below_archive_floor" and i):
+                genes = f"(((A_y{i},B_y{i}),(A_z{i},B_z{i})),C_c{i});"
+            else:
+                genes = f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});"
+            stream.writestr(f"family{i}_root.nwk", genes)
+    rows, total = scan_duplications(tree, archive, 0.5, observe=cross.observe, observe_family=cross.observe_family)
     assert reverse.summarize() == separate_reverse.summarize()
-    evidence, pair_rows, _ = cross.summarize()
+    coverage, _, reverse_floor = cross.nonreused_coverage_rows()
+    assert coverage == list(cross.coverage_rows())
+    if case == "positive_below_archive_floor":
+        assert coverage[0]["num_archive_family_anchor_pairs"] == 2
+        assert coverage[0]["archive_family_window_floor_met"] == 0
+    evidence, pair_rows, _ = cross.summarize(archive_floor=archive_window_floor(coverage))
     assert total == 5 and rows[0]["num_supporting_families"] == 5
     row, = summarize_events(rows, [], {}, cross_evidence=evidence)
     assert row["synteny_status"] == status
     assert row["event_support"] == event
     pair, = pair_rows
+    if case == "missing_archive_anchors":
+        assert coverage[0]["num_observable_windows"] == 2
+        assert coverage[0]["num_archive_family_windows"] == 0
+        assert pair["status"] == "insufficient_archive_anchors"
+        _, (reverse_row,), _ = reverse.summarize(archive_floor=reverse_floor)
+        assert reverse_row["status"] == "insufficient_archive_anchors"
     assert pair["matched_paired_windows"] == (0 if case == "one_copy" else matched)
     assert pair["matched_partial_only_windows"] == (matched if case == "one_copy" else 0)
-    assert len(cross.age_pairs) == (10 if matched and case != "one_copy" else 0)
+    assert len(cross.age_pairs) == (2 if case == "positive_below_archive_floor" else
+                                   10 if matched and case != "one_copy" else 0)
     assert bool(cross.traced_hits) == bool(matched)
     if matched:
         for branch, a, b, _, _, genes, blocks, positions in cross.traced_hits:

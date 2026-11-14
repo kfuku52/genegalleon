@@ -36,6 +36,7 @@ try:
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
         CrossSynteny,
+        archive_window_floor,
         cross_synteny_inputs,
         orientation_rows,
         read_pairs,
@@ -64,6 +65,7 @@ except ImportError:
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
         CrossSynteny,
+        archive_window_floor,
         cross_synteny_inputs,
         orientation_rows,
         read_pairs,
@@ -970,20 +972,20 @@ def run_analysis(plan, output, cpus):
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
         del by_family
         if cross is not None:
-            cross_evidence, pair_rows, window_rows = cross.summarize()
+            if reverse is None:
+                coverage_rows = list(cross.coverage_rows())
+            else:
+                coverage_rows, nonreuse_rows, reverse_floor = cross.nonreused_coverage_rows()
+                write_table(output / "cross_synteny_anchor_nonreuse.tsv", nonreuse_rows, NONREUSE_OUTPUT)
+            cross_evidence, pair_rows, window_rows = cross.summarize(archive_floor=archive_window_floor(coverage_rows))
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
             if reverse is not None:
-                _, reverse_pairs, _ = reverse.summarize(include_windows=False)
+                _, reverse_pairs, _ = reverse.summarize(include_windows=False, archive_floor=reverse_floor)
                 write_table(output / "cross_synteny_orientation.tsv",
                             orientation_rows(raw_candidates, pair_rows, reverse_pairs, p["min_cross_windows"]),
                             ORIENTATION_OUTPUT)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
-            if not p.get("cross_orientation_audit"):
-                coverage_rows = cross.coverage_rows()
-            else:
-                coverage_rows, nonreuse_rows = cross.nonreused_coverage_rows()
-                write_table(output / "cross_synteny_anchor_nonreuse.tsv", nonreuse_rows, NONREUSE_OUTPUT)
             write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
                                                                p["min_cross_windows"])

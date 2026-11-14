@@ -126,9 +126,12 @@ is validated but not scored because there is no root stem.
 
 In 100-gene windows of the first species, an observable cross window
 has at least five distinct genes on both sides of one direct block.
-With both self comparisons present, a pair is assessed when it has
-at least `wgd_min_cross_windows` (default 3) observable windows.
-An empty self comparison counts as assessed, not missing. The
+With both self comparisons present, a pair needs at least
+`wgd_min_cross_windows` (default 3) observable windows. If exact copy
+support falls short, the same window floor must also be met by direct
+anchors connecting genes in the same archived family tree. Otherwise the
+pair is `insufficient_archive_anchors`, not observed negative evidence.
+An empty self comparison is observed, not missing. The
 correspondence search requires five distinct genes in each copy slot,
 within the same original blocks. It retains one-copy paths separately,
 without inferring a loss, and tests the exact linked genes against the
