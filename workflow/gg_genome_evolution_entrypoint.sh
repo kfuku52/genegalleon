@@ -141,6 +141,7 @@ wgd_gene_trees_file="" # Optional rooted *_root.nwk ZIP; selects duplication-sco
 wgd_duplication_taxon_holdout=0 # Audit branch scores after excluding each species; requires rooted gene trees.
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.
+wgd_cross_ks_reuse_summary="" # Optional summary.json from a separate completed WGD run to reuse exact alignments.
 wgd_max_ks_quartets=0 # Optional maximum four-copy dS comparisons per branch and species pair; 0 disables.
 wgd_cross_tree_support_file="" # Optional GeneRax UFBoot tree ZIP for duplication and paired cross-block support diagnostics.
 wgd_min_cross_windows=3 # Minimum observable windows and, for support, concordant windows and distinct families per pair.

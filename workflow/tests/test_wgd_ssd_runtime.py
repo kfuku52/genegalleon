@@ -193,6 +193,7 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
 
 
 def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
+    import shutil
     from zipfile import ZipFile
 
     workspace = tmp_path / "workspace"
@@ -261,6 +262,19 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert "wgd_cross_ks.png" in summary["plot_hashes"]
     assert str(workspace / "cross.anchors") in summary["plan"]["input_hashes"]
     assert (root / "wgd_species_tree.png").stat().st_size > 1000
+    saved = workspace / "prior_wgd"
+    saved.mkdir()
+    shutil.copy(root / "summary.json", saved)
+    shutil.copy(root / "cross_ks_aligned_pairs.code1.tsv", saved)
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
+                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3",
+                      artifact_stale_policy="rebuild", wgd_cross_ks_reuse_summary="prior_wgd/summary.json")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reusing 22/22 codon alignments" in result.stdout
+    reused = json.loads((root / "summary.json").read_text())
+    assert reused["output_hashes"] == summary["output_hashes"]
+    assert str(saved / "cross_ks_aligned_pairs.code1.tsv") in reused["plan"]["input_hashes"]
 
 
 def test_boundary_uncertainty_root_and_nonmonotone_values_remain_unresolved(tmp_path):

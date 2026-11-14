@@ -13,12 +13,14 @@ import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
+from functools import partial
 from pathlib import Path
 
 try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
+    from wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_support import (
@@ -36,6 +38,7 @@ except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
+    from .wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_support import (
@@ -93,6 +96,7 @@ def owned_identity():
     for root in (Path(nwkit.__file__).parent, Path(kffractbias.io.__file__).parent):
         files.extend(root.rglob("*.py"))
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
+              Path(__file__).with_name("wgd_alignment_reuse.py").resolve(),
               Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
@@ -225,10 +229,22 @@ def make_plan(args):
     tools = owned_identity()
     inputs.update(tools["source_hashes"])
     inputs.update(tools["ds"]["source_hashes"])
+    reuse = getattr(args, "cross_ks_reuse_summary", "")
+    if reuse and not cross_ks_sources:
+        raise ValueError("Cross-block alignment reuse requires --cross-ks-cds")
+    alignment, files = alignment_identity(tools["ds"]) if cross_ks_sources else (None, ())
+    inputs.update(files)
+    reused_alignments = {}
+    if reuse:
+        reused_alignments, hashes = reuse_sources(resolve(reuse, ""), alignment)
+        managed_output = workspace / "output/genome_evolution/wgd_ssd"
+        protect_output(managed_output, hashes)
+        inputs.update(hashes)
     protect_output(args.outfile, inputs, workspace)
     return {"schema_version": 1, "workspace": str(workspace), "species_tree": str(tree_path),
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
+            "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -236,6 +252,9 @@ def make_plan(args):
 
 
 def verify(plan):
+    identity = plan.get("alignment_identity")
+    if identity is not None and alignment_identity(plan["tools"]["ds"])[0] != identity:
+        raise ValueError("MAFFT or backtranslation identity changed during WGD analysis")
     for path, expected in plan["input_hashes"].items():
         if digest(path) != expected:
             raise ValueError(f"WGD input changed during analysis: {path}")
@@ -522,16 +541,16 @@ def estimate_ks(plan, output, sequences, anchors, cpus, family_tables=None):
     return reports, contrasts
 
 
-def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix=""):
+def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix="", *, reuse=None):
     # MAFFT's many short-lived files need not traverse a shared workspace mount.
     if prefix and not os.environ.get("MAFFT_TMPDIR") and requests:
         with tempfile.TemporaryDirectory(prefix="gg-wgd-mafft-", dir="/tmp") as scratch:
             return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix,
-                                          {**os.environ, "MAFFT_TMPDIR": scratch})
-    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None)
+                                          {**os.environ, "MAFFT_TMPDIR": scratch}, reuse)
+    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None, reuse)
 
 
-def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env):
+def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env, reuse):
     reports = {}
     by_code = defaultdict(list)
     for pair, info in requests.items():
@@ -542,11 +561,18 @@ def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, ali
         if not selected:
             continue
         pairs_file, ds_file = output / f"{prefix}aligned_pairs.code{code}.tsv", output / f"{prefix}pair_ds.code{code}.tsv"
+        cached = matching_rows(reuse[str(code)], selected, sequences) if reuse and str(code) in reuse else {}
+        if cached:
+            print(f"Cross-block dS code {code}: reusing {len(cached):,}/{len(selected):,} codon alignments", flush=True)
+
+        def align(item, code=code, cached=cached):
+            pair, info = item
+            if pair in cached:
+                return cached[pair]
+            return align_pair(pair, [sequences[info[0]], sequences[info[1]]], code, **options)
+
         with ThreadPoolExecutor(max_workers=cpus) as pool:
-            with closing(ordered_bounded_results(pool,
-                    lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]],
-                                                       code, **options),
-                    ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
+            with closing(ordered_bounded_results(pool, align, ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
                 write_table(pairs_file, aligned, PAIR_COLUMNS)
         run_tool(["cdskit", "dnds", "--pairs_file", pairs_file,
                   "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"{prefix}dnds.code{code}")
@@ -935,7 +961,8 @@ def run_analysis(plan, output, cpus):
             row["minimum_cross_windows"] = p["min_cross_windows"]
     age_summary, focal_rows = {}, ()
     if cross_ks:
-        focal_rows = cross_ks.run(output, cpus, candidates, estimate_pair_reports, write_table, traced_ks_hits)
+        estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"))
+        focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits)
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
             status = row["cross_ks_status"]
@@ -1195,7 +1222,7 @@ def main():
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
-                  "cross-tree-support"):
+                  "cross-tree-support", "cross-ks-reuse-summary"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)

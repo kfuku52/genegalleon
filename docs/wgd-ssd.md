@@ -192,6 +192,15 @@ Cross-code pairs are not estimated. Low-information alignments (fewer than
 60 retained codons, less than 70% coverage of the longer CDS, or fewer than
 20 synonymous sites) and non-estimable dS values are audited and excluded.
 
+To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` can point to
+`summary.json` in a separate, completed run directory with its original
+`cross_ks_aligned_pairs.code*.tsv` files. The source bundle must not be the
+destination. GeneGalleon checks the source hashes, MAFFT and backtranslation
+identity, genetic code, ordered gene IDs, and the exact current CDS for each
+reused row. New or changed pairs are aligned normally. All dS estimates and
+downstream tests are recomputed. Summaries without alignment provenance or
+unsupported MAFFT layouts cannot be used for reuse.
+
 The NWKIT `ksrate` model puts the younger and older species divergence boundaries
 on each focal species' dS scale, using conservative simultaneous
 pair-median intervals. Copy-pair observations sharing either genomic

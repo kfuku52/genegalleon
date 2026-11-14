@@ -35,6 +35,7 @@ wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
 wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
+wgd_cross_ks_reuse_summary="${wgd_cross_ks_reuse_summary:-}"
 wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
 wgd_cross_tree_support_file="${wgd_cross_tree_support_file:-}"
 wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
@@ -397,6 +398,7 @@ run_wgd_ssd_stage() (
     --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
     --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
     --cross-ks-cds "${wgd_cross_ks_cds_file}" \
+    --cross-ks-reuse-summary "${wgd_cross_ks_reuse_summary}" \
     --max-ks-quartets "${wgd_max_ks_quartets}" \
     --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
