@@ -11,6 +11,7 @@ import hashlib
 import json
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from itertools import chain
 from pathlib import Path
 
@@ -251,18 +252,30 @@ def prepare(root, plan, cpus):
         inputs.check()
         r.require_same_key(old_hash, r.plan_digest(previous, prior))
         r.require_same_key(new_hash, r.plan_digest(root, plan))
+
     names = sorted({name for target in plan['species'] for name in (target, *plan['donors'][target])})
-    for name in names:
-        r.verify_sources(plan, [name], ['fasta', 'gff', 'genome'], verification=inputs)
-        old_key, new_key = {'plan': old_hash, 'species': name}, {'plan': new_hash, 'species': name}
-        def build(tmp, name=name, old_key=old_key):
-            r.copy_verified_comparison(previous / 'prepared' / name, tmp, old_key, cpus)
-        r.stage(root, Path('prepared') / name, new_key, build, guard, hash_workers=cpus)
-    for job in plan['synteny_jobs']:
-        old_key, new_key = r.comparison_key(previous, job), r.comparison_key(root, job)
-        def build(tmp, job=job, old_key=old_key):
-            r.copy_verified_comparison(previous / 'synteny' / job['id'], tmp, old_key, cpus)
-        r.stage(root, Path('synteny') / job['id'], new_key, build, guard, hash_workers=cpus)
+    # Finish collecting source proofs before workers start checking them.
+    r.verify_sources(plan, names, ['fasta', 'gff', 'genome'], verification=inputs)
+    workers = min(cpus, 4, max(1, len(names), len(plan['synteny_jobs'])))
+    copy_workers = cpus // workers
+
+    def import_stage(relative, old_key, new_key):
+        def build(tmp):
+            r.copy_verified_comparison(previous / relative, tmp, old_key, copy_workers)
+        r.stage(root, relative, new_key, build, guard, hash_workers=copy_workers, publication_guard=guard)
+
+    def import_species(name):
+        import_stage(Path('prepared') / name, {'plan': old_hash, 'species': name}, {'plan': new_hash, 'species': name})
+
+    def import_comparison(job):
+        import_stage(Path('synteny') / job['id'], r.comparison_key(previous, job), r.comparison_key(root, job))
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # Each comparison key requires both prepared stages to be complete.
+        for _ in executor.map(import_species, names):
+            pass
+        for _ in executor.map(import_comparison, plan['synteny_jobs']):
+            pass
 
 
 def eligible(context):

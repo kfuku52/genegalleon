@@ -205,6 +205,32 @@ def test_replay_refuses_a_corrupt_parallel_sidecar_copy(completed, tmp_path, mon
     assert not (output / 'rescued/Target_species').exists()
 
 
+def test_parallel_prepare_can_resume_after_one_donor_copy_fails(completed, tmp_path, monkeypatch):
+    previous, producer, _, _ = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    copy_verified = rescue.copy_verified_comparison
+
+    def fail_donor(source, destination, key, workers):
+        if source.name == 'Relative_species':
+            raise OSError('failed donor copy')
+        return copy_verified(source, destination, key, workers)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, 'copy_verified_comparison', fail_donor)
+        with pytest.raises(OSError, match='failed donor copy'):
+            replay.prepare(output, plan, 2)
+    target = output / 'prepared/Target_species/receipt.json'
+    inode = target.stat().st_ino
+    assert not (output / 'prepared/Relative_species').exists()
+    assert not (output / 'synteny').exists()
+
+    replay.prepare(output, plan, 2)
+    assert target.stat().st_ino == inode
+    assert (output / 'prepared/Relative_species/receipt.json').is_file()
+    assert (output / 'synteny/comparison_000001/receipt.json').is_file()
+
+
 @pytest.mark.parametrize('member', ['prepared', 'genome', 'producer', 'plan'])
 def test_replay_checks_verified_inputs_after_hashing_outputs(completed, tmp_path, monkeypatch, member):
     previous, producer, _, _ = completed
