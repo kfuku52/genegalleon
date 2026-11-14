@@ -137,6 +137,21 @@ def test_count_selection_keeps_missing_separate_from_zero(tmp_path):
     assert read_table(output / "count_family_selection.tsv")[1]["selection"] == "excluded_root_clade_absence"
 
 
+def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    result = run_core(workspace, GG_TASK_CPUS="2", wgd_count_scan_workers="2",
+                      wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["parameters"]["count_scan_workers"] == 2
+    assert summary["plan"]["parameters"]["count_bootstrap_workers"] == 2
+    model = json.loads((root / "count_model.json").read_text())
+    assert len(model["bootstrap_max_statistics"]) == 2
+    assert len(model["candidates"]) == 4
+
+
 def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path):
     from zipfile import ZipFile
 

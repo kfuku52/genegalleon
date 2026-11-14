@@ -797,9 +797,10 @@ def test_output_protection_preserves_curated_inputs_and_input_ancestors(tmp_path
     wgd_ssd.protect_output(workspace / "output/new", [source], workspace)
 
 
-def test_count_bootstrap_worker_budget_is_checked_before_outputs(tmp_path):
+@pytest.mark.parametrize("parameter", ["count_bootstrap_workers", "count_scan_workers"])
+def test_count_worker_budget_is_checked_before_outputs(tmp_path, parameter):
     output = tmp_path / "out"
-    plan = {"parameters": {"count_bootstrap": 10, "count_bootstrap_workers": 3}}
+    plan = {"parameters": {"count_bootstrap": 10, parameter: 3}}
     with pytest.raises(ValueError, match="exceed the allocated CPUs"):
         wgd_ssd.run_analysis(plan, output, cpus=2)
     assert not output.exists()

@@ -198,9 +198,11 @@ def make_plan(args):
     parameters["min_duplication_score"] = getattr(args, "min_duplication_score", 0.01)
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
+    parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
             or any(parameters[key] < 1 for key in ("max_pairs", "max_ks_families", "max_count_families",
-                                                  "diagonal_bound", "min_blocks", "max_iterations", "count_bootstrap_workers"))
+                                                  "diagonal_bound", "min_blocks", "max_iterations",
+                                                  "count_bootstrap_workers", "count_scan_workers"))
             or not 0 < args.cscore <= 1 or not 0 < args.minimum_mapping_fraction <= 1
             or not 0 < args.self_hit_percent <= 100 or not 0 < args.alpha < 1
             or not 0 < parameters["min_duplication_score"] <= 1
@@ -778,6 +780,9 @@ def run_analysis(plan, output, cpus):
     p = plan["parameters"]
     tree_mode = bool(plan.get("gene_trees"))
     bootstrap_workers = p.get("count_bootstrap_workers", 1)
+    scan_workers = p.get("count_scan_workers", 1)
+    if not tree_mode and scan_workers > cpus:
+        raise ValueError("WGD scan workers exceed the allocated CPUs")
     if not tree_mode and p["count_bootstrap"] and bootstrap_workers > cpus:
         raise ValueError("WGD bootstrap workers exceed the allocated CPUs")
     verify(plan)
@@ -836,6 +841,8 @@ def run_analysis(plan, output, cpus):
         write_table(output / "duplication_candidates.tsv", raw_candidates, list(raw_candidates[0]))
     else:
         worker_args = ["--bootstrap-workers", str(bootstrap_workers)] if p["count_bootstrap"] and bootstrap_workers > 1 else []
+        if scan_workers > 1:
+            worker_args.extend(("--scan-workers", str(scan_workers)))
         run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
                   "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
                   "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
@@ -1145,7 +1152,7 @@ def main():
                   "cross-tree-support"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
-    for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1),
+    for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-count-families", 10000),
                            ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
