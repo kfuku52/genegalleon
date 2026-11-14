@@ -18,9 +18,11 @@ from pathlib import Path
 try:
     import rescue_model_store as store
     from rescue_model_store_patch import patch_model_store
+    from stage_output_hashes import hash_paths
 except ImportError:
     from . import rescue_model_store as store
     from .rescue_model_store_patch import patch_model_store
+    from .stage_output_hashes import hash_paths
 
 POST = frozenset({'overlap_existing_annotation', 'competing_new_models',
                   'ambiguous_coding_path_representative', 'ambiguous_annevo_coding_path_representative',
@@ -447,15 +449,22 @@ def rescue(root, plan, name, cpus):
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
         if native_audit is not None:
             mutable.add('oriongeno_genomewide.json')
-        for member in old_receipt['files']:
-            if member.startswith('model_store/') or member in mutable:
-                continue
-            source_path, target = store._member(old_worker, member), tmp / member
+        sidecars = (store._member(old_worker, member) for member in old_receipt['files']
+                    if not member.startswith('model_store/') and member not in mutable)
+
+        def copy_sidecar(source_path):
+            member = source_path.relative_to(old_worker).as_posix()
+            target = tmp / member
             target.parent.mkdir(parents=True, exist_ok=True)
             with source_path.open('rb') as inp, target.open('xb') as out:
                 shutil.copyfileobj(inp, out)
-            if r.digest(target) != old_receipt['files'][member]:
+            actual = r.digest(target)
+            if actual != old_receipt['files'][member]:
                 raise ValueError('Admission sidecar changed during copying')
+            return actual
+
+        hash_paths(old_worker, sidecars, workers=min(cpus, 4), hash_function=copy_sidecar)
+
         def audit(m):
             return (m['query'], m['evidence']['query'], m['status'], ','.join(m['problems']),
                     m['coverage'], m['identity'], m.get('model_id', ''))

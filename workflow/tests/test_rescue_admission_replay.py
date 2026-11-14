@@ -181,6 +181,24 @@ def test_standard_replay_reuses_evidence_rechecks_admission_and_retains_rejectio
     assert {str(p): p.read_bytes() for p in previous.rglob('*') if p.is_file()} == before
 
 
+def test_replay_refuses_a_corrupt_parallel_sidecar_copy(completed, tmp_path, monkeypatch):
+    previous, producer, _old, _rows = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    replay.prepare(output, plan, 2)
+    copyfileobj = replay.shutil.copyfileobj
+
+    def corrupt(source, target, *args, **kwargs):
+        copyfileobj(source, target, *args, **kwargs)
+        if Path(source.name).name == 'unknown.txt':
+            target.write(b'changed')
+
+    monkeypatch.setattr(replay.shutil, 'copyfileobj', corrupt)
+    with pytest.raises(ValueError, match='Admission sidecar changed during copying'):
+        rescue.rescue(output, plan, 'Target_species', 4)
+    assert not (output / 'rescued/Target_species').exists()
+
+
 @pytest.mark.parametrize('fault', ['validator', 'raw-module', 'runtime', 'unbound-source', 'native-confirmation'])
 def test_replay_abstains_when_reuse_contract_cannot_be_proven(completed, tmp_path, fault):
     previous, source, plan, _ = completed
