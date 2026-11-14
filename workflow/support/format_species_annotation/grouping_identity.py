@@ -23,6 +23,8 @@ KNOWN_ALIAS_PREFIXES = (
     "transcript:",
 )
 
+_ALIAS_SEPARATORS = re.compile(r"[-_]+")
+
 GFF_CDS_ALIAS_KEYS = frozenset(
     (
         "accession",
@@ -76,15 +78,15 @@ def gff_alias_variants(value):
         if normalized != "" and normalized not in variants:
             variants.append(normalized)
         if normalize_separators:
-            separator_normalized = re.sub(r"[-_]+", "_", normalized)
+            separator_normalized = _ALIAS_SEPARATORS.sub("_", normalized)
             if separator_normalized != "" and separator_normalized not in variants:
                 variants.append(separator_normalized)
 
-    has_known_prefix = any(text.lower().startswith(prefix) for prefix in KNOWN_ALIAS_PREFIXES)
+    lowered = text.lower()
+    has_known_prefix = lowered.startswith(KNOWN_ALIAS_PREFIXES)
     add(text, normalize_separators=not has_known_prefix)
     current = text
-    while True:
-        lowered = current.lower()
+    while has_known_prefix:
         stripped = ""
         for prefix in KNOWN_ALIAS_PREFIXES:
             if lowered.startswith(prefix):
@@ -94,6 +96,8 @@ def gff_alias_variants(value):
             break
         add(stripped)
         current = stripped
+        lowered = current.lower()
+        has_known_prefix = lowered.startswith(KNOWN_ALIAS_PREFIXES)
     if "|" in text:
         add(text.rsplit("|", 1)[-1])
     if ":" in text:
