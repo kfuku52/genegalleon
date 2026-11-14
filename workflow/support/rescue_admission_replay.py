@@ -398,7 +398,7 @@ def rescue(root, plan, name, cpus, *, dependencies):
         r.require_same_key(raw_key['manifest_sha256'], manifest_sha)
         counts = {'raw_records': manifest['counts']['models']}
         selected = dict(store.iter_model_items(old_worker, context_filter=eligible, frozen_key=raw_key,
-                                               verification=batch, scan_workers=min(cpus, 4)))
+                                               verification=batch, scan_workers=min(cpus, 8)))
         for ordinal, primary in store._iter(old_worker, 'accepted', verification=batch, with_ordinals=True):
             if ordinal not in selected or store._json(selected[ordinal]) != store._json(primary):
                 raise ValueError('Prior primary is not an eligible, identical raw candidate')

@@ -113,9 +113,9 @@ def test_patch_rejects_corrupted_source_members(tmp_path, fault):
     assert not (tmp_path / 'output/model_store').exists()
 
 
-@pytest.mark.parametrize('workers', [1, 4])
+@pytest.mark.parametrize('workers', [1, 4, 8])
 def test_context_selection_keeps_original_ordinals_without_decoding_rejections(tmp_path, monkeypatch, workers):
-    rows = [model(i) for i in range(10)]
+    rows = [model(i) for i in range(18)]
     for i, m in enumerate(rows):
         m['problems'] = [] if i in {2, 7} else ['internal_stop']
     source, _ = published(tmp_path, rows)
