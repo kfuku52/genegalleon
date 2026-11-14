@@ -429,6 +429,8 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert "cross_ks_quartets.tsv" in summary["output_hashes"]
     assert summary["plan"]["parameters"]["max_ks_outgroup_families"] == 11
     assert {r["status"] for r in read_table(root / "cross_ks_common_outgroups.tsv")} == {"missing_trio"}
+    assert {r["status"] for r in read_table(root / "cross_ks_outgroup_topology.tsv")} == {"missing_trio"}
+    assert "cross_ks_outgroup_topology.tsv" in summary["output_hashes"]
     assert read_table(root / "cross_ks_common_outgroup_pairs.tsv") == []
     assert {"cross_ks_common_outgroups.tsv", "cross_ks_common_outgroup_pairs.tsv"} <= summary["output_hashes"].keys()
     assert summary["plan"]["parameters"]["ks_sister_panels"] == 1

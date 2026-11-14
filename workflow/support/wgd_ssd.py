@@ -1548,7 +1548,7 @@ def run_analysis(plan, output, cpus):
         estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"),
                            method=ds_method)
         focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal,
-                                  rooted_copy=rooted_copy, run_tool=run_tool,
+                                  rooted_copy=rooted_copy, run_tool=run_tool, tree_archive=plan["gene_trees"],
                                   method_label=CROSS_DS_REPORT_LABELS.get(ds_method, plan["tools"]["ds"]["method"]))
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:

@@ -350,6 +350,12 @@ count. A negative gap reverses the expected order; an interval crossing zero
 does not resolve it. The diagnostic assumes independent family observations
 and is not used to call or date a WGD. The summaries and input pair results
 are in `cross_ks_common_outgroups.tsv` and `cross_ks_common_outgroup_pairs.tsv`.
+The companion `cross_ks_outgroup_topology.tsv` keeps only measured families
+whose archived rooted gene tree supports both focal/sister splits against
+every selected outgroup. It reports the family count before and after
+filtering and the sensitivity of the signed interval. The main plot and
+placement continue to use the unfiltered panel; this filter can select
+against genuine discordance or gene-tree error.
 The default zero skips the extra alignments.
 
 With common-outgroup dS enabled, `wgd_ks_sister_panels=1` adds comparisons

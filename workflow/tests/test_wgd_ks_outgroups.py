@@ -8,6 +8,7 @@ from workflow.support.wgd_ks_outgroups import (
     select_sister_panels,
     sibling_panel_requests,
     sibling_panel_rows,
+    topology_outgroup_rows,
 )
 
 
@@ -79,3 +80,29 @@ def test_sister_panel_keeps_every_comparison_on_the_same_measured_families():
     assert {row["num_measured_all_outgroups"] for row in rows} == {28}
     assert {row["num_sister_combinations"] for row in rows} == {4}
     assert {row["status"] for row in rows} == {"order_unresolved"}
+
+
+def test_rooted_filter_uses_only_original_complete_families_and_all_outgroups(tmp_path):
+    from zipfile import ZipFile
+
+    files = tmp_path / "rooted.zip"
+    with ZipFile(files, "w") as archive:
+        for family, newick in {
+            "good": "((((F,Y),X),O),P);",
+            "wrong_one_outgroup": "((((F,P),Y),X),O);",
+            "unresolved": "[&R]((F,Y,X,O),P);",
+            "not_measured": "((((F,Y),X),O),P);",
+        }.items():
+            archive.writestr(f"{family}_root.nwk", newick)
+    families = ("good", "wrong_one_outgroup", "unresolved", "not_measured")
+    archived = {family: {name: name for name in "FYXOP"} for family in families}
+    selected = CommonOutgroups("event", "F", "Y", "X", ("O", "P"), len(families), families)
+    sampled = {}
+    for out in selected.outgroups:
+        for key in selected.pair_keys(out):
+            sampled[key] = dict.fromkeys(families, 1.)
+    sampled[tuple(sorted(("X", "P")))].pop("not_measured")
+    rows = list(topology_outgroup_rows([selected], sampled, {"event": 2}, archived, files))
+    assert {r["num_measured_before_topology_filter"] for r in rows} == {3}
+    assert {r["num_measured_all_outgroups"] for r in rows} == {1}
+    assert {r["median_signed_gap"] for r in rows} == {0.}

@@ -19,12 +19,14 @@ try:
     from wgd_ks_outgroups import (
         OUTGROUP_FIELDS,
         SISTER_FIELDS,
+        TOPOLOGY_FIELDS,
         common_outgroup_requests,
         common_outgroup_rows,
         select_common_outgroups,
         select_sister_panels,
         sibling_panel_requests,
         sibling_panel_rows,
+        topology_outgroup_rows,
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from wgd_rooted_copy_ks import (
@@ -43,12 +45,14 @@ except ImportError:
     from .wgd_ks_outgroups import (
         OUTGROUP_FIELDS,
         SISTER_FIELDS,
+        TOPOLOGY_FIELDS,
         common_outgroup_requests,
         common_outgroup_rows,
         select_common_outgroups,
         select_sister_panels,
         sibling_panel_requests,
         sibling_panel_rows,
+        topology_outgroup_rows,
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
     from .wgd_rooted_copy_ks import (
@@ -402,7 +406,7 @@ class CrossKs:
         return requested
 
     def run(self, output, cpus, candidates, estimate, write_table, traced_hits=(), *, terminal=None, rooted_copy=None,
-            run_tool=None, method_label=None):
+            run_tool=None, method_label=None, tree_archive=None):
         requested = self.requests()
         outgroup_pairs = dict(common_outgroup_requests(self.outgroup_selections, self.archived))
         for pair, info in outgroup_pairs.items():
@@ -482,6 +486,10 @@ class CrossKs:
             mapping = {r["species_event_id"]: r["branch_id"] for r in candidates}
             self.outgroup_rows = list(common_outgroup_rows(self.outgroup_selections, sampled, mapping))
             write_table(output / "cross_ks_common_outgroups.tsv", self.outgroup_rows, OUTGROUP_FIELDS)
+            if tree_archive is not None:
+                write_table(output / "cross_ks_outgroup_topology.tsv",
+                            topology_outgroup_rows(self.outgroup_selections, sampled, mapping, self.archived, tree_archive),
+                            TOPOLOGY_FIELDS)
             if self.parameters.get("ks_sister_panels"):
                 audit = []
                 for pair, (a, b, family, _) in sorted(sister_pairs.items()):

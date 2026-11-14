@@ -3,14 +3,22 @@
 import random
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from statistics import median
+from zipfile import ZipFile
 
 import numpy as np
+
+try:
+    from wgd_cross_support import archive_index
+except ImportError:
+    from .wgd_cross_support import archive_index
 
 OUTGROUP_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "older_sister", "common_outgroup",
                    "num_eligible_families", "num_sampled_families", "num_measured_all_outgroups", "younger_median_ds",
                    "older_median_ds", "median_signed_gap", "gap_lower", "gap_upper", "status")
 SISTER_FIELDS = OUTGROUP_FIELDS[:-1] + ("num_sister_combinations", "status")
+TOPOLOGY_FIELDS = OUTGROUP_FIELDS[:-1] + ("num_measured_before_topology_filter", "status")
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,47 @@ def common_outgroup_requests(selections, archived):
                 for family in selection.families:
                     genes = archived[family]
                     yield (genes[a], genes[b]), (a, b, family, "common_outgroup")
+
+
+def topology_outgroup_rows(selections, sampled, branch_ids, archived, tree_archive):
+    """Check both rooted trios for the same measured families and outgroups."""
+    from nwkit.clade_index import LcaIndex
+    from nwkit.rooting_state import require_rooted
+    from nwkit.util import read_tree
+
+    requests = defaultdict(list)
+    for i, row in enumerate(selections):
+        needed = {pair for out in row.outgroups for pair in row.pair_keys(out)}
+        for family in row.families:
+            if needed and all(family in sampled.get(pair, {}) for pair in needed):
+                requests[family].append((i, row))
+    before = [0] * len(selections)
+    retained = [set() for _ in selections]
+    if requests:
+        with ZipFile(tree_archive) as archive:
+            members = archive_index(archive, "_root.nwk")
+            for family, panels in requests.items():
+                member = members.get(family)
+                if member is None:
+                    raise ValueError(f"Missing archived calibration family: {family}")
+                tree = read_tree(archive.read(member).decode("utf-8"), "auto", True, rooted="auto", quiet=True)
+                require_rooted(tree, f"Calibration topology requires a rooted gene tree: {PurePosixPath(member.filename).name}")
+                nodes = {leaf.name: leaf for leaf in tree.leaves()}
+                lca = LcaIndex(tree)
+                genes = archived[family]
+                for i, row in panels:
+                    before[i] += 1
+                    f, y, o = (nodes[genes[sp]] for sp in (row.focal, row.younger, row.older))
+                    split_nodes = lca.common_ancestor(f, y), lca.common_ancestor(f, o)
+                    if all(all(lca.common_ancestor(split, nodes[genes[out]]) is not split for split in split_nodes)
+                           for out in row.outgroups):
+                        retained[i].add(family)
+    denominator = sum(len(row.outgroups) for row in selections)
+    for i, selection in enumerate(selections):
+        needed = {pair for out in selection.outgroups for pair in selection.pair_keys(out)}
+        subset = {pair: {family: sampled[pair][family] for family in retained[i]} for pair in needed}
+        for row in common_outgroup_rows([selection], subset, branch_ids, denominator=denominator):
+            yield {**row, "num_measured_before_topology_filter": before[i]}
 
 
 def common_outgroup_rows(selections, sampled, branch_ids, *, denominator=None):
