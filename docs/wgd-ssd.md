@@ -160,6 +160,15 @@ original block, both before and after requiring archive-family agreement.
 This diagnostic does not require five disjoint four-copy paths or change
 the primary definition of an observable window.
 
+`cross_synteny_copy_phase.tsv` separates four-gene sets for the same species
+pair and matched duplication node into concordant-only, discordant-only,
+and ambiguous paths. Ambiguous means the original blocks admit both ways
+of pairing the same four genes across species. Families and windows can
+contain multiple quartets and can appear in more than one category. On the
+species tree, `W` counts matched paired windows and `U` counts windows with
+at least one concordant-only quartet. This audit does not change the primary
+candidate decision or turn phase agreement into an age estimate.
+
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:
 

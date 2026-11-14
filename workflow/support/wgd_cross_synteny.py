@@ -7,8 +7,10 @@ from collections import defaultdict
 from pathlib import Path
 
 try:
+    from wgd_cross_phase import observe_phase, record_phase
     from wgd_evidence import read_table
 except ImportError:
+    from .wgd_cross_phase import observe_phase, record_phase
     from .wgd_evidence import read_table
 
 
@@ -240,7 +242,7 @@ class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
     def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
-                 *, reverse_cross=False, inputs=None):
+                 *, reverse_cross=False, inputs=None, audit_phase=False):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -252,6 +254,7 @@ class CrossSynteny:
         self.coverage = [] if audit_coverage else None
         self.coverage_genes = set() if audit_coverage else None
         self.archive_families = {}
+        self.phases = defaultdict(dict) if audit_phase else None
         trace_branches = None if trace_branches is None else set(trace_branches)
         index = CladeIndex(tree)
         leaves = {leaf.name: leaf for leaf in tree.leaves()}
@@ -290,7 +293,8 @@ class CrossSynteny:
                             (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
                             for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
                         trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
-                        self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace))
+                        phase_pair = (branch, a, b) if audit_phase and status == "assessed" and len(genes) == 4 else None
+                        self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace, phase_pair))
 
     def observe_family(self, family, leaves):
         for gene in self.coverage_genes.intersection(leaves):
@@ -338,7 +342,9 @@ class CrossSynteny:
         left, right = (set(child.leaf_names()) for child in node.children)
         for source, other in ((left, right), (right, left)):
             for gene in source.intersection(targets):
-                for genes, window, observed, regions_for_age, trace in targets[gene]:
+                for genes, window, observed, regions_for_age, trace, phase_pair in targets[gene]:
+                    if phase_pair is not None and (phase := observe_phase(source, other, genes)):
+                        record_phase(self.phases, phase_pair, window, family, genes, phase)
                     if genes[1] in source and all(g in other for g in genes[2:]):
                         observed[window].add(family)
                         for sp, pair, first, second in regions_for_age or ():

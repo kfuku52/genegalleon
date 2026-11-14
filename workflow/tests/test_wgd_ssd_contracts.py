@@ -186,6 +186,7 @@ def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
 
 @pytest.mark.parametrize("case,status,event,matched", [
     ("paired", "supports", "duplication-and-synteny-candidate", 1),
+    ("both_phases", "supports", "duplication-and-synteny-candidate", 1),
     ("one_copy", "supports", "duplication-and-synteny-candidate", 1),
     ("wrong_phase", "assessed_below_threshold", "unresolved", 0),
     ("empty_self", "assessed_below_threshold", "unresolved", 0),
@@ -200,6 +201,7 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     from nwkit.clade_index import CladeIndex
     from nwkit.util import read_tree
 
+    from workflow.support.wgd_cross_phase import phase_rows
     from workflow.support.wgd_cross_synteny import CrossSynteny, archive_window_floor, cross_synteny_inputs
     from workflow.support.wgd_tree_scan import scan_duplications
 
@@ -213,6 +215,8 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
             "" if case in {"empty_self", "missing_archive_anchors"} else "###\n" + "".join(
                 f"{species}_a{i}\t{species}_b{i}\t1\n" for i in range(5)))
     copies = (("a", "b"), ("b", "a")) if case == "wrong_phase" else (("a", "a"), ("b", "b"))
+    if case == "both_phases":
+        copies += (("a", "b"), ("b", "a"))
     if case == "one_copy":
         copies = copies[:1]
     if case == "no_cross_anchors":
@@ -227,7 +231,7 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
          "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs]
     inputs = cross_synteny_inputs(comparisons)
     cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,),
-                         audit_coverage=True, inputs=inputs)
+                         audit_coverage=True, audit_phase=True, inputs=inputs)
     reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, inputs=inputs)
     separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True)
     assert reverse.summarize() == separate_reverse.summarize()
@@ -252,6 +256,11 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     assert row["synteny_status"] == status
     assert row["event_support"] == event
     pair, = pair_rows
+    phase, = phase_rows(rows, pair_rows, cross.phases)
+    assert phase["concordant_only_quartets"] == (5 if case == "paired" else 1 if case == "positive_below_archive_floor" else 0)
+    assert phase["discordant_only_quartets"] == (5 if case == "wrong_phase" else 0)
+    assert phase["ambiguous_quartets"] == (5 if case == "both_phases" else 0)
+    assert phase["ambiguous_windows"] == (1 if case == "both_phases" else 0)
     if case == "missing_archive_anchors":
         assert coverage[0]["num_observable_windows"] == 2
         assert coverage[0]["num_archive_family_windows"] == 0

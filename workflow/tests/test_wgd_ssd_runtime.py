@@ -265,7 +265,10 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert row["event_support"] == "duplication-and-synteny-candidate"
     assert row["species_event_id"] == pair["species_event_id"]
     assert pair["matched_paired_windows"] == "1" and pair["matched_families"] == "5"
-    assert {"cross_synteny_pairs.tsv", "cross_synteny_windows.tsv"} <= summary["output_hashes"].keys()
+    assert {"cross_synteny_pairs.tsv", "cross_synteny_windows.tsv", "cross_synteny_copy_phase.tsv"} <= summary["output_hashes"].keys()
+    phase, = read_table(root / "cross_synteny_copy_phase.tsv")
+    assert phase["concordant_only_quartets"] == "5" and phase["concordant_only_windows"] == "1"
+    assert phase["ambiguous_quartets"] == phase["discordant_only_quartets"] == "0"
     coverage, = read_table(root / "cross_synteny_archive_coverage.tsv")
     assert coverage["num_cross_anchor_pairs"] == coverage["num_archive_family_anchor_pairs"] == "10"
     assert coverage["num_observable_windows"] == coverage["num_archive_family_windows"] == "2"

@@ -22,6 +22,7 @@ try:
     from parallel_io import ordered_bounded_results
     from wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from wgd_cross_phase import PHASE_FIELDS, phase_rows, unique_phase_windows
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -51,6 +52,7 @@ except ImportError:
     from .parallel_io import ordered_bounded_results
     from .wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from .wgd_cross_phase import PHASE_FIELDS, phase_rows, unique_phase_windows
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -123,6 +125,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
+              Path(__file__).with_name("wgd_cross_phase.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
               Path(__file__).with_name("wgd_cross_support.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
@@ -689,7 +692,7 @@ def focal_ks_label(row):
 
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
-                    matched_trios=()):
+                    matched_trios=(), phase_diagnostics=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -700,6 +703,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     tree_mode = duplication_threshold is not None
     cross_mode = any(row.get("synteny_method") == "cross_block_correspondence" for row in rows)
     paired_regions = {row["species_event_id"]: row for row in region_rows if row["mode"] == "paired"}
+    phase_windows = unique_phase_windows(phase_diagnostics)
     age_styles = {"supports_branch": ("o", "#15504B", "dS supports placement"),
                   "partial_support": ("o", "#9F620A", "dS supports one daughter"),
                   "age_conflict": ("x", "#AD3232", "dS age conflict"),
@@ -828,6 +832,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             value = f"S={float(row[metric]):.2%}" if tree_mode else f"P={float(row['p_value']):.3g}"
             region = paired_regions.get(row["species_event_id"])
             windows = f"  W={region['matched_windows']}" if region is not None and state == "duplication-and-synteny-candidate" else ""
+            if windows and row["species_event_id"] in phase_windows:
+                windows += f"  U={phase_windows[row['species_event_id']]}"
             ax.annotate(f"B{row['branch_id']}  {value}{windows}",
                         (midpoint, y[node]), xytext=(0, 5),
                         textcoords="offset points", ha="center", fontsize=7.5, color=color)
@@ -861,6 +867,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                for c, h, label in active_styles]
     if cross_mode:
         handles.append(Line2D([], [], color="#6B537F", ls=":", label="Synteny unobserved; score below cutoff"))
+    if phase_windows:
+        handles.append(Line2D([], [], color="none", label="W: paired windows; U: uniquely concordant windows"))
     shown_age = {row.get("cross_ks_status") for row in rows}
     age_handles = [Line2D([], [], marker=marker, mec=edge, mfc="white", ls="none", label=label)
                    for marker, edge, label in dict.fromkeys(style for state, style in age_styles.items() if state in shown_age)]
@@ -938,6 +946,7 @@ def run_analysis(plan, output, cpus):
     cross_evidence = None
     cross_ks = None
     region_summary = ()
+    phase_diagnostics = ()
     traced_ks_hits = ()
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
@@ -948,7 +957,7 @@ def run_analysis(plan, output, cpus):
             audit_orientation = p.get("cross_orientation_audit")
             inputs = cross_synteny_inputs(pairs) if audit_orientation else None
             cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
-                                 trace_branches=None, audit_coverage=True, inputs=inputs)
+                                 trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs)
             if audit_orientation:
                 reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs)
             del inputs
@@ -994,6 +1003,8 @@ def run_analysis(plan, output, cpus):
                 write_table(output / "cross_synteny_anchor_nonreuse.tsv", nonreuse_rows, NONREUSE_OUTPUT)
             cross_evidence, pair_rows, window_rows = cross.summarize(archive_floor=archive_window_floor(coverage_rows))
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
+            phase_diagnostics = list(phase_rows(raw_candidates, pair_rows, cross.phases))
+            write_table(output / "cross_synteny_copy_phase.tsv", phase_diagnostics, PHASE_FIELDS)
             if reverse is not None:
                 _, reverse_pairs, _ = reverse.summarize(include_windows=False, archive_floor=reverse_floor)
                 write_table(output / "cross_synteny_orientation.tsv",
@@ -1083,7 +1094,8 @@ def run_analysis(plan, output, cpus):
     plot_candidates(candidates, output, tree=tree, alpha=p["alpha"],
                     duplication_threshold=p["min_duplication_score"] if tree_mode else None,
                     focal_rows=focal_rows, region_rows=region_summary,
-                    matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else ())
+                    matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
+                    phase_diagnostics=phase_diagnostics)
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
