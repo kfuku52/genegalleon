@@ -55,6 +55,19 @@ def test_tsv_rejects_ambiguous_headers_and_row_widths(tmp_path, text):
         read_table(path)
 
 
+@pytest.mark.parametrize("relpath", ["input/bootstrap.json", "output/genome_evolution/wgd_ssd/bootstrap.json",
+                                     "output/tmp/wgd_ssd/bootstrap.json", "output/artifact_provenance/bootstrap.json",
+                                     "output/.gg_global_artifacts/bootstrap.json", "source.tsv"])
+def test_wgd_bootstrap_checkpoint_protects_managed_paths(tmp_path, relpath):
+    source = tmp_path / "source.tsv"
+    source.touch()
+    output = tmp_path / relpath
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ValueError, match="outside|replace|curated"):
+        wgd_ssd.protect_checkpoint(output, {source: ""}, tmp_path)
+    wgd_ssd.protect_checkpoint(tmp_path / "bootstrap.json", {source: ""}, tmp_path)
+
+
 def test_event_support_is_an_evidence_rule_not_a_probability():
     anchors = anchor_rows()
     row = summarize_events([candidate()], anchors, {name: {"num_annotated_loci": 20} for name in ("A", "B")},

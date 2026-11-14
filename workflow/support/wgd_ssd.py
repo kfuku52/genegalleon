@@ -212,6 +212,11 @@ def make_plan(args):
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
+    checkpoint = getattr(args, "count_bootstrap_checkpoint", "")
+    if checkpoint:
+        if not args.count_bootstrap or tree_archive is not None:
+            raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
+        checkpoint = str(resolve(checkpoint, ""))
     parameters["max_ks_quartets"] = getattr(args, "max_ks_quartets", 0)
     if parameters["max_ks_quartets"] and not cross_ks_sources:
         raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
@@ -240,11 +245,14 @@ def make_plan(args):
         managed_output = workspace / "output/genome_evolution/wgd_ssd"
         protect_output(managed_output, hashes)
         inputs.update(hashes)
+    if checkpoint:
+        protect_checkpoint(checkpoint, inputs | {str(args.outfile.resolve()): ""}, workspace)
     protect_output(args.outfile, inputs, workspace)
     return {"schema_version": 1, "workspace": str(workspace), "species_tree": str(tree_path),
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
+            "count_bootstrap_checkpoint": checkpoint,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -270,6 +278,17 @@ def protect_output(path, inputs, workspace=None):
         raise ValueError("WGD output must not replace or contain an input")
     if workspace and (target == Path(workspace) / "input" or Path(workspace) / "input" in target.parents):
         raise ValueError("WGD outputs must not be written into curated workspace/input")
+
+
+def protect_checkpoint(path, inputs, workspace):
+    protected = [workspace / "output/genome_evolution/wgd_ssd", workspace / "output/tmp/wgd_ssd",
+                 workspace / "output/artifact_provenance", workspace / "output/.gg_global_artifacts"]
+    checkpoint = Path(path).resolve()
+    if not checkpoint.parent.is_dir():
+        raise ValueError("WGD bootstrap checkpoint needs an existing parent directory")
+    if any(parent == checkpoint or parent in checkpoint.parents for parent in protected):
+        raise ValueError("WGD bootstrap checkpoint must be outside managed WGD outputs and task scratch")
+    protect_output(checkpoint, inputs, workspace)
 
 
 def validated_members(plan):
@@ -843,6 +862,13 @@ def run_analysis(plan, output, cpus):
         raise ValueError("WGD bootstrap workers exceed the allocated CPUs")
     verify(plan)
     protect_output(output, plan["input_hashes"], Path(plan["workspace"]))
+    checkpoint = plan.get("count_bootstrap_checkpoint", "")
+    if checkpoint:
+        if tree_mode or not p["count_bootstrap"]:
+            raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
+        protect_checkpoint(checkpoint, plan["input_hashes"] | {str(output.resolve()): ""}, Path(plan["workspace"]))
+        if output.resolve() in Path(checkpoint).resolve().parents:
+            raise ValueError("WGD bootstrap checkpoint must be outside the output bundle")
     family_tables = _validated_family_tables(plan)
     members, family_key, count_rows = family_tables
     validate_annotation_counts(plan, members)
@@ -914,6 +940,8 @@ def run_analysis(plan, output, cpus):
         worker_args = ["--bootstrap-workers", str(bootstrap_workers)] if p["count_bootstrap"] and bootstrap_workers > 1 else []
         if scan_workers > 1:
             worker_args.extend(("--scan-workers", str(scan_workers)))
+        if checkpoint:
+            worker_args.extend(("--bootstrap-checkpoint", checkpoint))
         run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
                   "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
                   "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
@@ -1222,7 +1250,7 @@ def main():
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
-                  "cross-tree-support", "cross-ks-reuse-summary"):
+                  "cross-tree-support", "cross-ks-reuse-summary", "count-bootstrap-checkpoint"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)

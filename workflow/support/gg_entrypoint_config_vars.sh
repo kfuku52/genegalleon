@@ -417,6 +417,7 @@ wgd_counts_file
 wgd_members_file
 wgd_count_bootstrap
 wgd_count_bootstrap_workers
+wgd_count_bootstrap_checkpoint
 wgd_count_scan_workers
 wgd_alpha
 wgd_gene_trees_file

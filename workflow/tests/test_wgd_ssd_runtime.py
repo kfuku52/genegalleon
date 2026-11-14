@@ -141,13 +141,18 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     workspace = tmp_path / "workspace"
     fixture(workspace, genomes=False)
     result = run_core(workspace, GG_TASK_CPUS="2", wgd_count_scan_workers="2",
-                      wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2")
+                      wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2",
+                      wgd_count_bootstrap_checkpoint="bootstrap.json")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
     assert summary["plan"]["parameters"]["count_scan_workers"] == 2
     assert summary["plan"]["parameters"]["count_bootstrap_workers"] == 2
     model = json.loads((root / "count_model.json").read_text())
+    checkpoint = workspace / "bootstrap.json"
+    assert json.loads(checkpoint.read_text())["statistics"] == model["bootstrap_max_statistics"]
+    assert summary["plan"]["count_bootstrap_checkpoint"] == str(checkpoint)
+    assert "bootstrap.json" not in summary["output_hashes"]
     assert len(model["bootstrap_max_statistics"]) == 2
     assert len(model["candidates"]) == 4
 

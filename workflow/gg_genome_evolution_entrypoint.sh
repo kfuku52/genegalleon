@@ -135,6 +135,7 @@ wgd_counts_file="" # Default: unfiltered OrthoFinder GeneCount table; count-depe
 wgd_members_file="" # Default: matching unfiltered OrthoFinder membership table.
 wgd_count_bootstrap=199 # Refit null simulations and calibrate the maximum over searched branches/times.
 wgd_count_bootstrap_workers=1 # Optional NWKIT parallel null refits; each worker needs fit memory and one CPU.
+wgd_count_bootstrap_checkpoint="" # Optional file outside stage outputs to resume interrupted null refits.
 wgd_count_scan_workers=1 # Optional NWKIT parallel fits across candidate branches before bootstrapping.
 wgd_alpha=0.05 # Search-wide conditional bootstrap P-value cutoff.
 wgd_gene_trees_file="" # Optional rooted *_root.nwk ZIP; selects duplication-score mode.
