@@ -332,13 +332,16 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
             manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
                                           codec, codec_version, compression_level, publication_workers, packing_workers)
             if work != staging:
-                for name in manifest["files"]:
-                    shutil.copyfile(work / name, staging / name)
-                copied = hash_paths(staging, (staging / name for name in manifest["files"]),
-                                    workers=publication_workers, hash_function=_digest)
-                for name, expected in manifest["files"].items():
-                    if copied[name] != expected:
-                        raise OSError(f"Copied model-store member differs: {name}")
+                def copy_member(path):
+                    target_path = staging / path.name
+                    shutil.copyfile(path, target_path)
+                    copied = _digest(target_path)
+                    if copied != manifest["files"][path.name]:
+                        raise OSError(f"Copied model-store member differs: {path.name}")
+                    return copied
+
+                hash_paths(work, (work / name for name in manifest["files"]),
+                           workers=publication_workers, hash_function=copy_member)
         (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
         _sync_files(staging.iterdir(), publication_workers)
         os.rename(staging, target)
