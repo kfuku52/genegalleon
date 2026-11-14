@@ -91,13 +91,15 @@ def test_parallel_flanked_scores_keep_block_order():
 
 def test_parallel_cold_catalog_cli_preserves_restart_and_qc(tmp_path, monkeypatch):
     inputs, edges, rows = tiny_inputs(tmp_path)
+    rows.append({**rows[0], 'species': 'Species_donor3'})
+    write_tsv(inputs, list(rows[0]), rows)
     root = tmp_path / 'parallel'
     refinement.plan(root, inputs=inputs, edges=edges, mode='off')
-    monkeypatch.setenv('GG_MEM_TOOL_GB', '8')
+    monkeypatch.setenv('GG_MEM_TOOL_GB', '16')
 
     def run(command):
         return subprocess.check_output([sys.executable, '-B', refinement.__file__, command,
-                                        '--output', str(root), '--cpus', '2'], text=True)
+                                        '--output', str(root), '--cpus', '4'], text=True)
 
     assert run('catalog').count('Completed catalog/') == len(rows)
     receipts = {path: path.read_bytes() for path in root.glob('catalog/*/receipt.json')}

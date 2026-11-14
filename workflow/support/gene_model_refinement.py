@@ -768,7 +768,12 @@ def _build_catalogs(root, value, names, cpus):
         else:
             source, fields = request['sources'][name], ('fasta', 'gff')
         annotation_sizes.append(sum(Path(source[field]).stat().st_size for field in fields))
-    if sum(sorted(annotation_sizes, reverse=True)[:2]) * 64 > (int(budget) - 4) * 1024 ** 3:
+    workers = min(cpus, len(missing), 4)
+    largest = sorted(annotation_sizes, reverse=True)
+    available = (int(budget) - 4) * 1024 ** 3
+    while workers > 1 and sum(largest[:workers]) * 64 > available:
+        workers -= 1
+    if workers < 2:
         return [catalog_species(root, value, name) for name in names]
 
     cold = set(missing)
@@ -777,10 +782,10 @@ def _build_catalogs(root, value, names, cpus):
             directories[name] = catalog_species(root, value, name)
 
     pending, receipts = deque(), {}
-    with ProcessPoolExecutor(max_workers=2, mp_context=get_context('spawn')) as executor:
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
         for name in missing:
             pending.append(executor.submit(_build_catalog_worker, root, value, name))
-            if len(pending) >= 4:
+            if len(pending) >= workers * 2:
                 directory, sha = pending.popleft().result()
                 receipts[directory / 'receipt.json'] = sha
         for future in pending:
