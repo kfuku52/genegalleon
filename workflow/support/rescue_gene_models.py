@@ -1809,10 +1809,15 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
 
                 def checked_native_prediction(model):
                     checked = checked_prediction(model)
+                    raw = checked['raw_prediction']
                     if checked['evidence'] is model['evidence']:
                         # This input owns its evidence. Both records already
                         # share nested structure support, which is filled below.
-                        checked['raw_prediction']['evidence'] = checked['evidence']
+                        raw['evidence'] = checked['evidence']
+                    # After native validation, neither path changes the CDS
+                    # coordinates. Keep distinct paths when QC changed them.
+                    if raw['cds'] == checked['cds']:
+                        raw['cds'] = checked['cds']
                     return checked
 
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
@@ -2058,6 +2063,8 @@ def revalidate_retained_coding_paths(retained_paths, current, genome, code, para
     DNA, the current strict validator, and a fresh alignment to an available
     current donor. Ordinary ownership and competition still run afterwards.
     """
+    if not retained_paths:
+        return [], {'schema': 1, 'missing_valid_prediction_paths': 0, 'rows': []}
     from Bio.Align import PairwiseAligner
 
     placement = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
