@@ -91,6 +91,7 @@ def test_component_selection_equivalent_to_memory_engine_with_wgd_and_isolates(t
     assert scientific_output(result) == scientific_output(expected)
     assert result["metrics"]["peak_loaded_loci"] == 3
     assert result["metrics"]["store_loci"] == 7
+    assert result["metrics"]["components"] == 3
     assert result["metrics"]["limited_components"] == 0
 
 

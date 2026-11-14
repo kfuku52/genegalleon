@@ -193,7 +193,7 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
     if max_component_loci < 1:
         raise ValueError("max_component_loci must be positive")
     with _connection(db) as connection:
-        parent = {node: node for node in iter_locus_keys(connection)}
+        locus_keys = set(iter_locus_keys(connection))
         edge_rows = list(edges)
         endpoints = {(str(edge['species_' + side]), str(edge['gene_' + side]))
                      for edge in edge_rows for side in ('a', 'b')}
@@ -213,18 +213,24 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                     coordinate_ambiguity.add(node)
             locus = None
 
+        parent = {}
+
         def find(node):
             while parent[node] != node:
                 parent[node] = parent[parent[node]]
                 node = parent[node]
             return node
 
-        prepared = prepare_correspondence(parent, edge_rows, coordinate_ambiguity=coordinate_ambiguity,
+        prepared = prepare_correspondence(locus_keys, edge_rows, coordinate_ambiguity=coordinate_ambiguity,
                                           nonvoting=nonvoting)
+        locus_count = len(locus_keys)
+        del locus_keys
         voting_edges = [{"species_a": a[0], "gene_a": a[1], "species_b": b[0], "gene_b": b[1], "weight": weight}
                         for (a, b), weight in sorted(prepared["edge_by_pair"].items())]
         for edge in voting_edges:
             a, b = (edge["species_a"], edge["gene_a"]), (edge["species_b"], edge["gene_b"])
+            parent.setdefault(a, a)
+            parent.setdefault(b, b)
             root_a, root_b = find(a), find(b)
             if root_a != root_b:
                 parent[max(root_a, root_b)] = min(root_a, root_b)
@@ -247,8 +253,6 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                     total_metrics[key] += value
 
         for root, keys in sorted(components.items()):
-            if len(keys) == 1:
-                continue
             if len(keys) > max_component_loci:
                 limited_components += 1
                 for species, gene_id in keys:
@@ -275,7 +279,7 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
         # Most loci have no voting neighbors. Stream their records through one
         # cursor and compute the same isolated decision without building a graph.
         def isolated(node):
-            return len(components[find(node)]) == 1
+            return node not in parent
 
         for locus in iter_loci(connection, include=isolated):
             node = str(locus["species"]), str(locus["gene_id"])
@@ -290,8 +294,8 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
         result["scores"].sort(key=lambda row: (row["species"], row["gene_id"], row["candidate_id"]))
         result["audit"].sort(key=lambda row: row["loci"])
         result["omitted_edges"].sort(key=lambda row: (row["a"], row["b"]))
-        total_metrics["components"] = len(components)
-        total_metrics.update(store_loci=len(parent), graph_edges=len(edge_rows),
+        total_metrics["components"] = len(components) + locus_count - len(parent)
+        total_metrics.update(store_loci=locus_count, graph_edges=len(edge_rows),
                              max_component_loci=max_component_loci, peak_loaded_loci=peak_loaded_loci,
                              limited_components=limited_components)
         result["metrics"] = dict(total_metrics)
