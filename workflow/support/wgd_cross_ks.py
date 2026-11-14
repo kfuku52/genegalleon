@@ -16,10 +16,12 @@ try:
     from fasta_sequence_store import fasta_records
     from pairwise_synteny import source_file
     from wgd_evidence import number, read_table
+    from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny import source_file
     from .wgd_evidence import number, read_table
+    from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
 
 
 PAIR_FIELDS = ("species_event_id", "focal", "family_id", "gene_a", "gene_b",
@@ -291,8 +293,14 @@ class CrossKs:
                 requested.setdefault(pair, (focal, focal, "", "paralog"))
         return requested
 
-    def run(self, output, cpus, candidates, estimate, write_table):
+    def run(self, output, cpus, candidates, estimate, write_table, traced_hits=()):
         requested = self.requests()
+        quartet_limit = self.parameters.get("max_ks_quartets", 0)
+        selected = ()
+        if quartet_limit:
+            selected, pairs = quartet_requests(traced_hits, candidates, self.codes, quartet_limit, self.parameters["seed"])
+            for pair, info in pairs.items():
+                requested.setdefault(pair, info)
         genes = defaultdict(set)
         for pair, info in requested.items():
             for name, gene in zip(info[:2], pair, strict=True):
@@ -336,6 +344,8 @@ class CrossKs:
         write_table(output / "cross_ks_focals.tsv", rows, FOCAL_FIELDS)
         write_table(output / "cross_ks_matched_boundaries.tsv",
                     matched_boundary_rows(self.tree, rows, self.trios, contrasts, self.parameters), MATCHED_FIELDS)
+        if quartet_limit:
+            write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
         return rows
 
     def divergence_bounds(self, contrasts, output, write_table):

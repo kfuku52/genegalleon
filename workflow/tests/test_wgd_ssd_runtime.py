@@ -217,7 +217,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
         stream.writestr("OG000_generax.ufboot.nwk", f"(({a}_a0,{b}_a0)100,({a}_b0,{b}_b0)88,{c}_a0);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
-                      wgd_cross_tree_support_file="boot.zip")
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -240,6 +240,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
+    quartets = read_table(root / "cross_ks_quartets.tsv")
+    assert len(quartets) == 3 and {r["species_event_id"] for r in quartets} == {row["species_event_id"]}
+    assert "cross_ks_quartets.tsv" in summary["output_hashes"]
     assert all(row["status"] == "missing_trio" for row in read_table(root / "cross_ks_matched_boundaries.tsv"))
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
     assert "wgd_cross_ks.png" in summary["plot_hashes"]

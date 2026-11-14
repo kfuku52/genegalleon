@@ -34,6 +34,7 @@ wgd_alpha="${wgd_alpha:-0.05}"
 wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
 wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
+wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
 wgd_cross_tree_support_file="${wgd_cross_tree_support_file:-}"
 wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
 wgd_min_duplication_score="${wgd_min_duplication_score:-0.01}"
@@ -394,6 +395,7 @@ run_wgd_ssd_stage() (
     --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
     --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
     --cross-ks-cds "${wgd_cross_ks_cds_file}" \
+    --max-ks-quartets "${wgd_max_ks_quartets}" \
     --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
     --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \

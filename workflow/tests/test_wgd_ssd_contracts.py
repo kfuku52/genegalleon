@@ -411,6 +411,30 @@ def test_cross_ks_chooses_coverage_trio_and_uses_cds_only_outgroup(tmp_path):
     assert scan.place("A", branch, (.4, .5), bounds, bounds["A", branch], bounds["A", parent])[0] == "supports_branch"
 
 
+def test_cross_ks_quartet_sampling_is_bounded_and_tests_all_three_pairings():
+    from workflow.support.wgd_quartet_ks import quartet_requests, quartet_results
+
+    rows = [{"species_event_id": "e", "branch_id": 2, "event_support": "duplication-and-synteny-candidate"}]
+    hits = [("e", "B", "A", ("c", i), "f", (f"B_a{i}", f"A_a{i}", f"B_b{i}", f"A_b{i}"), (), ())
+            for i in range(4)]
+    selected, requests = quartet_requests(hits, rows, {"A": 1, "B": 1}, 2, 73)
+    assert len(selected) == 2 and len(requests) == 12
+    assert (selected, requests) == quartet_requests(hits[::-1], rows, {"A": 1, "B": 1}, 2, 73)
+    assert quartet_requests(hits, rows, {"A": 1, "B": 2}, 2, 73) == ([], {})
+    first, second = selected
+    assert first[1][0][0].startswith("A_")
+    reports = dict(zip(first[1], [("ok", .1), ("ok", .2), ("ok", .4), ("ok", .5), ("ok", .3), ("ok", .4)], strict=True))
+    reports.update(dict.fromkeys(second[1], ("saturated", "NA")))
+    paired, missing = quartet_results(selected, reports)
+    assert paired["status"] == "paired_minimum"
+    assert paired["paired_margin"] == pytest.approx(.4)
+    assert paired["other_sums_difference"] == pytest.approx(.2)
+    assert missing["status"] == "incomplete" and missing["paired_margin"] is None
+    reports.update(dict.fromkeys(first[1][:2], ("ok", 1.0)))
+    discordant, = quartet_results([first], reports)
+    assert discordant["status"] == "paired_not_minimum"
+
+
 def test_cross_synteny_rejects_duplicate_pair_and_bad_anchor(tmp_path):
     from workflow.support.wgd_cross_synteny import anchor_links, read_pairs
 

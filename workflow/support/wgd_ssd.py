@@ -97,6 +97,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
               Path(__file__).with_name("wgd_cross_support.py").resolve(),
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
+              Path(__file__).with_name("wgd_quartet_ks.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
     return {"nwkit": nwkit.__version__, "ds": ds,
@@ -199,7 +200,11 @@ def make_plan(args):
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
+    parameters["max_ks_quartets"] = getattr(args, "max_ks_quartets", 0)
+    if parameters["max_ks_quartets"] and not cross_ks_sources:
+        raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
+            or parameters["max_ks_quartets"] < 0
             or any(parameters[key] < 1 for key in ("max_pairs", "max_ks_families", "max_count_families",
                                                   "diagonal_bound", "min_blocks", "max_iterations",
                                                   "count_bootstrap_workers", "count_scan_workers"))
@@ -795,6 +800,7 @@ def run_analysis(plan, output, cpus):
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
     cross_ks = None
+    traced_ks_hits = ()
     plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
         age_sources = plan.get("cross_ks_sources", {})
@@ -835,6 +841,8 @@ def run_analysis(plan, output, cpus):
                                                 cross.traced_hits), SUPPORT_FIELDS)
             if cross_ks:
                 cross_ks.prepare(cross.age_pairs, raw_candidates, cross_evidence)
+                if p.get("max_ks_quartets"):
+                    traced_ks_hits = cross.traced_hits
             del cross
         if not raw_candidates:
             raise ValueError("Duplication scoring needs at least one non-root internal species branch")
@@ -890,7 +898,7 @@ def run_analysis(plan, output, cpus):
             row["minimum_cross_windows"] = p["min_cross_windows"]
     age_summary, focal_rows = {}, ()
     if cross_ks:
-        focal_rows = cross_ks.run(output, cpus, candidates, estimate_pair_reports, write_table)
+        focal_rows = cross_ks.run(output, cpus, candidates, estimate_pair_reports, write_table, traced_ks_hits)
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
             status = row["cross_ks_status"]
@@ -1154,7 +1162,7 @@ def main():
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
-                           ("max-pairs", 5000), ("max-ks-families", 500), ("max-count-families", 10000),
+                           ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-count-families", 10000),
                            ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
                            ("max-iterations", 200), ("multiplicity", 2)):
         plan.add_argument("--" + field, type=int, default=default)

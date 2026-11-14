@@ -172,6 +172,18 @@ not used to reject or move a WGD automatically: dS dates copy divergence,
 which can precede allopolyploidization. The diagnostic is not an independent
 P-value and does not change the original branch or gene-node classification.
 
+With `wgd_max_ks_quartets` above zero, `cross_ks_quartets.tsv` adds a
+within-family check for combined candidates with paired paths and same-code
+CDS in both species. The limit is per branch and species pair; each selected
+window/family contributes one quartet, sampled before looking at dS. The six
+dS values compare the three possible pairs of opposing paths. A positive
+`paired_margin` means the two synteny-matched copy paths have the smallest
+sum; `other_sums_difference` records deviation from an additive tree.
+Missing or saturated pairs yield an incomplete quartet. This is a check
+of local copy correspondence, not a clock correction, age estimate, or test
+of the branch or number of WGD events. The default zero skips additional
+alignments; pairs already requested for the age analysis are reused.
+
 Without a gene-tree ZIP, the default is the calibrated gene-count mode.
 
 NWKIT models linear duplication/loss, positive-geometric ancestral counts,
