@@ -76,6 +76,19 @@ def test_parallel_refinement_nominations_preserve_edge_order():
     assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 2)) == expected
 
 
+def test_parallel_flanked_scores_keep_block_order():
+    left = {'protein': 'M' * 12, 'blocks': [[0, 36, 0]]}
+    right = {'protein': 'W' * 12, 'blocks': [[0, 36, 0]]}
+    rows = [(i, None if i % 3 == 0 else (left, left if i % 3 == 1 else right)) for i in range(521)]
+    one = list(refinement._ordered_scores(iter(rows), refinement.pair_score, (), 1))
+    two = list(refinement._ordered_scores(iter(rows), refinement.pair_score, (), 2))
+    assert one == two
+    assert [i for i, _ in two] == list(range(len(rows)))
+    assert two[0][1] is None
+    assert two[1][1].identity == 1
+    assert two[2][1].identity == 0
+
+
 def test_parallel_cold_catalog_cli_preserves_restart_and_qc(tmp_path, monkeypatch):
     inputs, edges, rows = tiny_inputs(tmp_path)
     root = tmp_path / 'parallel'
@@ -1414,7 +1427,7 @@ def test_final_catalog_index_rejects_catalog_receipt_change_after_initial_index(
         refinement.predict_species(root, value, name)
     receipt = root / 'catalog' / value['species'][0] / 'receipt.json'
 
-    def change_catalog(_root, _value, name):
+    def change_catalog(_root, _value, name, _cpus=1):
         if name == value['species'][-1]:
             receipt.write_bytes(receipt.read_bytes() + b'\n')
 

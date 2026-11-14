@@ -795,13 +795,13 @@ def _build_catalogs(root, value, names, cpus):
 def catalog_index(root, value, predictions=False, *, cpus=1):
     dependencies = {}
     if predictions:
-        initial_db = catalog_index(root, value)
+        initial_db = catalog_index(root, value, cpus=cpus)
         initial_receipt = (initial_db.parent / 'receipt.json').read_bytes()
         initial_record = json.loads(initial_receipt)
         initial_files = initial_record['files']
         dependencies['index'] = {'catalog_index': hashlib.sha256(initial_receipt).hexdigest()}
         for name in target_species(value):
-            predict_species(root, value, name)
+            predict_species(root, value, name, cpus)
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
     else:
         directories = _build_catalogs(root, value, value['species'], cpus)
@@ -878,13 +878,8 @@ def copy_refinement_index(source, destination, expected_sha256):
         raise OSError('Copied refinement SQLite index differs from its source database')
 
 
-def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, params):
-    """Nominate existing nonanchor loci only between two conserved anchors.
-
-    A rank correspondence requires equal bounded counts and independent coding
-    similarity. Copy conflicts remain ambiguous when all block evidence merges.
-    """
-    result = []
+def _flanked_locus_pairs(db, species_a, species_b, anchor_pairs, position_index, params):
+    """Pair existing nonanchor loci only between two conserved anchors."""
     def interior(species, left, right):
         positions, tracks = position_index[species]
         a, b = positions[left], positions[right]
@@ -908,14 +903,22 @@ def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, p
             la, lb = load_locus(db, species_a, ga['gene_id']), load_locus(db, species_b, gb['gene_id'])
             ca = max(la['candidates'], key=lambda c: c.get('corrected_cds_length', len(c['cds'])))
             cb = max(lb['candidates'], key=lambda c: c.get('corrected_cds_length', len(c['cds'])))
-            score = pair_score(ca, cb)
-            if score.bounded or score.identity < params['minimum_identity'] or min(score.coverage_a, score.coverage_b) < 0.75:
-                continue
-            result.append(dict(species_a=species_a, gene_a=ga['gene_id'], species_b=species_b, gene_b=gb['gene_id'],
-                               weight=0.8, ambiguous=False,
-                               evidence={'kind': 'two_flanking_anchors', 'left': list(left), 'right': list(right),
-                                         'identity': score.identity, 'coverage_a': score.coverage_a, 'coverage_b': score.coverage_b}))
-    return result
+            yield (species_a, species_b, ga['gene_id'], gb['gene_id'], left, right), (ca, cb)
+
+
+def _flanked_edge(context, score, params):
+    if score.bounded or score.identity < params['minimum_identity'] or min(score.coverage_a, score.coverage_b) < 0.75:
+        return None
+    species_a, species_b, ga, gb, left, right = context
+    return dict(species_a=species_a, gene_a=ga, species_b=species_b, gene_b=gb, weight=0.8, ambiguous=False,
+                evidence={'kind': 'two_flanking_anchors', 'left': list(left), 'right': list(right),
+                          'identity': score.identity, 'coverage_a': score.coverage_a, 'coverage_b': score.coverage_b})
+
+
+def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, params):
+    """Require independent coding similarity after pairing equal bounded ranks."""
+    return [edge for context, (ca, cb) in _flanked_locus_pairs(db, species_a, species_b, anchor_pairs, position_index, params)
+            if (edge := _flanked_edge(context, pair_score(ca, cb), params)) is not None]
 
 
 def uses_rescue_correspondence(request):
@@ -1007,7 +1010,7 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                               for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
                 ordered = {seqid: sorted(genes, key=lambda g: g['start']) for seqid, genes in tracks.items()}
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
-            with store_connection(db) as connection:
+            def score_inputs(connection):
                 for job in jobs:
                     directory = anchor_root / 'synteny' / job['id']
                     if _RECEIPT_SNAPSHOT is None:
@@ -1019,16 +1022,28 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                             raise ValueError('Synteny comparison has no receipted blocks')
                     for block in blocks:
                         anchor_pairs = [(aliases[job['a']].get(a), aliases[job['b']].get(b)) for a, b in block]
-                        edges.extend(infer_flanked_loci(connection, job['a'], job['b'], anchor_pairs, position_index, request['parameters']))
-                        for i, (a, b) in enumerate(block):
-                            ga, gb = aliases[job['a']].get(a), aliases[job['b']].get(b)
-                            if not ga or not gb:
-                                continue
-                            # Boundary anchors lack two independent flanks and are audit-only.
-                            edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
-                                              weight=1.0, evidence={'comparison': job['id'], 'anchors': len(block),
-                                                                  'left_flank': i > 0, 'right_flank': i + 1 < len(block)},
-                                              ambiguous=i == 0 or i + 1 == len(block)))
+                        yield from _flanked_locus_pairs(connection, job['a'], job['b'], anchor_pairs,
+                                                        position_index, request['parameters'])
+                        # Emit anchor evidence after its block's flanked pairs,
+                        # preserving which evidence wins a duplicate edge.
+                        yield (job, anchor_pairs), None
+
+            with store_connection(db) as connection:
+                for context, score in _ordered_scores(score_inputs(connection), pair_score, (), cpus):
+                    if score is not None:
+                        edge = _flanked_edge(context, score, request['parameters'])
+                        if edge is not None:
+                            edges.append(edge)
+                        continue
+                    job, anchor_pairs = context
+                    for i, (ga, gb) in enumerate(anchor_pairs):
+                        if not ga or not gb:
+                            continue
+                        # Boundary anchors lack two independent flanks and are audit-only.
+                        edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
+                                          weight=1.0, evidence={'comparison': job['id'], 'anchors': len(anchor_pairs),
+                                                              'left_flank': i > 0, 'right_flank': i + 1 < len(anchor_pairs)},
+                                          ambiguous=i == 0 or i + 1 == len(anchor_pairs)))
         if request.get('transcriptome_diamond'):
             with contextlib.ExitStack() as stack:
                 scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='transcriptome-proteins-', dir=tmp)))
@@ -1098,16 +1113,16 @@ def prediction_donor_names(directory, name, species):
 
 
 @invocation_cached
-def select(root, value, predictions=False):
-    db = catalog_index(root, value, predictions)
-    directory = correspondence(root, value)
+def select(root, value, predictions=False, *, cpus=1):
+    db = catalog_index(root, value, predictions, cpus=cpus)
+    directory = correspondence(root, value, cpus)
     params = value['request']['parameters']
     dependencies = {'correspondence': digest(directory / 'receipt.json'),
                     'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     if predictions:
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
-        initial = select(root, value)
+        initial = select(root, value, cpus=cpus)
         dependencies['initial'] = digest(initial / 'receipt.json')
 
     def build(tmp):
@@ -1722,46 +1737,50 @@ def _nomination_indexes(targets, baseline, donors, params):
     return searches
 
 
-def _nomination_batch(rows, params):
-    return [_nomination_indexes(*row, params) if row is not None else [] for row in rows]
+def _score_batch(function, rows, options):
+    return [function(*row, *options) if row is not None else None for row in rows]
 
 
-def _ordered_nominations(inputs, params, cpus):
+def _ordered_scores(inputs, function, options, cpus):
+    """Score bounded batches while keeping database reads and result order local."""
     batch_size = 64
     minimum_parallel_edges = 512
     initial = list(islice(inputs, minimum_parallel_edges)) if cpus > 1 else []
     remaining = chain(initial, inputs)
     if len(initial) < minimum_parallel_edges:
         for context, row in remaining:
-            yield context, _nomination_indexes(*row, params) if row is not None else []
+            yield context, function(*row, *options) if row is not None else None
         return
 
     def consume(batch):
         contexts, future = batch
         yield from zip(contexts, future.result(), strict=True)
 
-    # Genome/SQLite handles stay in the caller. Results are applied in edge
-    # order so query insertion and proposal order remain stable.
     workers = min(cpus, 8)
     pending = deque()
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
         while batch := list(islice(remaining, batch_size)):
             contexts, rows = zip(*batch, strict=True)
-            pending.append((contexts, executor.submit(_nomination_batch, rows, params)))
+            pending.append((contexts, executor.submit(_score_batch, function, rows, options)))
             if len(pending) >= workers * 2:
                 yield from consume(pending.popleft())
         while pending:
             yield from consume(pending.popleft())
 
 
+def _ordered_nominations(inputs, params, cpus):
+    for context, result in _ordered_scores(inputs, _nomination_indexes, (params,), cpus):
+        yield context, result or []
+
+
 @invocation_cached
 def predict_species(root, value, name, cpus=1):
     if name not in target_species(value):
         raise ValueError('Donor-only species has no refinement prediction: ' + name)
-    initial = select(root, value)
+    initial = select(root, value, cpus=cpus)
     cat_dir = catalog_species(root, value, name)
-    db = catalog_index(root, value)
-    corr = correspondence(root, value)
+    db = catalog_index(root, value, cpus=cpus)
+    corr = correspondence(root, value, cpus)
     donor_names = prediction_donor_names(corr, name, value['species'])
     params, source = parameters_for(value['request'], name), value['request']['sources'].get(name)
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': catalog_hashes(root, value),
@@ -2714,9 +2733,9 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
             'transcriptome_changed_representatives': sum(row['status'] == 'conserved' for row in assembly_rows)}
 
 
-def finalize(root, value):
-    final = select(root, value, predictions=True)
-    db = catalog_index(root, value, predictions=True)
+def finalize(root, value, *, cpus=1):
+    final = select(root, value, predictions=True, cpus=cpus)
+    db = catalog_index(root, value, predictions=True, cpus=cpus)
     dependencies = {'selection': digest(final / 'receipt.json'),
                     'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
@@ -3176,12 +3195,12 @@ def _main(args):
     if args.command in {'correspondence', 'run'}:
         correspondence(root, value, args.cpus, args.comparison_cache)
     if args.command in {'select', 'run'}:
-        select(root, value)
+        select(root, value, cpus=args.cpus)
     if args.command in {'predict', 'run'}:
         for name in names:
             predict_species(root, value, name, args.cpus)
     if args.command in {'finalize', 'run'}:
-        finalize(root, value)
+        finalize(root, value, cpus=args.cpus)
     if args.command in {'status', 'qc'}:
         if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys():
             verify_inputs(root / 'effective' / 'inputs.tsv')
