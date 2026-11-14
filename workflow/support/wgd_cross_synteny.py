@@ -353,7 +353,7 @@ class CrossSynteny:
             reverse[key] = passes
         return coverage, nonreuse, reverse
 
-    def observe(self, branch, family, node):
+    def observe(self, branch, family, node, paired_hits=None):
         targets = self.matches.get(branch)
         if not targets:
             return
@@ -375,7 +375,10 @@ class CrossSynteny:
                             blocks = tuple(sorted((*scopes[side], block) for side, block in set().union(*paths)))
                             positions = tuple((sp, *window_for(beds[sp], gene)) for gene in genes
                                               for sp in (a if gene in beds[a] else b,))
-                            self.traced_hits.add((branch, a, b, window, family, genes, blocks, positions))
+                            hit = (branch, a, b, window, family, genes, blocks, positions)
+                            self.traced_hits.add(hit)
+                            if paired_hits is not None and len(genes) == 4:
+                                paired_hits.add(hit)
 
     def summarize(self, *, include_windows=True, archive_floor=None, require_unique_phase=False):
         if require_unique_phase and self.phases is None:

@@ -616,16 +616,24 @@ def test_nested_copy_overlap_distinguishes_window_and_gene_matches():
 def test_paired_tree_support_uses_full_copy_groups_not_anchor_subclades(tmp_path):
     from zipfile import ZipFile
 
-    from workflow.support.wgd_cross_support import paired_tree_support
+    from nwkit.util import read_tree
 
-    primary, alternative = tmp_path / "root.zip", tmp_path / "ufboot.zip"
+    from workflow.support.wgd_cross_support import DuplicationTreeSupport
+
+    alternative = tmp_path / "ufboot.zip"
     text = "((((A_x,B_x)14,C_x)97,((A_y,B_y)15,C_y)98)99,(D_x,E_x)99);"
-    for path, member in ((primary, "f_root.nwk"), (alternative, "f_generax.ufboot.nwk")):
-        with ZipFile(path, "w") as stream:
-            stream.writestr(member, text)
+    with ZipFile(alternative, "w") as stream:
+        stream.writestr("f_generax.ufboot.nwk", text)
+        stream.writestr("m_generax.ufboot.nwk", text.replace("E_x", "E_y"))
+    tree = read_tree(text, "auto", True, quiet=True)
     rows = [{"species_event_id": "clade", "branch_id": 3}]
-    hits = [("clade", "A", "B", ("chr1", 1), "f", ("A_x", "B_x", "A_y", "B_y"), (), ())]
-    result, = paired_tree_support(primary, alternative, rows, hits)
+    with DuplicationTreeSupport(alternative) as support:
+        for family in ("z", "m", "f"):
+            hit = ("clade", "A", "B", ("chr1", 1), family, ("A_x", "B_x", "A_y", "B_y"), (), ())
+            support.observe(family, tree, (), {hit})
+    result, different, missing = support.paired_rows(rows)
+    assert [r["family_id"] for r in (result, different, missing)] == ["f", "m", "z"]
+    assert [r["status"] for r in (different, missing)] == ["different_leaves", "archive_missing"]
     assert result["status"] == "all_splits_present"
     assert [result[name] for name in ("duplication_support", "first_copy_support", "second_copy_support")] == [99, 97, 98]
 

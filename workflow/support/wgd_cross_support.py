@@ -81,6 +81,7 @@ class DuplicationTreeSupport:
     def __init__(self, path):
         self.path = path
         self.counts = defaultdict(Counter)
+        self.paired = defaultdict(dict)
 
     def __enter__(self):
         with ExitStack() as stack:
@@ -92,10 +93,11 @@ class DuplicationTreeSupport:
     def __exit__(self, *exc):
         return self.stack.__exit__(*exc)
 
-    def observe(self, family, tree, duplications):
-        bits = {name: 1 << i for i, name in enumerate(sorted(tree.leaf_names()))}
+    def observe(self, family, tree, duplications, paired_hits=()):
+        leaves = {leaf.name: leaf for leaf in tree.leaves()}
+        bits = {name: 1 << i for i, name in enumerate(sorted(leaves))}
         state, support = comparable_splits(self.archive, self.index.get(family), bits)
-        by_node = masks(tree, bits) if support else {}
+        by_node = masks(tree, bits) if support or paired_hits else {}
         best = dict.fromkeys(branch for branch, _ in duplications)
         if support:
             universe = by_node[tree]
@@ -111,6 +113,12 @@ class DuplicationTreeSupport:
             if weakest is not None:
                 for level in SUPPORT_LEVELS:
                     self.counts[branch][level] += weakest >= level
+        for hit in paired_hits:
+            nodes = paired_copy_nodes(tree, leaves, by_node, bits, hit[5])
+            values = tuple(support.get(split_id(by_node[node], by_node[tree])) for node in nodes)
+            status = state if state != "comparable" else (
+                "all_splits_present" if None not in values else "split_not_supported_or_missing")
+            self.paired[family][hit] = status, *values
 
     def rows(self, candidates):
         for row in candidates:
@@ -119,6 +127,13 @@ class DuplicationTreeSupport:
             yield {**{key: row[key] for key in DUPLICATION_SUPPORT_FIELDS[:4]},
                    **{f"num_{state}": counter[state] for state in COMPARISON_STATES},
                    **{f"num_all_splits_ge_{level}": counter[level] for level in SUPPORT_LEVELS}}
+
+    def paired_rows(self, candidates):
+        branch_ids = {row["species_event_id"]: row["branch_id"] for row in candidates}
+        for family, hits in sorted(self.paired.items()):
+            for (event, a, b, (contig, window), _, genes, *_), values in sorted(hits.items()):
+                yield dict(zip(SUPPORT_FIELDS, (event, branch_ids[event], a, b, contig, window, family,
+                                               ",".join(genes), *values), strict=True))
 
 
 def paired_copy_nodes(tree, leaves, by_node, bits, genes):
@@ -131,30 +146,3 @@ def paired_copy_nodes(tree, leaves, by_node, bits, genes):
     if None in copies or copies[0] is copies[1]:
         raise ValueError("Traced paired anchors do not split into the recorded duplication copies")
     return duplication, *copies
-
-
-def paired_tree_support(tree_archive, support_archive, candidates, traced_hits):
-    from nwkit.util import read_tree
-
-    branch_ids = {row["species_event_id"]: row["branch_id"] for row in candidates}
-    by_family = defaultdict(list)
-    for hit in sorted(traced_hits):
-        if len(hit[5]) == 4:
-            by_family[hit[4]].append(hit)
-    with ZipFile(tree_archive) as primary, ZipFile(support_archive) as alternative:
-        primary_index = archive_index(primary, "_root.nwk")
-        support_index = archive_index(alternative, "_generax.ufboot.nwk")
-        for family, hits in sorted(by_family.items()):
-            tree = read_tree(primary.read(primary_index[family]).decode("utf-8"), "auto", True, quiet=True)
-            leaves = {leaf.name: leaf for leaf in tree.leaves()}
-            bits = {name: 1 << i for i, name in enumerate(sorted(leaves))}
-            by_node = masks(tree, bits)
-            universe = by_node[tree]
-            state, support = comparable_splits(alternative, support_index.get(family), bits)
-            for event, a, b, (contig, window), _, genes, *_ in hits:
-                nodes = paired_copy_nodes(tree, leaves, by_node, bits, genes)
-                vals = tuple(support.get(split_id(by_node[node], universe)) for node in nodes)
-                status = state if state != "comparable" else (
-                    "all_splits_present" if None not in vals else "split_not_supported_or_missing")
-                yield dict(zip(SUPPORT_FIELDS, (event, branch_ids[event], a, b, contig, window, family,
-                                               ",".join(genes), status, *vals), strict=True))
