@@ -11,7 +11,6 @@ import hashlib
 import json
 import shutil
 import time
-from collections import Counter
 from itertools import chain
 from pathlib import Path
 
@@ -369,11 +368,11 @@ def rescue(root, plan, name, cpus):
             raise ValueError('Admission worker is incomplete or corrupted')
         history = []
         retained = read_retained(root, plan, name, old_worker, frozen['receipt_sha256'], batch, history)
-        counts = Counter()
-        def select(context):
-            counts['raw_records'] += 1
-            return eligible(context)
-        selected = dict(store.iter_model_items(old_worker, context_filter=select, frozen_key=raw_key, verification=batch))
+        manifest, manifest_sha = store._manifest(old_worker / 'model_store')
+        r.require_same_key(raw_key['manifest_sha256'], manifest_sha)
+        counts = {'raw_records': manifest['counts']['models']}
+        selected = dict(store.iter_model_items(old_worker, context_filter=eligible, frozen_key=raw_key,
+                                               verification=batch, scan_workers=min(cpus, 4)))
         for ordinal, primary in store._iter(old_worker, 'accepted', verification=batch, with_ordinals=True):
             if ordinal not in selected or store._json(selected[ordinal]) != store._json(primary):
                 raise ValueError('Prior primary is not an eligible, identical raw candidate')

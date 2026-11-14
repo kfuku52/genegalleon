@@ -1,5 +1,6 @@
 """Lossless admission updates, immutable source proof and sparse decoding."""
 import copy
+import gzip
 import json
 import os
 import weakref
@@ -9,6 +10,10 @@ import pytest
 from workflow.support import rescue_model_store as store
 from workflow.support.rescue_model_store_patch import patch_model_store
 from workflow.tests.test_rescue_model_store import model, published, receipt
+
+
+def clean_context(context):
+    return not context['problems']
 
 
 def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, monkeypatch):
@@ -88,7 +93,8 @@ def test_patch_rejects_corrupted_source_members(tmp_path, fault):
     assert not (tmp_path / 'output/model_store').exists()
 
 
-def test_context_selection_keeps_original_ordinals_without_decoding_rejections(tmp_path, monkeypatch):
+@pytest.mark.parametrize('workers', [1, 4])
+def test_context_selection_keeps_original_ordinals_without_decoding_rejections(tmp_path, monkeypatch, workers):
     rows = [model(i) for i in range(10)]
     for i, m in enumerate(rows):
         m['problems'] = [] if i in {2, 7} else ['internal_stop']
@@ -98,7 +104,7 @@ def test_context_selection_keeps_original_ordinals_without_decoding_rejections(t
         calls.append(envelope['ordinal'])
         return unpack(envelope, *args, **kwargs)
     monkeypatch.setattr(store, '_unpack', record)
-    assert list(store.iter_model_items(source, context_filter=lambda c: not c['problems'])) == [(2, rows[2]), (7, rows[7])]
+    assert list(store.iter_model_items(source, context_filter=clean_context, scan_workers=workers)) == [(2, rows[2]), (7, rows[7])]
     assert calls == [2, 7]
 
 
@@ -109,6 +115,16 @@ def test_context_selection_finishes_generation_fence_after_last_match(tmp_path):
     (source / 'receipt.json').write_text((source / 'receipt.json').read_text() + '\n')
     with pytest.raises(ValueError, match='generation changed'):
         list(iterator)
+
+
+def test_parallel_context_selection_checks_rejected_shards(tmp_path):
+    rows = [{**model(i), 'problems': [] if i == 0 else ['internal_stop']} for i in range(10)]
+    source, manifest = published(tmp_path, rows)
+    shard = source / 'model_store' / manifest['shards'][-1]['path']
+    with shard.open('ab') as stream:
+        stream.write(gzip.compress(b''))
+    with pytest.raises(ValueError, match='shard checksum changed'):
+        list(store.iter_model_items(source, context_filter=clean_context, scan_workers=4))
 
 
 @pytest.mark.parametrize('workers', [1, 4])

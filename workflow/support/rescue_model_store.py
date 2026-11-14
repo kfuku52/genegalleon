@@ -16,9 +16,11 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict, deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import closing
 from itertools import batched
+from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
 
 if __package__:
@@ -680,7 +682,7 @@ class _HashReader:
         self.handle.close()
 
 
-def _lines(path, codec, expected=None):
+def _record_lines(path, codec, expected=None):
     with Path(path).open("rb") as raw:
         reader = _HashReader(raw)
         if codec == "gzip":
@@ -692,12 +694,71 @@ def _lines(path, codec, expected=None):
             while line := handle.readline(MAX_RECORD_BYTES + 1):
                 if len(line) > MAX_RECORD_BYTES or not line.endswith(b"\n"):
                     raise ValueError("Malformed or oversized model-store JSONL record")
-                try:
-                    yield json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise ValueError("Malformed model-store JSONL record") from error
+                yield line
         if expected is not None and reader.hash.hexdigest() != expected:
             raise ValueError("Model-store shard checksum changed")
+
+
+def _decode_line(line):
+    try:
+        return json.loads(line)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Malformed model-store JSONL record") from error
+
+
+def _lines(path, codec, expected=None):
+    for line in _record_lines(path, codec, expected):
+        yield _decode_line(line)
+
+
+def _selection_context(envelope):
+    if (not isinstance(envelope, dict) or set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
+            or not _SHA.fullmatch(str(envelope.get("body", "")))
+            or not isinstance(envelope.get("context"), dict)):
+        raise ValueError("Malformed model-store envelope")
+    return envelope["context"]
+
+
+def _filter_shard(source, codec, expected, first, count, predicate, destination):
+    seen = 0
+    with destination.open("xb") as output:
+        for line in _record_lines(source, codec, expected):
+            envelope = _decode_line(line)
+            context = _selection_context(envelope)
+            if envelope.get("ordinal") != first + seen:
+                raise ValueError("Model-store candidate order changed")
+            if predicate(context):
+                output.write(line)
+            seen += 1
+    if seen != count:
+        raise ValueError("Model-store shard count changed")
+
+
+def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
+    """Verify each complete shard and consume its selected lines in source order."""
+    codec = manifest["codec"]
+    pending = deque()
+    with tempfile.TemporaryDirectory(prefix="gg-model-selection-") as directory, \
+            ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        def consume():
+            path, future = pending.popleft()
+            future.result()
+            with path.open("rb") as handle:
+                while line := handle.readline(MAX_RECORD_BYTES + 1):
+                    if len(line) > MAX_RECORD_BYTES or not line.endswith(b"\n"):
+                        raise ValueError("Malformed model-store selection scratch record")
+                    yield _decode_line(line)
+            path.unlink()
+
+        for index, shard in enumerate(manifest["shards"]):
+            member = f"{prefix}/{shard['path']}"
+            output = Path(directory) / str(index)
+            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected[member],
+                                                shard["first"], shard["count"], predicate, output)))
+            if len(pending) >= workers * 2:
+                yield from consume()
+        while pending:
+            yield from consume()
 
 
 def _stat(path):
@@ -706,7 +767,7 @@ def _stat(path):
 
 
 def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None, model_ids=None,
-          context_filter=None, with_ordinals=False):
+          context_filter=None, with_ordinals=False, scan_workers=1):
     if model_ids is not None:
         if isinstance(model_ids, (str, bytes)):
             raise ValueError("Model IDs must be a collection of strings")
@@ -772,6 +833,14 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 db.close()
         elif kind == "partial":
             yield from _partials(root, store, manifest, key)
+        elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
+              and len(manifest["shards"]) >= scan_workers * 2):
+            with closing(_readonly(store / "bodies.sqlite")) as db:
+                bodies = _DecodedBodies(db, manifest["body_codec"])
+                for envelope in _selected_shard_rows(prefix, manifest, paths, key["files"], context_filter, scan_workers):
+                    record = bodies.unpack(envelope, context_owned=True)
+                    if statuses is None or record.get("status") in statuses:
+                        yield (envelope["ordinal"], record) if with_ordinals else record
         else:
             db = _readonly(store / "bodies.sqlite")
             try:
@@ -793,13 +862,10 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                             # complete body DB. Only selected body payloads need
                             # decompression/reassembly; the full reader remains
                             # available for validating every record's layout.
-                            if (set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
-                                    or not _SHA.fullmatch(str(envelope.get("body", "")))
-                                    or not isinstance(envelope.get("context"), dict)):
-                                raise ValueError("Malformed model-store envelope")
-                            if model_ids is not None and envelope["context"].get("model_id") not in model_ids:
+                            context = _selection_context(envelope)
+                            if model_ids is not None and context.get("model_id") not in model_ids:
                                 continue
-                            if context_filter is not None and not context_filter(envelope["context"]):
+                            if context_filter is not None and not context_filter(context):
                                 continue
                         record = bodies.unpack(envelope, context_owned=True)
                         if statuses is None or record.get("status") in statuses:
@@ -905,15 +971,19 @@ def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model
                  model_ids=model_ids)
 
 
-def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None):
+def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None, scan_workers=1):
     """Yield original ordinals and selected models after full stream verification.
 
     The predicate reads candidate context only and must not mutate it. Unselected
     DNA bodies need not be restored, but every raw shard and body database is
     freshly hashed. Exhaust before consuming decisions or publishing a result.
+    Parallel scans require a picklable predicate without side effects and use
+    bounded batches of private scratch files for selected rows.
     """
+    if type(scan_workers) is not int or scan_workers < 1:
+        raise ValueError("Model-store scan workers must be a positive integer")
     return _iter(directory, "models", context_filter=context_filter,
-                 frozen_key=frozen_key, verification=verification, with_ordinals=True)
+                 frozen_key=frozen_key, verification=verification, with_ordinals=True, scan_workers=scan_workers)
 
 
 def iter_accepted_models(directory, *, verify=True, frozen_key=None, verification=None):
