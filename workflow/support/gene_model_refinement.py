@@ -2171,7 +2171,7 @@ def extend_gene_bounds(original, bounds):
     return ''.join(lines), changes
 
 
-def analysis_coding_candidate(candidate, genetic_code=None):
+def analysis_coding_candidate(candidate, genetic_code=None, *, projection=False):
     """Clip only already-known partial codon bases for the CDS analysis view."""
     quality = candidate.get('quality', {})
     expected = str(candidate.get('protein', '')).upper()
@@ -2219,10 +2219,15 @@ def analysis_coding_candidate(candidate, genetic_code=None):
     for index, block in enumerate(blocks):
         block[2] = (3 - cumulative % 3) % 3
         cumulative += block[1] - block[0]
-        if index + 1 < len(blocks):
+        if not projection and index + 1 < len(blocks):
             following = blocks[index + 1]
             donor, acceptor = (block[1], following[0]) if strand == '+' else (block[0], following[1])
             junctions.append([donor, acceptor, cumulative % 3])
+    if projection:
+        # The analysis view consumes geometry and admission only.
+        return {'cds': coding, 'protein': expected, 'blocks': blocks, 'seqid': candidate['seqid'],
+                'strand': strand, 'source_transcript_id': candidate['source_transcript_id'],
+                'quality': {'usable': True}}
     result = copy.deepcopy(candidate)
     result.update(cds=coding, protein=expected, blocks=blocks, junctions=junctions,
                   analysis={'removed_first_bases': offset, 'removed_final_bases': trailing,
@@ -2884,16 +2889,14 @@ def finalize(root, value, *, cpus=1):
                     admitted = exportable and candidate['quality'].get('usable', False) and bool(candidate['protein']) and '*' not in candidate['protein']
                     if admitted:
                         pep.write(f">{gene['gene_id']}\n{candidate['protein']}\n")
-                        coding_candidate = analysis_coding_candidate(candidate)
-                        analysis_cds.write(f">{gene['gene_id']}\n{coding_candidate['cds']}\n")
-                        analysis_candidates.append({
-                            key: coding_candidate[key]
-                            for key in ('source_transcript_id', 'seqid', 'strand', 'blocks', 'protein', 'quality')
-                        })
+                        coding_candidate = analysis_coding_candidate(candidate, projection=True)
+                        coding_sequence = coding_candidate.pop('cds')
+                        analysis_cds.write(f">{gene['gene_id']}\n{coding_sequence}\n")
+                        analysis_candidates.append(coding_candidate)
                         head = candidate['quality'].get('translation_offset', 0)
-                        tail = len(candidate['cds']) - head - len(coding_candidate['cds'])
+                        tail = len(candidate['cds']) - head - len(coding_sequence)
                         coding_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included', head, tail,
-                                             len(candidate['cds']), len(coding_candidate['cds'])))
+                                             len(candidate['cds']), len(coding_sequence)))
                     else:
                         coding_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'excluded', '', '', len(candidate['cds']), 0))
                     translation_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included' if admitted else 'excluded', json.dumps(candidate['quality'], sort_keys=True)))
