@@ -24,6 +24,7 @@ gg_read_shared_input <- if (exists(".gg_presence_read", inherits = FALSE)) .gg_p
 
 source(file.path(script_dir, "species_label_utils.r"), local = TRUE)
 source(file.path(script_dir, "tree_topology_helpers.R"), local = TRUE)
+source(file.path(script_dir, "presence_absence_taxonomy.R"), local = TRUE)
 
 font_size_pt <- 8
 font_size_mm <- font_size_pt * 0.352777778
@@ -248,14 +249,15 @@ displayed_duplication_nodes <- function(nodes, glyphs, visible_species) {
 }
 
 text_width_inches <- function(labels, size = font_size_pt) {
+  labels <- as.character(labels)
+  if (!length(labels)) return(stats::setNames(numeric(), labels))
   # A null device avoids persistent graphics files during font-metric measurement.
   grDevices::pdf(NULL, family = "Helvetica")
   on.exit(grDevices::dev.off())
-  vapply(as.character(labels), function(label) {
-    grid::convertWidth(grid::grobWidth(grid::textGrob(
-      label, gp = grid::gpar(fontsize = size)
-    )), "inches", valueOnly = TRUE) * 1.15
-  }, numeric(1))
+  grid::pushViewport(grid::viewport(gp = grid::gpar(fontsize = size)))
+  distinct <- unique(labels)
+  widths <- grid::convertWidth(grid::stringWidth(distinct), "inches", valueOnly = TRUE)
+  stats::setNames(widths[match(labels, distinct)] * 1.15, labels)
 }
 
 has_nonempty_file <- function(file_path) {
@@ -815,6 +817,22 @@ tree_scale_mode <- get_arg(args, "tree_scale", "bar")
 plot_width_arg <- get_arg(args, "width", "7.2")
 plot_width <- if (identical(plot_width_arg, "auto")) 7.2 else as.numeric(plot_width_arg)
 label_map <- read_label_map(get_arg(args, "label_map"))
+taxonomy_lineage_path <- get_arg(args, "taxonomy_lineage")
+taxonomy_groups_arg <- get_arg(args, "taxonomy_groups")
+taxonomy_ranks_arg <- get_arg(args, "taxonomy_ranks", "auto")
+if (nzchar(taxonomy_lineage_path)) {
+  if (!has_nonempty_file(taxonomy_lineage_path) || dir.exists(taxonomy_lineage_path)) {
+    stop("Cannot read taxonomy lineage TSV: ", taxonomy_lineage_path)
+  }
+  output_paths <- c(out_pdf, out_svg)
+  output_paths <- output_paths[nzchar(output_paths)]
+  if (normalizePath(taxonomy_lineage_path) %in% normalizePath(output_paths, mustWork = FALSE)) {
+    stop("Plot output replaces the taxonomy lineage TSV: ", taxonomy_lineage_path)
+  }
+  taxonomy_lineage <- gg_read_shared_input(taxonomy_lineage_path, "taxonomy_lineage", read_presence_taxonomy_lineage)
+} else if (nzchar(taxonomy_groups_arg) || !identical(taxonomy_ranks_arg, "auto")) {
+  stop("--taxonomy_groups and explicit --taxonomy_ranks require --taxonomy_lineage")
+}
 focus_species <- gg_species_label_from_text(trimws(strsplit(get_arg(args, "focus_species"), ",", fixed = TRUE)[[1]]))
 focus_species <- focus_species[nzchar(focus_species)]
 legend_columns_arg <- get_arg(args, "legend_columns", "auto")
@@ -2028,7 +2046,25 @@ if (root_stem_needed) {
 }
 label_right <- tree_right + max(4.0, max_label_width * 0.33)
 species_label_matrix_gap <- 0.18
-heatmap_left <- label_right + species_label_matrix_gap
+taxonomy_tracks <- list()
+taxonomy_widths <- numeric()
+taxonomy_font_pt <- font_size_pt * 0.82
+if (nzchar(taxonomy_lineage_path)) {
+  taxonomy_tracks <- presence_taxonomy_tracks(taxonomy_lineage, taxonomy_groups_arg, taxonomy_ranks_arg,
+                                              tip_levels, tree_for_plot$tip.label)
+  taxonomy_labels <- unique(c(names(taxonomy_tracks), unlist(lapply(taxonomy_tracks, "[[", "label"), use.names = FALSE)))
+  taxonomy_label_inches <- text_width_inches(taxonomy_labels, taxonomy_font_pt)
+  taxonomy_inches <- vapply(names(taxonomy_tracks), function(heading) {
+    max(taxonomy_label_inches[c(heading, taxonomy_tracks[[heading]]$label)]) + 0.16
+  }, numeric(1))
+  if (identical(plot_width_arg, "auto")) plot_width <- plot_width + sum(taxonomy_inches)
+  remaining_inches <- plot_width - sum(taxonomy_inches) - 6 / 72
+  if (remaining_inches <= 0) stop("Plot width is too small for taxonomy columns; use --width=auto or increase --width")
+  base_width <- label_right + species_label_matrix_gap + length(query_levels) * heatmap_cell_pitch +
+    if (nrow(busco_df) > 0) 5.35 else 0.55
+  taxonomy_widths <- taxonomy_inches * base_width / remaining_inches
+}
+heatmap_left <- label_right + species_label_matrix_gap + sum(taxonomy_widths)
 heatmap_right <- heatmap_left + length(query_levels) * heatmap_cell_pitch
 busco_left <- heatmap_right + ifelse(nrow(busco_df) > 0, 0.95, 0.15)
 busco_width <- ifelse(nrow(busco_df) > 0, 3.6, 0)
@@ -2987,10 +3023,11 @@ if (glyph_mode) {
   legend_df <- data.frame(
     label = c("undetected", "detected"),
     fill = unname(ortholog_colors[c("undetected", "detected")]),
-    x = heatmap_left + c(2.95, 7.35),
+    x = heatmap_left + c(4.30, 8.70),
     stringsAsFactors = FALSE
   )
 }
+presence_legend_title <- "Gene family"
 ortholog_legend_bottom <- if (glyph_mode && nrow(legend_df) > 0) {
   min(legend_df$y - pmax(0, legend_line_counts - 1) * 0.375)
 } else {
@@ -3205,7 +3242,7 @@ if (nrow(legend_df) > 0) {
     max(nchar(lines, type = "width"))
   }, integer(1))
   ortholog_legend_right <- max(
-    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, "Ortholog"), type = "width") * 0.33,
+    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, presence_legend_title), type = "width") * 0.33,
     legend_df$x + 0.62 + legend_label_width * 0.33
   )
   x_max <- max(x_max, ortholog_legend_right + 0.15)
@@ -3474,7 +3511,65 @@ if (nrow(query_tree_title_df) > 0) {
   y_max <- max(y_max, max(query_tree_title_df$title_y + final_title_depth) + 0.20)
 }
 
+if (length(taxonomy_tracks)) {
+  track_lefts <- label_right + species_label_matrix_gap + cumsum(taxonomy_widths) - taxonomy_widths
+  # Match the rendered matrix rows. The focus outline is taller than a tile
+  # in the family view and would make adjacent taxonomy bands overlap.
+  taxonomy_row_half_height <- if (glyph_mode) row_half_height_by_species else {
+    stats::setNames(rep(heatmap_cell_half, length(tip_y_by_species)), names(tip_y_by_species))
+  }
+  taxonomy_rects <- do.call(rbind, lapply(seq_along(taxonomy_tracks), function(index) {
+    blocks <- presence_taxonomy_blocks(taxonomy_tracks[[index]], tip_y_by_species, taxonomy_row_half_height)
+    blocks$xmin <- track_lefts[index]
+    blocks$xmax <- track_lefts[index] + taxonomy_widths[index]
+    blocks
+  }))
+  heading_height <- taxonomy_font_pt / 72 * final_data_units_per_inch
+  headings <- data.frame(
+    x = track_lefts + taxonomy_widths / 2, y = max(taxonomy_rects$ymax) + 0.8 * heading_height,
+    label = names(taxonomy_tracks)
+  )
+  y_max <- max(y_max, headings$y + heading_height)
+  if (identical(plot_height_arg, "auto")) {
+    # Short singleton bands in dense family matrices still need one line of text.
+    x_inches_per_unit <- (plot_width - 6 / 72) / (x_max - x_min)
+    min_band_height <- min(taxonomy_rects$ymax - taxonomy_rects$ymin)
+    layout_y_ratio <- max(layout_y_ratio, (taxonomy_font_pt + 1.5) / (72 * min_band_height * x_inches_per_unit))
+  }
+}
+
+required_plot_height <- plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min)
+plot_height <- if (identical(plot_height_arg, "auto")) max(2.8, required_plot_height) else as.numeric(plot_height_arg)
+if (!is.finite(plot_height) || plot_height <= 0) {
+  stop("Invalid --height: ", plot_height_arg)
+}
+if (nrow(glyph_rect_df) > 0 && plot_height < required_plot_height) {
+  stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
+       format(required_plot_height, digits = 4), " inches")
+}
+
 combined <- ggplot()
+if (length(taxonomy_tracks)) {
+  # coord_fixed fits the panel to both page dimensions, after plot margins.
+  x_inches_per_unit <- min((plot_width - 6 / 72) / (x_max - x_min),
+                           (plot_height - 6 / 72) / (layout_y_ratio * (y_max - y_min)))
+  label_width <- (taxonomy_rects$xmax - taxonomy_rects$xmin) * x_inches_per_unit - 2 / 72
+  label_height <- (taxonomy_rects$ymax - taxonomy_rects$ymin) * x_inches_per_unit * layout_y_ratio * 72 - 1.5
+  label_pt <- pmin(taxonomy_font_pt,
+                   taxonomy_font_pt * label_width / taxonomy_label_inches[taxonomy_rects$label], label_height)
+  heading_pt <- pmin(taxonomy_font_pt, taxonomy_font_pt *
+    (taxonomy_widths * x_inches_per_unit - 2 / 72) / taxonomy_label_inches[headings$label])
+  if (any(c(label_pt, heading_pt) < 4)) {
+    stop("Plot dimensions are too small for taxonomy labels; use --width=auto and --height=auto or increase the page size")
+  }
+  combined <- combined +
+    geom_rect(data = taxonomy_rects, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = fill),
+              color = "white", linewidth = 0.16) +
+    geom_text(data = taxonomy_rects, aes(x = (xmin + xmax) / 2, y = (ymin + ymax) / 2, label = label),
+              size = label_pt * font_size_mm / font_size_pt, color = "black") +
+    geom_text(data = headings, aes(x = x, y = y, label = label),
+              size = heading_pt * font_size_mm / font_size_pt, color = "black", fontface = "bold")
+}
 if (length(focus_species) > 0) {
   focus_y <- unname(tip_y_by_species[focus_species])
   focus_half_height <- unname(row_half_height_by_species[focus_species])
@@ -3776,7 +3871,7 @@ if (glyph_mode) {
   }
 } else if (value_mode == "presence") {
   combined <- combined +
-    annotate("text", x = heatmap_left + 0.05, y = y_legend, label = "Ortholog", hjust = 0, size = font_size_mm, color = "black") +
+    annotate("text", x = heatmap_left + 0.05, y = y_legend, label = presence_legend_title, hjust = 0, size = font_size_mm, color = "black") +
     geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y_legend - 0.18, ymax = y_legend + 0.18, fill = fill), color = "black", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y_legend, label = label), hjust = 0, size = font_size_mm, color = "black")
 }
@@ -3930,21 +4025,6 @@ if (nrow(busco_legend_df) > 0) {
     annotate("text", x = busco_left, y = y_legend + 0.75 * legend_y_scale, label = "BUSCO", hjust = 0, size = font_size_mm, color = "black") +
     geom_rect(data = busco_legend_df, aes(xmin = x, xmax = x + 0.32, ymin = y - 0.16 * legend_y_scale, ymax = y + 0.16 * legend_y_scale, fill = fill), color = "white", linewidth = 0.14) +
     geom_text(data = busco_legend_df, aes(x = x + 0.42, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
-}
-
-required_plot_height <- plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min)
-automatic_plot_height <- max(2.8, required_plot_height)
-plot_height <- if (identical(plot_height_arg, "auto")) {
-  automatic_plot_height
-} else {
-  as.numeric(plot_height_arg)
-}
-if (!is.finite(plot_height) || plot_height <= 0) {
-  stop("Invalid --height: ", plot_height_arg)
-}
-if (nrow(glyph_rect_df) > 0 && plot_height < required_plot_height) {
-  stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
-       format(required_plot_height, digits = 4), " inches")
 }
 
 if (nzchar(out_pdf)) {
