@@ -113,10 +113,12 @@ def anchor_links(path, a, b, symmetric=False, *, reversed_input=False):
                 contigs = pair
                 if symmetric and x == y:
                     continue
-                links[x, y].add(block)
+                ids = links[x, y]
+                ids.add(block)
                 neighbors[x].add(y)
                 if symmetric:
-                    links[y, x].add(block)
+                    # Both directions always receive the same block IDs.
+                    links[y, x] = ids
                     neighbors[y].add(x)
     return links, neighbors
 

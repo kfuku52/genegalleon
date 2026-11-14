@@ -96,6 +96,19 @@ def test_nonreused_anchor_count_checks_exact_matching_when_greedy_fails():
     assert not has_nonreused_anchors(set())
 
 
+def test_self_anchor_directions_share_block_membership_but_not_other_pairs(tmp_path):
+    from workflow.support.wgd_cross_synteny import anchor_links
+
+    path = tmp_path / "self.anchors"
+    path.write_text("###\na\tb\na\tc\na\ta\n###\nb\ta\n###\na\tb\n")
+    genome = {gene: ("chr", rank) for rank, gene in enumerate("abc")}
+    links, neighbors = anchor_links(path, genome, genome, symmetric=True)
+    assert links["a", "b"] is links["b", "a"] and links["a", "b"] == {1, 2, 3}
+    assert links["a", "c"] is links["c", "a"] and links["a", "c"] == {1}
+    assert dict(neighbors) == {"a": {"b", "c"}, "b": {"a"}, "c": {"a"}}
+    assert ("a", "a") not in links
+
+
 def test_event_support_is_an_evidence_rule_not_a_probability():
     anchors = anchor_rows()
     row = summarize_events([candidate()], anchors, {name: {"num_annotated_loci": 20} for name in ("A", "B")},
