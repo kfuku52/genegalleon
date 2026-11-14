@@ -82,7 +82,7 @@ def support_after_holdouts(hits, daughters, floor, *, reverse_windows=None, pair
     result = []
     single_losses = []
     for i, (group, wc, families, rc) in enumerate(stats, 1):
-        def lost_single(pair):
+        def lost_single(pair, families=families):
             return sum(family_regions[pair][f] == 1 for f in families[pair])
 
         if pair_audit is not None:
