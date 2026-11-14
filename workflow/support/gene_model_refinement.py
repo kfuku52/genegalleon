@@ -2950,7 +2950,7 @@ def finalize(root, value, *, cpus=1):
     return stage(root, 'effective', {'dependencies': dependencies}, build)
 
 
-def verify_inputs(inputs, field=None):
+def verify_inputs(inputs, field=None, *, verification=None):
     def parsed_identity(path):
         info = Path(path).stat()
         return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
@@ -2980,7 +2980,7 @@ def verify_inputs(inputs, field=None):
     roles = ('cds', 'protein', 'gff', 'genome', 'representative_map')
     paths = [inputs, receipt_path, *(row[role] for row in rows for role in roles),
              *(root / path for path in receipt['files'])]
-    hashes = digest_paths(paths)
+    hashes = digest_paths(paths) if verification is None else verification.read(paths)
     # Parsing happened before the batch began; bind the parsed rows/receipt to
     # those same bytes even if they changed before their fresh hash was taken.
     if parsed_identity(inputs) != input_identity or parsed_identity(receipt_path) != receipt_identity:
@@ -3015,7 +3015,7 @@ def verify_inputs(inputs, field=None):
     return rows
 
 
-def inspect_stages(root, value, cpus=1):
+def inspect_stages(root, value, cpus=1, *, effective_verification=None):
     """Check the required dependency graph, including absent publications.
 
     A receipt's own key is not evidence that it belongs to this run or its
@@ -3024,6 +3024,13 @@ def inspect_stages(root, value, cpus=1):
     """
     plan_hash = digest(root / 'plan.json')
     verify = _receipt_verifier(cpus)
+    verified_view = None
+    if effective_verification is not None:
+        # The genomic QC path reads all effective members once, including the
+        # role paths that can live outside the publication. Reuse that proof
+        # when validating this stage's key below.
+        rows = verify_inputs(root / 'effective' / 'inputs.tsv', verification=effective_verification)
+        verified_view = Path(rows[0]['cds']).parent.parent
 
     def receipt_hash(relative):
         try:
@@ -3105,8 +3112,22 @@ def inspect_stages(root, value, cpus=1):
     expected['selection_final'] = {'dependencies': final_selection_dependencies}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}
-    return {relative: verify(root / relative, {'plan': plan_hash, **key})
-            for relative, key in expected.items()} | anchors
+    result = {}
+    for relative, key in expected.items():
+        key = {'plan': plan_hash, **key}
+        if relative == 'effective' and verified_view == root / relative:
+            # verify_inputs has already hashed the full published inventory.
+            # Check its generation again and still require this run's stage key.
+            path = root / relative / 'receipt.json'
+            expected_sha = effective_verification.read([path])[str(path)]
+            receipt = path.read_bytes()
+            effective_verification.check()
+            if hashlib.sha256(receipt).hexdigest() != expected_sha:
+                raise ValueError('Effective receipt changed during QC')
+            result[relative] = json.loads(receipt)['key'] == key
+        else:
+            result[relative] = verify(root / relative, key)
+    return result | anchors
 
 
 def parser():
@@ -3202,13 +3223,19 @@ def _main(args):
     if args.command in {'finalize', 'run'}:
         finalize(root, value, cpus=args.cpus)
     if args.command in {'status', 'qc'}:
-        if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys():
-            verify_inputs(root / 'effective' / 'inputs.tsv')
-        result = {'species': len(target_species(value)), 'stages': inspect_stages(root, value, args.cpus)}
+        effective_verification = (FreshDigestBatch()
+                                  if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys()
+                                  else None)
+        stages = inspect_stages(root, value, args.cpus, effective_verification=effective_verification)
+        result = {'species': len(target_species(value)), 'stages': stages}
         if args.command == 'qc' and not all(result['stages'].values()):
             invalid = [name for name, valid in result['stages'].items() if not valid]
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))
+        load(root)
+        if effective_verification is not None:
+            effective_verification.check()
         print(json.dumps(result, sort_keys=True))
+        return
     load(root)
 
 

@@ -939,7 +939,7 @@ def test_qc_fails_on_corrupt_catalog_receipt_artifact(tmp_path):
     assert "Corrupt refinement stage" in result.stderr
 
 
-@pytest.mark.parametrize("damage", ["missing_catalog", "missing_index", "foreign_key", "upstream_key"])
+@pytest.mark.parametrize("damage", ["missing_catalog", "missing_index", "foreign_key", "upstream_key", "effective_key"])
 def test_qc_requires_every_stage_and_its_current_dependency_key(tmp_path, damage):
     inputs, edges, _rows = tiny_inputs(tmp_path)
     root = tmp_path / "run"
@@ -950,9 +950,9 @@ def test_qc_requires_every_stage_and_its_current_dependency_key(tmp_path, damage
         directory = root / ("catalog/Species_target" if damage == "missing_catalog" else "catalog_index")
         shutil.rmtree(directory)
     else:
-        path = root / "selection_final/receipt.json"
+        path = root / ("effective/receipt.json" if damage == "effective_key" else "selection_final/receipt.json")
         receipt = json.loads(path.read_text())
-        if damage == "foreign_key":
+        if damage in {"foreign_key", "effective_key"}:
             receipt["key"]["plan"] = "other-run"
         else:
             receipt["key"]["dependencies"]["correspondence"] = "obsolete-stage"

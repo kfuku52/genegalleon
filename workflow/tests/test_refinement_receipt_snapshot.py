@@ -347,6 +347,39 @@ def test_whole_refinement_completed_resume_keeps_every_output_and_receipt_byte(t
     refinement.verify_inputs(root / 'effective/inputs.tsv')
 
 
+def test_genomic_qc_hashes_effective_once_and_fences_changes(tmp_path, monkeypatch):
+    fixtures = import_module('test_gene_model_refinement')
+    inputs, edges, _rows = fixtures.tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    effective = refinement.finalize(root, value)
+    target = effective / 'species_cds/Species_target.fa'
+    original, reads = state.digest, Counter()
+
+    def track(path):
+        reads[Path(path)] += 1
+        return original(path)
+
+    monkeypatch.setattr(state, 'digest', track)
+    monkeypatch.setattr(rescue, 'digest', track)
+    proof = state.FreshDigestBatch()
+    assert all(refinement.inspect_stages(root, value, 2, effective_verification=proof).values())
+    assert reads[target] == 1
+
+    verify_inputs = refinement.verify_inputs
+
+    def change(*args, **kwargs):
+        result = verify_inputs(*args, **kwargs)
+        replacement = target.with_suffix('.replacement')
+        replacement.write_bytes(target.read_bytes())
+        replacement.replace(target)
+        return result
+
+    monkeypatch.setattr(refinement, 'verify_inputs', change)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        refinement.inspect_stages(root, value, 2, effective_verification=state.FreshDigestBatch())
+
+
 def correspondence_fixture(tmp_path, edges, *, legacy=False, projection=None):
     directory = tmp_path / 'correspondence'
     directory.mkdir()
