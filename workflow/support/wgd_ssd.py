@@ -20,7 +20,7 @@ try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
-    from wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
+    from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
@@ -52,7 +52,7 @@ except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
-    from .wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
+    from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
@@ -299,14 +299,17 @@ def make_plan(args):
     tools = owned_identity()
     inputs.update(tools["source_hashes"])
     inputs.update(tools["ds"]["source_hashes"])
-    reuse = getattr(args, "cross_ks_reuse_summary", "")
+    reuse = getattr(args, "cross_ks_reuse_summary", ())
+    if isinstance(reuse, str):
+        reuse = [reuse]
+    reuse = [summary for summary in reuse if summary]
     if reuse and not cross_ks_sources:
         raise ValueError("Cross-block alignment reuse requires --cross-ks-cds")
     alignment, files = alignment_identity(tools["ds"]) if cross_ks_sources else (None, ())
     inputs.update(files)
     reused_alignments = {}
     if reuse:
-        reused_alignments, hashes = reuse_sources(resolve(reuse, ""), alignment)
+        reused_alignments, hashes = reuse_bundle((resolve(summary, "") for summary in reuse), alignment)
         managed_output = workspace / "output/genome_evolution/wgd_ssd"
         protect_output(managed_output, hashes)
         inputs.update(hashes)
@@ -645,7 +648,7 @@ def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, ali
         if not selected:
             continue
         pairs_file, ds_file = output / f"{prefix}aligned_pairs.code{code}.tsv", output / f"{prefix}pair_ds.code{code}.tsv"
-        cached = matching_rows(reuse[str(code)], selected, sequences) if reuse and str(code) in reuse else {}
+        cached = matching_cached_rows(reuse[str(code)], selected, sequences) if reuse and str(code) in reuse else {}
         if cached:
             print(f"Cross-block dS code {code}: reusing {len(cached):,}/{len(selected):,} codon alignments", flush=True)
 
@@ -1442,9 +1445,10 @@ def main():
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
-                  "cross-tree-support", "cross-ks-reuse-summary", "count-bootstrap-checkpoint", "count-detection-tsv",
+                  "cross-tree-support", "count-bootstrap-checkpoint", "count-detection-tsv",
                   "count-rate-groups-tsv", "count-event-fractions", "count-family-gamma-shape"):
         plan.add_argument("--" + field, default="")
+    plan.add_argument("--cross-ks-reuse-summary", action="append", default=[], metavar="SUMMARY_JSON")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-coverage-audit", type=int, choices=(0, 1), default=0)

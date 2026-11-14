@@ -63,6 +63,35 @@ def reuse_sources(summary, identity):
     return sources, hashes
 
 
+def reuse_bundle(summaries, identity):
+    bundles, hashes = {}, {}
+    paths = tuple(dict.fromkeys(summaries))
+    for summary in paths:
+        sources, inputs = reuse_sources(summary, identity)
+        for code, path in sources.items():
+            aligned = bundles.setdefault(code, [])
+            if path not in aligned:
+                aligned.append(path)
+        for path, value in inputs.items():
+            if hashes.setdefault(path, value) != value:
+                raise ValueError(f"Prior WGD alignment source changed between summaries: {path}")
+    if len(paths) <= 1:
+        # Retain the single-source representation in existing plans.
+        bundles = {code: sources[0] for code, sources in bundles.items()}
+    return bundles, hashes
+
+
+def matching_cached_rows(paths, selected, sequences):
+    if isinstance(paths, (str, Path)):
+        paths = (paths,)
+    result = {}
+    for path in paths:
+        for pair, row in matching_rows(path, selected, sequences).items():
+            if result.setdefault(pair, row) != row:
+                raise ValueError(f"Conflicting verified WGD alignments for {row['pair_id']}: {path}")
+    return result
+
+
 def matching_rows(path, selected, sequences):
     requests = {pair: info for pair, info in selected}
     rows, seen = {}, set()

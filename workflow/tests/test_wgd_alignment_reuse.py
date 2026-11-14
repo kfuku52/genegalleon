@@ -42,6 +42,34 @@ def test_reuse_keeps_order_and_requires_exact_cds(tmp_path):
         reuse.matching_rows(path, request.items(), sequences)
 
 
+def test_reuse_merges_two_verified_bundles_and_rejects_conflicting_overlap(tmp_path):
+    identity = {"test": True}
+    header = "\t".join(reuse.PAIR_COLUMNS) + "\n"
+    a, b = tmp_path / "old", tmp_path / "new"
+    for folder in (a, b):
+        folder.mkdir()
+    files = [p / "cross_ks_aligned_pairs.code1.tsv" for p in (a, b)]
+    summaries = [p / "summary.json" for p in (a, b)]
+    shared = "u|v\tu\tv\tATG---ATG\tATGAAAATG\n"
+    files[0].write_text(header + shared + "a|b\ta\tb\tATG\tATG\n")
+    files[1].write_text(header + shared + "c|d\tc\td\tATG\tATG\n")
+    for summary, file in zip(summaries, files, strict=True):
+        summary.write_text(json.dumps({"plan": {"alignment_identity": identity},
+                                       "output_hashes": {file.name: reuse.digest(file)}}))
+    bundles, hashes = reuse.reuse_bundle([*summaries, summaries[0]], identity)
+    assert bundles == {"1": list(map(str, files))}
+    assert set(hashes) == {str(p) for p in (*files, *summaries)}
+    requests = [((x, y), ("A", "B")) for x, y in ("ab", "cd", "uv")]
+    sequences = {"A": {"a": ("ATG",), "c": ("ATG",), "u": ("ATGATG",)},
+                 "B": {"b": ("ATG",), "d": ("ATG",), "v": ("ATGAAAATG",)}}
+    assert reuse.matching_cached_rows(bundles["1"], requests, sequences).keys() == {("a", "b"), ("c", "d"), ("u", "v")}
+    files[1].write_text(header + shared.replace("ATG---ATG", "ATGATG---"))
+    with pytest.raises(ValueError, match="Conflicting verified"):
+        reuse.matching_cached_rows(bundles["1"], requests, sequences)
+    with pytest.raises(ValueError, match="hash does not match"):
+        reuse.reuse_bundle(summaries, identity)
+
+
 def test_alignment_identity_tracks_helpers_and_declines_unknown_layout(tmp_path, monkeypatch):
     wrapper = tmp_path / "mafft"
     helpers = tmp_path / "libexec"

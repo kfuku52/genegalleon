@@ -393,14 +393,18 @@ run_subgenome_dominance_stage() (
   echo "Subgenome outputs: ${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
 )
 run_wgd_ssd_stage() (
-  local scratch_root work_dir plan_file argument needs_update
-  local -a contract_args=()
+  local scratch_root work_dir plan_file argument needs_update prior_summary
+  local -a contract_args=() reuse_args=()
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" wgd_ssd || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/wgd_ssd") || exit 1
   ensure_dir "${scratch_root}"
   work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
   plan_file="${work_dir}/plan.json"
+  while IFS= read -r prior_summary; do
+    if [[ -n ${prior_summary} ]]; then reuse_args+=(--cross-ks-reuse-summary "${prior_summary}"); fi
+  done <<< "${wgd_cross_ks_reuse_summary}"
+  if [[ -z ${reuse_args[0]:-} ]]; then reuse_args=(--cross-ks-reuse-summary ""); fi
   python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
@@ -412,7 +416,7 @@ run_wgd_ssd_stage() (
     --cross-orientation-audit "${wgd_cross_orientation_audit}" \
     --cross-require-unique-phase "${wgd_cross_require_unique_phase}" \
     --cross-ks-cds "${wgd_cross_ks_cds_file}" \
-    --cross-ks-reuse-summary "${wgd_cross_ks_reuse_summary}" \
+    "${reuse_args[@]}" \
     --max-ks-quartets "${wgd_max_ks_quartets}" \
     --max-ks-outgroup-families "${wgd_max_ks_outgroup_families}" \
     --cross-tree-support "${wgd_cross_tree_support_file}" \

@@ -276,12 +276,15 @@ and is not used to call or date a WGD. The summaries and input pair results
 are in `cross_ks_common_outgroups.tsv` and `cross_ks_common_outgroup_pairs.tsv`.
 The default zero skips the extra alignments.
 
-To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` can point to
-`summary.json` in a separate, completed run directory with its original
-`cross_ks_aligned_pairs.code*.tsv` files. The source bundle must not be the
-destination. GeneGalleon checks the source hashes, MAFFT and backtranslation
+To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` accepts
+one or more newline-separated `summary.json` paths in separate, completed
+run directories with their original `cross_ks_aligned_pairs.code*.tsv`
+files. The CLI accepts repeated `--cross-ks-reuse-summary` arguments. No source
+bundle may be the destination. GeneGalleon checks the source hashes, MAFFT and backtranslation
 identity, genetic code, ordered gene IDs, and the exact current CDS for each
-reused row. New or changed pairs are aligned normally. All dS estimates and
+reused row. Identical alignments can be shared by bundles; conflicting
+verified alignments for the same pair and current CDS stop the run instead
+of choosing one by input order. New or changed pairs are aligned normally. All dS estimates and
 downstream tests are recomputed. Summaries without alignment provenance or
 unsupported MAFFT layouts cannot be used for reuse.
 
