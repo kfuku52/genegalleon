@@ -222,6 +222,26 @@ def test_cross_ks_matched_boundaries_exclude_incomplete_families_and_keep_covari
     assert matched_boundary_gap(older, younger, data, 199, np.random.default_rng(7))[-1] == "reversed"
 
 
+def test_cross_ks_matched_trios_keep_negative_contrasts_and_missing_families():
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_trio_rows
+
+    t = KsTrio("A", "B", "C", "event", 2)
+    absent = KsTrio("A", "B", "D", "event", 2)
+    f = [str(i) for i in range(25)]
+    contrasts = {("A", "B"): dict.fromkeys(f, 0.2), ("A", "C"): dict.fromkeys(f, 0.3),
+                 ("B", "C"): {family: 0.6 if i < 10 else 0.4 for i, family in enumerate(f)}}
+    contrasts["A", "B"]["incomplete"] = 5.0
+    row, missing = matched_trio_rows([t, absent], contrasts)
+    assert row["num_complete_families"] == 25 and row["num_negative_family_contrasts"] == 10
+    assert row["matched_median_ds"] == pytest.approx(.1)
+    assert row["matched_lower"] == pytest.approx(-.1)
+    assert row["status"] == "interval_includes_negative"
+    assert missing["status"] == "no_complete_families"
+    assert missing["num_complete_families"] == 0 and missing["matched_median_ds"] is None
+
+
 def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     from workflow.support.wgd_cross_regions import summarize_regions
 

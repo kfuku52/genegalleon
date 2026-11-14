@@ -445,6 +445,12 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
   family jointly. It diagnoses boundary ordering, not WGD age or a rate
   difference between retained duplicates and single-copy genes. It does not
   replace the primary boundary estimates or the branch call.
+- `cross_ks_matched_trios.tsv` reports the median of individual signed
+  three-distance corrections in complete families, with simultaneous
+  order-statistic intervals and counts of negative corrections. It targets
+  the complete-family distribution, which may differ from the primary
+  pair-median estimate if missingness or substitution rates vary by family.
+  It does not replace the primary intervals or the figure's placement rule.
 
 Each family has an additional `wgd_ssd/<family>_wgd_ssd.zip` archive containing
 `duplication_origins.tsv`, `pair_evidence.tsv`, full-tree `reconciliation.tsv`,

@@ -33,22 +33,28 @@ FOCAL_FIELDS = ("species_event_id", "branch_id", "focal", "status", "placed_even
 MATCHED_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "younger_outgroup",
                   "older_sister", "older_outgroup", "num_complete_families", "younger_ds", "older_ds",
                   "older_minus_younger", "gap_lower", "gap_upper", "status")
+MATCHED_TRIO_FIELDS = ("species_event_id", "branch_id", "focal", "sister", "outgroup", "num_complete_families",
+                       "num_negative_family_contrasts", "matched_median_ds", "matched_lower", "matched_upper", "status")
+
+
+def trio_pairs(trio):
+    return [tuple(sorted(taxa)) for taxa in ((trio.focal, trio.sister), (trio.focal, trio.outgroup),
+                                             (trio.sister, trio.outgroup))]
+
+
+def complete_distances(keys, contrasts):
+    families = sorted(set.intersection(*(set(contrasts.get(key, {})) for key in keys)))
+    return np.array([[contrasts[key][family] for key in keys] for family in families], dtype=float).reshape(-1, len(keys))
 
 
 def matched_boundary_gap(trio_young, trio_old, contrasts, draws, rng):
     """Estimate boundary ordering while keeping all six measurements within each family."""
     from nwkit.ksrate_model import corrected_ks
 
-    def pairs(trio):
-        return [tuple(sorted(taxa)) for taxa in ((trio.focal, trio.sister), (trio.focal, trio.outgroup),
-                                                 (trio.sister, trio.outgroup))]
-
-    keys = pairs(trio_young) + pairs(trio_old)
-    families = sorted(set.intersection(*(set(contrasts.get(key, {})) for key in keys)))
-    n = len(families)
+    values = complete_distances(trio_pairs(trio_young) + trio_pairs(trio_old), contrasts)
+    n = len(values)
     if not n:
         return n, None, None, None, None, None, "no_complete_families"
-    values = np.array([[contrasts[key][family] for key in keys] for family in families])
     med = np.median(values, axis=0)
     young, old = corrected_ks(*med[:3]), corrected_ks(*med[3:])
     gap = old - young
@@ -66,16 +72,42 @@ def matched_boundary_gap(trio_young, trio_old, contrasts, draws, rng):
     return n, young, old, gap, lo, hi, "ordered" if lo > 0 else "reversed" if hi < 0 else "order_unresolved"
 
 
-def matched_boundary_rows(tree, focal_rows, trios, contrasts, parameters):
+def ortholog_distances(contrasts):
+    by_pair = defaultdict(dict)
+    for row in contrasts:
+        key = tuple(sorted((row["species_a"], row["species_b"])))
+        by_pair[key][row["family_id"]] = float(row["ks"])
+    return by_pair
+
+
+def matched_trio_rows(trios, by_pair):
+    """Describe the median signed correction across complete families."""
+    from nwkit.ksrate_model import median_order_statistic_interval
+
+    for trio in trios:
+        first, second, third = complete_distances(trio_pairs(trio), by_pair).T
+        # Keep negative contrasts to avoid upward truncation bias.
+        corrected = (first - third) + second
+        center = lo = hi = None
+        status = "no_complete_families"
+        if len(corrected):
+            center = float(np.median(corrected))
+            lo, hi = median_order_statistic_interval(corrected, .05 / len(trios))
+            if not np.isfinite(lo):
+                lo = hi = None
+            status = ("negative_median" if center < 0 else "interval_unavailable" if lo is None
+                      else "interval_includes_negative" if lo < 0 else "estimated")
+        values = (trio.species_event_id, trio.branch_id, trio.focal, trio.sister, trio.outgroup,
+                  len(corrected), int(np.count_nonzero(corrected < 0)), center, lo, hi, status)
+        yield dict(zip(MATCHED_TRIO_FIELDS, values, strict=True))
+
+
+def matched_boundary_rows(tree, focal_rows, trios, by_pair, parameters):
     from nwkit.clade_index import CladeIndex
 
     index = CladeIndex(tree)
     parent_ids = {index.clade_id_for_node(node): index.clade_id_for_node(node.up) for node in tree.descendants()}
     by_trio = {(t.focal, t.species_event_id): t for t in trios}
-    by_pair = defaultdict(dict)
-    for row in contrasts:
-        key = tuple(sorted((row["species_a"], row["species_b"])))
-        by_pair[key][row["family_id"]] = float(row["ks"])
     rng = np.random.default_rng(parameters["seed"])
     for row in focal_rows:
         event, focal = row["species_event_id"], row["focal"]
@@ -342,8 +374,10 @@ class CrossKs:
         write_table(output / "cross_ks_paralogs.tsv", audit, PAIR_FIELDS)
         rows = self.summarize(candidates, bounds, hits, totals)
         write_table(output / "cross_ks_focals.tsv", rows, FOCAL_FIELDS)
+        by_pair = ortholog_distances(contrasts)
         write_table(output / "cross_ks_matched_boundaries.tsv",
-                    matched_boundary_rows(self.tree, rows, self.trios, contrasts, self.parameters), MATCHED_FIELDS)
+                    matched_boundary_rows(self.tree, rows, self.trios, by_pair, self.parameters), MATCHED_FIELDS)
+        write_table(output / "cross_ks_matched_trios.tsv", matched_trio_rows(self.trios, by_pair), MATCHED_TRIO_FIELDS)
         if quartet_limit:
             write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
         return rows
