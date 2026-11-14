@@ -346,6 +346,25 @@ def test_cross_ks_matched_trios_keep_negative_contrasts_and_missing_families():
     assert missing["num_complete_families"] == 0 and missing["matched_median_ds"] is None
 
 
+def test_cross_ks_matched_bootstrap_and_trios_preserve_tiny_residuals():
+    import numpy as np
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_boundary_gap, matched_trio_rows
+
+    younger = KsTrio("F", "Y", "O", "young", 2)
+    older = KsTrio("F", "X", "O", "old", 1)
+    huge = float(2 ** 57)
+    data = {tuple(sorted(pair)): {str(i): value for i in range(20)} for pair, value in {
+        ("F", "Y"): .25, ("F", "X"): .75, ("F", "O"): huge,
+        ("Y", "O"): huge, ("X", "O"): huge,
+    }.items()}
+    assert matched_boundary_gap(younger, older, data, 40, np.random.default_rng(1)) == (20, .25, .75, .5, .5, .5, "ordered")
+    rows = list(matched_trio_rows((younger, older), data))
+    assert [r["matched_median_ds"] for r in rows] == [.25, .75]
+    assert all(r["matched_lower"] == r["matched_median_ds"] == r["matched_upper"] for r in rows)
+
+
 def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     from workflow.support.wgd_cross_regions import summarize_regions
 

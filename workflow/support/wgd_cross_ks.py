@@ -48,6 +48,11 @@ def complete_distances(keys, contrasts):
     return np.array([[contrasts[key][family] for key in keys] for family in families], dtype=float).reshape(-1, len(keys))
 
 
+def signed_correction(first, second, third):
+    """Subtract from the larger distance first to preserve small residuals."""
+    return (np.maximum(first, second) - third) + np.minimum(first, second)
+
+
 def matched_boundary_gap(trio_young, trio_old, contrasts, draws, rng):
     """Estimate boundary ordering while keeping all six measurements within each family."""
     from nwkit.ksrate_model import corrected_ks
@@ -68,7 +73,7 @@ def matched_boundary_gap(trio_young, trio_old, contrasts, draws, rng):
         end = min(start + 128, draws)
         sample = rng.integers(n, size=(end - start, n))
         first, second, third, fourth, fifth, sixth = np.median(values[sample], axis=1).T
-        gaps[start:end] = fourth + fifth - sixth - (first + second - third)
+        gaps[start:end] = signed_correction(fourth, fifth, sixth) - signed_correction(first, second, third)
     lo, hi = map(float, np.quantile(gaps, (.025, .975)))
     return n, young, old, gap, lo, hi, "ordered" if lo > 0 else "reversed" if hi < 0 else "order_unresolved"
 
@@ -88,7 +93,7 @@ def matched_trio_rows(trios, by_pair):
     for trio in trios:
         first, second, third = complete_distances(trio_pairs(trio), by_pair).T
         # Keep negative contrasts to avoid upward truncation bias.
-        corrected = (first - third) + second
+        corrected = signed_correction(first, second, third)
         center = lo = hi = None
         status = "no_complete_families"
         if len(corrected):
