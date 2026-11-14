@@ -3020,11 +3020,13 @@ case "${input_generation_mode}" in
     python "${gg_support_dir}/rescue_gene_models.py" "${rescue_subcommand}" --output "${gene_model_rescue_dir}" \
       --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
     if [[ "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == rescue_postprocess ]]; then
-      rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}") || exit $?
+      rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" \
+        --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}") || exit $?
       while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
         gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"
       done <<< "${rescue_qc_rows}"
-      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}"
+      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" \
+        --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}"
     fi
     ;;
   rescue_finalize)
