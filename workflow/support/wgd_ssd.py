@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import hashlib
 import itertools
 import json
 import os
@@ -13,6 +14,7 @@ import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
+from copy import copy
 from functools import partial
 from math import isfinite
 from pathlib import Path
@@ -1184,8 +1186,9 @@ def replot(args):
     source = args.evidence.resolve()
     output = args.output.resolve()
     summary_path = source / "summary.json"
-    summary_hash = digest(summary_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary_bytes = summary_path.read_bytes()
+    summary_hash = hashlib.sha256(summary_bytes).hexdigest()
+    summary = json.loads(summary_bytes)
     if summary.get("schema_version") != 1:
         raise ValueError("Replot requires a version 1 WGD summary")
     plan = summary["plan"]
@@ -1652,12 +1655,21 @@ def classify(args):
     from nwkit.rooting_state import require_rooted
     from nwkit.util import _is_missing_support_value, assign_branch_ids, read_tree, write_tree
 
+    # Native tools run with the new result directory as cwd. Resolve user
+    # paths before entering it, including the optional species-label map.
+    args = copy(args)
+    for key in ("gene_tree", "species_tree", "evidence", "output", "species_map"):
+        if value := getattr(args, key, None):
+            setattr(args, key, Path(value).resolve())
     mul_enabled = bool(getattr(args, "mul_diagnostics", 0))
     if mul_enabled and (not args.mul_h1.strip() or min(args.mul_max_candidates, args.mul_max_state_pairs, args.mul_max_maps) < 1):
         raise ValueError("MUL diagnostics require explicit H1 and positive resource limits")
     evidence = args.evidence.resolve()
     # Ensure the candidate IDs refer to this full tree, not a family-pruned tree.
-    summary = json.loads((evidence / "summary.json").read_text())
+    summary_path = evidence / "summary.json"
+    summary_bytes = summary_path.read_bytes()
+    summary_hash = hashlib.sha256(summary_bytes).hexdigest()
+    summary = json.loads(summary_bytes)
     if digest(args.species_tree) != summary["plan"]["input_hashes"][str(Path(summary["plan"]["species_tree"]))]:
         raise ValueError("WGD evidence and classification species trees differ")
     verify(summary["plan"], family_evidence_digest)
@@ -1671,11 +1683,12 @@ def classify(args):
     for name, expected in summary["output_hashes"].items():
         if Path(name).name != name or family_evidence_digest(evidence / name) != expected:
             raise ValueError("WGD evidence output changed or has an invalid hash path")
-    snapshot_paths = [args.gene_tree, args.species_tree, evidence / "summary.json"]
+    snapshot_paths = [args.gene_tree, args.species_tree]
     if args.species_map:
         snapshot_paths.append(args.species_map)
     snapshot = {str(path): digest(path) for path in snapshot_paths}
-    protect_output(args.output, [args.gene_tree, args.species_tree, evidence],
+    snapshot[str(summary_path)] = summary_hash
+    protect_output(args.output, [*snapshot_paths, evidence],
                    Path(summary["plan"]["workspace"]) if "workspace" in summary["plan"] else None)
     species = species_tree(args.species_tree)
     if mul_enabled:

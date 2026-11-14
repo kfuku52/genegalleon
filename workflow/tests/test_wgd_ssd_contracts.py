@@ -702,6 +702,17 @@ def test_cross_synteny_node_paths_do_not_transfer_support_to_wrong_copy_or_branc
     assert node.props["cross_synteny_matched_paths"] == 1 and "duplication_origin" not in node.props
 
 
+def test_cross_node_reader_validates_unrelated_family_before_filtering(tmp_path):
+    from workflow.support.wgd_cross_node import CROSS_PATH_FIELDS, load_family_paths
+
+    path = tmp_path / "paths.tsv"
+    row = dict(zip(CROSS_PATH_FIELDS, ("AB", "other", "A", "B", "chr", 1, "a", "b", "a2", "b2", 1, 0, "invalid"),
+                   strict=True))
+    write_rows(path, CROSS_PATH_FIELDS, [row])
+    with pytest.raises(ValueError, match="Invalid cross-synteny node path flags"):
+        list(load_family_paths(path, "requested"))
+
+
 def test_rooted_dS_path_balance_recovers_signed_stems_and_respects_copy_order():
     from itertools import combinations
 
@@ -1660,14 +1671,23 @@ def test_classification_ignores_unrelated_evidence_but_keeps_conflicting_anchor_
     assert outputs[0] == outputs[1]
 
 
-@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv"])
+@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv", "cross_synteny_node_paths.tsv"])
 def test_classification_rejects_malformed_evidence_outside_family_scope(tmp_path, table):
     args = classification_fixture(tmp_path, "(A_a:1,A_b:1);",
                                   [positioned("A_a"), positioned("A_b", rank=2)])
+    if table == "cross_synteny_node_paths.tsv":
+        from workflow.support.wgd_cross_node import CROSS_PATH_FIELDS
+
+        path = args.evidence / table
+        write_rows(path, CROSS_PATH_FIELDS, [])
+        summary_path = args.evidence / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["output_hashes"][table] = wgd_ssd.digest(path)
+        summary_path.write_text(json.dumps(summary))
     with (args.evidence / table).open("a") as handle:
         handle.write("outside_family\n")
     refresh_classification_evidence(args)
-    with pytest.raises(ValueError, match="Invalid TSV row width"):
+    with pytest.raises(ValueError, match="Invalid (TSV|cross-synteny node path) row width"):
         wgd_ssd.classify(args)
     assert not (args.output / "summary.json").exists()
 
@@ -1907,6 +1927,20 @@ def test_family_evidence_hash_cache_rejects_same_size_rewrite_with_restored_mtim
             wgd_ssd.verify(plan, wgd_ssd.family_evidence_digest)
     finally:
         cache.close()
+
+
+def test_classify_resolves_relative_paths_before_launching_tools(tmp_path, monkeypatch):
+    args = classification_fixture(tmp_path, "(A_a:1,override:1);",
+                                  [positioned("A_a"), positioned("override", species="A", rank=2)])
+    mapping = tmp_path / "species-map.tsv"
+    write_rows(mapping, ["leaf_name", "species_label"], [{"leaf_name": "override", "species_label": "A"}])
+    for key in ("gene_tree", "species_tree", "evidence", "output"):
+        setattr(args, key, getattr(args, key).relative_to(tmp_path))
+    args.species_map = mapping.name
+    monkeypatch.chdir(tmp_path)
+    wgd_ssd.classify(args)
+    row, = read_table(args.output / "duplication_origins.tsv")
+    assert row["classification"] == "SSD-supported"
 
 
 def test_nhx_ancestral_branch_mapping_cannot_get_terminal_tandem_label(tmp_path):

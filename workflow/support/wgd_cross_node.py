@@ -39,15 +39,14 @@ def load_family_paths(path, family):
         for row in reader:
             if None in row or any(value is None for value in row.values()):
                 raise ValueError("Invalid cross-synteny node path row width")
-            if row["family_id"] != family:
-                continue
             genes = tuple(row[key] for key in CROSS_PATH_FIELDS[6:10])
             if len(set(genes)) != 4 or any(not gene for gene in genes):
                 raise ValueError("Cross-synteny node path must identify four distinct genes")
             if (row["unique_phase"] not in {"0", "1"} or row["both_orientations"] not in {"", "0", "1"}
                     or row["used_in_candidate_mode"] not in {"0", "1"}):
                 raise ValueError("Invalid cross-synteny node path flags")
-            yield row
+            if row["family_id"] == family:
+                yield row
 
 
 def daughter_below(node, ancestor):
