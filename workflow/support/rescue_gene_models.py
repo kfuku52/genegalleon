@@ -1444,8 +1444,10 @@ LOCAL_VALIDATED = "local_validated.jsonl.gz"
 TARGETED_VALIDATED = "targeted_validated.json"
 
 
-def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1):
+def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1, packing_workers=None):
     """Write candidate quality and revision views in original model order."""
+    if packing_workers is None:
+        packing_workers = publication_workers
     revisions = {}
 
     def with_quality(quality_writer):
@@ -1478,7 +1480,7 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
         if compact:
             # The store consumes revisions after the main model stream.
             write_model_store(directory, enriched, revisions=revisions.values(), publication_workers=publication_workers,
-                              packing_workers=publication_workers)
+                              packing_workers=packing_workers)
         else:
             for _ in enriched:
                 pass
@@ -1892,6 +1894,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
                   audit_rows())
         if storage["format"] == "compact":
+            # Larger streams amortize the higher encoding process count.
+            packing_workers = min(cpus, 8 if len(models) >= 1_000_000 else 4)
             # The audit was the final reader of the in-memory candidate list.
             # Release each record as its compact publication is written.
             models.reverse()
@@ -1901,7 +1905,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     yield models.pop()
 
             write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True,
-                                publication_workers=min(cpus, 4))
+                                publication_workers=min(cpus, 4), packing_workers=packing_workers)
         else:
             write_rescue_models(tmp, models, source["genetic_code"], compact=False)
         # Huge indexes are execution scratch, not reusable unverified outputs.
