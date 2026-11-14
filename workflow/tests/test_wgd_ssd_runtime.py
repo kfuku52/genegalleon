@@ -289,7 +289,8 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
                       wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
                       wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", wgd_ks_component_holdout="1",
-                      wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1", wgd_ks_rooted_copies="1")
+                      wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1", wgd_ks_rooted_copies="1",
+                      wgd_cross_two_region_holdout="1")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -338,6 +339,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     both = next(row for row in regions if row["mode"] == "both_orientations")
     assert both["supports_before_holdout"] == "1" and both["num_holdouts_losing_support"] == "1"
     assert "cross_synteny_regions.tsv" in summary["output_hashes"]
+    two_regions = read_table(root / "cross_synteny_two_region_holdout.tsv")
+    assert all(r["status"] == "fewer_than_two_regions" for r in two_regions)
+    assert "cross_synteny_two_region_holdout.tsv" in summary["output_hashes"]
     assert read_table(root / "cross_synteny_nested_copies.tsv") == []
     support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}
     assert support["OG000"]["first_copy_support"] == "100.0"
@@ -393,8 +397,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout
     reused = json.loads((root / "summary.json").read_text())
-    without_rooted = {k: v for k, v in summary["output_hashes"].items() if not k.startswith("cross_ks_rooted_")}
-    assert reused["output_hashes"] == without_rooted
+    shared_outputs = {k: v for k, v in summary["output_hashes"].items()
+                      if not k.startswith("cross_ks_rooted_") and k != "cross_synteny_two_region_holdout.tsv"}
+    assert reused["output_hashes"] == shared_outputs
     assert reused["plan"]["reused_cross_ks_alignments"] == {"1": [str(saved / name) for saved in donors]}
     assert {str(saved / name) for saved in donors} <= reused["plan"]["input_hashes"].keys()
 

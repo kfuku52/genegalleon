@@ -150,6 +150,7 @@ wgd_duplication_copy_split_audit=0 # Audit reciprocal species retention and both
 wgd_duplication_family_panels=0 # Number of disjoint panels for a family-score sensitivity audit; 0 disables.
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
 wgd_cross_orientation_audit=0 # Audit coverage/support after reversing the cross-anchor window reference.
+wgd_cross_two_region_holdout=0 # Audit all two-region deletions when there are at most 10,000 combinations.
 wgd_cross_require_unique_phase=0 # Require concordant-only four-copy paths to support synteny.
 wgd_cross_require_both_orientations=0 # Require identical unique paths in both references; needs both orientation and unique-phase audits.
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.

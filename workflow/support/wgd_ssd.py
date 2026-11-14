@@ -32,7 +32,14 @@ try:
         trace_has_unique_phase,
         unique_phase_windows,
     )
-    from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
+    from wgd_cross_regions import (
+        NESTED_FIELDS,
+        REGION_DETAIL,
+        REGION_PAIR_HOLDOUT,
+        REGION_SUMMARY,
+        nested_copy_overlap,
+        summarize_regions,
+    )
     from wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -81,7 +88,14 @@ except ImportError:
         trace_has_unique_phase,
         unique_phase_windows,
     )
-    from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
+    from .wgd_cross_regions import (
+        NESTED_FIELDS,
+        REGION_DETAIL,
+        REGION_PAIR_HOLDOUT,
+        REGION_SUMMARY,
+        nested_copy_overlap,
+        summarize_regions,
+    )
     from .wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from .wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -299,6 +313,10 @@ def make_plan(args):
         raise ValueError("Cross-synteny orientation audit must be 0 or 1")
     if parameters["cross_orientation_audit"] and cross_pairs is None:
         raise ValueError("Cross-synteny orientation audit requires --cross-synteny")
+    if getattr(args, "cross_two_region_holdout", 0):
+        if cross_pairs is None:
+            raise ValueError("Two-region holdout requires --cross-synteny")
+        parameters["cross_two_region_holdout"] = 1
     if getattr(args, "cross_require_unique_phase", 0):
         if cross_pairs is None:
             raise ValueError("Unique cross-synteny phase requires --cross-synteny")
@@ -1275,9 +1293,10 @@ def run_analysis(plan, output, cpus):
                            if p.get("cross_require_unique_phase") else None)
             write_table(output / "cross_synteny_copy_replication.tsv",
                         replicated_copy_rows(raw_candidates, pair_rows, cross.traced_hits, unique_hits), REPLICATION_FIELDS)
+            two_regions = [] if p.get("cross_two_region_holdout") else None
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
                                                                p["min_cross_windows"], unique_phase_hits=unique_hits,
-                                                               reverse_windows=reverse_windows)
+                                                               reverse_windows=reverse_windows, two_region_rows=two_regions)
             if reverse_windows is not None:
                 for row in region_summary:
                     if (row["mode"] == "both_orientations" and
@@ -1285,6 +1304,8 @@ def run_analysis(plan, output, cpus):
                         raise ValueError("Both-reference region audit changed the pre-holdout support")
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
+            if two_regions is not None:
+                write_table(output / "cross_synteny_two_region_holdout.tsv", two_regions, REGION_PAIR_HOLDOUT)
             write_table(output / "cross_synteny_nested_copies.tsv",
                         nested_copy_overlap(tree, raw_candidates, cross.traced_hits), NESTED_FIELDS)
             if support:
@@ -1637,6 +1658,7 @@ def main():
     plan.add_argument("--duplication-copy-split-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-family-panels", type=int, default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--cross-two-region-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)

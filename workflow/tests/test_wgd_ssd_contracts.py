@@ -622,6 +622,52 @@ def test_two_reference_region_holdout_keeps_reverse_floor_after_exclusion():
     assert both["supports_before_holdout"] == 1 and both["num_holdouts_losing_support"] == 2
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_region_holdout_matches_recomputing_every_remaining_subset(reverse):
+    import random
+    from itertools import combinations
+
+    from workflow.support.wgd_cross_regions import components, support_after_holdouts
+
+    rng = random.Random(95)
+    for _ in range(30):
+        hits, reverse_windows = [], {}
+        for a, b in (("A", "B"), ("B", "C"), ("C", "A")):
+            for i in range(7):
+                for f in rng.sample(range(12), rng.randrange(1, 4)):
+                    hit = ("event", a, b, (f"{a}_{b}", i), str(f), ("a", "b", "c", "d"),
+                           ((a, b, i // 2),), ((a, f"{a}_{b}", i), (b, f"{b}_{a}", i)))
+                    hits.append(hit)
+                    reverse_windows[hit] = {("ctg", i + rng.choice([0, 1]))}
+        kwargs = {"reverse_windows": reverse_windows} if reverse else {}
+        daughters, floor = ({"A"}, {"B", "C"}), rng.randrange(2, 8)
+        audit = {}
+        baseline, details = support_after_holdouts(hits, daughters, floor, pair_audit=audit, **kwargs)
+        assert (baseline, details) == support_after_holdouts(hits, daughters, floor, **kwargs)
+        if baseline:
+            groups = components(hits, **kwargs)
+            failed = []
+            for i, j in combinations(range(len(groups)), 2):
+                remaining = [hit for k, group in enumerate(groups) if k not in (i, j) for hit in group]
+                if not support_after_holdouts(remaining, daughters, floor, **kwargs)[0]:
+                    failed.append(f"{i + 1},{j + 1}")
+            assert audit["num_two_region_holdouts_losing_support"] == len(failed)
+            assert audit["first_failed_regions"] == (failed[0] if failed else None)
+        else:
+            assert audit["status"] == "not_initially_supported"
+
+
+def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch):
+    from workflow.support import wgd_cross_regions as regions
+
+    monkeypatch.setattr(regions, "MAX_TWO_REGION_HOLDOUTS", 2)
+    hits = [("event", "A", "B", ("chr", i), str(i), ("a", "b", "c", "d"), (), ()) for i in range(3)]
+    audit = {}
+    assert regions.support_after_holdouts(hits, ({"A"}, {"B"}), 1, pair_audit=audit)[0]
+    assert audit["status"] == "pair_limit_exceeded" and audit["num_two_region_holdouts"] == 0
+    assert audit["num_two_region_holdouts_losing_support"] is None
+
+
 def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):
     from nwkit.util import read_tree
 

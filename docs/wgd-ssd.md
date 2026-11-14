@@ -219,7 +219,14 @@ in either reference are joined; after deleting one region the support rule
 still enforces the window floor in both references. The window totals
 shown in the region tables remain in the supplied reference orientation.
 Existing region and replication modes retain their original scopes.
-This option also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
+Set `wgd_cross_two_region_holdout=1` to additionally test every distinct
+pair of original regions in each supported mode, retaining the family and
+window floors. A family observed in both removed regions counts as lost
+only if no other region retains it. The table reports how many deletions
+remove support and an example of the regions involved. More than 10,000
+combinations are explicitly marked untested. This is a sensitivity
+diagnostic, not an independence test or a change to the call.
+The orientation audit also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
 reference windows that contain five gene-disjoint direct pairs within one
 original block, both before and after requiring archive-family agreement.
 This diagnostic does not require five disjoint four-copy paths or change

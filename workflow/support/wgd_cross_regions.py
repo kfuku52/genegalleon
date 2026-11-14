@@ -1,12 +1,16 @@
 """Assess whether cross-synteny support depends on a single genomic region."""
 
 from collections import Counter, defaultdict
+from itertools import combinations
 
 REGION_SUMMARY = ("species_event_id", "branch_id", "mode", "matched_windows", "matched_families",
                   "regions", "largest_region_windows", "min_windows_after_one_region", "contigs_by_species",
                   "supports_before_holdout", "num_holdouts_losing_support", "holds_after_every_one_region")
 REGION_DETAIL = ("species_event_id", "branch_id", "mode", "region", "matched_windows", "matched_families",
                  "num_original_blocks", "copy_contigs", "windows_after_exclusion", "supports_after_exclusion")
+REGION_PAIR_HOLDOUT = ("species_event_id", "branch_id", "mode", "regions", "num_two_region_holdouts",
+                       "num_two_region_holdouts_losing_support", "first_failed_regions", "status")
+MAX_TWO_REGION_HOLDOUTS = 10_000
 NESTED_FIELDS = ("younger_event_id", "younger_branch_id", "older_event_id", "older_branch_id", "species",
                  "younger_window_pairs", "older_window_pairs", "shared_window_pairs",
                  "younger_gene_pairs", "older_gene_pairs", "shared_gene_pairs",
@@ -36,7 +40,7 @@ def components(hits, reverse_windows=None):
     return sorted(groups.values(), key=lambda g: (-len({h[1:4] for h in g}), g[0]))
 
 
-def support_after_holdouts(hits, daughters, floor, *, reverse_windows=None):
+def support_after_holdouts(hits, daughters, floor, *, reverse_windows=None, pair_audit=None):
     groups = components(hits, reverse_windows)
     stats = []
     windows_by_pair, family_regions = Counter(), defaultdict(Counter)
@@ -67,22 +71,61 @@ def support_after_holdouts(hits, daughters, floor, *, reverse_windows=None):
         return all(any(taxa[sp] > 0 for sp in daughter) for daughter in daughters)
 
     total = windows_by_pair.total()
-    result = []
-    for i, (group, wc, families, rc) in enumerate(stats, 1):
+    def supports_without(wc, rc, lost):
         taxa = initial_taxa.copy()
         for pair in wc.keys() & initially_supported:
-            lost_families = sum(family_regions[pair][f] == 1 for f in families[pair])
-            if not pair_passes(windows_by_pair[pair] - wc[pair], len(family_regions[pair]) - lost_families,
+            if not pair_passes(windows_by_pair[pair] - wc[pair], len(family_regions[pair]) - lost(pair),
                                reverse_by_pair[pair] - rc[pair]):
                 taxa.subtract(pair)
+        return has_support(taxa)
+
+    result = []
+    single_losses = []
+    for i, (group, wc, families, rc) in enumerate(stats, 1):
+        def lost_single(pair):
+            return sum(family_regions[pair][f] == 1 for f in families[pair])
+
+        if pair_audit is not None:
+            single_losses.append(Counter({pair: lost_single(pair) for pair in families.keys() & initially_supported}))
         result.append({"region": i, "matched_windows": wc.total(), "matched_families": len({h[4] for h in group}),
                        "num_original_blocks": len({v for h in group for v in h[6]}),
                        "copy_contigs": ",".join(f"{sp}:{c}" for sp, c in sorted({v[:2] for h in group for v in h[7]})),
-                       "windows_after_exclusion": total - wc.total(), "supports_after_exclusion": int(has_support(taxa))})
-    return has_support(initial_taxa), result
+                       "windows_after_exclusion": total - wc.total(),
+                       "supports_after_exclusion": int(supports_without(wc, rc, lost_single))})
+    baseline = has_support(initial_taxa)
+    if pair_audit is not None:
+        n = len(stats)
+        num_pairs = n * (n - 1) // 2
+        status = ("not_initially_supported" if not baseline else "fewer_than_two_regions" if not num_pairs else
+                  "pair_limit_exceeded" if num_pairs > MAX_TWO_REGION_HOLDOUTS else "ok")
+        failures, example = None, None
+        if status == "ok":
+            # Families in precisely two components disappear only when both are omitted.
+            owners = defaultdict(list)
+            for i, (_, _, families, _) in enumerate(stats):
+                for pair, ids in families.items():
+                    for family in ids:
+                        if family_regions[pair][family] == 2:
+                            owners[pair, family].append(i)
+            double_losses = defaultdict(Counter)
+            for (pair, _), ids in owners.items():
+                double_losses[tuple(ids)][pair] += 1
+            failures = 0
+            for i, j in combinations(range(n), 2):
+                _, left, _, left_rev = stats[i]
+                _, right, _, right_rev = stats[j]
+                lost = single_losses[i] + single_losses[j] + double_losses.get((i, j), Counter())
+                if not supports_without(left + right, left_rev + right_rev, lost.__getitem__):
+                    failures += 1
+                    if example is None:
+                        example = f"{i + 1},{j + 1}"
+        pair_audit.update(regions=n, num_two_region_holdouts=num_pairs if status == "ok" else 0,
+                          num_two_region_holdouts_losing_support=failures, first_failed_regions=example, status=status)
+    return baseline, result
 
 
-def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase_hits=None, reverse_windows=None):
+def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase_hits=None, reverse_windows=None,
+                      two_region_rows=None):
     by_branch = defaultdict(list)
     for hit in sorted(traced_hits):
         by_branch[hit[0]].append(hit)
@@ -106,13 +149,17 @@ def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase
         if reverse_windows is not None:
             modes.append(("both_orientations", shared[branch]))
         for mode, selected in modes:
+            pair_audit = {} if two_region_rows is not None else None
             supported, regions = support_after_holdouts(selected, daughters[branch], floor,
-                                                         reverse_windows=reverse_windows if mode == "both_orientations" else None)
+                                                         reverse_windows=reverse_windows if mode == "both_orientations" else None,
+                                                         pair_audit=pair_audit)
             contigs = defaultdict(set)
             for hit in selected:
                 for sp, contig, _ in hit[7]:
                     contigs[sp].add(contig)
             keys = {"species_event_id": branch, "branch_id": row["branch_id"], "mode": mode}
+            if two_region_rows is not None:
+                two_region_rows.append({**keys, **pair_audit})
             lost = sum(not r["supports_after_exclusion"] for r in regions) if supported else 0
             summary.append({**keys, "matched_windows": sum(r["matched_windows"] for r in regions),
                             "matched_families": len({h[4] for h in selected}), "regions": len(regions),

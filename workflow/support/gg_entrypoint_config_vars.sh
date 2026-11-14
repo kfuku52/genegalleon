@@ -432,6 +432,7 @@ wgd_duplication_copy_split_audit
 wgd_duplication_family_panels
 wgd_cross_synteny_file
 wgd_cross_orientation_audit
+wgd_cross_two_region_holdout
 wgd_cross_require_unique_phase
 wgd_cross_require_both_orientations
 wgd_cross_ks_cds_file
