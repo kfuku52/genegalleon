@@ -2884,7 +2884,10 @@ def finalize(root, value, *, cpus=1):
                         pep.write(f">{gene['gene_id']}\n{candidate['protein']}\n")
                         coding_candidate = analysis_coding_candidate(candidate)
                         analysis_cds.write(f">{gene['gene_id']}\n{coding_candidate['cds']}\n")
-                        analysis_candidates.append(coding_candidate)
+                        analysis_candidates.append({
+                            key: coding_candidate[key]
+                            for key in ('source_transcript_id', 'seqid', 'strand', 'blocks', 'protein', 'quality')
+                        })
                         head = candidate['quality'].get('translation_offset', 0)
                         tail = len(candidate['cds']) - head - len(coding_candidate['cds'])
                         coding_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included', head, tail,
