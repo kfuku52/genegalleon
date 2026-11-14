@@ -116,6 +116,23 @@ def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_p
     assert scan_duplications(tree, archive, 0.51)[0][0]["tree_support"] == "below_threshold"
 
 
+def test_duplication_scan_uses_membership_species_when_prefixes_overlap(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,A_sub:2);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("x_root.nwk", "(((A_sub_gene,B_x),(A_y,B_y)),A_sub_out);")
+    genes = {"A_sub_gene": "A", "B_x": "B", "A_y": "A", "B_y": "B", "A_sub_out": "A_sub"}
+    rows, _ = scan_duplications(tree, archive, .01, family_members=lambda _: genes)
+    assert rows[0]["num_supporting_families"] == 1
+    assert scan_duplications(tree, archive, .01)[0][0]["num_supporting_families"] == 0
+
+
 def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
     event = {"species_event_id": "event_ABC", "descendant_taxa": "A,B,C", "tree_support": "tree_score_supported"}
     daughters = {"event_ABC": ({"A", "B"}, {"C"})}

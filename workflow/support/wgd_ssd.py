@@ -829,7 +829,7 @@ def run_analysis(plan, output, cpus):
         def family_members(family):
             row = by_family.get(family)
             return (None if row is None else
-                    {gene.strip() for name in plan["species"] if row[name] for gene in row[name].split(",")})
+                    {gene.strip(): name for name in plan["species"] if row[name].strip() for gene in row[name].split(",")})
 
         cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
         support_file = plan.get("cross_tree_support")

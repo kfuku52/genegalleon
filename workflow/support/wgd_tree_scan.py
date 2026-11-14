@@ -47,13 +47,19 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             duplication_nodes = []
             for gene in tree.traverse("postorder"):
                 if gene.is_leaf:
-                    match = prefix.match(gene.name or "")
-                    if not match or gene.name in leaves:
+                    if gene.name in leaves:
                         raise ValueError(f"Duplicate gene or unmatched species in {name}: {gene.name}")
-                    if expected is not None and gene.name not in expected:
-                        raise ValueError(f"Gene absent from its family membership in {name}: {gene.name}")
+                    if expected is not None:
+                        if gene.name not in expected:
+                            raise ValueError(f"Gene absent from its family membership in {name}: {gene.name}")
+                        taxon = expected[gene.name]
+                    else:
+                        match = prefix.match(gene.name or "")
+                        if match is None:
+                            raise ValueError(f"Duplicate gene or unmatched species in {name}: {gene.name}")
+                        taxon = match[1]
                     leaves.add(gene.name)
-                    observed[gene] = bits[match[1]]
+                    observed[gene] = bits[taxon]
                     continue
                 union = 0
                 for child in gene.children:

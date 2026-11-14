@@ -107,6 +107,8 @@ comparisons spanning the daughter lineages at each internal split.
 Species and BED gene IDs must match the input species and gene trees.
 BED gene IDs must be globally unique, and each archive member must name
 a family in the membership table and contain only its genes (subsets allowed).
+For this mode the membership column supplies the species identity, including
+when one species name is a prefix of another.
 Use one BED per species and original `###`-delimited JCVI anchor files
 (plain or gzip), not lifted anchors or preassigned branch scores. This
 stage reads existing comparisons; it does not launch genome alignments.
