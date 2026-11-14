@@ -1618,10 +1618,11 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         with indexed_genome(source["genome"]) as genome:
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
-            for feature in [*existing, *positions]:
+            for feature in chain(existing, positions):
                 if (feature["seqid"] not in lengths or feature["start"] < 0
                         or feature["end"] <= feature["start"] or feature["end"] > lengths[feature["seqid"]]):
                     raise ValueError("Original annotation outside or absent from genome: " + str(feature))
+            del positions
             for region in candidate_regions:
                 if not region.get("genome_only"):
                     region["end"] = min(region["end"], genome.get_reference_length(region["seqid"]))
@@ -1682,6 +1683,9 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
                 validated.append(checked_prediction(model))
+            del predictions
+            searched_local_windows = len(windows) if checkpoint is None else state["searched_local_windows"]
+            del windows
             if checkpoint is not None:
                 with gzip.open(tmp / LOCAL_VALIDATED, "rt") as handle:
                     validated.extend(json.loads(line) for line in handle)
@@ -1724,7 +1728,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 with gzip.open(tmp / LOCAL_VALIDATED, "wt", compresslevel=1) as handle:
                     for model in validated:
                         write_record(handle, model)
-                atomic_json(tmp / PREDICTION_STATE, {"empty": False, "searched_local_windows": len(windows),
+                atomic_json(tmp / PREDICTION_STATE, {"empty": False, "searched_local_windows": searched_local_windows,
                                                      "additional_genome_queries": extra_count,
                                                      "local_validation_memo": raw_validation.diagnostics()})
                 (tmp / "genome.mpi").unlink(missing_ok=True)
@@ -1781,6 +1785,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     model, genome, source['genetic_code'], params,
                     proteins[evidence['donor']][evidence['query']], validate_model))
             validated.extend(boundary_models)
+            del historical, boundary_models
             for engine in (e for e in ('annevo', 'oriongeno') if plan['request'].get(e)):
                 import annevo_gene_models
                 bounded_regions = [r for r in candidate_regions if not r.get('genome_only')]
@@ -1804,6 +1809,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 del native_models
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
+                del native_checked, bounded_regions, placements
                 atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
             if plan['request'].get('oriongeno_genomewide'):
                 import rescue_native_genomewide
@@ -1877,7 +1883,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         })
         atomic_json(tmp / "prediction_reuse.json", {"cached_local_queries": len(cached_ids),
                     "cached_genome_queries": len(cached_genome_ids),
-                    "searched_local_windows": len(windows) if checkpoint is None else state["searched_local_windows"],
+                    "searched_local_windows": searched_local_windows,
                     "additional_genome_queries": extra_count, "all_queries": len(candidate_regions),
                     "search_contract": prediction_search_contract(),
                     "cached_search_contract": cached.search_contract if cached else None,
