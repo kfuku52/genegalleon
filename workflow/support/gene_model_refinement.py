@@ -610,7 +610,7 @@ def load(root, names=None):
     return value
 
 
-def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
+def stage(root, relative, key, builder, names=None, prepared_snapshot=None, *, cpus=1):
     dependencies = key.get('dependencies', {})
     catalog_deps = dependencies.get('catalog', {})
     value = json.loads((root / 'plan.json').read_text()) if catalog_deps else None
@@ -686,6 +686,8 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
     options = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
     if receipt_snapshot is not None:
         options['verify'] = receipt_snapshot.verify_reusable
+    if cpus > 1:
+        options['hash_workers'] = min(cpus, 4)
     return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **options)
 
 
@@ -1175,7 +1177,7 @@ def select(root, value, predictions=False, *, cpus=1):
         atomic_json(tmp / 'selection.json', selection)
         rescue.write_tsv(tmp / 'representative_map.tsv', MAP_FIELDS,
                          [[r.get(k, '') for k in MAP_FIELDS] for r in selection['selections']])
-    return stage(root, 'selection_final' if predictions else 'selection_initial', {'dependencies': dependencies}, build)
+    return stage(root, 'selection_final' if predictions else 'selection_initial', {'dependencies': dependencies}, build, cpus=cpus)
 
 
 def rna_path_index(rows):
@@ -1963,7 +1965,7 @@ def predict_species(root, value, name, cpus=1):
                                          'rescue_revision_models': revision_count,
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
-    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names)
+    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names, cpus=cpus)
 
 
 def source_rescue_locus_provenance(gene):
@@ -2990,7 +2992,7 @@ def finalize(root, value, *, cpus=1):
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes),
                                          **sequence_summary})
         representative_map_proof.check()
-    return stage(root, 'effective', {'dependencies': dependencies}, build)
+    return stage(root, 'effective', {'dependencies': dependencies}, build, cpus=cpus)
 
 
 def verify_inputs(inputs, field=None, *, verification=None):
