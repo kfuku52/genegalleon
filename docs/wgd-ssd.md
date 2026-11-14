@@ -455,6 +455,16 @@ per-family likelihood tolerance; optimization or convergence failures stop
 the stage. A separately fitted branch-specific duplication/loss burst provides
 an AIC diagnostic against coordinated genome multiplication.
 
+To check a candidate in the presence of other events, set
+`wgd_count_fixed_events_tsv` to a table with `branch_id`, `retention`,
+`event_fraction`, and `multiplicity`. Use distinct positive-length branches
+and positive retention. The fixed events are in every model, including the
+simulated null, and their branches are excluded from the candidate search.
+The bootstrap does not account for estimation or selection of the supplied
+events. Treat fits based on events selected from the same families as
+conditional sensitivity checks. Native gene-tree likelihood does not yet
+accept count models with fixed background events.
+
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in
 bootstrap P-values, not posterior probabilities or guaranteed error control

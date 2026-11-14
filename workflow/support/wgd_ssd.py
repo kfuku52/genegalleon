@@ -334,11 +334,11 @@ def make_plan(args):
                 raise ValueError("Count event fractions and family gamma shape require gene-count mode")
             parameters[key] = value
     count_inputs = {}
-    for kind in ("detection", "rate_groups"):
+    for kind in ("detection", "rate_groups", "fixed_events"):
         value = getattr(args, f"count_{kind}_tsv", "")
         if value:
             if tree_archive is not None:
-                raise ValueError("Count detection and rate-group tables require gene-count mode")
+                raise ValueError(f"Count {kind.replace('_', ' ')} table requires gene-count mode")
             path = resolve(value, "")
             inputs[str(path)] = digest(path)
             count_inputs[f"count_{kind}_tsv"] = str(path)
@@ -1139,10 +1139,11 @@ def run_analysis(plan, output, cpus):
     p = plan["parameters"]
     tree_mode = bool(plan.get("gene_trees"))
     count_input_args = []
-    for key, option in (("count_detection_tsv", "--detection-tsv"), ("count_rate_groups_tsv", "--rate-groups-tsv")):
+    for key, option in (("count_detection_tsv", "--detection-tsv"), ("count_rate_groups_tsv", "--rate-groups-tsv"),
+                        ("count_fixed_events_tsv", "--fixed-events-tsv")):
         if plan.get(key):
             if tree_mode or plan[key] not in plan["input_hashes"]:
-                raise ValueError("Count observation and rate-group tables require hashed inputs in gene-count mode")
+                raise ValueError("Count observation, rate and fixed-event tables require hashed inputs in gene-count mode")
             count_input_args.extend((option, plan[key]))
     for key, option in (("count_event_fractions", "--event-fractions"), ("count_family_gamma_shape", "--family-gamma-shape")):
         if p.get(key):
@@ -1497,6 +1498,8 @@ def classify(args):
     if args.native_tree_likelihood:
         if summary.get("candidate_model") == "rooted_gene_tree_duplication_score":
             raise ValueError("Native tree likelihood requires a fitted count model, not duplication-score candidates")
+        if summary["plan"].get("count_fixed_events_tsv"):
+            raise ValueError("Native tree likelihood does not support fixed background genome events")
         required.add("count_model.json")
     if not required.issubset(summary.get("output_hashes", {})):
         raise ValueError("WGD evidence lacks output integrity hashes; regenerate it")
@@ -1648,7 +1651,7 @@ def main():
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
                   "cross-tree-support", "count-bootstrap-checkpoint", "count-detection-tsv",
-                  "count-rate-groups-tsv", "count-event-fractions", "count-family-gamma-shape"):
+                  "count-rate-groups-tsv", "count-fixed-events-tsv", "count-event-fractions", "count-family-gamma-shape"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--cross-ks-reuse-summary", action="append", default=[], metavar="SUMMARY_JSON")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")

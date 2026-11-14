@@ -183,6 +183,26 @@ def test_wgd_stage_forwards_known_observation_probabilities_and_rate_groups(tmp_
     assert (root / "summary.json").read_bytes() == initial
 
 
+def test_wgd_stage_forwards_fixed_background_events(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    fixed = workspace / "fixed_events.tsv"
+    fixed.write_text("branch_id\tretention\tevent_fraction\tmultiplicity\n1\t0.5\t0.5\t2\n")
+    result = run_core(workspace, wgd_count_fixed_events_tsv=fixed.name, wgd_count_event_fractions="0.5",
+                      wgd_count_family_gamma_shape="none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["count_fixed_events_tsv"] == str(fixed)
+    assert str(fixed) in summary["plan"]["input_hashes"]
+    model = json.loads((root / "count_model.json").read_text())
+    assert [event["branch_id"] for event in model["fixed_background_events"]] == [1]
+    assert {int(row["branch_id"]) for row in read_table(root / "count_candidates.tsv")} == {2, 3, 4}
+    with pytest.raises(ValueError, match="does not support fixed background"):
+        classify(SimpleNamespace(native_tree_likelihood=1, evidence=root,
+                                 species_tree=Path(summary["plan"]["species_tree"])))
+
+
 @pytest.mark.parametrize("holdout", [False, True])
 def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout):
     from zipfile import ZipFile
