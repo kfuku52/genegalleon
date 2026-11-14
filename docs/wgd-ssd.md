@@ -379,6 +379,19 @@ of local copy correspondence, not a clock correction, age estimate, or test
 of the branch or number of WGD events. The default zero skips additional
 alignments; pairs already requested for the age analysis are reused.
 
+With `wgd_ks_rooted_copies=1`, the same sampled quartets are also checked
+with a fifth copy. It must be the only member of its species in the family
+table, from the species-tree sister clade, and in the gene tree immediately
+outside the copy split. This selection precedes dS estimation. One protein
+alignment is backtranslated, and all ten distances are estimated on the
+same unambiguous, gap-free codon columns. The reported residual compares
+the expected rooted copy split against the other 14 five-tip topologies
+with nonnegative branch lengths; a positive gap favors the expected split.
+`cross_ks_rooted_copies.tsv` records incomplete measurements and ties;
+`cross_ks_rooted_copy_summary.tsv` records measured quartets and distinct
+families. This diagnostic depends on the original gene tree and synteny,
+does not infer an absolute age, and does not change the WGD calls.
+
 Set `wgd_max_terminal_ks_families` above zero to inspect terminal copy splits
 in species with supplied self anchors and CDS. The analysis samples at most
 one same-family self-anchor pair per family, in rounds across original anchor

@@ -27,6 +27,7 @@ try:
         sibling_panel_rows,
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
+    from wgd_rooted_copy_ks import ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, run_rooted_copy_ks
     from wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 except ImportError:
     from .fasta_sequence_store import fasta_records
@@ -43,6 +44,7 @@ except ImportError:
         sibling_panel_rows,
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
+    from .wgd_rooted_copy_ks import ROOTED_COPY_FIELDS, ROOTED_COPY_SUMMARY, rooted_copy_summary, run_rooted_copy_ks
     from .wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 
 
@@ -387,7 +389,8 @@ class CrossKs:
                 requested.setdefault(pair, (focal, focal, "", "paralog"))
         return requested
 
-    def run(self, output, cpus, candidates, estimate, write_table, traced_hits=(), *, terminal=None):
+    def run(self, output, cpus, candidates, estimate, write_table, traced_hits=(), *, terminal=None, rooted_copy=None,
+            run_tool=None, method_label=None):
         requested = self.requests()
         outgroup_pairs = dict(common_outgroup_requests(self.outgroup_selections, self.archived))
         for pair, info in outgroup_pairs.items():
@@ -408,6 +411,7 @@ class CrossKs:
         for pair, info in requested.items():
             for name, gene in zip(info[:2], pair, strict=True):
                 genes[name].add(gene)
+        rooted_selection = list(rooted_copy.selection(selected, genes)) if rooted_copy is not None else ()
         sequences, rejected = {}, {}
         for name, targets in genes.items():
             sequences[name], rejected[name] = selected_cds(self.sources[name], name, targets)
@@ -478,6 +482,12 @@ class CrossKs:
                             sibling_panel_rows(self.sister_panels, sampled, mapping), SISTER_FIELDS)
         if quartet_limit:
             write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
+        if rooted_copy is not None:
+            rooted_rows = run_rooted_copy_ks(rooted_selection, sequences, self.codes, cpus, output,
+                                            self.parameters.get("cross_ks_method", "yn00"), method_label, run_tool,
+                                            write_table, read_table)
+            write_table(output / "cross_ks_rooted_copies.tsv", rooted_rows, ROOTED_COPY_FIELDS)
+            write_table(output / "cross_ks_rooted_copy_summary.tsv", rooted_copy_summary(rooted_rows), ROOTED_COPY_SUMMARY)
         if terminal is not None:
             pairs, summaries = terminal.summarize(results)
             self.terminal_rows = summaries

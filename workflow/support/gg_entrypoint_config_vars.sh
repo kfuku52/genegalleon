@@ -440,6 +440,7 @@ wgd_max_ks_outgroup_families
 wgd_max_terminal_ks_families
 wgd_ks_component_holdout
 wgd_ks_sister_panels
+wgd_ks_rooted_copies
 wgd_cross_ks_method
 wgd_cross_tree_support_file
 wgd_min_cross_windows

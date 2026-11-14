@@ -158,6 +158,7 @@ wgd_max_ks_outgroup_families=0 # Optional common-outgroup dS sensitivity family 
 wgd_max_terminal_ks_families=0 # Optional block-balanced family cap per species for terminal self-anchor dS.
 wgd_ks_component_holdout=0 # Show the point-median range after excluding any one linked copy component.
 wgd_ks_sister_panels=0 # Compare alternative sister species on one family set; needs common-outgroup dS enabled.
+wgd_ks_rooted_copies=0 # Compare rooted copy topologies on a shared five-sequence alignment; needs dS quartets.
 wgd_cross_ks_method="yn00" # Alternate dS sensitivity: gy94 or gy94-regularized; do not mix methods.
 wgd_cross_tree_support_file="" # Optional GeneRax UFBoot tree ZIP for duplication and paired cross-block support diagnostics.
 wgd_min_cross_windows=3 # Minimum observable windows and, for support, concordant windows and distinct families per pair.

@@ -217,7 +217,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                         if observe_duplications is not None:
                             family_nodes.append((branch, gene))
                 if family_nodes:
-                    observe_duplications(family, tree, family_nodes)
+                    observe_duplications(family, tree, family_nodes, expected)
     if not families:
         raise ValueError("Gene-tree archive contains no *_root.nwk families")
     rows = []

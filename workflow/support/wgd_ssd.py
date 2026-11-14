@@ -53,6 +53,7 @@ try:
     )
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
+    from wgd_rooted_copy_ks import RootedCopyKs
     from wgd_taxon_holdout import HOLDOUT_FIELDS
     from wgd_terminal_ks import TerminalKs
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
@@ -94,6 +95,7 @@ except ImportError:
     )
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
+    from .wgd_rooted_copy_ks import RootedCopyKs
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
     from .wgd_terminal_ks import TerminalKs
     from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
@@ -161,6 +163,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("wgd_ks_outgroups.py").resolve(),
               Path(__file__).with_name("wgd_quartet_ks.py").resolve(),
+              Path(__file__).with_name("wgd_rooted_copy_ks.py").resolve(),
               Path(__file__).with_name("wgd_terminal_ks.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
@@ -313,6 +316,10 @@ def make_plan(args):
             raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
         checkpoint = str(resolve(checkpoint, ""))
     parameters["max_ks_quartets"] = getattr(args, "max_ks_quartets", 0)
+    if getattr(args, "ks_rooted_copies", 0):
+        if parameters["max_ks_quartets"] < 1 or not cross_ks_sources:
+            raise ValueError("Rooted-copy dS requires --cross-ks-cds and positive --max-ks-quartets")
+        parameters["ks_rooted_copies"] = 1
     outgroup_limit = getattr(args, "max_ks_outgroup_families", 0)
     if outgroup_limit < 0 or (outgroup_limit and not cross_ks_sources):
         raise ValueError("Common-outgroup dS requires --cross-ks-cds and a nonnegative family cap")
@@ -1132,7 +1139,7 @@ def run_analysis(plan, output, cpus):
     output.mkdir(parents=True, exist_ok=False)
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
-    cross_ks = terminal = None
+    cross_ks = terminal = rooted_copy = None
     region_summary = ()
     phase_diagnostics = ()
     traced_ks_hits = ()
@@ -1162,6 +1169,8 @@ def run_analysis(plan, output, cpus):
                     {gene.strip(): name for name in plan["species"] if row[name].strip() for gene in row[name].split(",")})
 
         cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
+        if p.get("ks_rooted_copies"):
+            rooted_copy = RootedCopyKs(tree, cross_ks.codes)
 
         def observe_family(family, leaves):
             cross.observe_family(family, leaves)
@@ -1169,16 +1178,19 @@ def run_analysis(plan, output, cpus):
                 cross_ks.observe_family(family, leaves)
 
         support_file = plan.get("cross_tree_support")
-        paired_hits = set() if support_file and cross is not None else None
+        paired_hits = set() if cross is not None and (support_file or rooted_copy is not None) else None
 
         def observe_cross(branch, family, node):
             cross.observe(branch, family, node, paired_hits)
             if reverse is not None:
                 reverse.observe(branch, family, node)
 
-        def observe_support(family, gene_tree, duplications):
-            support.observe(family, gene_tree, duplications, paired_hits or ())
+        def observe_support(family, gene_tree, duplications, membership):
+            if support:
+                support.observe(family, gene_tree, duplications, paired_hits or ())
             if paired_hits:
+                if rooted_copy is not None:
+                    rooted_copy.observe(family, gene_tree, membership, paired_hits)
                 paired_hits.clear()
 
         holdout_rows = [] if p.get("duplication_taxon_holdout") else None
@@ -1193,9 +1205,10 @@ def run_analysis(plan, output, cpus):
                 observe=observe_cross if cross is not None else None,
                 family_members=family_members if cross is not None else None,
                 observe_family=observe_family if cross is not None else None,
-                observe_duplications=observe_support if support else None, holdout_output=holdout_rows,
+                observe_duplications=observe_support if support or rooted_copy is not None else None, holdout_output=holdout_rows,
                 coverage_output=duplication_coverage, root_output=root_audit,
-                observe_topology=terminal.observe if terminal is not None else None, panels=panels, panel_output=panel_output)
+                observe_topology=terminal.observe if terminal is not None else None,
+                panels=panels, panel_output=panel_output)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if duplication_coverage is not None:
@@ -1326,9 +1339,12 @@ def run_analysis(plan, output, cpus):
                 row["synteny_block_definition"] = "same_original_blocks_with_uniquely_concordant_four_copy_paths"
     age_summary, focal_rows = {}, ()
     if cross_ks:
+        ds_method = p.get("cross_ks_method", "yn00")
         estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"),
-                           method=p.get("cross_ks_method", "yn00"))
-        focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal)
+                           method=ds_method)
+        focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal,
+                                  rooted_copy=rooted_copy, run_tool=run_tool,
+                                  method_label=CROSS_DS_REPORT_LABELS.get(ds_method, plan["tools"]["ds"]["method"]))
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
             status = row["cross_ks_status"]
@@ -1606,6 +1622,7 @@ def main():
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-sister-panels", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--ks-rooted-copies", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-ks-method", choices=CROSS_DS_METHODS, default="yn00")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),

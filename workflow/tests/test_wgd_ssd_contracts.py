@@ -660,7 +660,8 @@ def test_duplication_support_counts_each_voting_family_and_reports_missing_evide
         stream.writestr("different_generax.ufboot.nwk", newick.replace("D_a", "D_b"))
         stream.writestr("not_resolved_generax.ufboot.nwk", "(A_a,A_b,A_c,A_d,B_a,B_b,B_c,B_d,C_a,D_a);")
     with DuplicationTreeSupport(alternative) as support:
-        candidates, n = scan_duplications(tree, primary, 0.01, observe_duplications=support.observe)
+        candidates, n = scan_duplications(tree, primary, 0.01,
+                                          observe_duplications=lambda f, t, d, _: support.observe(f, t, d))
     assert n == 7
     assert candidates == scan_duplications(tree, primary, 0.01)[0]
     result, empty = support.rows(candidates)

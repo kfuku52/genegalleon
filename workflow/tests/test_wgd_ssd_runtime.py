@@ -267,11 +267,12 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
         "Orthogroup\t" + "\t".join(NAMES) + "\tTotal\n" + "".join(f"OG{i:03d}\t2\t2\t1\t5\n" for i in range(5)))
     (orthogroups / "Orthogroups.tsv").write_text("Orthogroup\t" + "\t".join(NAMES) + "\n" + "".join(
         f"OG{i:03d}\t{a}_a{i}, {a}_b{i}\t{b}_a{i}, {b}_b{i}\t{c}_a{i}\n" for i in range(5)))
-    (workspace / "cross_cds.tsv").write_text(f"species\tcds\n{a}\t{a}.fa\n{b}\t{b}.fa\n")
+    (workspace / "cross_cds.tsv").write_text(f"species\tcds\n{a}\t{a}.fa\n{b}\t{b}.fa\n{c}\t{c}.fa\n")
     for name in (a, b):
         (workspace / f"{name}.fa").write_text("".join(
             f">{name}_{copy}{i}\nATG" + ("GCT" if copy == "a" else "GCA") * 90 + "\n"
             for copy in ("a", "b") for i in range(5)))
+    (workspace / f"{c}.fa").write_text("".join(f">{c}_a{i}\nATG" + "GCTGCCGCA" * 30 + "\n" for i in range(5)))
     with ZipFile(workspace / "rooted_tree.zip", "w") as stream:
         for i in range(5):
             stream.writestr(f"OG{i:03d}_root.nwk", f"((({a}_a{i},{b}_a{i}),({a}_b{i},{b}_b{i})),{c}_a{i});")
@@ -282,11 +283,18 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
                       wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
                       wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", wgd_ks_component_holdout="1",
-                      wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1")
+                      wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1", wgd_ks_rooted_copies="1")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
     assert summary["plan"]["parameters"].get("cross_ks_method", "yn00") == ds_method
+    assert summary["plan"]["parameters"]["ks_rooted_copies"] == 1
+    rooted_rows = read_table(root / "cross_ks_rooted_copies.tsv")
+    assert len(rooted_rows) == 3
+    assert all(r["outgroup_species"] == c and r["common_codons"] == "91" for r in rooted_rows)
+    assert all(len(r["pair_statuses"].split(",")) == 10 for r in rooted_rows)
+    assert len(read_table(root / "cross_ks_rooted_alignments.code1.tsv")) == 30
+    assert "cross_ks_rooted_copy_summary.tsv" in summary["output_hashes"]
     if ds_method != "yn00":
         assert any(path.endswith("/dnds_mle.py") for path in summary["plan"]["input_hashes"])
         statuses = {row["status"] for row in read_table(root / "cross_ks_pair_ds.code1.tsv")}
@@ -379,7 +387,8 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout
     reused = json.loads((root / "summary.json").read_text())
-    assert reused["output_hashes"] == summary["output_hashes"]
+    without_rooted = {k: v for k, v in summary["output_hashes"].items() if not k.startswith("cross_ks_rooted_")}
+    assert reused["output_hashes"] == without_rooted
     assert reused["plan"]["reused_cross_ks_alignments"] == {"1": [str(saved / name) for saved in donors]}
     assert {str(saved / name) for saved in donors} <= reused["plan"]["input_hashes"].keys()
 
