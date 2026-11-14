@@ -1,5 +1,6 @@
 """Real genomic admission from frozen evidence, without another prediction run."""
 import copy
+import csv
 import importlib
 import json
 import shutil
@@ -14,6 +15,35 @@ sys.path.insert(0, str(SUPPORT))
 rescue = importlib.import_module('rescue_gene_models')
 replay = importlib.import_module('rescue_admission_replay')
 store = importlib.import_module('rescue_model_store')
+
+
+def test_rewrite_table_preserves_csv_records_and_logical_ordinals(tmp_path):
+    source = tmp_path / 'audit.tsv'
+    source.write_bytes(
+        'query\tnote\r\nunchanged\t植物\r\n\rquoted\t"tab\tand\r\nnewline"\r'
+        'updated\t"old ""quote"""\nsummary\tbare"quote'.encode()
+    )
+    result = tmp_path / 'replayed.tsv'
+    updates = {3: {'query': 'updated', 'note': 'new\ttext'}}
+    appended = [{'query': 'appended', 'note': 'more'}]
+
+    def make_row(model):
+        return model['query'], model['note']
+
+    replay._rewrite_table(source, result, updates, appended, make_row, 4, allow_tail=True)
+    assert result.read_bytes() == (
+        'query\tnote\nunchanged\t植物\n\nquoted\t"tab\tand\r\nnewline"\n'
+        'updated\t"new\ttext"\nappended\tmore\nsummary\t"bare""quote"\n'.encode()
+    )
+    with pytest.raises(ValueError, match='audit order changed'):
+        replay._rewrite_table(source, tmp_path / 'bad-order.tsv', {2: updates[3]}, appended, make_row, 5)
+
+
+def test_rewrite_table_still_enforces_csv_field_limit(tmp_path):
+    source = tmp_path / 'audit.tsv'
+    source.write_text('query\tnote\n' + 'x' * (csv.field_size_limit() + 1) + '\tnote\n')
+    with pytest.raises(csv.Error, match='field larger than field limit'):
+        replay._rewrite_table(source, tmp_path / 'too-large.tsv', {}, [], tuple, 1)
 
 
 @pytest.fixture

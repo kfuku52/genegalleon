@@ -12,6 +12,7 @@ import json
 import shutil
 import time
 from collections import Counter
+from itertools import chain
 from pathlib import Path
 
 try:
@@ -307,19 +308,27 @@ def read_retained(root, plan, name, previous_worker, receipt_sha, batch, history
 def _rewrite_table(source, destination, updates, appended, make_row, count, *, allow_tail=False):
     import csv
     with source.open(newline='') as inp, destination.open('x', newline='') as out:
-        reader, writer = csv.reader(inp, delimiter='\t'), csv.writer(out, delimiter='\t', lineterminator='\n')
-        writer.writerow(next(reader))
+        writer = csv.writer(out, delimiter='\t', lineterminator='\n')
+        writer.writerow(next(csv.reader(inp, delimiter='\t')))
+        field_limit = csv.field_size_limit()
         total = 0
         inserted = False
-        for ordinal, row in enumerate(reader):
+        for ordinal, line in enumerate(inp):
             if ordinal == count:
                 writer.writerows(make_row(m) for m in appended)
                 inserted = True
-            if ordinal in updates:
-                if row[0] != updates[ordinal]['query']:
-                    raise ValueError('Admission audit order changed')
-                row = make_row(updates[ordinal])
-            writer.writerow(row)
+            # Unchanged unquoted records already use the writer's encoding.
+            # The CSV reader still handles quoted multiline fields, changed
+            # ordinals and records that could exceed its field-size limit.
+            if ordinal in updates or '"' in line or len(line) > field_limit:
+                row = next(csv.reader(chain((line,), inp), delimiter='\t'))
+                if ordinal in updates:
+                    if row[0] != updates[ordinal]['query']:
+                        raise ValueError('Admission audit order changed')
+                    row = make_row(updates[ordinal])
+                writer.writerow(row)
+            else:
+                out.write(line if line.endswith('\n') and not line.endswith('\r\n') else line.rstrip('\r\n') + '\n')
             total += 1
         if total < count or (not allow_tail and total != count):
             raise ValueError('Admission audit/model count differs')
