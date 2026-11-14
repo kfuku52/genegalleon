@@ -476,20 +476,22 @@ def _manifest(store):
             raise ValueError("Malformed model-store count")
     _codec(manifest["codec"])
     ordinal = 0
-    shard_names = []
+    shard_names, seen = [], set()
     for shard in manifest["shards"]:
         if (not isinstance(shard, dict) or set(shard) != {"path", "first", "count"}
-                or shard["path"] not in manifest["files"] or shard["path"] in shard_names
+                or shard["path"] not in manifest["files"] or shard["path"] in seen
                 or type(shard["first"]) is not int or shard["first"] != ordinal
                 or type(shard["count"]) is not int or shard["count"] < 1):
             raise ValueError("Malformed model-store shard index")
         shard_names.append(shard["path"])
+        seen.add(shard["path"])
         ordinal += shard["count"]
+    partial_members = seen | {"partial.sqlite", "bodies.sqlite"}
     if (ordinal != manifest["counts"]["models"] or manifest["scopes"]["models"] != ["bodies.sqlite", *shard_names]
             or manifest["scopes"]["accepted"] != ["accepted.sqlite"]
             or manifest["scopes"]["revision"] != ["revision.sqlite"]
             or not manifest["scopes"]["partial"] or manifest["scopes"]["partial"][0] != "partial.sqlite"
-            or any(p not in {"partial.sqlite", "bodies.sqlite", *shard_names} for p in manifest["scopes"]["partial"])):
+            or not partial_members.issuperset(manifest["scopes"]["partial"])):
         raise ValueError("Malformed model-store scope dependencies")
     return manifest, sha
 

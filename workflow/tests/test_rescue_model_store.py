@@ -748,6 +748,15 @@ def test_directory_export_source_generation_change_discards_partial_output(tmp_p
     assert not list(tmp_path.glob(".model-export-*"))
 
 
+def test_manifest_rejects_duplicate_shard_with_matching_ordinals(tmp_path):
+    directory, manifest = published(tmp_path, [model(0), model(1)])
+    manifest["shards"][1]["path"] = manifest["shards"][0]["path"]
+    (directory / "model_store/manifest.json").write_text(json.dumps(manifest))
+    receipt(directory)
+    with pytest.raises(ValueError, match="Malformed model-store shard index"):
+        store.frozen_model_store_key(directory)
+
+
 @pytest.mark.parametrize("change", ["schema", "codec", "count", "scope", "unsafe_shard"])
 def test_unknown_or_malformed_manifest_rejected_even_with_new_receipt(tmp_path, change):
     directory, manifest = published(tmp_path, [model(0)])
