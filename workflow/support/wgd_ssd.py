@@ -31,6 +31,7 @@ try:
     )
     from wgd_cross_synteny import (
         COVERAGE_OUTPUT,
+        NONREUSE_OUTPUT,
         ORIENTATION_OUTPUT,
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
@@ -57,6 +58,7 @@ except ImportError:
     )
     from .wgd_cross_synteny import (
         COVERAGE_OUTPUT,
+        NONREUSE_OUTPUT,
         ORIENTATION_OUTPUT,
         PAIR_OUTPUT,
         WINDOW_OUTPUT,
@@ -952,7 +954,12 @@ def run_analysis(plan, output, cpus):
                             ORIENTATION_OUTPUT)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
-            write_table(output / "cross_synteny_archive_coverage.tsv", cross.coverage_rows(), COVERAGE_OUTPUT)
+            if not p.get("cross_orientation_audit"):
+                coverage_rows = cross.coverage_rows()
+            else:
+                coverage_rows, nonreuse_rows = cross.nonreused_coverage_rows()
+                write_table(output / "cross_synteny_anchor_nonreuse.tsv", nonreuse_rows, NONREUSE_OUTPUT)
+            write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
                                                                p["min_cross_windows"])
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)

@@ -24,6 +24,9 @@ WINDOW_OUTPUT = ("species_event_id", "species_a", "species_b", "contig", "window
 COVERAGE_OUTPUT = ("species_event_id", "species_a", "species_b", "num_cross_anchor_pairs",
                    "num_archive_family_anchor_pairs", "num_observable_windows", "num_archive_family_windows",
                    "archive_family_window_floor_met")
+NONREUSE_OUTPUT = ("species_event_id", "species_a", "species_b", "num_observable_windows",
+                   "num_nonreused_anchor_windows", "num_archive_family_windows", "num_nonreused_archive_family_windows",
+                   "nonreused_anchor_window_floor_met", "nonreused_archive_window_floor_met")
 ORIENTATION_METRICS = ("status", "observable_windows", "matched_paired_windows",
                        "matched_partial_only_windows", "matched_families")
 ORIENTATION_OUTPUT = ("species_event_id", "branch_id", "species_a", "species_b",
@@ -127,13 +130,40 @@ def qualifying(groups):
             yield key, tuples
 
 
-def observable_windows(positions, cross):
+def cross_window_groups(positions, cross):
     groups = defaultdict(set)
     for (x, y), ids in cross.items():
         window = window_for(positions, x)
         for block in ids:
             groups[window, block].add((x, y))
-    return {window for (window, _), _ in qualifying(groups)}
+    return groups
+
+
+def observable_windows(positions, cross):
+    return {window for (window, _), _ in qualifying(cross_window_groups(positions, cross))}
+
+
+def has_nonreused_anchors(tuples):
+    # Most blocks already contain five gene-disjoint pairs. Fall back to an
+    # exact bipartite match when an inexpensive greedy witness is insufficient.
+    pairs = sorted(tuples)
+    if len(pairs) < ANCHOR_FLOOR:
+        return False
+    used_a, used_b = set(), set()
+    for a, b in pairs:
+        if a not in used_a and b not in used_b:
+            used_a.add(a)
+            used_b.add(b)
+            if len(used_a) >= ANCHOR_FLOOR:
+                return True
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import maximum_bipartite_matching
+
+    row, col = {}, {}
+    indices = [(row.setdefault(a, len(row)), col.setdefault(b, len(col))) for a, b in pairs]
+    ii, jj = zip(*indices, strict=True)
+    graph = csr_matrix(([1] * len(indices), (ii, jj)), shape=(len(row), len(col)))
+    return bool((maximum_bipartite_matching(graph, perm_type="column") >= 0).sum() >= ANCHOR_FLOOR)
 
 
 def correspondence(positions, left, right, cross, provenance=None):
@@ -256,13 +286,35 @@ class CrossSynteny:
         for gene in self.coverage_genes.intersection(leaves):
             self.archive_families[gene] = family
 
-    def coverage_rows(self):
+    def _covered_windows(self, audit_nonreuse):
         for event, a, b, positions, links, observable in self.coverage:
             both = {pair: blocks for pair, blocks in links.items() if pair[0] in self.archive_families
                     and self.archive_families[pair[0]] == self.archive_families.get(pair[1])}
-            n = len(observable_windows(positions, both))
-            yield dict(zip(COVERAGE_OUTPUT, (event, a, b, len(links), len(both), observable, n,
-                                             int(n >= self.min_windows)), strict=True))
+            grouped = cross_window_groups(positions, both)
+            eligible = list(qualifying(grouped)) if audit_nonreuse else qualifying(grouped)
+            n = len({window for (window, _), _ in eligible})
+            coverage = dict(zip(COVERAGE_OUTPUT, (event, a, b, len(links), len(both), observable, n,
+                                                  int(n >= self.min_windows)), strict=True))
+            nonreuse = None
+            if audit_nonreuse:
+                raw_count, archive_count = (
+                    len({window for (window, _), pairs in rows if has_nonreused_anchors(pairs)})
+                    for rows in (qualifying(cross_window_groups(positions, links)), eligible))
+                nonreuse = dict(zip(NONREUSE_OUTPUT, (event, a, b, observable, raw_count, n, archive_count,
+                                                     int(raw_count >= self.min_windows),
+                                                     int(archive_count >= self.min_windows)), strict=True))
+            yield coverage, nonreuse
+
+    def coverage_rows(self):
+        for coverage, _ in self._covered_windows(False):
+            yield coverage
+
+    def nonreused_coverage_rows(self):
+        coverage, nonreuse = [], []
+        for old, strict in self._covered_windows(True):
+            coverage.append(old)
+            nonreuse.append(strict)
+        return coverage, nonreuse
 
     def observe(self, branch, family, node):
         targets = self.matches.get(branch)

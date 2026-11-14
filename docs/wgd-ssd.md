@@ -151,6 +151,11 @@ and the same family-tree pass. It reports differences in observability and
 in per-pair support, with separate window and family counts. It is a
 sensitivity audit: the supplied orientation still determines primary calls,
 and two orientations do not count as independent evidence.
+This option also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
+reference windows that contain five gene-disjoint direct pairs within one
+original block, both before and after requiring archive-family agreement.
+This diagnostic does not require five disjoint four-copy paths or change
+the primary definition of an observable window.
 
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:

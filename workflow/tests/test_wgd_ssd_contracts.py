@@ -83,6 +83,18 @@ def test_orientation_audit_distinguishes_assessment_and_support(observability, r
     assert (row["status"], row["a_supports_pair"], row["b_supports_pair"]) == (status, 1, b_support)
 
 
+def test_nonreused_anchor_count_checks_exact_matching_when_greedy_fails():
+    from workflow.support.wgd_cross_synteny import has_nonreused_anchors, qualifying
+
+    # Both sides have five genes, but these two stars can support at most two pairs.
+    stars = {("a", str(i)) for i in range(5)} | {(str(i), "0") for i in range(4)}
+    assert list(qualifying({"block": stars}))
+    assert not has_nonreused_anchors(stars)
+    greedy_trap = {("a", "1"), ("a", "2"), ("b", "1"), ("c", "3"), ("d", "4"), ("e", "5")}
+    assert has_nonreused_anchors(greedy_trap)
+    assert not has_nonreused_anchors(set())
+
+
 def test_event_support_is_an_evidence_rule_not_a_probability():
     anchors = anchor_rows()
     row = summarize_events([candidate()], anchors, {name: {"num_annotated_loci": 20} for name in ("A", "B")},
