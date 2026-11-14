@@ -233,7 +233,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
         stream.writestr("OG000_generax.ufboot.nwk", f"(({a}_a0,{b}_a0)100,({a}_b0,{b}_b0)88,{c}_a0);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
-                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3")
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -246,6 +246,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     coverage, = read_table(root / "cross_synteny_archive_coverage.tsv")
     assert coverage["num_cross_anchor_pairs"] == coverage["num_archive_family_anchor_pairs"] == "10"
     assert coverage["num_observable_windows"] == coverage["num_archive_family_windows"] == "2"
+    orientation, = read_table(root / "cross_synteny_orientation.tsv")
+    assert orientation["status"] == "supports_in_both"
+    assert orientation["a_matched_paired_windows"] == orientation["b_matched_paired_windows"] == "1"
     region = read_table(root / "cross_synteny_region_summary.tsv")[0]
     assert region["mode"] == "paired" and region["regions"] == "1"
     assert region["num_holdouts_losing_support"] == "1"
@@ -273,7 +276,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     shutil.copy(root / "cross_ks_aligned_pairs.code1.tsv", saved)
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
-                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3",
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
                       artifact_stale_policy="rebuild", wgd_cross_ks_reuse_summary="prior_wgd/summary.json")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout

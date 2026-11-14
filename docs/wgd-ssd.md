@@ -145,6 +145,13 @@ the branch stays unresolved. Only branches without sufficient
 observability can use the duplication-only rule. The thresholds
 are exploratory and are not calibrated WGD probabilities.
 
+With `wgd_cross_orientation_audit=1`, `cross_synteny_orientation.tsv` repeats
+the 100-gene window calculation in the second species using the same anchors
+and the same family-tree pass. It reports differences in observability and
+in per-pair support, with separate window and family counts. It is a
+sensitivity audit: the supplied orientation still determines primary calls,
+and two orientations do not count as independent evidence.
+
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:
 

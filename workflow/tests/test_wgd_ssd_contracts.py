@@ -68,6 +68,21 @@ def test_wgd_bootstrap_checkpoint_protects_managed_paths(tmp_path, relpath):
     wgd_ssd.protect_checkpoint(tmp_path / "bootstrap.json", {source: ""}, tmp_path)
 
 
+@pytest.mark.parametrize("observability,reverse_windows,status,b_support", [
+    ("assessed", 1, "orientation_dependent_support", 0),
+    ("insufficient_cross_anchors", 1, "orientation_dependent_observability", "NA"),
+    ("assessed", 3, "supports_in_both", 1),
+])
+def test_orientation_audit_distinguishes_assessment_and_support(observability, reverse_windows, status, b_support):
+    from workflow.support.wgd_cross_synteny import orientation_rows
+
+    forward = {"species_event_id": "event", "species_a": "A", "species_b": "B", "status": "assessed",
+               "observable_windows": 4, "matched_paired_windows": 3, "matched_partial_only_windows": 0, "matched_families": 4}
+    reverse = {**forward, "species_a": "B", "species_b": "A", "status": observability, "matched_paired_windows": reverse_windows}
+    row, = orientation_rows([{"species_event_id": "event", "branch_id": 8}], [forward], [reverse], 3)
+    assert (row["status"], row["a_supports_pair"], row["b_supports_pair"]) == (status, 1, b_support)
+
+
 def test_event_support_is_an_evidence_rule_not_a_probability():
     anchors = anchor_rows()
     row = summarize_events([candidate()], anchors, {name: {"num_annotated_loci": 20} for name in ("A", "B")},

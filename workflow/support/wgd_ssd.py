@@ -29,7 +29,15 @@ try:
         DuplicationTreeSupport,
         paired_tree_support,
     )
-    from wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
+    from wgd_cross_synteny import (
+        COVERAGE_OUTPUT,
+        ORIENTATION_OUTPUT,
+        PAIR_OUTPUT,
+        WINDOW_OUTPUT,
+        CrossSynteny,
+        orientation_rows,
+        read_pairs,
+    )
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
     from wgd_taxon_holdout import HOLDOUT_FIELDS
@@ -47,7 +55,15 @@ except ImportError:
         DuplicationTreeSupport,
         paired_tree_support,
     )
-    from .wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
+    from .wgd_cross_synteny import (
+        COVERAGE_OUTPUT,
+        ORIENTATION_OUTPUT,
+        PAIR_OUTPUT,
+        WINDOW_OUTPUT,
+        CrossSynteny,
+        orientation_rows,
+        read_pairs,
+    )
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
@@ -210,6 +226,11 @@ def make_plan(args):
     if parameters["duplication_taxon_holdout"] and tree_archive is None:
         raise ValueError("Duplication taxon holdout requires --gene-trees")
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
+    parameters["cross_orientation_audit"] = getattr(args, "cross_orientation_audit", 0)
+    if parameters["cross_orientation_audit"] not in (0, 1):
+        raise ValueError("Cross-synteny orientation audit must be 0 or 1")
+    if parameters["cross_orientation_audit"] and cross_pairs is None:
+        raise ValueError("Cross-synteny orientation audit requires --cross-synteny")
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
     checkpoint = getattr(args, "count_bootstrap_checkpoint", "")
@@ -885,6 +906,8 @@ def run_analysis(plan, output, cpus):
         cross = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], age_sources,
                               trace_branches=None, audit_coverage=True)
                  if plan.get("cross_pairs") is not None else None)
+        reverse = (CrossSynteny(tree, plan["cross_pairs"], p["min_cross_windows"], reverse_cross=True)
+                   if p.get("cross_orientation_audit") else None)
         by_family = {row[family_key]: row for row in members} if cross is not None else {}
 
         def family_members(family):
@@ -899,12 +922,18 @@ def run_analysis(plan, output, cpus):
             if cross_ks is not None:
                 cross_ks.observe_family(family, leaves)
 
+        def observe_both(branch, family, node):
+            cross.observe(branch, family, node)
+            reverse.observe(branch, family, node)
+
+        observe = observe_both if reverse is not None else cross.observe if cross is not None else None
+
         support_file = plan.get("cross_tree_support")
         holdout_rows = [] if p.get("duplication_taxon_holdout") else None
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
-                observe=cross.observe if cross is not None else None,
+                observe=observe,
                 family_members=family_members if cross is not None else None,
                 observe_family=observe_family if cross is not None else None,
                 observe_duplications=support.observe if support else None, holdout_output=holdout_rows)
@@ -916,6 +945,12 @@ def run_analysis(plan, output, cpus):
         if cross is not None:
             cross_evidence, pair_rows, window_rows = cross.summarize()
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
+            if reverse is not None:
+                _, reverse_pairs, _ = reverse.summarize(include_windows=False)
+                write_table(output / "cross_synteny_orientation.tsv",
+                            orientation_rows(raw_candidates, pair_rows, reverse_pairs, p["min_cross_windows"]),
+                            ORIENTATION_OUTPUT)
+                del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "cross_synteny_archive_coverage.tsv", cross.coverage_rows(), COVERAGE_OUTPUT)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
@@ -1254,6 +1289,7 @@ def main():
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-count-families", 10000),

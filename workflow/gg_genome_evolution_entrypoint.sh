@@ -141,6 +141,7 @@ wgd_alpha=0.05 # Search-wide conditional bootstrap P-value cutoff.
 wgd_gene_trees_file="" # Optional rooted *_root.nwk ZIP; selects duplication-score mode.
 wgd_duplication_taxon_holdout=0 # Audit branch scores after excluding each species; requires rooted gene trees.
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
+wgd_cross_orientation_audit=0 # Audit coverage/support after reversing the cross-anchor window reference.
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.
 wgd_cross_ks_reuse_summary="" # Optional summary.json from a separate completed WGD run to reuse exact alignments.
 wgd_max_ks_quartets=0 # Optional maximum four-copy dS comparisons per branch and species pair; 0 disables.

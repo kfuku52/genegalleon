@@ -24,6 +24,11 @@ WINDOW_OUTPUT = ("species_event_id", "species_a", "species_b", "contig", "window
 COVERAGE_OUTPUT = ("species_event_id", "species_a", "species_b", "num_cross_anchor_pairs",
                    "num_archive_family_anchor_pairs", "num_observable_windows", "num_archive_family_windows",
                    "archive_family_window_floor_met")
+ORIENTATION_METRICS = ("status", "observable_windows", "matched_paired_windows",
+                       "matched_partial_only_windows", "matched_families")
+ORIENTATION_OUTPUT = ("species_event_id", "branch_id", "species_a", "species_b",
+                      *(f"{side}_{field}" for side in ("a", "b") for field in ORIENTATION_METRICS),
+                      "a_supports_pair", "b_supports_pair", "status")
 
 
 def read_pairs(path, resolve, species, hash_input):
@@ -78,7 +83,7 @@ def coordinates(path, species):
     return result
 
 
-def anchor_links(path, a, b, symmetric=False):
+def anchor_links(path, a, b, symmetric=False, *, reversed_input=False):
     links, neighbors = defaultdict(set), defaultdict(set)
     path = Path(path)
     opener = gzip.open if path.suffix == ".gz" else open
@@ -90,9 +95,13 @@ def anchor_links(path, a, b, symmetric=False):
                 block, contigs = block + 1, None
             elif line and not line.startswith("#"):
                 fields = line.split("\t")
-                if len(fields) < 2 or not block or fields[0] not in a or fields[1] not in b:
+                if len(fields) < 2 or not block:
                     raise ValueError(f"Anchor outside its block or BED in {path}: {line}")
                 x, y = fields[:2]
+                if reversed_input:
+                    x, y = y, x
+                if x not in a or y not in b:
+                    raise ValueError(f"Anchor outside its block or BED in {path}: {line}")
                 pair = a[x][0], b[y][0]
                 if contigs is not None and contigs != pair:
                     raise ValueError(f"Anchor block spans multiple contig pairs in {path}")
@@ -177,7 +186,8 @@ def correspondence(positions, left, right, cross, provenance=None):
 class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
-    def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False):
+    def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
+                 *, reverse_cross=False):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -211,8 +221,10 @@ class CrossSynteny:
             a, b = row["species_a"], row["species_b"]
             if a == b:
                 continue
+            if reverse_cross:
+                a, b = b, a
             node = tree.common_ancestor([leaves[a], leaves[b]])
-            cross = anchor_links(row["anchors"], beds[a], beds[b])
+            cross = anchor_links(row["anchors"], beds[a], beds[b], reversed_input=reverse_cross)
             if node.is_root:
                 continue
             branch = index.clade_id_for_node(node)
@@ -272,7 +284,7 @@ class CrossSynteny:
                                               for sp in (a if gene in beds[a] else b,))
                             self.traced_hits.add((branch, a, b, window, family, genes, blocks, positions))
 
-    def summarize(self):
+    def summarize(self, *, include_windows=True):
         branches, pairs, windows = {}, [], []
         for branch, entries in self.entries.items():
             observed_species, supported_species = set(), set()
@@ -289,12 +301,13 @@ class CrossSynteny:
                               "paired_windows": len(paired), "partial_only_windows": len(partial),
                               "matched_paired_windows": len(full_hits), "matched_partial_only_windows": len(partial_hits),
                               "matched_families": len(families)})
-                for chrom, window in sorted(paired | partial):
-                    k = chrom, window
-                    windows.append({**key, "contig": chrom, "window": window, "paired": int(k in paired),
-                                    "partial_only": int(k in partial),
-                                    "matched_paired_families": ",".join(sorted(full_hits.get(k, ()))),
-                                    "matched_partial_only_families": ",".join(sorted(partial_hits.get(k, ())))})
+                if include_windows:
+                    for chrom, window in sorted(paired | partial):
+                        k = chrom, window
+                        windows.append({**key, "contig": chrom, "window": window, "paired": int(k in paired),
+                                        "partial_only": int(k in partial),
+                                        "matched_paired_families": ",".join(sorted(full_hits.get(k, ()))),
+                                        "matched_partial_only_families": ",".join(sorted(partial_hits.get(k, ())))})
             daughters = self.daughters[branch]
             branches[branch] = {
                 "observable": all(group & observed_species for group in daughters),
@@ -303,3 +316,24 @@ class CrossSynteny:
                 "supported_species": sorted(supported_species),
             }
         return branches, pairs, windows
+
+
+def orientation_rows(candidates, forward, reverse, floor):
+    ids = {row["species_event_id"]: row["branch_id"] for row in candidates}
+    reversed_by_pair = {(row["species_event_id"], row["species_b"], row["species_a"]): row for row in reverse}
+
+    def passes(row):
+        return (row["matched_paired_windows"] + row["matched_partial_only_windows"] >= floor
+                and row["matched_families"] >= floor)
+
+    for row in forward:
+        event, a, b = (row[field] for field in ("species_event_id", "species_a", "species_b"))
+        first, second = row, reversed_by_pair[event, a, b]
+        assessed = tuple(item["status"] == "assessed" for item in (first, second))
+        support = tuple(passes(item) if ok else "NA" for item, ok in zip((first, second), assessed, strict=True))
+        status = ("not_assessed" if not any(assessed) else "orientation_dependent_observability" if not all(assessed)
+                  else "orientation_dependent_support" if support[0] != support[1] else
+                  "supports_in_both" if all(support) else "below_threshold_in_both")
+        values = (event, ids[event], a, b, *(item[field] for item in (first, second) for field in ORIENTATION_METRICS),
+                  *(int(value) if isinstance(value, bool) else value for value in support), status)
+        yield dict(zip(ORIENTATION_OUTPUT, values, strict=True))
