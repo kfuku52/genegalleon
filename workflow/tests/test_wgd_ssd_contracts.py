@@ -558,6 +558,20 @@ def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
     assert all(row["supports_after_exclusion"] == 0 for row in detail if row["mode"] == "unique_phase")
 
 
+def test_two_reference_region_holdout_keeps_reverse_floor_after_exclusion():
+    from workflow.support.wgd_cross_regions import summarize_regions
+
+    hits = [("event", "A", "B", ("a", i), str(i), (f"a{i}", f"b{i}", f"c{i}", f"d{i}"),
+             (("A", "B", i),), (("A", "a", i), ("B", "b", i))) for i in range(3)]
+    reverse = {hit: {("linked", 1 if i < 2 else 2)} for i, hit in enumerate(hits)}
+    result, _ = summarize_regions([{"species_event_id": "event", "branch_id": 4}], hits,
+                                  {"event": ({"A"}, {"B"})}, 2, reverse_windows=reverse)
+    assert result[0]["regions"] == 3 and result[0]["holds_after_every_one_region"] == 1
+    both = result[-1]
+    assert both["mode"] == "both_orientations" and both["regions"] == 2
+    assert both["supports_before_holdout"] == 1 and both["num_holdouts_losing_support"] == 2
+
+
 def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):
     from nwkit.util import read_tree
 

@@ -317,9 +317,12 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert row["synteny_block_definition"] == "uniquely_concordant_four_copy_paths_in_both_orientations"
     nonreused, = read_table(root / "cross_synteny_anchor_nonreuse.tsv")
     assert nonreused["num_nonreused_anchor_windows"] == nonreused["num_nonreused_archive_family_windows"] == "2"
-    region = read_table(root / "cross_synteny_region_summary.tsv")[0]
+    regions = read_table(root / "cross_synteny_region_summary.tsv")
+    region = regions[0]
     assert region["mode"] == "paired" and region["regions"] == "1"
     assert region["num_holdouts_losing_support"] == "1"
+    both = next(row for row in regions if row["mode"] == "both_orientations")
+    assert both["supports_before_holdout"] == "1" and both["num_holdouts_losing_support"] == "1"
     assert "cross_synteny_regions.tsv" in summary["output_hashes"]
     assert read_table(root / "cross_synteny_nested_copies.tsv") == []
     support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}

@@ -13,7 +13,7 @@ NESTED_FIELDS = ("younger_event_id", "younger_branch_id", "older_event_id", "old
                  "younger_families", "older_families", "shared_families")
 
 
-def components(hits):
+def components(hits, reverse_windows=None):
     parents = list(range(len(hits)))
 
     def root(i):
@@ -26,6 +26,8 @@ def components(hits):
     for i, (_, a, b, window, _, _, blocks, positions) in enumerate(hits):
         keys = (("scored_window", a, b, *window), *(("block", *v) for v in blocks),
                 *(("copy_window", *v) for v in positions))
+        if reverse_windows is not None:
+            keys += tuple(("reversed_window", a, b, *v) for v in reverse_windows[hits[i]])
         for key in keys:
             parents[root(i)] = root(seen.setdefault(key, i))
     groups = defaultdict(list)
@@ -34,25 +36,31 @@ def components(hits):
     return sorted(groups.values(), key=lambda g: (-len({h[1:4] for h in g}), g[0]))
 
 
-def support_after_holdouts(hits, daughters, floor):
-    groups = components(hits)
+def support_after_holdouts(hits, daughters, floor, *, reverse_windows=None):
+    groups = components(hits, reverse_windows)
     stats = []
     windows_by_pair, family_regions = Counter(), defaultdict(Counter)
+    reverse_by_pair = Counter()
     for group in groups:
         windows = {h[1:4] for h in group}
         window_counts = Counter((a, b) for a, b, _ in windows)
+        reverse = Counter((a, b) for a, b, _ in {
+            (h[1], h[2], window) for h in group for window in reverse_windows[h]
+        }) if reverse_windows is not None else Counter()
+        reverse_by_pair.update(reverse)
         families = defaultdict(set)
         for _, a, b, _, family, *_ in group:
             families[a, b].add(family)
         windows_by_pair.update(window_counts)
         for pair, ids in families.items():
             family_regions[pair].update(ids)
-        stats.append((group, window_counts, families))
+        stats.append((group, window_counts, families, reverse))
 
-    def pair_passes(windows, families):
-        return windows >= floor and families >= floor
+    def pair_passes(windows, families, reverse):
+        return min(windows, families) >= floor and (reverse_windows is None or reverse >= floor)
 
-    initially_supported = {pair for pair, n in windows_by_pair.items() if pair_passes(n, len(family_regions[pair]))}
+    initially_supported = {pair for pair, n in windows_by_pair.items()
+                           if pair_passes(n, len(family_regions[pair]), reverse_by_pair[pair])}
     initial_taxa = Counter(sp for pair in initially_supported for sp in pair)
 
     def has_support(taxa):
@@ -60,11 +68,12 @@ def support_after_holdouts(hits, daughters, floor):
 
     total = windows_by_pair.total()
     result = []
-    for i, (group, wc, families) in enumerate(stats, 1):
+    for i, (group, wc, families, rc) in enumerate(stats, 1):
         taxa = initial_taxa.copy()
         for pair in wc.keys() & initially_supported:
             lost_families = sum(family_regions[pair][f] == 1 for f in families[pair])
-            if not pair_passes(windows_by_pair[pair] - wc[pair], len(family_regions[pair]) - lost_families):
+            if not pair_passes(windows_by_pair[pair] - wc[pair], len(family_regions[pair]) - lost_families,
+                               reverse_by_pair[pair] - rc[pair]):
                 taxa.subtract(pair)
         result.append({"region": i, "matched_windows": wc.total(), "matched_families": len({h[4] for h in group}),
                        "num_original_blocks": len({v for h in group for v in h[6]}),
@@ -73,7 +82,7 @@ def support_after_holdouts(hits, daughters, floor):
     return has_support(initial_taxa), result
 
 
-def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase_hits=None):
+def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase_hits=None, reverse_windows=None):
     by_branch = defaultdict(list)
     for hit in sorted(traced_hits):
         by_branch[hit[0]].append(hit)
@@ -81,6 +90,10 @@ def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase
     if unique_phase_hits is not None:
         for hit in sorted(unique_phase_hits):
             unique_by_branch[hit[0]].append(hit)
+    shared = defaultdict(list)
+    if reverse_windows is not None:
+        for hit in sorted(reverse_windows):
+            shared[hit[0]].append(hit)
     summary, details = [], []
     for row in candidates:
         branch = row["species_event_id"]
@@ -90,8 +103,11 @@ def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase
         modes = [("paired", [h for h in hits if len(h[5]) == 4]), ("all", hits)]
         if unique_phase_hits is not None:
             modes.append(("unique_phase", unique_by_branch[branch]))
+        if reverse_windows is not None:
+            modes.append(("both_orientations", shared[branch]))
         for mode, selected in modes:
-            supported, regions = support_after_holdouts(selected, daughters[branch], floor)
+            supported, regions = support_after_holdouts(selected, daughters[branch], floor,
+                                                         reverse_windows=reverse_windows if mode == "both_orientations" else None)
             contigs = defaultdict(set)
             for hit in selected:
                 for sp, contig, _ in hit[7]:

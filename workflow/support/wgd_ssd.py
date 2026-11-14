@@ -1214,6 +1214,7 @@ def run_analysis(plan, output, cpus):
             phase_diagnostics = list(phase_rows(raw_candidates, pair_rows, cross.phases))
             write_table(output / "cross_synteny_copy_phase.tsv", phase_diagnostics, PHASE_FIELDS)
             both_hits = None
+            reverse_windows = None
             if reverse is not None:
                 _, reverse_pairs, _ = reverse.summarize(include_windows=False, archive_floor=reverse_floor)
                 write_table(output / "cross_synteny_orientation.tsv",
@@ -1223,8 +1224,9 @@ def run_analysis(plan, output, cpus):
                                                              unique=bool(p.get("cross_require_unique_phase"))))
                 write_table(output / "cross_synteny_orientation_quartets.tsv", orientation, ORIENTATION_PHASE_FIELDS)
                 if p.get("cross_require_both_orientations"):
+                    reverse_windows = {}
                     both_hits = require_paired_orientations(cross_evidence, cross.daughters, orientation, cross,
-                                                           reverse, p["min_cross_windows"])
+                                                           reverse, p["min_cross_windows"], reverse_windows=reverse_windows)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "duplication_synteny_family_overlap.tsv",
@@ -1235,7 +1237,13 @@ def run_analysis(plan, output, cpus):
             write_table(output / "cross_synteny_copy_replication.tsv",
                         replicated_copy_rows(raw_candidates, pair_rows, cross.traced_hits, unique_hits), REPLICATION_FIELDS)
             region_summary, region_detail = summarize_regions(raw_candidates, cross.traced_hits, cross.daughters,
-                                                               p["min_cross_windows"], unique_phase_hits=unique_hits)
+                                                               p["min_cross_windows"], unique_phase_hits=unique_hits,
+                                                               reverse_windows=reverse_windows)
+            if reverse_windows is not None:
+                for row in region_summary:
+                    if (row["mode"] == "both_orientations" and
+                            bool(row["supports_before_holdout"]) != cross_evidence[row["species_event_id"]]["supported"]):
+                        raise ValueError("Both-reference region audit changed the pre-holdout support")
             write_table(output / "cross_synteny_region_summary.tsv", region_summary, REGION_SUMMARY)
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
             write_table(output / "cross_synteny_nested_copies.tsv",

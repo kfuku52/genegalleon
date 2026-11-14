@@ -81,12 +81,16 @@ def oriented_pairings(scanner, reverse, unique_phase):
         event, a, b, _, family, genes, *_ = hit
         if len(genes) != 4 or (unique_phase and not trace_has_unique_phase(scanner.phases, hit)):
             continue
-        first, other_a, second, other_b = genes
-        copies = ((other_a, first), (other_b, second)) if reverse else ((first, other_a), (second, other_b))
+        key = orientation_pair_key(family, genes, reverse)
         pair = (event, b, a) if reverse else (event, a, b)
-        key = family, *sorted(copies)
         result[pair].setdefault(key, set()).add(hit)
     return result
+
+
+def orientation_pair_key(family, genes, reverse=False):
+    first, other_a, second, other_b = genes
+    copies = ((other_a, first), (other_b, second)) if reverse else ((first, other_a), (second, other_b))
+    return family, *sorted(copies)
 
 
 def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reverse, *, unique=False):
@@ -112,7 +116,7 @@ def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reve
             yield dict(zip(ORIENTATION_PHASE_FIELDS, values, strict=True))
 
 
-def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor):
+def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor, *, reverse_windows=None):
     first, second = oriented_pairings(forward, False, True), oriented_pairings(reverse, True, True)
     support = defaultdict(set)
     retained = set()
@@ -126,6 +130,10 @@ def require_paired_orientations(evidence, daughters, orientation, forward, rever
         # Keep consistent paths for ages and provenance. The support rule
         # checks independent window counts on both references, not their sum.
         retained.update(hit for key in shared for hit in x[key])
+        if reverse_windows is not None:
+            for key in shared:
+                windows = frozenset(hit[3] for hit in y[key])
+                reverse_windows.update((hit, windows) for hit in x[key])
         if min(row["shared_families"], row["shared_windows_a"], row["shared_windows_b"]) >= floor:
             support[event].update((a, b))
     for event, state in evidence.items():

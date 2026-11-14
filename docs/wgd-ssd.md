@@ -203,7 +203,11 @@ are unchanged; a positive signal in one orientation without corroboration
 in the other does not become a duplication-only call. The tree additionally
 shows `R`, the sum across species pairs of the smaller of their two shared
 unique window counts. This is a sensitivity filter, not independent evidence.
-Region and replication audits retain their original scopes.
+The region audit adds a `both_orientations` mode. Regions sharing a window
+in either reference are joined; after deleting one region the support rule
+still enforces the window floor in both references. The window totals
+shown in the region tables remain in the supplied reference orientation.
+Existing region and replication modes retain their original scopes.
 This option also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
 reference windows that contain five gene-disjoint direct pairs within one
 original block, both before and after requiring archive-family agreement.
