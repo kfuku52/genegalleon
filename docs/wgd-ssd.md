@@ -258,6 +258,17 @@ rate categories. At an event, each ancestral copy contributes its original
 copy plus binomially retained extra copies. `wgd_multiplicity=2` tests doubling;
 3 is a separate triplication alternative, not an estimated ploidy.
 
+Optionally supply `wgd_count_detection_tsv` with `leaf_name` and
+`detection_probability` columns, covering every tip exactly once with a
+known probability in `(0, 1]`. It models independently missed copies;
+it does not correct extra annotation copies or turn a missing value into
+zero. Do not treat BUSCO completeness as a per-copy probability without
+independent justification. Supply `wgd_count_rate_groups_tsv` with `branch_id`
+and `regime` columns to replace the terminal/internal background groups.
+Include every non-root branch of the input tree once. Specify groups and
+probabilities before inspecting candidate support; rerunning with a different
+table is a sensitivity analysis with its own null fit and bootstrap.
+
 The scan searches every positive-length non-root branch at fractions
 0.25, 0.5, and 0.75. It fits one event at a time. State doubling must meet a
 per-family likelihood tolerance; optimization or convergence failures stop

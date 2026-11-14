@@ -239,6 +239,15 @@ def make_plan(args):
         raise ValueError("Cross-synteny orientation audit requires --cross-synteny")
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
+    count_inputs = {}
+    for kind in ("detection", "rate_groups"):
+        value = getattr(args, f"count_{kind}_tsv", "")
+        if value:
+            if tree_archive is not None:
+                raise ValueError("Count detection and rate-group tables require gene-count mode")
+            path = resolve(value, "")
+            inputs[str(path)] = digest(path)
+            count_inputs[f"count_{kind}_tsv"] = str(path)
     checkpoint = getattr(args, "count_bootstrap_checkpoint", "")
     if checkpoint:
         if not args.count_bootstrap or tree_archive is not None:
@@ -279,7 +288,7 @@ def make_plan(args):
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
-            "count_bootstrap_checkpoint": checkpoint,
+            "count_bootstrap_checkpoint": checkpoint, **count_inputs,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -899,6 +908,12 @@ def run_analysis(plan, output, cpus):
         raise ValueError("cpus must be positive")
     p = plan["parameters"]
     tree_mode = bool(plan.get("gene_trees"))
+    count_input_args = []
+    for key, option in (("count_detection_tsv", "--detection-tsv"), ("count_rate_groups_tsv", "--rate-groups-tsv")):
+        if plan.get(key):
+            if tree_mode or plan[key] not in plan["input_hashes"]:
+                raise ValueError("Count observation and rate-group tables require hashed inputs in gene-count mode")
+            count_input_args.extend((option, plan[key]))
     bootstrap_workers = p.get("count_bootstrap_workers", 1)
     scan_workers = p.get("count_scan_workers", 1)
     if not tree_mode and scan_workers > cpus:
@@ -1016,7 +1031,7 @@ def run_analysis(plan, output, cpus):
                   "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
                   "--max-states", p["max_states"], "--max-iterations", p["max_iterations"],
                   "--multiplicity", p["multiplicity"], "--outfile", output / "count_candidates.tsv",
-                  "--model-out", output / "count_model.json", *worker_args], output, "wgd-count")
+                  "--model-out", output / "count_model.json", *worker_args, *count_input_args], output, "wgd-count")
         raw_candidates = read_table(output / "count_candidates.tsv")
         num_trees = None
     positions, sequences, summaries, anchors = prepare_sources(plan, output, cpus)
@@ -1320,7 +1335,8 @@ def main():
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
-                  "cross-tree-support", "cross-ks-reuse-summary", "count-bootstrap-checkpoint"):
+                  "cross-tree-support", "cross-ks-reuse-summary", "count-bootstrap-checkpoint", "count-detection-tsv",
+                  "count-rate-groups-tsv"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)

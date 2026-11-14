@@ -157,6 +157,29 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     assert len(model["candidates"]) == 4
 
 
+def test_wgd_stage_forwards_known_observation_probabilities_and_rate_groups(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    detection = workspace / "detection.tsv"
+    detection.write_text("leaf_name\tdetection_probability\nGamma_three\t0.91\nAlpha_one\t0.97\nBeta_two\t1\n")
+    rates = workspace / "regimes.tsv"
+    rates.write_text("branch_id\tregime\n1\tancestral\n2\tterminal\n3\tterminal\n4\tterminal\n")
+    options = {"wgd_count_detection_tsv": detection.name, "wgd_count_rate_groups_tsv": rates.name}
+    result = run_core(workspace, **options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    initial = (root / "summary.json").read_bytes()
+    plan = json.loads(initial)["plan"]
+    assert {str(detection), str(rates)} <= plan["input_hashes"].keys()
+    model = json.loads((root / "count_model.json").read_text())
+    assert dict(zip(model["tip_names"], model["detection_probabilities"], strict=True)) == dict(zip(NAMES, (.97, 1, .91), strict=True))
+    assert model["branch_rate_group_names"] == ["ancestral", "terminal"]
+    detection.write_text(detection.read_text().replace("0.91", "0.92"))
+    result = run_core(workspace, **options)
+    assert result.returncode != 0
+    assert (root / "summary.json").read_bytes() == initial
+
+
 @pytest.mark.parametrize("holdout", [False, True])
 def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout):
     from zipfile import ZipFile

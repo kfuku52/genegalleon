@@ -31,6 +31,8 @@ wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
 wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
 wgd_count_bootstrap_checkpoint="${wgd_count_bootstrap_checkpoint:-}"
 wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
+wgd_count_detection_tsv="${wgd_count_detection_tsv:-}"
+wgd_count_rate_groups_tsv="${wgd_count_rate_groups_tsv:-}"
 wgd_alpha="${wgd_alpha:-0.05}"
 wgd_gene_trees_file="${wgd_gene_trees_file:-}"
 wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
@@ -409,6 +411,7 @@ run_wgd_ssd_stage() (
     --count-bootstrap-workers "${wgd_count_bootstrap_workers}" \
     --count-bootstrap-checkpoint "${wgd_count_bootstrap_checkpoint}" \
     --count-scan-workers "${wgd_count_scan_workers}" \
+    --count-detection-tsv "${wgd_count_detection_tsv}" --count-rate-groups-tsv "${wgd_count_rate_groups_tsv}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
     --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \
