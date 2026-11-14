@@ -1477,7 +1477,8 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
         enriched = with_quality(writer)
         if compact:
             # The store consumes revisions after the main model stream.
-            write_model_store(directory, enriched, revisions=revisions.values(), publication_workers=publication_workers)
+            write_model_store(directory, enriched, revisions=revisions.values(), publication_workers=publication_workers,
+                              packing_workers=publication_workers)
         else:
             for _ in enriched:
                 pass

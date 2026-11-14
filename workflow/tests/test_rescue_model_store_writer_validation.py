@@ -43,6 +43,27 @@ def test_writer_rejects_non_json_body_without_publication(tmp_path):
 
 
 @pytest.mark.parametrize("codec", ["gzip", "auto"])
+def test_parallel_packing_preserves_model_store_bytes_and_order(tmp_path, codec):
+    records = [model(i, "accepted" if i % 13 == 0 else "unresolved") for i in range(530)]
+    serial, parallel = tmp_path / "serial", tmp_path / "parallel"
+    options = {"codec": codec, "shard_bytes": 64000, "revisions": [records[13]]}
+    expected = store.write_model_store(serial, iter(records), **options)
+    actual = store.write_model_store(parallel, iter(records), **options, packing_workers=4)
+    assert actual == expected
+    receipt(parallel)
+    assert list(store.iter_models(parallel)) == records
+
+
+def test_parallel_packing_aborts_on_invalid_later_record(tmp_path):
+    records = [model(i) for i in range(640)]
+    records[600]["evidence"]["invalid"] = float("nan")
+    directory = tmp_path / "worker"
+    with pytest.raises(ValueError, match="Out of range float values"):
+        store.write_model_store(directory, iter(records), packing_workers=4)
+    assert_unpublished(directory)
+
+
+@pytest.mark.parametrize("codec", ["gzip", "auto"])
 @pytest.mark.parametrize("status", ["proposal", "accepted"])
 def test_record_bound_includes_jsonl_newline(tmp_path, monkeypatch, codec, status):
     record = model(0, status)

@@ -19,7 +19,7 @@ import tempfile
 from collections import OrderedDict, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
-from itertools import batched
+from itertools import batched, chain, islice
 from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
 
@@ -289,22 +289,26 @@ def _overlay(path):
 
 
 def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None, *, _encoded_envelope=None):
-    _insert_body(db, body, level, codec, cache, packed_sha=envelope["body"])
-    if _encoded_envelope is None:
-        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_json(envelope), codec, level)))
-    else:
-        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_encoded_envelope, codec, level)))
+    encoded = _json(envelope) if _encoded_envelope is None else _encoded_envelope
+    _add_packed_overlay(db, ordinal, body, envelope["body"], encoded, level, codec, cache)
+
+
+def _add_packed_overlay(db, ordinal, body, sha, encoded, level, codec, cache):
+    _insert_body(db, body, level, codec, cache, packed_sha=sha)
+    db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(encoded, codec, level)))
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
                       shard_bytes=8 * 1024 * 1024, codec="auto", compression_level=1,
-                      publication_workers=1):
+                      publication_workers=1, packing_workers=1):
     """Atomically publish into ``directory/model_store`` without replacing data.
 
     ``partial_models=None`` records references for ``partial_evidence.partial``.
     Explicit partial records must be exact members of models. Revision records
     can differ from models and are stored in an independent, small overlay.
     ``publication_workers`` bounds concurrent checksums and file syncs.
+    Parallel packing requires stable, picklable input records and is used only
+    when the main stream supplies its own partial references.
     Publication is immutable; the enclosing stage subsequently hashes all files
     into its normal receipt. No receipt is fabricated by this writer.
     """
@@ -315,6 +319,8 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         raise ValueError("Invalid model-store shard bound")
     if type(publication_workers) is not int or publication_workers < 1:
         raise ValueError("Model-store publication workers must be a positive integer")
+    if type(packing_workers) is not int or packing_workers < 1:
+        raise ValueError("Model-store packing workers must be a positive integer")
     directory = Path(directory)
     target = directory if directory.name == "model_store" else directory / "model_store"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -324,7 +330,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         staging = Path(directory)
         with scratch_build_directory(staging) as work:
             manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
-                                          codec, codec_version, compression_level, publication_workers)
+                                          codec, codec_version, compression_level, publication_workers, packing_workers)
             if work != staging:
                 for name in manifest["files"]:
                     shutil.copyfile(work / name, staging / name)
@@ -340,8 +346,53 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         return manifest
 
 
+def _encode_model(record, ordinal, *, track_fingerprint=False):
+    body, envelope = _pack(record, _validate_envelope=False)
+    fingerprint = hashlib.sha256(_json(envelope)).digest() if track_fingerprint else None
+    envelope["ordinal"] = ordinal
+    packed = _json(envelope) + b"\n"
+    if len(packed) > MAX_RECORD_BYTES:
+        raise ValueError("Model-store record exceeds bounded buffer")
+    return body, envelope["body"], packed, fingerprint
+
+
+def _encode_model_batch(batch, first):
+    return [_encode_model(record, ordinal) for ordinal, record in enumerate(batch, first)]
+
+
+def _encoded_models(models, track_fingerprint, workers):
+    batch_size = 128
+    minimum_records = 512
+    models = iter(models)
+    if workers > 1 and not track_fingerprint:
+        first = list(islice(models, minimum_records))
+        models = chain(first, models)
+        if len(first) < minimum_records:
+            workers = 1
+        del first
+    if workers == 1 or track_fingerprint:
+        for ordinal, record in enumerate(models):
+            yield record, _encode_model(record, ordinal, track_fingerprint=track_fingerprint)
+        return
+
+    pending = deque()
+    ordinal = 0
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        def consume():
+            batch, future = pending.popleft()
+            yield from zip(batch, future.result(), strict=True)
+
+        for batch in batched(models, batch_size):
+            pending.append((batch, pool.submit(_encode_model_batch, batch, ordinal)))
+            ordinal += len(batch)
+            if len(pending) >= workers * 2:
+                yield from consume()
+        while pending:
+            yield from consume()
+
+
 def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level,
-                       hash_workers):
+                       hash_workers, packing_workers):
     dbs, shard_handle = [], None
     try:
         body_db = _database(tmp / "bodies.sqlite")
@@ -368,38 +419,32 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
         revision_cache = _Bodies(revision_db, codec)
         shards, shard_size, line, count, accepted_count, partial_count = [], 0, 0, 0, 0, 0
         partial_ordered, last_partial_ordinal = True, -1
-        for ordinal, record in enumerate(models):
-            body, envelope = _pack(record, _validate_envelope=False)
-            if lookup_db is not None:
-                fingerprint = hashlib.sha256(_json(envelope)).digest()
-            envelope["ordinal"] = ordinal
-            packed = _json(envelope) + b"\n"
-            if len(packed) > MAX_RECORD_BYTES:
-                raise ValueError("Model-store record exceeds bounded buffer")
-            if shard_handle is None or (shard_size and shard_size + len(packed) > shard_bytes):
-                if shard_handle is not None:
-                    shard_handle.close()
-                extension = "gz" if codec == "gzip" else "zst"
-                shard = f"models-{len(shards):06d}.jsonl.{extension}"
-                shards.append({"path": shard, "first": ordinal, "count": 0})
-                shard_handle = _writer(tmp / shard, codec, compression_level)
-                shard_size, line = 0, 0
-            shard_handle.write(packed)
-            _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=envelope["body"])
-            if lookup_db is not None:
-                lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
-                                  (fingerprint, ordinal, len(shards) - 1, line))
-            if record.get("status") == "accepted":
-                _add_overlay(accepted_db, ordinal, body, envelope, compression_level, codec, accepted_cache,
-                             _encoded_envelope=memoryview(packed)[:-1])
-                accepted_count += 1
-            if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
-                partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
-                partial_count += 1
-            shard_size += len(packed)
-            line += 1
-            shards[-1]["count"] += 1
-            count += 1
+        with closing(_encoded_models(models, lookup_db is not None, packing_workers)) as encoded:
+            for ordinal, (record, (body, sha, packed, fingerprint)) in enumerate(encoded):
+                if shard_handle is None or (shard_size and shard_size + len(packed) > shard_bytes):
+                    if shard_handle is not None:
+                        shard_handle.close()
+                    extension = "gz" if codec == "gzip" else "zst"
+                    shard = f"models-{len(shards):06d}.jsonl.{extension}"
+                    shards.append({"path": shard, "first": ordinal, "count": 0})
+                    shard_handle = _writer(tmp / shard, codec, compression_level)
+                    shard_size, line = 0, 0
+                shard_handle.write(packed)
+                _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=sha)
+                if lookup_db is not None:
+                    lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
+                                      (fingerprint, ordinal, len(shards) - 1, line))
+                if record.get("status") == "accepted":
+                    _add_packed_overlay(accepted_db, ordinal, body, sha, memoryview(packed)[:-1],
+                                        compression_level, codec, accepted_cache)
+                    accepted_count += 1
+                if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
+                    partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
+                    partial_count += 1
+                shard_size += len(packed)
+                line += 1
+                shards[-1]["count"] += 1
+                count += 1
         if shard_handle is not None:
             shard_handle.close()
             shard_handle = None
