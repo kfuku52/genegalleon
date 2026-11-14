@@ -238,7 +238,8 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         assert all(r["branch_identifiable"] == "0" and r["duplication_score"] == "NA" for r in estimates)
 
 
-def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
+@pytest.mark.parametrize("ds_method", ["yn00", "gy94", "gy94-regularized"])
+def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     from hashlib import sha256
     from zipfile import ZipFile
 
@@ -276,10 +277,16 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
                       wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
-                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", wgd_ks_component_holdout="1")
+                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", wgd_ks_component_holdout="1",
+                      wgd_cross_ks_method=ds_method)
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["parameters"].get("cross_ks_method", "yn00") == ds_method
+    if ds_method != "yn00":
+        assert any(path.endswith("/dnds_mle.py") for path in summary["plan"]["input_hashes"])
+        statuses = {row["status"] for row in read_table(root / "cross_ks_pair_ds.code1.tsv")}
+        assert "identical" in statuses
     row, = read_table(root / "wgd_events.tsv")
     pair, = read_table(root / "cross_synteny_pairs.tsv")
     assert row["event_support"] == "duplication-and-synteny-candidate"
@@ -357,7 +364,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
                       wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
                       wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", artifact_stale_policy="rebuild",
-                      wgd_ks_component_holdout="1",
+                      wgd_ks_component_holdout="1", wgd_cross_ks_method=ds_method,
                       wgd_cross_ks_reuse_summary="\n".join(f"{saved.name}/summary.json" for saved in donors))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout

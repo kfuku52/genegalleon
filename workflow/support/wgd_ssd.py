@@ -102,6 +102,12 @@ except ImportError:
     from .wgd_tree_scan import ROOT_FIELDS, scan_duplications
 
 
+CROSS_DS_METHODS = ("yn00", "gy94", "gy94-regularized")
+CROSS_GY94_STATUSES = frozenset(("identical", "kappa_boundary", "rate_boundary", "not_converged",
+                                "frequency_not_converged"))
+CROSS_DS_REPORT_LABELS = {"gy94": "GY94_CF3x4_pairwise", "gy94-regularized": "GY94_CF3x4_log_ratio_penalty"}
+
+
 def write_table(path, rows, fields):
     with Path(path).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", lineterminator="\n")
@@ -318,6 +324,17 @@ def make_plan(args):
         if not cross_ks_sources:
             raise ValueError("Copy dS component holdout requires --cross-ks-cds")
         parameters["ks_component_holdout"] = 1
+    ds_method = getattr(args, "cross_ks_method", "yn00")
+    if ds_method != "yn00":
+        if ds_method not in CROSS_DS_METHODS or not cross_ks_sources:
+            raise ValueError("Alternative dS estimation requires --cross-ks-cds and a supported --cross-ks-method")
+        parameters["cross_ks_method"] = ds_method
+        import cdskit.cli
+        import cdskit.dnds_mle
+        import scipy
+
+        modules = (cdskit.cli, cdskit.dnds_mle, scipy)
+        inputs.update({str(Path(module.__file__).resolve()): digest(Path(module.__file__)) for module in modules})
     if parameters["max_ks_quartets"] and not cross_ks_sources:
         raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
@@ -663,16 +680,16 @@ def estimate_ks(plan, output, sequences, anchors, cpus, family_tables=None):
     return reports, contrasts
 
 
-def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix="", *, reuse=None):
+def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix="", *, reuse=None, method="yn00"):
     # MAFFT's many short-lived files need not traverse a shared workspace mount.
     if prefix and not os.environ.get("MAFFT_TMPDIR") and requests:
         with tempfile.TemporaryDirectory(prefix="gg-wgd-mafft-", dir="/tmp") as scratch:
             return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix,
-                                          {**os.environ, "MAFFT_TMPDIR": scratch}, reuse)
-    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None, reuse)
+                                          {**os.environ, "MAFFT_TMPDIR": scratch}, reuse, method)
+    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None, reuse, method)
 
 
-def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env, reuse):
+def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env, reuse, method):
     reports = {}
     by_code = defaultdict(list)
     for pair, info in requests.items():
@@ -696,15 +713,19 @@ def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, ali
         with ThreadPoolExecutor(max_workers=cpus) as pool:
             with closing(ordered_bounded_results(pool, align, ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
                 write_table(pairs_file, aligned, PAIR_COLUMNS)
-        run_tool(["cdskit", "dnds", "--pairs_file", pairs_file,
+        method_args = ["--method", method] if method != "yn00" else []
+        run_tool(["cdskit", "dnds", "--pairs_file", pairs_file, *method_args,
                   "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"{prefix}dnds.code{code}")
         expected = {"|".join(pair) for pair, _ in selected}
         observed = set()
+        statuses = DS_STATUSES if method == "yn00" else DS_STATUSES | CROSS_GY94_STATUSES
         for row in read_table(ds_file):
             pair_id = row.get("pair_id")
             if pair_id not in expected or pair_id in observed:
                 raise ValueError("dS report contains an unrequested or duplicate Ks pair")
-            if (not {"pair_id", "status", "dS"}.issubset(row) or row.get("status") not in DS_STATUSES
+            if method in CROSS_DS_REPORT_LABELS and row.get("method") != CROSS_DS_REPORT_LABELS[method]:
+                raise ValueError("CDSKIT did not report the requested cross-block dS model")
+            if (not {"pair_id", "status", "dS"}.issubset(row) or row.get("status") not in statuses
                     or (row["status"] == "ok" and number(row.get("dS")) is None)):
                 raise ValueError("dS report contains an invalid Ks status or value")
             observed.add(pair_id)
@@ -757,7 +778,7 @@ def focal_ks_label(row):
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
                     matched_trios=(), phase_diagnostics=(), common_outgroups=(), terminal_rows=(),
-                    orientation_rows=(), copy_holdout=()):
+                    orientation_rows=(), copy_holdout=(), ds_method="yn00"):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -904,7 +925,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     if by_node or terminal:
         ds_ax = axes[2]
         ds_ax.sharey(ax)
-        ds_ax.set(xlabel="dS (focal species scale)")
+        axis_title = "dS (focal species scale)" if ds_method == "yn00" else f"dS ({ds_method}, focal species scale)"
+        ds_ax.set(xlabel=axis_title)
         ds_ax.set_axisbelow(True)
         ds_ax.grid(axis="x", color="#E5E8EA", linewidth=.7)
         ds_ax.tick_params(axis="x", labelsize=8)
@@ -1278,7 +1300,8 @@ def run_analysis(plan, output, cpus):
                 row["synteny_block_definition"] = "same_original_blocks_with_uniquely_concordant_four_copy_paths"
     age_summary, focal_rows = {}, ()
     if cross_ks:
-        estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"))
+        estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"),
+                           method=p.get("cross_ks_method", "yn00"))
         focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal)
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
@@ -1291,7 +1314,7 @@ def run_analysis(plan, output, cpus):
                     matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
                     phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
                     terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation,
-                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else ())
+                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else (), ds_method=p.get("cross_ks_method", "yn00"))
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
@@ -1555,6 +1578,7 @@ def main():
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--cross-ks-method", choices=CROSS_DS_METHODS, default="yn00")
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-ks-outgroup-families", 0),

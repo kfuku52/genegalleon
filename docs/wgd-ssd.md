@@ -279,6 +279,17 @@ Cross-code pairs are not estimated. Low-information alignments (fewer than
 60 retained codons, less than 70% coverage of the longer CDS, or fewer than
 20 synonymous sites) and non-estimable dS values are audited and excluded.
 
+`wgd_cross_ks_method` defaults to `yn00`. Use `gy94` or
+`gy94-regularized` for a separate estimator sensitivity run across all
+cross-block, ortholog and optional terminal/paralog distances in that run.
+The procedure does not substitute YN00 estimates for failed likelihood
+fits or treat GY94 parameter boundaries as measured dS. Pairs with
+identical coding sequences have zero estimated distance but no fitted
+synonymous-site count under GY94; they are recorded as `identical` and
+excluded from the quality-filtered summaries. Alignment reuse is independent
+of the subsequent estimator. This setting does not change self-synteny
+distances outside the cross-block module.
+
 On the species tree, inverted primary boundaries remain visible as dashed
 intervals and crosses. When matched-family estimates are available for such a
 row, open diamonds and dotted intervals show the alternative split estimates.
