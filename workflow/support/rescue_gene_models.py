@@ -1505,7 +1505,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             import rescue_native_genomewide_reuse
             return rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
         import rescue_admission_replay
-        return rescue_admission_replay.rescue(root, plan, name, cpus)
+        return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies)
     storage = output_storage(plan)
     donors = [name, *plan["donors"][name]]
     if phase != "postprocess":

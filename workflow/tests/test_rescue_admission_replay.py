@@ -205,6 +205,34 @@ def test_replay_refuses_a_corrupt_parallel_sidecar_copy(completed, tmp_path, mon
     assert not (output / 'rescued/Target_species').exists()
 
 
+@pytest.mark.parametrize('member', ['prepared', 'genome', 'producer', 'plan'])
+def test_replay_checks_verified_inputs_after_hashing_outputs(completed, tmp_path, monkeypatch, member):
+    previous, producer, _, _ = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    replay.prepare(output, plan, 2)
+    if member == 'prepared':
+        path = output / 'prepared/Target_species/genes.pep'
+    elif member == 'genome':
+        path = Path(plan['request']['sources']['Target_species']['genome'])
+    elif member == 'producer':
+        path = previous / 'rescued/Target_species/unknown.txt'
+    else:
+        path = output / 'plan.json'
+    hash_outputs = rescue.hash_outputs
+
+    def change_after_hashing(directory, **kwargs):
+        hashes = hash_outputs(directory, **kwargs)
+        with path.open('ab') as handle:
+            handle.write(b'changed')
+        return hashes
+
+    monkeypatch.setattr(rescue, 'hash_outputs', change_after_hashing)
+    with pytest.raises((ValueError, OSError), match='changed'):
+        rescue.rescue(output, plan, 'Target_species', 2)
+    assert not (output / 'rescued/Target_species').exists()
+
+
 @pytest.mark.parametrize('fault', ['validator', 'raw-module', 'runtime', 'unbound-source', 'native-confirmation'])
 def test_replay_abstains_when_reuse_contract_cannot_be_proven(completed, tmp_path, fault):
     previous, source, plan, _ = completed

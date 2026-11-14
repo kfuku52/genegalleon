@@ -338,7 +338,7 @@ def _rewrite_table(source, destination, updates, appended, make_row, count, *, a
             writer.writerows(make_row(m) for m in appended)
 
 
-def rescue(root, plan, name, cpus):
+def rescue(root, plan, name, cpus, *, dependencies):
     r = _r()
     from gene_model_catalog import indexed_genome
     from input_generation_array_state import FreshDigestBatch
@@ -353,15 +353,28 @@ def rescue(root, plan, name, cpus):
     r.require_same_key(old_receipt['key'], r.rescue_key(previous, prior, name))
     raw_key = store.frozen_model_store_key(old_worker)
     batch = FreshDigestBatch()
+    source_proof = FreshDigestBatch()
     expected = {str(old_worker / member): sha for member, sha in old_receipt['files'].items()}
     expected[str(old_worker / 'receipt.json')] = frozen['receipt_sha256']
     expected.update(plan['request']['admission_cache']['contract']['source_files'])
-    key = r.rescue_key(root, plan, name)
-    def guard():
+    def current_key():
+        return r.rescue_key(root, plan, name, dependency_snapshot=dependencies)
+
+    key = current_key()
+    expected[str(previous / 'plan.json')] = plan['request']['admission_cache']['plan_sha256']
+    expected[str(root / 'plan.json')] = key['plan']
+
+    def publication_guard():
         batch.check()
-        r.require_same_key(key, r.rescue_key(root, plan, name))
+        dependencies.check_all()
+        source_proof.check()
+
+    def guard():
+        publication_guard()
+        r.require_same_key(key, current_key())
         store._check_key(old_worker, raw_key, 'models')
-        r.verify_sources(plan, [name], ['genome', 'fasta', 'gff'])
+        r.verify_sources(plan, [name], ['genome', 'fasta', 'gff'], verification=source_proof)
+
     def build(tmp):
         started = time.perf_counter()
         if batch.read(expected) != expected:
@@ -496,4 +509,5 @@ def rescue(root, plan, name, cpus):
                       'counts': dict(counts), 'changed_records': len(changed), 'appended_records': len(extra),
                       'published_counts': manifest['counts'], 'full_stream_verified': True,
                       'admitted_cds_freshly_validated': True, 'wall_seconds': time.perf_counter() - started})
-    return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus)
+    return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus,
+                   publication_guard=publication_guard)
