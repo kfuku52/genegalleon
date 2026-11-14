@@ -145,6 +145,30 @@ the branch stays unresolved. Only branches without sufficient
 observability can use the duplication-only rule. The thresholds
 are exploratory and are not calibrated WGD probabilities.
 
+To expand an existing manifest without all-vs-all comparisons, run the sparse
+planner in the GeneGalleon runtime:
+
+```bash
+python workflow/support/wgd_synteny_plan.py \
+  --workspace workspace --species-tree /path/to/species_tree.nwk \
+  --cross-synteny /path/to/wgd_cross_synteny.tsv \
+  --pair-evidence /path/to/wgd_ssd/cross_synteny_pairs.tsv \
+  --pairs-out /path/to/next_pairs.tsv --audit-out /path/to/branch_coverage.tsv
+```
+
+The planner visits non-root splits from descendants toward the root, using
+species with self-synteny in the input manifest. It proposes new pairs only
+for daughter lineages that are not covered, preferring pairs that cover more
+missing daughters, then shorter tree distance. With `--pair-evidence`, only
+assessed comparisons count toward coverage; unassessed pairs are not repeated.
+Without it, coverage means only that a pair was supplied, not that it was
+observable. The audit distinguishes missing self-synteny from exhausted
+cross-pair choices. When the plan is nonempty, `next_pairs.tsv` uses the
+`synteny_pairs_file` columns for the separate pairwise-synteny stage. The
+planner does not create anchors or modify the existing WGD manifest. After
+generating and validating the original anchors, add those comparisons to
+the manifest before rerunning WGD. An empty plan leaves just the header.
+
 ### Relative Age From Cross-Block dS
 
 With a cross-synteny manifest, optionally set `wgd_cross_ks_cds_file` to a
