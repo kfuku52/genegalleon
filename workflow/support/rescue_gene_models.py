@@ -1806,9 +1806,18 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             if plan['request'].get('oriongeno_genomewide'):
                 import rescue_native_genomewide
                 require_same_key(rescue_native_genomewide.CONTRACT, plan['request']['oriongeno_genomewide'])
+
+                def checked_native_prediction(model):
+                    checked = checked_prediction(model)
+                    if checked['evidence'] is model['evidence']:
+                        # This input owns its evidence. Both records already
+                        # share nested structure support, which is filled below.
+                        checked['raw_prediction']['evidence'] = checked['evidence']
+                    return checked
+
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
                     plan['request']['oriongeno'], name, proteins, genome, placement_ownership,
-                    params, tmp, cpus=cpus, validate=checked_prediction)
+                    params, tmp, cpus=cpus, validate=checked_native_prediction)
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
                 transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))
