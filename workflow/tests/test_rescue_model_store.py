@@ -71,6 +71,51 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     assert list(iterator) == []
 
 
+def test_parallel_model_store_hashes_preserve_manifest_and_verify_copies(tmp_path, monkeypatch):
+    records = [model(i, "accepted" if i % 2 else "proposal") for i in range(16)]
+    source, manifest = published(tmp_path, records)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    @contextmanager
+    def separate_scratch(_):
+        yield scratch
+
+    monkeypatch.setattr(store, "scratch_build_directory", separate_scratch)
+    destination = tmp_path / "parallel"
+    result = store.write_model_store(destination, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert result == manifest
+    assert (destination / "model_store/manifest.json").read_bytes() == (source / "model_store/manifest.json").read_bytes()
+
+    real_copy = store.shutil.copyfile
+
+    def corrupt_copy(origin, target):
+        real_copy(origin, target)
+        if target.name == "bodies.sqlite":
+            target.write_bytes(b"corrupt")
+
+    for path in scratch.iterdir():
+        path.unlink()
+    monkeypatch.setattr(store.shutil, "copyfile", corrupt_copy)
+    failed = tmp_path / "corrupt"
+    with pytest.raises(OSError, match="Copied model-store member differs: bodies.sqlite"):
+        store.write_model_store(failed, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert not (failed / "model_store").exists()
+
+    def fail_sync(path):
+        if path.name == "manifest.json":
+            raise OSError("failed to sync manifest")
+
+    for path in scratch.iterdir():
+        path.unlink()
+    monkeypatch.setattr(store.shutil, "copyfile", real_copy)
+    monkeypatch.setattr(store, "_sync_file", fail_sync)
+    failed = tmp_path / "unsynced"
+    with pytest.raises(OSError, match="failed to sync manifest"):
+        store.write_model_store(failed, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert not (failed / "model_store").exists()
+
+
 @pytest.mark.parametrize('codec', ['gzip', 'zstd'])
 def test_stored_body_with_matching_prefix_is_rejected(tmp_path, codec):
     if codec == 'zstd':

@@ -1445,7 +1445,7 @@ LOCAL_VALIDATED = "local_validated.jsonl.gz"
 TARGETED_VALIDATED = "targeted_validated.json"
 
 
-def write_rescue_models(directory, models, genetic_code, *, compact):
+def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1):
     """Write candidate quality and revision views in original model order."""
     revisions = {}
 
@@ -1478,7 +1478,7 @@ def write_rescue_models(directory, models, genetic_code, *, compact):
         enriched = with_quality(writer)
         if compact:
             # The store consumes revisions after the main model stream.
-            write_model_store(directory, enriched, revisions=revisions.values())
+            write_model_store(directory, enriched, revisions=revisions.values(), publication_workers=publication_workers)
         else:
             for _ in enriched:
                 pass
@@ -1886,7 +1886,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 while models:
                     yield models.pop()
 
-            write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True)
+            write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True,
+                                publication_workers=min(cpus, 4))
         else:
             write_rescue_models(tmp, models, source["genetic_code"], compact=False)
         # Huge indexes are execution scratch, not reusable unverified outputs.

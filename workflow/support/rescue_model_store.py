@@ -17,12 +17,16 @@ import sqlite3
 import sys
 import tempfile
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from itertools import batched
 from pathlib import Path, PurePosixPath
 
 if __package__:
     from .filesystem_io import scratch_build_directory
+    from .stage_output_hashes import hash_paths
 else:
     from filesystem_io import scratch_build_directory
+    from stage_output_hashes import hash_paths
 
 FORMAT = "gg_rescue_model_store_v1"
 KINDS = {"models", "accepted", "partial", "revision"}
@@ -115,6 +119,11 @@ def _sync_directory(path):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _sync_file(path):
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
 
 
 def _safe_member(value):
@@ -276,12 +285,14 @@ def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None, *, _enco
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
-                      shard_bytes=8 * 1024 * 1024, codec="auto", compression_level=1):
+                      shard_bytes=8 * 1024 * 1024, codec="auto", compression_level=1,
+                      publication_workers=1):
     """Atomically publish into ``directory/model_store`` without replacing data.
 
     ``partial_models=None`` records references for ``partial_evidence.partial``.
     Explicit partial records must be exact members of models. Revision records
     can differ from models and are stored in an independent, small overlay.
+    ``publication_workers`` bounds concurrent checksums and file syncs.
     Publication is immutable; the enclosing stage subsequently hashes all files
     into its normal receipt. No receipt is fabricated by this writer.
     """
@@ -290,6 +301,8 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         raise ValueError("Unsupported model-store compression")
     if type(shard_bytes) is not int or shard_bytes < 1:
         raise ValueError("Invalid model-store shard bound")
+    if type(publication_workers) is not int or publication_workers < 1:
+        raise ValueError("Model-store publication workers must be a positive integer")
     directory = Path(directory)
     target = directory if directory.name == "model_store" else directory / "model_store"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -299,23 +312,31 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         staging = Path(directory)
         with scratch_build_directory(staging) as work:
             manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
-                                          codec, codec_version, compression_level)
+                                          codec, codec_version, compression_level, publication_workers)
             if work != staging:
+                for name in manifest["files"]:
+                    shutil.copyfile(work / name, staging / name)
+                copied = hash_paths(staging, (staging / name for name in manifest["files"]),
+                                    workers=publication_workers, hash_function=_digest)
                 for name, expected in manifest["files"].items():
-                    copied = staging / name
-                    shutil.copyfile(work / name, copied)
-                    if _digest(copied) != expected:
+                    if copied[name] != expected:
                         raise OSError(f"Copied model-store member differs: {name}")
         (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
-        for path in staging.iterdir():
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
+        if publication_workers == 1:
+            for path in staging.iterdir():
+                _sync_file(path)
+        else:
+            # All staged files must be durable before the single rename.
+            with ThreadPoolExecutor(max_workers=publication_workers) as executor:
+                for paths in batched(staging.iterdir(), publication_workers * 16):
+                    list(executor.map(_sync_file, paths))
         os.rename(staging, target)
         _sync_directory(target.parent)
         return manifest
 
 
-def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level):
+def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level,
+                       hash_workers):
     dbs, shard_handle = [], None
     try:
         body_db = _database(tmp / "bodies.sqlite")
@@ -410,7 +431,8 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
             db.commit()
             db.close()
         dbs = []
-        files = {p.name: _digest(p) for p in sorted(tmp.iterdir())}
+        hashes = hash_paths(tmp, tmp.iterdir(), workers=hash_workers, hash_function=_digest)
+        files = dict(sorted(hashes.items()))
         scopes = {
             "models": ["bodies.sqlite", *(s["path"] for s in shards)],
             "accepted": ["accepted.sqlite"],
