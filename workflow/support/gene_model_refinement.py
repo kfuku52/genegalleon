@@ -2901,6 +2901,10 @@ def finalize(root, value, *, cpus=1):
                         predicted_rows.append(candidate_gff(gene, candidate, name))
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
                 gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
+            # Both annotation views now have their source rows. Release the
+            # graph before building transcript sequences and the analysis GFF.
+            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
+            del source_graph
             for identifier in retired:
                 del selected[identifier]
             import transcript_utrs
@@ -2924,7 +2928,6 @@ def finalize(root, value, *, cpus=1):
                                   sum(bool(r.get('utr3', {}).get('length')) for r in utr_audit),
                                   sum(bool(r.get('utr5', {}).get('length')) and bool(r.get('utr3', {}).get('length')) for r in utr_audit)))
             paths['analysis_gff'].write_text(analysis_gff_rows(augmented, analysis_candidates))
-            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
             gene_bounds_audit.extend(dict(species=name, **row) for row in bound_changes)
             full_path.write_text(derived_original.rstrip() + '\n' + ''.join(additions) + (sep + embedded if sep else ''))
             updates = {}
@@ -2936,7 +2939,6 @@ def finalize(root, value, *, cpus=1):
                 updates[tid] = dict(model=selected_models[tid], exons=selected_models[tid]['exons'],
                                     choices={'5': record['utr5'], '3': record['utr3']})
             full_path.write_text(transcript_utrs.render(full_path.read_text(), updates))
-            del source_graph
             map_hashes = representative_map_proof.read([tmp / 'representative_map.tsv'])
             row = {'species': name, **{k: str((root / 'effective' / p.relative_to(tmp)).resolve()) for k, p in paths.items()},
                    'representative_map': str((root / 'effective' / 'representative_map.tsv').resolve()),
