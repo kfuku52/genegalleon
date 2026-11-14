@@ -668,6 +668,34 @@ def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch
     assert audit["num_two_region_holdouts_losing_support"] is None
 
 
+def test_window_offset_shifts_observability_and_paths_in_both_references(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_synteny import CrossSynteny
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    comparisons = []
+    for name, boundary in (("A", 48), ("B", 46)):
+        bed = tmp_path / f"{name}.bed"
+        bed.write_text("".join(f"{contig}\t{i}\t{i + 1}\t{name}_{contig}{i}\n"
+                               for contig in ("x", "y") for i in range(60)))
+        anchors = tmp_path / f"{name}.anchors"
+        anchors.write_text("###\n" + "".join(f"{name}_x{i}\t{name}_y{i}\n" for i in range(boundary, boundary + 5)))
+        comparisons.append(dict(species_a=name, species_b=name, bed_a=bed, bed_b=bed, anchors=anchors))
+    direct = tmp_path / "direct.anchors"
+    direct.write_text("".join("###\n" + "".join(f"A_{contig}{48+i}\tB_{contig}{46+i}\n" for i in range(5))
+                              for contig in ("x", "y")))
+    comparisons.append(dict(species_a="A", species_b="B", bed_a=tmp_path / "A.bed", bed_b=tmp_path / "B.bed", anchors=direct))
+    default = CrossSynteny(tree, comparisons, 1, reverse_phase=True)
+    shifted = CrossSynteny(tree, comparisons, 1, reverse_phase=True, window_offset=50)
+    assert [obj.summarize()[1][0]["observable_windows"] for obj in (default, default.reverse)] == [2, 2]
+    assert [obj.summarize()[1][0]["observable_windows"] for obj in (shifted, shifted.reverse)] == [0, 0]
+    assert [obj.summarize()[1][0]["paired_windows"] for obj in (default, default.reverse)] == [1, 1]
+    assert [obj.summarize()[1][0]["paired_windows"] for obj in (shifted, shifted.reverse)] == [0, 0]
+    with pytest.raises(ValueError, match="window offset"):
+        CrossSynteny(tree, comparisons, 1, window_offset=100)
+
+
 def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):
     from nwkit.util import read_tree
 

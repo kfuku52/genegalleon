@@ -121,9 +121,9 @@ def anchor_links(path, a, b, symmetric=False, *, reversed_input=False):
     return links, neighbors
 
 
-def window_for(positions, gene):
+def window_for(positions, gene, offset=0):
     chrom, rank = positions[gene]
-    return chrom, rank // WINDOW_GENES + 1
+    return chrom, (rank + offset) // WINDOW_GENES + 1
 
 
 def qualifying(groups):
@@ -132,17 +132,17 @@ def qualifying(groups):
             yield key, tuples
 
 
-def cross_window_groups(positions, cross):
+def cross_window_groups(positions, cross, offset=0):
     groups = defaultdict(set)
     for (x, y), ids in cross:
-        window = window_for(positions, x)
+        window = window_for(positions, x, offset)
         for block in ids:
             groups[window, block].add((x, y))
     return groups
 
 
-def observable_windows(positions, cross):
-    return {window for (window, _), _ in qualifying(cross_window_groups(positions, cross.items()))}
+def observable_windows(positions, cross, offset=0):
+    return {window for (window, _), _ in qualifying(cross_window_groups(positions, cross.items(), offset))}
 
 
 def archive_window_floor(coverage_rows):
@@ -173,7 +173,7 @@ def has_nonreused_anchors(tuples):
     return bool((maximum_bipartite_matching(graph, perm_type="column") >= 0).sum() >= ANCHOR_FLOOR)
 
 
-def correspondence(positions, left, right, cross, provenance=None):
+def correspondence(positions, left, right, cross, provenance=None, offset=0):
     aa, an = left
     bb, bn = right
     ab, cross_neighbors = cross
@@ -186,7 +186,7 @@ def correspondence(positions, left, right, cross, provenance=None):
             for y in ys:
                 for yy in bn.get(y, EMPTY) & cross_neighbors[xx]:
                     for blocks in itertools.product(aa[x, xx], bb[y, yy], ab[x, y], ab[xx, yy]):
-                        groups[window_for(positions, x), blocks].add((x, y, xx, yy))
+                        groups[window_for(positions, x, offset), blocks].add((x, y, xx, yy))
     paired = defaultdict(set)
     for (window, blocks), genes in qualifying(groups):
         paired[window].update(genes)
@@ -206,7 +206,7 @@ def correspondence(positions, left, right, cross, provenance=None):
             for xx in self_neighbors.get(x, ()):
                 other_path = oriented.get(xx, {})
                 for y, cross_blocks in others.items():
-                    window = window_for(positions, y if reverse else x)
+                    window = window_for(positions, y if reverse else x, offset)
                     if window in paired or not other_neighbors.get(y, EMPTY).isdisjoint(other_path):
                         continue
                     for blocks in itertools.product(self_links[x, xx], cross_blocks):
@@ -242,10 +242,14 @@ class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
     def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
-                 *, reverse_cross=False, inputs=None, audit_phase=False, orientation_paths=False, reverse_phase=None):
+                 *, reverse_cross=False, inputs=None, audit_phase=False, orientation_paths=False, reverse_phase=None,
+                 window_offset=0):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
+        if isinstance(window_offset, bool) or not isinstance(window_offset, int) or not 0 <= window_offset < WINDOW_GENES:
+            raise ValueError(f"Cross-synteny window offset must be in [0, {WINDOW_GENES})")
+        self.window_offset = window_offset
         self.entries = defaultdict(list)
         self.matches = defaultdict(lambda: defaultdict(list))
         self.age_species = set(age_species)
@@ -266,7 +270,7 @@ class CrossSynteny:
             if reverse_cross:
                 raise ValueError("Cannot build the two orientations from a reverse scanner")
             self.reverse = CrossSynteny(tree, (), min_windows, inputs=(beds, self_blocks), audit_phase=reverse_phase,
-                                        orientation_paths=True)
+                                        orientation_paths=True, window_offset=window_offset)
         for row in pairs:
             a, b = row["species_a"], row["species_b"]
             if a == b:
@@ -289,13 +293,13 @@ class CrossSynteny:
 
     def _add_pair(self, branch, daughters, a, b, beds, self_blocks, cross, trace_branches):
         self.daughters[branch] = daughters
-        observable = observable_windows(beds[a], cross[0])
+        observable = observable_windows(beds[a], cross[0], self.window_offset)
         if self.coverage is not None:
             self.coverage.append((branch, a, b, beds[a], beds[b], cross[0], len(observable)))
             self.coverage_genes.update(gene for pair in cross[0] for gene in pair)
         provenance = defaultdict(set) if trace_branches is None or branch in trace_branches else None
         if a in self_blocks and b in self_blocks:
-            paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance)
+            paired, partial = correspondence(beds[a], self_blocks[a], self_blocks[b], cross, provenance, self.window_offset)
             status = "assessed" if len(observable) >= self.min_windows else "insufficient_cross_anchors"
         else:
             paired, partial = {}, {}
@@ -307,7 +311,8 @@ class CrossSynteny:
             for window, groups in regions.items():
                 for genes in groups:
                     regions_for_age = None if age is None else tuple(
-                        (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
+                        (sp, tuple(sorted((x, y))), window_for(beds[sp], x, self.window_offset),
+                         window_for(beds[sp], y, self.window_offset))
                         for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
                     trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
                     phase_pair = ((branch, a, b) if (self.phases is not None or self.orientation_hits is not None)
@@ -323,7 +328,7 @@ class CrossSynteny:
         for event, a, b, positions, other_positions, links, observable in self.coverage:
             both = [(pair, blocks) for pair, blocks in links.items() if pair[0] in families
                     and families[pair[0]] == families.get(pair[1])]
-            grouped = cross_window_groups(positions, both)
+            grouped = cross_window_groups(positions, both, self.window_offset)
             eligible = list(qualifying(grouped)) if audit_nonreuse else qualifying(grouped)
             n = len({window for (window, _), _ in eligible})
             coverage = dict(zip(COVERAGE_OUTPUT, (event, a, b, len(links), len(both), observable, n,
@@ -332,11 +337,11 @@ class CrossSynteny:
             if audit_nonreuse:
                 raw_count, archive_count = (
                     len({window for (window, _), pairs in rows if has_nonreused_anchors(pairs)})
-                    for rows in (qualifying(cross_window_groups(positions, links.items())), eligible))
+                    for rows in (qualifying(cross_window_groups(positions, links.items(), self.window_offset)), eligible))
                 nonreuse = dict(zip(NONREUSE_OUTPUT, (event, a, b, observable, raw_count, n, archive_count,
                                                      int(raw_count >= self.min_windows),
                                                      int(archive_count >= self.min_windows)), strict=True))
-                reversed_groups = cross_window_groups(other_positions, (((y, x), ids) for (x, y), ids in both))
+                reversed_groups = cross_window_groups(other_positions, (((y, x), ids) for (x, y), ids in both), self.window_offset)
                 reverse = (event, b, a), len({window for (window, _), _ in qualifying(reversed_groups)}) >= self.min_windows
             yield coverage, nonreuse, reverse
 
@@ -373,7 +378,7 @@ class CrossSynteny:
                             a, b, paths, beds = trace
                             scopes = ((a, a), (b, b), (a, b))
                             blocks = tuple(sorted((*scopes[side], block) for side, block in set().union(*paths)))
-                            positions = tuple((sp, *window_for(beds[sp], gene)) for gene in genes
+                            positions = tuple((sp, *window_for(beds[sp], gene, self.window_offset)) for gene in genes
                                               for sp in (a if gene in beds[a] else b,))
                             hit = (branch, a, b, window, family, genes, blocks, positions)
                             self.traced_hits.add(hit)

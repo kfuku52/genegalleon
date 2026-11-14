@@ -171,6 +171,9 @@ is validated but not scored because there is no root stem.
 
 In 100-gene windows of the first species, an observable cross window
 has at least five distinct genes on both sides of one direct block.
+`wgd_cross_window_offset` shifts both reference grids by 0 to 99 genes
+without crossing contigs (default 0). Use separate outputs to compare
+shifted windows; they overlap and are not independent evidence.
 With both self comparisons present, a pair needs at least
 `wgd_min_cross_windows` (default 3) observable windows. If exact copy
 support falls short, the same window floor must also be met by direct

@@ -51,6 +51,7 @@ try:
         NONREUSE_OUTPUT,
         ORIENTATION_OUTPUT,
         PAIR_OUTPUT,
+        WINDOW_GENES,
         WINDOW_OUTPUT,
         CrossSynteny,
         archive_window_floor,
@@ -107,6 +108,7 @@ except ImportError:
         NONREUSE_OUTPUT,
         ORIENTATION_OUTPUT,
         PAIR_OUTPUT,
+        WINDOW_GENES,
         WINDOW_OUTPUT,
         CrossSynteny,
         archive_window_floor,
@@ -308,6 +310,11 @@ def make_plan(args):
     if panel_count:
         parameters["duplication_family_panels"] = panel_count
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
+    offset = getattr(args, "cross_window_offset", 0)
+    if offset:
+        if cross_pairs is None or not 0 <= offset < WINDOW_GENES:
+            raise ValueError(f"Cross window offset requires --cross-synteny and a value in [0, {WINDOW_GENES})")
+        parameters["cross_window_offset"] = offset
     parameters["cross_orientation_audit"] = getattr(args, "cross_orientation_audit", 0)
     if parameters["cross_orientation_audit"] not in (0, 1):
         raise ValueError("Cross-synteny orientation audit must be 0 or 1")
@@ -1197,7 +1204,8 @@ def run_analysis(plan, output, cpus):
             inputs = cross_synteny_inputs(pairs) if audit_orientation or terminal_limit else None
             cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
                                  trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs,
-                                 reverse_phase=bool(p.get("cross_require_unique_phase")) if audit_orientation else None)
+                                 reverse_phase=bool(p.get("cross_require_unique_phase")) if audit_orientation else None,
+                                 window_offset=p.get("cross_window_offset", 0))
             if audit_orientation:
                 reverse, cross.reverse = cross.reverse, None
             if terminal_limit:
@@ -1671,6 +1679,7 @@ def main():
     plan.add_argument("--duplication-family-panels", type=int, default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-two-region-holdout", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--cross-window-offset", type=int, default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)
     plan.add_argument("--ks-component-holdout", type=int, choices=(0, 1), default=0)
