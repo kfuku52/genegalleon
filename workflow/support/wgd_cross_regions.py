@@ -10,7 +10,10 @@ REGION_DETAIL = ("species_event_id", "branch_id", "mode", "region", "matched_win
                  "num_original_blocks", "copy_contigs", "windows_after_exclusion", "supports_after_exclusion")
 REGION_PAIR_HOLDOUT = ("species_event_id", "branch_id", "mode", "regions", "num_two_region_holdouts",
                        "num_two_region_holdouts_losing_support", "first_failed_regions", "status")
+CONTIG_HOLDOUT = ("species_event_id", "branch_id", "num_contigs_removed", "num_contigs_with_paths",
+                  "num_possible_holdouts", "num_evaluated_holdouts", "num_losing_support", "first_failed_contigs", "status")
 MAX_TWO_REGION_HOLDOUTS = 10_000
+MAX_CONTIG_PATH_VISITS = 5_000_000
 NESTED_FIELDS = ("younger_event_id", "younger_branch_id", "older_event_id", "older_branch_id", "species",
                  "younger_window_pairs", "older_window_pairs", "shared_window_pairs",
                  "younger_gene_pairs", "older_gene_pairs", "shared_gene_pairs",
@@ -170,6 +173,51 @@ def summarize_regions(candidates, traced_hits, daughters, floor, *, unique_phase
                             "holds_after_every_one_region": int(supported and bool(regions) and lost == 0)})
             details.extend({**keys, **r} for r in regions)
     return summary, details
+
+
+def contig_holdout_rows(candidates, reverse_windows, daughters, floor, evidence):
+    """Remove every exact path touching one or two species-qualified contigs."""
+    grouped = defaultdict(list)
+    for hit, reverse in reverse_windows.items():
+        event, a, b, window, family, _, _, positions = hit
+        mask = frozenset((species, contig) for species, contig, _ in positions)
+        grouped[event].append(((a, b), family, window, reverse, mask))
+
+    def supports(paths, removed, daughter_groups):
+        windows_a, windows_b, families = defaultdict(set), defaultdict(set), defaultdict(set)
+        for pair, family, forwards, backwards, linked in paths:
+            if linked.isdisjoint(removed):
+                families[pair].add(family)
+                windows_a[pair].add(forwards)
+                windows_b[pair].update(backwards)
+        taxa = {sp for pair, ids in families.items()
+                if min(len(ids), len(windows_a[pair]), len(windows_b[pair])) >= floor for sp in pair}
+        return all(group & taxa for group in daughter_groups)
+
+    for row in candidates:
+        event = row["species_event_id"]
+        if event not in daughters:
+            continue
+        paths = grouped[event]
+        contigs = sorted({item for *_, linked in paths for item in linked})
+        baseline = supports(paths, (), daughters[event])
+        if baseline != evidence[event]["supported"]:
+            raise ValueError("Contig audit changed the pre-holdout support")
+        for remove in (1, 2):
+            total = len(contigs) if remove == 1 else len(contigs) * (len(contigs) - 1) // 2
+            status = ("not_initially_supported" if not baseline else "insufficient_contigs" if not total else
+                      "holdout_limit_exceeded" if total * len(paths) > MAX_CONTIG_PATH_VISITS else "ok")
+            failed, example = None, None
+            if status == "ok":
+                failed = 0
+                for omitted in combinations(contigs, remove):
+                    if not supports(paths, omitted, daughters[event]):
+                        failed += 1
+                        if example is None:
+                            example = ",".join(f"{species}:{contig}" for species, contig in omitted)
+            values = (event, row["branch_id"], remove, len(contigs), total, total if status == "ok" else 0,
+                      failed, example, status)
+            yield dict(zip(CONTIG_HOLDOUT, values, strict=True))
 
 
 def nested_copy_overlap(tree, candidates, traced_hits):

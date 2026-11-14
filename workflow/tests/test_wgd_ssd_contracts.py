@@ -668,6 +668,32 @@ def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch
     assert audit["num_two_region_holdouts_losing_support"] is None
 
 
+def test_strict_contig_holdout_uses_both_copies_and_keeps_species_namespaces(monkeypatch):
+    from workflow.support import wgd_cross_regions as regions
+
+    event = "ancestor"
+    candidate = {"species_event_id": event, "branch_id": 7}
+    by_path = {}
+    for i in (1, 2, 3):
+        # The second A copy touches a common assembly contig. The B copy on
+        # the same contig label must not be treated as touching the A contig.
+        hit = (event, "A", "B", ("a", i), f"f{i}", ("a", "b", "c", "d"), (),
+               (("A", "a", i), ("B", "common", i), ("A", "common", i), ("B", "z" if i == 1 else "b", i)))
+        by_path[hit] = {("common", i)}
+    groups = {event: ({"A"}, {"B"})}
+    evidence = {event: {"supported": True}}
+    single, double = regions.contig_holdout_rows([candidate], by_path, groups, 2, evidence)
+    assert (single["num_possible_holdouts"], single["num_losing_support"]) == (5, 4)
+    assert (double["num_evaluated_holdouts"], double["num_losing_support"]) == (10, 10)
+    assert single["first_failed_contigs"] == "A:a"
+    monkeypatch.setattr(regions, "MAX_CONTIG_PATH_VISITS", 14)
+    skipped, _ = regions.contig_holdout_rows([candidate], by_path, groups, 2, evidence)
+    assert skipped["status"] == "holdout_limit_exceeded" and skipped["num_evaluated_holdouts"] == 0
+    assert skipped["num_losing_support"] is None
+    with pytest.raises(ValueError, match="changed the pre-holdout support"):
+        list(regions.contig_holdout_rows([candidate], by_path, groups, 2, {event: {"supported": False}}))
+
+
 def test_cross_synteny_node_paths_do_not_transfer_support_to_wrong_copy_or_branch():
     from collections import defaultdict
 

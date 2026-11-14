@@ -39,10 +39,12 @@ try:
         unique_phase_windows,
     )
     from wgd_cross_regions import (
+        CONTIG_HOLDOUT,
         NESTED_FIELDS,
         REGION_DETAIL,
         REGION_PAIR_HOLDOUT,
         REGION_SUMMARY,
+        contig_holdout_rows,
         nested_copy_overlap,
         summarize_regions,
     )
@@ -99,10 +101,12 @@ except ImportError:
         unique_phase_windows,
     )
     from .wgd_cross_regions import (
+        CONTIG_HOLDOUT,
         NESTED_FIELDS,
         REGION_DETAIL,
         REGION_PAIR_HOLDOUT,
         REGION_SUMMARY,
+        contig_holdout_rows,
         nested_copy_overlap,
         summarize_regions,
     )
@@ -1492,6 +1496,10 @@ def run_analysis(plan, output, cpus):
             write_table(output / "cross_synteny_regions.tsv", region_detail, REGION_DETAIL)
             if two_regions is not None:
                 write_table(output / "cross_synteny_two_region_holdout.tsv", two_regions, REGION_PAIR_HOLDOUT)
+                if reverse_windows is not None:
+                    write_table(output / "cross_synteny_contig_holdout.tsv",
+                                contig_holdout_rows(raw_candidates, reverse_windows, cross.daughters,
+                                                    p["min_cross_windows"], cross_evidence), CONTIG_HOLDOUT)
             write_table(output / "cross_synteny_nested_copies.tsv",
                         nested_copy_overlap(tree, raw_candidates, cross.traced_hits), NESTED_FIELDS)
             if support:

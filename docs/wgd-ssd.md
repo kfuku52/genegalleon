@@ -239,6 +239,12 @@ only if no other region retains it. The table reports how many deletions
 remove support and an example of the regions involved. More than 10,000
 combinations are explicitly marked untested. This is a sensitivity
 diagnostic, not an independence test or a change to the call.
+In strict both-reference mode, the same flag also writes
+`cross_synteny_contig_holdout.tsv`. It removes every traced four-gene path
+touching one or two species-qualified assembly contigs, then rechecks the
+shared-family and both-reference window floors. It does not realign or
+rephase the remaining anchors. Large searches are marked untested when
+the number of exclusions times the number of paths exceeds five million.
 The orientation audit also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
 reference windows that contain five gene-disjoint direct pairs within one
 original block, both before and after requiring archive-family agreement.

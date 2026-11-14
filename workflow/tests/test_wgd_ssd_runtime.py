@@ -400,6 +400,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     two_regions = read_table(root / "cross_synteny_two_region_holdout.tsv")
     assert all(r["status"] == "fewer_than_two_regions" for r in two_regions)
     assert "cross_synteny_two_region_holdout.tsv" in summary["output_hashes"]
+    contig_holdouts = read_table(root / "cross_synteny_contig_holdout.tsv")
+    assert {row["num_contigs_removed"] for row in contig_holdouts} == {"1", "2"}
+    assert "cross_synteny_contig_holdout.tsv" in summary["output_hashes"]
     assert read_table(root / "cross_synteny_nested_copies.tsv") == []
     support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}
     assert support["OG000"]["first_copy_support"] == "100.0"
@@ -477,7 +480,8 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert "reusing 22/22 codon alignments" in result.stdout
     reused = json.loads((root / "summary.json").read_text())
     shared_outputs = {k: v for k, v in summary["output_hashes"].items()
-                      if not k.startswith("cross_ks_rooted_") and k != "cross_synteny_two_region_holdout.tsv"}
+                      if not k.startswith("cross_ks_rooted_") and k not in
+                      {"cross_synteny_two_region_holdout.tsv", "cross_synteny_contig_holdout.tsv"}}
     assert reused["output_hashes"] == shared_outputs
     assert reused["plan"]["reused_cross_ks_alignments"] == {"1": [str(saved / name) for saved in donors]}
     assert {str(saved / name) for saved in donors} <= reused["plan"]["input_hashes"].keys()
