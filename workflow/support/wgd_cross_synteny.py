@@ -178,15 +178,17 @@ def correspondence(positions, left, right, cross, provenance=None, offset=0):
     bb, bn = right
     ab, cross_neighbors = cross
     groups = defaultdict(set)
+    windows = {x: window_for(positions, x, offset) for x in cross_neighbors}
     # Both paths must use the same two self blocks and two direct cross blocks.
     for x, ys in cross_neighbors.items():
+        window = windows[x]
         for xx in an.get(x, ()):
             if positions[x] >= positions[xx] or xx not in cross_neighbors:
                 continue
             for y in ys:
                 for yy in bn.get(y, EMPTY) & cross_neighbors[xx]:
                     for blocks in itertools.product(aa[x, xx], bb[y, yy], ab[x, y], ab[xx, yy]):
-                        groups[window_for(positions, x, offset), blocks].add((x, y, xx, yy))
+                        groups[window, blocks].add((x, y, xx, yy))
     paired = defaultdict(set)
     for (window, blocks), genes in qualifying(groups):
         paired[window].update(genes)
@@ -206,7 +208,7 @@ def correspondence(positions, left, right, cross, provenance=None, offset=0):
             for xx in self_neighbors.get(x, ()):
                 other_path = oriented.get(xx, {})
                 for y, cross_blocks in others.items():
-                    window = window_for(positions, y if reverse else x, offset)
+                    window = windows[y if reverse else x]
                     if window in paired or not other_neighbors.get(y, EMPTY).isdisjoint(other_path):
                         continue
                     for blocks in itertools.product(self_links[x, xx], cross_blocks):
