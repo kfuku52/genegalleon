@@ -641,7 +641,7 @@ FOCAL_DS_STYLES = (
 )
 
 
-def draw_focal_ks_intervals(ax, y, row):
+def draw_focal_ks_intervals(ax, y, row, matched=()):
     estimates = [("ok", (row["median_ds"], row["ci_lower"], row["ci_upper"]))]
     estimates.extend((row[f"{name}_boundary_status"], tuple(row[f"{name}_{field}"] for field in ("ds", "lower", "upper")))
                      for name in ("younger", "older"))
@@ -659,6 +659,13 @@ def draw_focal_ks_intervals(ax, y, row):
             ax.plot(center, y + shift, marker="x" if diagnostic else marker, color=color, ms=3 if not shift else 4,
                     ls="none", zorder=4)
             has_estimate = True
+    for y_adjust, (_, color, _), estimate in zip((.40, -.40), FOCAL_DS_STYLES[1:], matched, strict=False):
+        center, lo, hi = (number(estimate.get(key)) for key in ("matched_median_ds", "matched_lower", "matched_upper"))
+        lane = y + y_adjust
+        if lo is not None and hi is not None and lo <= hi:
+            ax.plot((lo, hi), (lane, lane), color=color, lw=.9, ls=":")
+        if center is not None:
+            ax.plot(center, lane, marker="D", mfc="white", mec=color, ms=3, ls="none", zorder=4)
     if not has_estimate:
         ax.text(.02, y, "No dS estimate", transform=ax.get_yaxis_transform(), va="center", fontsize=8, color="#646D78")
 
@@ -668,7 +675,8 @@ def focal_ks_label(row):
     return f"{row['focal']} (n={int(row['num_estimated_pairs']):,}{components})"
 
 
-def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=()):
+def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
+                    matched_trios=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -750,6 +758,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             children = [y[child] for child in node.children]
             y[node] = (min(children) + max(children)) / 2
     by_node = defaultdict(list)
+    trios = {(row["focal"], row["species_event_id"]): row for row in matched_trios}
+    matched_seen = False
     for row in focal_rows:
         by_node[index[row["species_event_id"]]].append(row)
     if by_node:
@@ -820,7 +830,12 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             for lane, focal in zip(lanes, focals, strict=True):
                 labels_ax.plot((.12, .16), (lane, lane), color="#AFB8BE", lw=.75)
                 labels_ax.text(.20, lane, focal_ks_label(focal), va="center", fontsize=8, color="#47545A")
-                draw_focal_ks_intervals(ds_ax, lane, focal)
+                matched = ()
+                if any(focal[f"{name}_boundary_status"] == "nonmonotone_or_invalid_interval" for name in ("younger", "older")):
+                    matched = tuple(trios.get((focal["focal"], clades.clade_id_for_node(boundary_node)), {})
+                                    for boundary_node in (node, node.up))
+                    matched_seen |= any(number(estimate.get("matched_median_ds")) is not None for estimate in matched)
+                draw_focal_ks_intervals(ds_ax, lane, focal, matched)
     span = max(x.values()) or 1
     labels_ax.set(xlim=(0, 1))
     labels_ax.set_axis_off()
@@ -846,9 +861,12 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         if any(row[f"{name}_boundary_status"] == "nonmonotone_or_invalid_interval"
                and number(row[f"{name}_ds"]) is not None for row in focal_rows for name in ("younger", "older")):
             ds_handles.append(Line2D([], [], color="#646D78", marker="x", ls="--", label="Unusable split"))
+        if matched_seen:
+            ds_handles.append(Line2D([], [], color="#646D78", marker="D", mfc="white", ls=":", label="Matched-family split"))
         ds_ax.legend(handles=ds_handles,
-                     loc="lower left", bbox_to_anchor=(0, 1.0), ncols=3, fontsize=8, frameon=False)
-    fig.subplots_adjust(left=0.07, right=0.97, bottom=0.19 if age_handles else 0.15, top=0.92)
+                     loc="lower left", bbox_to_anchor=(0, 1.0), ncols=2 if matched_seen else 3, fontsize=8, frameon=False)
+    top = min(.92, 1 - .64 / height) if matched_seen else .92
+    fig.subplots_adjust(left=0.07, right=0.97, bottom=0.19 if age_handles else 0.15, top=top)
     for extension in ("pdf", "png"):
         fig.savefig(output / f"wgd_species_tree.{extension}", dpi=175)
     plt.close(fig)
@@ -1040,7 +1058,8 @@ def run_analysis(plan, output, cpus):
     write_table(output / "wgd_events.tsv", candidates, list(candidates[0]))
     plot_candidates(candidates, output, tree=tree, alpha=p["alpha"],
                     duplication_threshold=p["min_duplication_score"] if tree_mode else None,
-                    focal_rows=focal_rows, region_rows=region_summary)
+                    focal_rows=focal_rows, region_rows=region_summary,
+                    matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else ())
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())

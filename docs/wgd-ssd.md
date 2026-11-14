@@ -204,6 +204,11 @@ Cross-code pairs are not estimated. Low-information alignments (fewer than
 60 retained codons, less than 70% coverage of the longer CDS, or fewer than
 20 synonymous sites) and non-estimable dS values are audited and excluded.
 
+On the species tree, inverted primary boundaries remain visible as dashed
+intervals and crosses. When matched-family estimates are available for such a
+row, open diamonds and dotted intervals show the alternative split estimates.
+These are diagnostics and do not change the primary event-age decision.
+
 To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` can point to
 `summary.json` in a separate, completed run directory with its original
 `cross_ks_aligned_pairs.code*.tsv` files. The source bundle must not be the

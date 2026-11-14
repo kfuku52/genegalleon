@@ -982,6 +982,9 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                   for i, name, n, c in ((2, "Gamma", 0, 0), (1, "Alpha", 2032, 13), (1, "Beta", "1957", 2))]
     focal_rows[0].update(median_ds="NA", ci_lower="NA", ci_upper="NA")
     focal_rows[-1].update(ci_lower="NA", ci_upper="NA", older_boundary_status="nonmonotone_or_invalid_interval")
+    matched_trios = [{"species_event_id": clades.clade_id_for_node(node), "focal": "Beta",
+                      "matched_median_ds": center, "matched_lower": lo, "matched_upper": hi}
+                     for node, center, lo, hi in ((tree.children[0], .212, .1, .3), (tree, .357, .18, .5))]
     captured = []
     savefig = Figure.savefig
 
@@ -998,15 +1001,20 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
             legend = [label.get_text() for label in tree_ax.get_legend().get_texts()]
             evidence = ([text.get_text() for text in tree_ax.texts],
                         [line.get_linestyle() for line in tree_ax.lines if line.get_color() == "#176B67"])
-            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence))
+            matched = [(tuple(line.get_xdata()), line.get_ydata()[0]) for line in ds_ax.lines if line.get_marker() == "D"]
+            ds_legend = [label.get_text() for label in ds_ax.get_legend().get_texts()]
+            fig.canvas.draw()
+            legend_extent = ds_ax.get_legend().get_window_extent(fig.canvas.get_renderer())
+            assert legend_extent.x1 < fig.bbox.x1 and legend_extent.y1 < fig.bbox.y1
+            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend))
         savefig(fig, path, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", capture)
     wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
-                            region_rows=regions)
+                            region_rows=regions, matched_trios=matched_trios)
     assert len(captured) == 2
     assert captured[0] == captured[1]
-    anchors, names, marks, branch_markers, legend, unusable, evidence = captured[0]
+    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend = captured[0]
     assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
     assert "Combined candidate; requires one-copy paths" in legend
     labels = ("Alpha (n=2,032, c=13)", "Beta (n=1,957, c=2)", "Gamma (n=0, c=0)")
@@ -1023,6 +1031,8 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
     assert unusable == [((.173, .501), beta - .23, "None", "--"), ((.34,), beta - .23, "x", "None")]
     assert branch_markers == [("x", gamma)]
     assert "dS age conflict" in legend and "dS inconclusive" not in legend
+    assert matched == [((.212,), beta + .40), ((.357,), beta - .40)]
+    assert "Matched-family split" in ds_legend
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):
