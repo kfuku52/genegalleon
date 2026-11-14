@@ -294,6 +294,40 @@ def test_paired_tree_support_uses_full_copy_groups_not_anchor_subclades(tmp_path
     assert [result[name] for name in ("duplication_support", "first_copy_support", "second_copy_support")] == [99, 97, 98]
 
 
+def test_duplication_support_counts_each_voting_family_and_reports_missing_evidence(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_support import DuplicationTreeSupport
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,(C:1,D:1):1);", "auto", True)
+    primary, alternative = tmp_path / "root.zip", tmp_path / "ufboot.zip"
+    newick = "((((A_a,B_a)97,(A_b,B_b)96)99,((A_c,B_c)30,(A_d,B_d)98)98)99,(C_a,D_a)99);"
+    with ZipFile(primary, "w") as stream:
+        for family in ("strong", "weak", "missing", "different", "not_resolved"):
+            stream.writestr(f"{family}_root.nwk", newick)
+        stream.writestr("ineligible_root.nwk", "((A_a,B_a),(A_b,B_b));")
+        stream.writestr("single_root.nwk", "((A_a,B_a),(C_a,D_a));")
+    with ZipFile(alternative, "w") as stream:
+        stream.writestr("strong_generax.ufboot.nwk", newick)
+        stream.writestr("weak_generax.ufboot.nwk", newick.replace(")96)99", ")96)65"))
+        stream.writestr("different_generax.ufboot.nwk", newick.replace("D_a", "D_b"))
+        stream.writestr("not_resolved_generax.ufboot.nwk", "(A_a,A_b,A_c,A_d,B_a,B_b,B_c,B_d,C_a,D_a);")
+    with DuplicationTreeSupport(alternative) as support:
+        candidates, n = scan_duplications(tree, primary, 0.01, observe_duplications=support.observe)
+    assert n == 7
+    assert candidates == scan_duplications(tree, primary, 0.01)[0]
+    result, empty = support.rows(candidates)
+    assert result["num_eligible_families"] == 6
+    assert result["num_supporting_families"] == 5
+    assert [result[key] for key in ("num_all_splits_present", "num_archive_missing", "num_different_leaves",
+                                    "num_split_not_supported_or_missing")] == [2, 1, 1, 1]
+    assert [result[f"num_all_splits_ge_{level}"] for level in (50, 70, 95)] == [2, 1, 1]
+    assert empty["num_supporting_families"] == empty["num_all_splits_present"] == 0
+
+
 def test_cross_ks_support_conflict_and_missing_boundary():
     from nwkit.util import read_tree
 

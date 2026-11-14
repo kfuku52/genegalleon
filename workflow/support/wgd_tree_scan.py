@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
-                      observe_family=None):
+                      observe_family=None, observe_duplications=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -64,7 +64,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                 left, right = (observed[c] for c in gene.children)
                 if left & right and all(left & daughter and right & daughter for daughter in branches[union][2]):
                     supported.add(union)
-                    if observe is not None:
+                    if observe is not None or observe_duplications is not None:
                         duplication_nodes.append((union, gene))
             full = observed[tree]
             if observe_family is not None:
@@ -74,11 +74,17 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                     eligible[mask] += 1
                     if mask in supported:
                         hits[mask] += 1
-            if observe is not None:
+            if observe is not None or observe_duplications is not None:
+                family_nodes = []
                 for mask, gene in duplication_nodes:
                     _, sisters, _, branch = branches[mask]
                     if full & sisters:
-                        observe(branch, family, gene)
+                        if observe is not None:
+                            observe(branch, family, gene)
+                        if observe_duplications is not None:
+                            family_nodes.append((branch, gene))
+                if family_nodes:
+                    observe_duplications(family, tree, family_nodes)
     if not families:
         raise ValueError("Gene-tree archive contains no *_root.nwk families")
     rows = []

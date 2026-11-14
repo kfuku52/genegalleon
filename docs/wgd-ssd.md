@@ -89,6 +89,13 @@ are labeled `duplication-only-candidate`; with matching synteny, they are
 `duplication-and-synteny-candidate`. Neither label assigns a gene origin.
 This mode writes `duplication_candidates.tsv` instead of the count-model
 outputs and cannot be used with the native per-gene tree likelihood.
+Optionally provide a GeneRax UFBoot tree ZIP as `wgd_cross_tree_support_file`,
+with or without cross-species synteny. `duplication_tree_support.tsv` counts
+each voting family once per branch, separating absent trees, different leaf
+sets, and missing exact split support. The last three columns count families
+with at least one matching duplication whose own split and both copy splits
+all have UFBoot support at or above 50, 70, or 95. These are descriptive
+levels, not WGD significance thresholds or a test of the root position.
 
 ### Sparse Cross-Species Synteny
 

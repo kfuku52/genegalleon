@@ -12,7 +12,7 @@ import sys
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, nullcontext
 from pathlib import Path
 
 try:
@@ -21,7 +21,12 @@ try:
     from parallel_io import ordered_bounded_results
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
-    from wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
+    from wgd_cross_support import (
+        DUPLICATION_SUPPORT_FIELDS,
+        SUPPORT_FIELDS,
+        DuplicationTreeSupport,
+        paired_tree_support,
+    )
     from wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
@@ -32,7 +37,12 @@ except ImportError:
     from .parallel_io import ordered_bounded_results
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
-    from .wgd_cross_support import SUPPORT_FIELDS, paired_tree_support
+    from .wgd_cross_support import (
+        DUPLICATION_SUPPORT_FIELDS,
+        SUPPORT_FIELDS,
+        DuplicationTreeSupport,
+        paired_tree_support,
+    )
     from .wgd_cross_synteny import PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
@@ -127,8 +137,8 @@ def make_plan(args):
         cross_pairs = read_pairs(cross_path, lambda path: resolve(path, ""), set(names), hash_input)
     support_archive = ""
     if getattr(args, "cross_tree_support", ""):
-        if cross_pairs is None:
-            raise ValueError("Cross-tree support requires --cross-synteny")
+        if tree_archive is None:
+            raise ValueError("Tree split support requires --gene-trees")
         support_archive = str(resolve(args.cross_tree_support, ""))
         inputs[support_archive] = digest(support_archive)
     genomes_path = resolve(args.genomes, "input/wgd_genomes.tsv")
@@ -793,10 +803,16 @@ def run_analysis(plan, output, cpus):
                     {gene.strip() for name in plan["species"] if row[name] for gene in row[name].split(",")})
 
         cross_ks = CrossKs(tree, age_sources, p, family_tables) if age_sources else None
-        raw_candidates, num_trees = scan_duplications(tree, plan["gene_trees"], p["min_duplication_score"],
-                                                      observe=cross.observe if cross is not None else None,
-                                                      family_members=family_members if cross is not None else None,
-                                                      observe_family=cross_ks.observe_family if cross_ks else None)
+        support_file = plan.get("cross_tree_support")
+        with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
+            raw_candidates, num_trees = scan_duplications(
+                tree, plan["gene_trees"], p["min_duplication_score"],
+                observe=cross.observe if cross is not None else None,
+                family_members=family_members if cross is not None else None,
+                observe_family=cross_ks.observe_family if cross_ks else None,
+                observe_duplications=support.observe if support else None)
+        if support:
+            write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
         del by_family
         if cross is not None:
             cross_evidence, pair_rows, window_rows = cross.summarize()
