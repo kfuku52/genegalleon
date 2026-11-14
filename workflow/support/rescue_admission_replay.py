@@ -252,7 +252,8 @@ def prepare(root, plan, cpus):
         inputs.check()
         r.require_same_key(old_hash, r.plan_digest(previous, prior))
         r.require_same_key(new_hash, r.plan_digest(root, plan))
-    for name in plan['species']:
+    names = sorted({name for target in plan['species'] for name in (target, *plan['donors'][target])})
+    for name in names:
         r.verify_sources(plan, [name], ['fasta', 'gff', 'genome'], verification=inputs)
         old_key, new_key = {'plan': old_hash, 'species': name}, {'plan': new_hash, 'species': name}
         def build(tmp, name=name, old_key=old_key):

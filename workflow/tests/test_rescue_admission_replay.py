@@ -82,14 +82,15 @@ def completed(tmp_path, request):
         files.update({str(p): rescue.digest(p) for p in directory.iterdir()})
     defaults = {a.dest: a.default for a in rescue.parser()._subparsers._group_actions[0].choices['plan']._actions}
     params = {key: defaults[key] for key in rescue.PARAMETERS}
-    plan = {'output': str(root), 'species': names, 'common_references': [names[1]],
+    history_case = getattr(request, 'param', None)
+    targets = names[:1] if history_case == 'donor-only' else names
+    plan = {'output': str(root), 'species': targets, 'common_references': [names[1]],
             'donors': {names[0]: [names[1]], names[1]: [names[0]]},
             'nearest_references': {names[0]: [names[1]], names[1]: [names[0]]},
             'synteny_jobs': [{'id': 'comparison_000001', 'index': 1, 'a': names[0], 'b': names[1], 'kind': 'pair'}],
             'request': {'schema': rescue.SCHEMA, 'sources': sources, 'files': files, 'parameters': params,
                         'tools': tools, 'species_profiles': {}, 'gemoma_jar': None,
                         'output_storage': {'format': 'compact', 'retain_search_inputs': False}}}
-    history_case = getattr(request, 'param', None)
     if history_case in {'separate-history', 'separate-code', 'duplicate-history'}:
         ancestor = tmp_path / 'separate-annotation-history'
         ancestor.mkdir()
@@ -134,7 +135,7 @@ def completed(tmp_path, request):
     rejected = copy.deepcopy(intact)
     rejected.update(query='strict-rejection', seqid='disrupted', sequence='ATGTAATAA', problems=['internal_stop'])
     rows = [intact, rejected]
-    for name in names:
+    for name in targets:
         records = rows if name == names[0] else []
         def build(tmp, records=records, name=name):
             store.write_model_store(tmp, records, shard_bytes=400, codec='gzip')
@@ -273,6 +274,7 @@ def test_native_unconfirmed_and_structural_failures_are_not_cleared():
         assert replay.reset_admission(row)['problems'] == [reason]
 
 
+@pytest.mark.parametrize('completed', [None, 'donor-only'], indirect=True)
 def test_standard_cli_owns_plan_import_worker_and_resume(completed, tmp_path):
     previous, source, _, _ = completed
     output = tmp_path / 'cli'
