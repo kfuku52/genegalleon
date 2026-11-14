@@ -42,10 +42,13 @@ def open_text(path: Path) -> TextIO:
     return path.open("r", encoding="utf-8")
 
 
-def fasta_records(path: Path) -> Iterator[tuple[str, str, str]]:
+def fasta_records(path: Path, *, identifiers=None) -> Iterator[tuple[str, str, str]]:
     from cdskit.sequence_selection import fasta_records as records
     try:
-        yield from records(path, opener=open_text)
+        if identifiers is None:
+            yield from records(path, opener=open_text)
+        else:
+            yield from records(path, opener=open_text, identifiers=identifiers)
     except ValueError as exc:
         raise SequenceStoreError(str(exc)) from exc
 

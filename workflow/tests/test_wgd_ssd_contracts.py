@@ -3,6 +3,7 @@
 import copy
 import csv
 import json
+from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,59 @@ def test_tsv_rejects_ambiguous_headers_and_row_widths(tmp_path, text):
         read_table(path)
 
 
+@pytest.mark.parametrize("relpath", ["input/bootstrap.json", "output/genome_evolution/wgd_ssd/bootstrap.json",
+                                     "output/tmp/wgd_ssd/bootstrap.json", "output/artifact_provenance/bootstrap.json",
+                                     "output/.gg_global_artifacts/bootstrap.json", "source.tsv"])
+def test_wgd_bootstrap_checkpoint_protects_managed_paths(tmp_path, relpath):
+    source = tmp_path / "source.tsv"
+    source.touch()
+    output = tmp_path / relpath
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ValueError, match="outside|replace|curated"):
+        wgd_ssd.protect_checkpoint(output, {source: ""}, tmp_path)
+    wgd_ssd.protect_checkpoint(tmp_path / "bootstrap.json", {source: ""}, tmp_path)
+
+
+@pytest.mark.parametrize("observability,reverse_windows,status,b_support", [
+    ("assessed", 1, "orientation_dependent_support", 0),
+    ("insufficient_cross_anchors", 1, "orientation_dependent_observability", "NA"),
+    ("assessed", 3, "supports_in_both", 1),
+])
+def test_orientation_audit_distinguishes_assessment_and_support(observability, reverse_windows, status, b_support):
+    from workflow.support.wgd_cross_synteny import orientation_rows
+
+    forward = {"species_event_id": "event", "species_a": "A", "species_b": "B", "status": "assessed",
+               "observable_windows": 4, "matched_paired_windows": 3, "matched_partial_only_windows": 0, "matched_families": 4}
+    reverse = {**forward, "species_a": "B", "species_b": "A", "status": observability, "matched_paired_windows": reverse_windows}
+    row, = orientation_rows([{"species_event_id": "event", "branch_id": 8}], [forward], [reverse], 3)
+    assert (row["status"], row["a_supports_pair"], row["b_supports_pair"]) == (status, 1, b_support)
+
+
+def test_nonreused_anchor_count_checks_exact_matching_when_greedy_fails():
+    from workflow.support.wgd_cross_synteny import has_nonreused_anchors, qualifying
+
+    # Both sides have five genes, but these two stars can support at most two pairs.
+    stars = {("a", str(i)) for i in range(5)} | {(str(i), "0") for i in range(4)}
+    assert list(qualifying({"block": stars}))
+    assert not has_nonreused_anchors(stars)
+    greedy_trap = {("a", "1"), ("a", "2"), ("b", "1"), ("c", "3"), ("d", "4"), ("e", "5")}
+    assert has_nonreused_anchors(greedy_trap)
+    assert not has_nonreused_anchors(set())
+
+
+def test_self_anchor_directions_share_block_membership_but_not_other_pairs(tmp_path):
+    from workflow.support.wgd_cross_synteny import anchor_links
+
+    path = tmp_path / "self.anchors"
+    path.write_text("###\na\tb\na\tc\na\ta\n###\nb\ta\n###\na\tb\n")
+    genome = {gene: ("chr", rank) for rank, gene in enumerate("abc")}
+    links, neighbors = anchor_links(path, genome, genome, symmetric=True)
+    assert links["a", "b"] is links["b", "a"] and links["a", "b"] == {1, 2, 3}
+    assert links["a", "c"] is links["c", "a"] and links["a", "c"] == {1}
+    assert dict(neighbors) == {"a": {"b", "c"}, "b": {"a"}, "c": {"a"}}
+    assert ("a", "a") not in links
+
+
 def test_event_support_is_an_evidence_rule_not_a_probability():
     anchors = anchor_rows()
     row = summarize_events([candidate()], anchors, {name: {"num_annotated_loci": 20} for name in ("A", "B")},
@@ -63,6 +117,1001 @@ def test_event_support_is_an_evidence_rule_not_a_probability():
     assert row["support_meaning"] == "experimental_evidence_rule_not_posterior"
     assert row["synteny_coverage_definition"] == "unique_branch_matched_anchor_loci_over_annotated_loci"
     assert not {"posterior", "probability", "ploidy"}.intersection(row)
+
+
+@pytest.mark.parametrize("observable,expected,status", [
+    (set(), "count-only-candidate", "insufficient_observability"),
+    ({"A"}, "count-only-candidate", "insufficient_observability"),
+    ({"A", "B"}, "unresolved", "assessed_below_threshold"),
+    ({"C", "D"}, "count-only-candidate", "insufficient_observability"),
+])
+def test_count_only_fallback_requires_insufficient_branch_synteny(observable, expected, status):
+    result = summarize_events([candidate()], [], {}, synteny_opportunity={"event_AB": observable})[0]
+    assert result["event_support"] == expected
+    assert result["synteny_status"] == status
+    assert result["num_synteny_observable_species"] == len(observable & {"A", "B"})
+
+
+@pytest.mark.parametrize("change", [
+    {"count_support": "background_compatible"}, {"count_support": "not_calibrated"},
+    {"count_support": "branch_burst_preferred"}, {"background_nuisance_bound_reached": "True"},
+    {"branch_burst_nuisance_bound_reached": "NA"}, {"descendant_taxa": "A,A"},
+])
+def test_missing_synteny_never_overrides_failed_count_evidence(change):
+    row = summarize_events([{**candidate(), **change}], [], {}, synteny_opportunity={})[0]
+    assert row["event_support"] == "unresolved"
+
+
+def test_count_only_event_does_not_assign_gene_node_origin():
+    row = {**anchor_rows(("A",), 1)[0], "gene_a": "A_a", "gene_b": "A_b"}
+    origin = combine_node("event_AB", [("A_a", "A_b")], pair_positions(),
+                          {("A_a", "A_b"): [row]}, {"event_AB": {"event_support": "count-only-candidate"}})
+    assert origin[0] == "unresolved"
+
+
+def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family():
+    from workflow.support.wgd_cross_phase import orientation_phase_overlap, record_phase, require_paired_orientations
+
+    event = "E"
+    f = [(event, "A", "B", ("a", 1), "OG", ("a1", "b1", "a2", "b2")),
+         (event, "A", "B", ("a", 1), "OG", ("a3", "b3", "a4", "b4"))]
+    r = [(event, "B", "A", ("b", 2), "OG", ("b2", "a2", "b1", "a1")),
+         (event, "B", "A", ("b", 3), "OG", ("b3", "a4", "b4", "a3"))]
+    phases = defaultdict(dict)
+    record_phase(phases, f[0][:3], f[0][3], f[0][4], f[0][5], 1)
+    reverse_phases = defaultdict(dict)
+    record_phase(reverse_phases, r[0][:3], r[0][3], r[0][4], r[0][5], 3)
+    first = SimpleNamespace(traced_hits=f, phases=phases)
+    second = SimpleNamespace(orientation_hits=r, phases=reverse_phases)
+    left, right = ({"species_event_id": event, "species_a": a, "species_b": b, "status": "assessed"}
+                   for a, b in (("A", "B"), ("B", "A")))
+    all_paths, strict = orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right],
+                                                  first, second, unique=True)
+    assert [all_paths[k] for k in ("a_quartets", "b_quartets", "shared_quartets", "shared_families",
+                                    "shared_windows_a", "shared_windows_b")] == [2, 2, 1, 1, 1, 1]
+    assert strict["a_quartets"] == 1 and strict["shared_quartets"] == 0
+    states = {event: {"observable": True, "supported": True, "supported_species": ["A", "B"]}}
+    daughters = {event: ({"A"}, {"B"})}
+    assert require_paired_orientations(states, daughters, (all_paths, strict), first, second, 1) == set()
+    assert states[event] == {"observable": True, "supported": False, "supported_species": []}
+    reverse_phases.clear()
+    record_phase(reverse_phases, r[0][:3], r[0][3], r[0][4], r[0][5], 1)
+    full = list(orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right],
+                                          first, second, unique=True))
+    assert require_paired_orientations(states, daughters, full, first, second, 1) == {f[0]}
+    assert states[event]["supported"]
+    assert require_paired_orientations(states, daughters, full, first, second, 2) == {f[0]}
+    assert not states[event]["supported"]
+    right["status"] = "insufficient_archive_anchors"
+    missing, = orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right], first, second)
+    assert missing["status"] == "not_assessed_both" and missing["shared_quartets"] is None
+
+
+def test_strict_orientation_uses_either_reference_for_observability_not_support():
+    from types import SimpleNamespace
+
+    from workflow.support.wgd_cross_phase import require_paired_orientations
+
+    forward = SimpleNamespace(traced_hits=(), phases={})
+    reverse = SimpleNamespace(orientation_hits=(), phases={})
+    evidence = {"covered": {"observed_species": ["A", "B"]}, "missing": {"observed_species": ["A"]}}
+    daughters = {event: ({"A"}, {"B"}, {"C"}) for event in evidence}
+    other = {"covered": {"observed_species": ["A", "C"]}, "missing": {"observed_species": ["C"]}}
+    assert not require_paired_orientations(evidence, daughters, (), forward, reverse, 3, reverse_evidence=other)
+    assert evidence["covered"] == {"observable": True, "supported": False,
+                                   "observed_species": ["A", "B", "C"], "supported_species": []}
+    assert not evidence["missing"]["observable"]
+
+
+@pytest.mark.parametrize("values", [[], [0.0], [0.0, 1.0], [0.0, 3.0, 3.0], [0.0, .3, .5, .8, 2., 3.]])
+def test_ks_component_holdout_extrema_match_exhaustive_deletions(values):
+    from statistics import median
+
+    from workflow.support.wgd_cross_ks import component_median_holdout_bounds
+
+    expected = [median(values[:i] + values[i + 1:]) for i in range(len(values))] if len(values) > 1 else []
+    bounds = component_median_holdout_bounds(values)
+    assert bounds == ((min(expected), max(expected)) if expected else (None, None))
+
+
+def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("rooted_tree/one_root.nwk", "((((A_a,B_a),(A_b,B_b)),((A_c,B_c),(A_d,B_d))),C_a);")
+        stream.writestr("rooted_tree/two_root.nwk", "((A_e,B_e),C_b);")
+        stream.writestr("rooted_tree/three_root.nwk", "((A_f,B_f),(A_g,B_g));")
+    rows, total = scan_duplications(tree, archive, 0.5)
+    assert total == 3 and len(rows) == 1
+    row = rows[0]
+    assert (row["num_supporting_families"], row["num_eligible_families"], row["duplication_score"]) == (1, 2, 0.5)
+    assert summarize_events(rows, [], {}, synteny_opportunity={})[0]["event_support"] == "duplication-only-candidate"
+    assert scan_duplications(tree, archive, 0.51)[0][0]["tree_support"] == "below_threshold"
+
+
+def test_duplication_family_panels_are_disjoint_stable_and_have_missing_status(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import FamilyPanels, scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    families = [("one", "(((A_a,B_a),(A_b,B_b)),C_a);"),
+                ("two", "((A_e,B_e),C_b);"), ("three", "((A_f,B_f),(A_g,B_g));")]
+    scans = []
+    for i, sites in enumerate((families, families[::-1])):
+        archive = tmp_path / f"order{i}.zip"
+        with ZipFile(archive, "w") as stream:
+            for name, gene in sites:
+                stream.writestr(f"{name}_root.nwk", gene)
+        panels, strata = [], []
+        result = scan_duplications(tree, archive, .5, panels=FamilyPanels(5, 7), panel_output=panels, stratum_output=strata)
+        assert result == scan_duplications(tree, archive, .5)
+        scans.append((panels, strata))
+    assert scans[0] == scans[1]
+    (detail, [summary]), strata = scans[0]
+    assert sum(r["families_in_panel"] for r in detail) == 3
+    assert sum(r["eligible_families"] for r in detail) == 2
+    assert sum(r["supporting_families"] for r in detail) == 1
+    assert sum(r["score"] is None for r in detail) >= 3
+    assert summary["baseline_score"] == .5
+    for metric in {r["metric"] for r in strata}:
+        rows = [r for r in strata if r["metric"] == metric]
+        assert len(rows) == 4
+        assert sum(r["families_in_stratum"] for r in rows) == 3
+        assert sum(r["eligible_families"] for r in rows) == 2
+        assert sum(r["supporting_families"] for r in rows) == 1
+    bands = [r for r in strata if r["metric"] == "copies_per_observed_species"]
+    assert [(r["lower_inclusive"], r["families_in_stratum"], r["score"]) for r in bands] == [
+        (1., 1, 0.), (1.25, 1, 1.), (1.75, 1, None), (2.5, 0, None)]
+
+
+def test_duplication_copy_split_audit_requires_the_same_duplication_node(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("(((A:1,B:1):1,(C:1,D:1):1):1,E:3);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        for key, newick in {
+            "joint": "((((A_a,B_a),(C_a,D_a)),((A_b,B_b),(C_b,D_b))),E_a);",
+            "complementary": "((((A_a,B_a),C_a),((A_b,B_b),D_b)),E_a);",
+            "different_nodes": ("(((((A_c,C_c),(B_c,D_c)),((A_d,C_d),(B_d,D_d))),"
+                                "(((A_e,B_e),C_e),((A_f,B_f),D_f))),E_c);"),
+            "no_sister": "(((A_g,B_g),(C_g,D_g)),((A_h,B_h),(C_h,D_h)));",
+        }.items():
+            stream.writestr(f"{key}_root.nwk", newick)
+    audit = []
+    observed = scan_duplications(tree, archive, .01, copy_split_output=audit)
+    assert observed == scan_duplications(tree, archive, .01)
+    clade = next(row for row in observed[0] if row["descendant_taxa"] == "A,B,C,D")
+    row = next(row for row in audit if row["species_event_id"] == clade["species_event_id"])
+    assert (row["eligible_families"], row["supporting_families"]) == (3, 3)
+    assert [row[k] for k in ("same_tip_in_every_daughter", "same_tip_set", "both_copy_splits",
+                             "same_tip_and_both_splits")] == [2, 2, 3, 1]
+    assert row["same_tip_and_both_splits_score"] == 1 / 3
+
+
+def test_duplication_coverage_audit_only_projects_taxa_missing_from_the_family(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,D:3):1,E:4);", "auto", True)
+    trees = {
+        "complete_hit": "(((A_1,(C_1,(B_1,D_1))),(A_2,(C_2,(B_2,D_2)))),E_1);",
+        "complete_miss": "(((A_1,(C_1,D_1)),(A_2,(C_2,D_2))),(B_1,E_1));",
+        "partial_two_votes": "((((A_1,(C_1,D_1)),(A_2,(C_2,D_2))),((A_3,(C_3,D_3)),(A_4,(C_4,D_4)))),E_1);",
+        "partial_miss_one_daughter": "(((A_1,(C_1,D_1)),(A_2,C_2)),E_1);",
+        "partial_no_sister": "((A_1,(C_1,D_1)),(A_2,(C_2,D_2)));",
+        "nested_with_observed_sister": "((((A_1,C_1),(A_2,C_2)),D_1),E_1);",
+    }
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as handle:
+        for family, gene in trees.items():
+            handle.writestr(f"{family}_root.nwk", gene)
+    coverage = []
+    baseline, _ = scan_duplications(tree, archive, .01)
+    audited, _ = scan_duplications(tree, archive, .01, coverage_output=coverage)
+    assert baseline == audited
+    by_taxa = {r["descendant_taxa"]: r["species_event_id"] for r in baseline}
+    by_event = {r["species_event_id"]: r for r in coverage}
+    outer = by_event[by_taxa["A,B,C,D"]]
+    assert (outer["eligible_complete"], outer["eligible_partial"]) == (2, 3)
+    assert outer["support_complete"] == outer["support_partial_projected"] == 1
+    assert outer["complete_case_score"] == .5 and outer["partial_case_score"] == pytest.approx(1 / 3)
+    assert outer["projected_score"] == .4
+    inner = by_event[by_taxa["A,B,C"]]
+    assert inner["support_complete"] == 0 and inner["support_partial_projected"] == 1
+
+
+@pytest.mark.parametrize("newick", [
+    "((A_1:1,((A_2:1,B_2:1):1,C_1:1):1):1,B_1:1);",
+    "((A_1:1,B_1:1):1,(A_2:1,B_2:1):1,C_1:1);",
+    "((A_1:1,B_1:1):1,(A_2:1,B_2:1):1,C_1:1,C_2:1);",
+    "(((A_1:1,B_1:1):1,(A_2:1,B_2:1):1):1,C_1:1);",
+])
+def test_duplication_root_orientations_match_explicit_rerooting(tmp_path, newick):
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    species = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+
+    def archive_for(source):
+        archive = BytesIO()
+        with ZipFile(archive, "w") as handle:
+            handle.writestr("family_root.nwk", source)
+        return archive
+
+    # Mark the supplied direction even when its top-level node is polytomous.
+    votes = []
+    tree = read_tree(newick, 1, True, rooted="yes", quiet=True)
+    diagnostics = []
+    [baseline], _ = scan_duplications(species, archive_for("[&R]" + newick), .01, root_output=diagnostics)
+    for i, node in enumerate(tree.traverse()):
+        if node is tree:
+            continue
+        copy = tree.copy(method="deepcopy")
+        copy.set_outgroup(list(copy.traverse())[i])
+        [candidate], _ = scan_duplications(species, archive_for(copy.write(parser=1)), .01)
+        votes.append(candidate["num_supporting_families"])
+    [audit] = diagnostics
+    assert audit["rooted_supporting_families"] == baseline["num_supporting_families"]
+    assert audit["extra_families_under_alternate_root"] == max(0, *votes) * (1 - baseline["num_supporting_families"])
+    assert audit["any_orientation_score"] == max(baseline["num_supporting_families"], *votes)
+
+
+def test_duplication_scan_uses_membership_species_when_prefixes_overlap(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,A_sub:2);", "auto", True)
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("x_root.nwk", "(((A_sub_gene,B_x),(A_y,B_y)),A_sub_out);")
+    genes = {"A_sub_gene": "A", "B_x": "B", "A_y": "A", "B_y": "B", "A_sub_out": "A_sub"}
+    rows, _ = scan_duplications(tree, archive, .01, family_members=lambda _: genes)
+    assert rows[0]["num_supporting_families"] == 1
+    assert scan_duplications(tree, archive, .01)[0][0]["num_supporting_families"] == 0
+
+
+def test_duplication_synteny_overlap_counts_distinct_families():
+    from workflow.support.wgd_cross_overlap import duplication_synteny_overlap
+
+    candidates = [{"species_event_id": "e", "branch_id": 4, "num_eligible_families": 10, "num_supporting_families": 4},
+                  {"species_event_id": "f", "branch_id": 7, "num_eligible_families": 0, "num_supporting_families": 0}]
+    windows = [{"species_event_id": "e", "matched_paired_families": "a,b", "matched_partial_only_families": "b"},
+               {"species_event_id": "e", "matched_paired_families": "a", "matched_partial_only_families": "c"}]
+    a, b = duplication_synteny_overlap(candidates, windows)
+    assert (a["matched_paired_families"], a["matched_partial_only_families"], a["matched_either"]) == (2, 1, 3)
+    assert (a["eligible_after_exclusion"], a["support_after_exclusion"], a["score_after_exclusion"]) == (7, 1, 1 / 7)
+    assert b["score_after_exclusion"] is None
+    with pytest.raises(ValueError, match="subset"):
+        list(duplication_synteny_overlap([{**candidates[0], "num_supporting_families": 2}], windows))
+
+
+def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
+    event = {"species_event_id": "event_ABC", "descendant_taxa": "A,B,C", "tree_support": "tree_score_supported"}
+    daughters = {"event_ABC": ({"A", "B"}, {"C"})}
+    row = summarize_events([event], [], {}, synteny_opportunity={"event_ABC": {"A", "B"}},
+                           daughter_taxa=daughters)[0]
+    assert row["event_support"] == "duplication-only-candidate"
+    row = summarize_events([event], [], {}, synteny_opportunity={"event_ABC": {"A", "C"}},
+                           daughter_taxa=daughters)[0]
+    assert row["event_support"] == "unresolved"
+
+
+@pytest.mark.parametrize("case,status,event,matched", [
+    ("paired", "supports", "duplication-and-synteny-candidate", 1),
+    ("both_phases", "supports", "duplication-and-synteny-candidate", 1),
+    ("one_copy", "supports", "duplication-and-synteny-candidate", 1),
+    ("wrong_phase", "assessed_below_threshold", "unresolved", 0),
+    ("empty_self", "assessed_below_threshold", "unresolved", 0),
+    ("missing_archive_anchors", "insufficient_observability", "duplication-only-candidate", 0),
+    ("positive_below_archive_floor", "supports", "duplication-and-synteny-candidate", 1),
+    ("missing_self", "insufficient_observability", "duplication-only-candidate", 0),
+    ("no_cross_anchors", "insufficient_observability", "duplication-only-candidate", 0),
+])
+def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case, status, event, matched):
+    from zipfile import ZipFile
+
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_ks import CrossKs
+    from workflow.support.wgd_cross_phase import phase_rows, trace_has_unique_phase
+    from workflow.support.wgd_cross_synteny import CrossSynteny, archive_window_floor, cross_synteny_inputs
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    event_id = CladeIndex(tree).clade_id_for_node(tree.common_ancestor(["A", "B"]))
+    for species in ("A", "B"):
+        (tmp_path / f"{species}.bed").write_text("".join(
+            f"chr{copy}\t{i * 10}\t{i * 10 + 5}\t{species}_{copy}{i}\n"
+            for copy in ("a", "b") for i in range(5)))
+        (tmp_path / f"{species}.anchors").write_text(
+            "" if case in {"empty_self", "missing_archive_anchors"} else "###\n" + "".join(
+                f"{species}_a{i}\t{species}_b{i}\t1\n" for i in range(5)))
+    copies = (("a", "b"), ("b", "a")) if case == "wrong_phase" else (("a", "a"), ("b", "b"))
+    if case == "both_phases":
+        copies += (("a", "b"), ("b", "a"))
+    if case == "one_copy":
+        copies = copies[:1]
+    if case == "no_cross_anchors":
+        copies = ()
+    (tmp_path / "cross.anchors").write_text("".join(
+        "###\n" + "".join(f"A_{a}{i}\tB_{b}{i}\t1\n" for i in range(5)) for a, b in copies))
+    pairs = [("A", "A", "A"), ("A", "B", "cross")]
+    if case != "missing_self":
+        pairs.append(("B", "B", "B"))
+    comparisons = [
+        {"species_a": a, "species_b": b, "bed_a": tmp_path / f"{a}.bed", "bed_b": tmp_path / f"{b}.bed",
+         "anchors": tmp_path / f"{key}.anchors"} for a, b, key in pairs]
+    inputs = cross_synteny_inputs(comparisons)
+    cross = CrossSynteny(tree, comparisons, 1, age_species=("A", "B"), trace_branches=(event_id,),
+                         audit_coverage=True, audit_phase=True, inputs=inputs, reverse_phase=True)
+    reverse = cross.reverse
+    separate_reverse = CrossSynteny(tree, comparisons, 1, reverse_cross=True, audit_phase=True, orientation_paths=True)
+    assert reverse.summarize() == separate_reverse.summarize()
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as stream:
+        for i in range(5):
+            if case == "missing_archive_anchors" or (case == "positive_below_archive_floor" and i):
+                genes = f"(((A_y{i},B_y{i}),(A_z{i},B_z{i})),C_c{i});"
+            else:
+                genes = f"(((A_a{i},B_a{i}),(A_b{i},B_b{i})),C_c{i});"
+            stream.writestr(f"family{i}_root.nwk", genes)
+    def observe(event, family, node):
+        for scanner in (cross, reverse, separate_reverse):
+            scanner.observe(event, family, node)
+
+    rows, total = scan_duplications(tree, archive, 0.5, observe=observe, observe_family=cross.observe_family)
+    assert reverse.summarize() == separate_reverse.summarize()
+    assert reverse.phases == separate_reverse.phases and reverse.orientation_hits == separate_reverse.orientation_hits
+    coverage, _, reverse_floor = cross.nonreused_coverage_rows()
+    assert coverage == list(cross.coverage_rows())
+    if case == "positive_below_archive_floor":
+        assert coverage[0]["num_archive_family_anchor_pairs"] == 2
+        assert coverage[0]["archive_family_window_floor_met"] == 0
+    evidence, pair_rows, _ = cross.summarize(archive_floor=archive_window_floor(coverage))
+    assert total == 5 and rows[0]["num_supporting_families"] == 5
+    row, = summarize_events(rows, [], {}, cross_evidence=evidence)
+    assert row["synteny_status"] == status
+    assert row["event_support"] == event
+    pair, = pair_rows
+    phase, = phase_rows(rows, pair_rows, cross.phases)
+    assert phase["concordant_only_quartets"] == (5 if case == "paired" else 1 if case == "positive_below_archive_floor" else 0)
+    assert phase["discordant_only_quartets"] == (5 if case == "wrong_phase" else 0)
+    assert phase["ambiguous_quartets"] == (5 if case == "both_phases" else 0)
+    assert phase["ambiguous_windows"] == (1 if case == "both_phases" else 0)
+    strict, _, _ = cross.summarize(archive_floor=archive_window_floor(coverage), require_unique_phase=True)
+    assert strict[event_id]["observable"] == evidence[event_id]["observable"]
+    assert strict[event_id]["supported"] == (case in {"paired", "positive_below_archive_floor"})
+    phased_hits = {hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
+    assert CrossKs.age_pairs_from_trace(phased_hits, {"A", "B"}) == (cross.age_pairs if strict[event_id]["supported"] else set())
+    if case == "missing_archive_anchors":
+        assert coverage[0]["num_observable_windows"] == 2
+        assert coverage[0]["num_archive_family_windows"] == 0
+        assert pair["status"] == "insufficient_archive_anchors"
+        _, (reverse_row,), _ = reverse.summarize(archive_floor=reverse_floor)
+        assert reverse_row["status"] == "insufficient_archive_anchors"
+    assert pair["matched_paired_windows"] == (0 if case == "one_copy" else matched)
+    assert pair["matched_partial_only_windows"] == (matched if case == "one_copy" else 0)
+    assert len(cross.age_pairs) == (2 if case == "positive_below_archive_floor" else
+                                   10 if matched and case != "one_copy" else 0)
+    assert bool(cross.traced_hits) == bool(matched)
+    if matched:
+        for branch, a, b, _, _, genes, blocks, positions in cross.traced_hits:
+            assert (branch, a, b) == (event_id, "A", "B")
+            assert ("A", "B", 1) in blocks
+            if case == "one_copy":
+                assert (("A", "A", 1) in blocks) != (("B", "B", 1) in blocks)
+            else:
+                assert set(blocks) == {("A", "A", 1), ("B", "B", 1), ("A", "B", 1), ("A", "B", 2)}
+            assert len(genes) == len(positions) == (3 if case == "one_copy" else 4)
+
+
+def test_cross_ks_coalesces_shared_copy_windows_and_families():
+    from workflow.support.wgd_cross_ks import component_medians
+
+    hits = [
+        ("f1", ("c1", 1), ("c2", 1), .5),
+        ("f2", ("c1", 2), ("c2", 1), .7),
+        ("f1", ("c3", 1), ("c4", 1), .9),
+        ("f3", ("c5", 1), ("c5", 2), 1.5),
+    ]
+    assert component_medians(hits) == [.7, 1.5]
+
+
+def test_distinct_synteny_quartets_merge_windows_and_keep_unassessed_missing():
+    from collections import defaultdict
+
+    from workflow.support.wgd_cross_phase import quartet_phase_rows, record_phase
+
+    event, a, b = "branch", "A", "B"
+    phases = defaultdict(dict)
+    record_phase(phases, (event, a, b), ("first", 1), "f", ("a", "b", "aa", "bb"), 1)
+    record_phase(phases, (event, a, b), ("repeat", 2), "f", ("aa", "b", "a", "bb"), 2)
+    record_phase(phases, (event, a, b), ("another", 3), "f", ("a", "b", "aaa", "bb"), 1)
+    pairs = [{"species_event_id": event, "species_a": a, "species_b": b, "status": status}
+             for status in ("assessed", "missing_self_comparison")]
+    found, unavailable = quartet_phase_rows([{"species_event_id": event, "branch_id": 3}], pairs, phases)
+    assert [found[k] for k in ("concordant_only_distinct_quartets", "discordant_only_distinct_quartets",
+                               "ambiguous_distinct_quartets")] == [1, 0, 1]
+    assert unavailable["status"] == "missing_self_comparison" and unavailable["ambiguous_distinct_quartets"] is None
+
+
+def test_copy_median_interval_requires_six_independent_components():
+    from workflow.support.wgd_cross_ks import copy_median_interval
+
+    assert copy_median_interval([.1, .2, .3, .4]) is None
+    assert copy_median_interval([.1, .2, .3, .4, .5]) is None
+    assert copy_median_interval([.1, .2, .3, .4, .5, .6]) == (.1, .6)
+
+
+def test_copy_contig_holdout_rebuilds_components_and_keeps_missing_separate(monkeypatch):
+    from workflow.support import wgd_cross_ks as ks
+
+    hits = [("family1", ("a", 1), ("b", 1), 1.),
+            ("family2", ("b", 1), ("c", 1), 20.),
+            ("family2", ("d", 1), ("d", 2), 3.)]
+    first, second = ks.copy_contig_holdout(hits, 2)
+    assert first == (1, 4, 4, 4, 0, 3, 1, 1, 2., 11.5, "ok")
+    assert second == (2, 4, 6, 6, 1, 6, 0, 0, 1., 20., "ok")
+    assert all(row[-1] == "no_measured_pairs" for row in ks.copy_contig_holdout([], 2))
+    monkeypatch.setattr(ks, "MAX_COPY_CONTIG_PAIR_VISITS", 17)
+    first, second = ks.copy_contig_holdout(hits, 2)
+    assert first[-1] == "ok" and second[3] == 0 and second[-1] == "holdout_limit_exceeded"
+
+
+def test_cross_ks_matched_boundaries_exclude_incomplete_families_and_keep_covariance():
+    import numpy as np
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_boundary_gap
+
+    younger = KsTrio("A", "B", "D", "B1", 1)
+    older = KsTrio("A", "C", "D", "B2", 2)
+    data = {pair: {str(i): v + i for i in range(10)}
+            for pair, v in {("A", "B"): 1, ("A", "C"): 2, ("A", "D"): 3,
+                            ("B", "D"): 3, ("C", "D"): 3}.items()}
+    data["A", "C"]["incomplete"] = 1e3
+    n, young, old, gap, lo, hi, status = matched_boundary_gap(younger, older, data, 199, np.random.default_rng(7))
+    assert (n, young, old, gap, lo, hi, status) == (10, 5.5, 6.5, 1, 1, 1, "ordered")
+    assert matched_boundary_gap(older, younger, data, 199, np.random.default_rng(7))[-1] == "reversed"
+
+
+def test_cross_ks_matched_trios_keep_negative_contrasts_and_missing_families():
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_trio_rows
+
+    t = KsTrio("A", "B", "C", "event", 2)
+    absent = KsTrio("A", "B", "D", "event", 2)
+    f = [str(i) for i in range(25)]
+    contrasts = {("A", "B"): dict.fromkeys(f, 0.2), ("A", "C"): dict.fromkeys(f, 0.3),
+                 ("B", "C"): {family: 0.6 if i < 10 else 0.4 for i, family in enumerate(f)}}
+    contrasts["A", "B"]["incomplete"] = 5.0
+    row, missing = matched_trio_rows([t, absent], contrasts)
+    assert row["num_complete_families"] == 25 and row["num_negative_family_contrasts"] == 10
+    assert row["matched_median_ds"] == pytest.approx(.1)
+    assert row["matched_lower"] == pytest.approx(-.1)
+    assert row["status"] == "interval_includes_negative"
+    assert missing["status"] == "no_complete_families"
+    assert missing["num_complete_families"] == 0 and missing["matched_median_ds"] is None
+
+
+def test_cross_ks_matched_bootstrap_and_trios_preserve_tiny_residuals():
+    import numpy as np
+    from nwkit.ksrate_model import KsTrio
+
+    from workflow.support.wgd_cross_ks import matched_boundary_gap, matched_trio_rows
+
+    younger = KsTrio("F", "Y", "O", "young", 2)
+    older = KsTrio("F", "X", "O", "old", 1)
+    huge = float(2 ** 57)
+    data = {tuple(sorted(pair)): {str(i): value for i in range(20)} for pair, value in {
+        ("F", "Y"): .25, ("F", "X"): .75, ("F", "O"): huge,
+        ("Y", "O"): huge, ("X", "O"): huge,
+    }.items()}
+    assert matched_boundary_gap(younger, older, data, 40, np.random.default_rng(1)) == (20, .25, .75, .5, .5, .5, "ordered")
+    rows = list(matched_trio_rows((younger, older), data))
+    assert [r["matched_median_ds"] for r in rows] == [.25, .75]
+    assert all(r["matched_lower"] == r["matched_median_ds"] == r["matched_upper"] for r in rows)
+
+
+def test_cross_region_holdout_counts_only_families_lost_from_all_regions():
+    from workflow.support.wgd_cross_regions import summarize_regions
+
+    def hit(window, family, block, shared=False):
+        return ("branch", "A", "B", ("ctg", window), family, ("a", "b", "aa", "bb"),
+                (("A", "B", block),), (("A", "ctg", window), ("B", "chr", 1 if shared else window)))
+
+    hits = [hit(1, "shared", 10), hit(2, "shared", 20), hit(3, "other", 10)]
+    candidates = [{"species_event_id": "branch", "branch_id": 5}]
+    summary, details = summarize_regions(candidates, hits, {"branch": ({"A"}, {"B"})}, 2)
+    paired, all_hits = summary
+    assert paired["matched_windows"] == all_hits["matched_windows"] == 3
+    assert paired["regions"] == 2 and paired["num_holdouts_losing_support"] == 1
+    assert [r["supports_after_exclusion"] for r in details if r["mode"] == "paired"] == [0, 1]
+    summary, _ = summarize_regions(candidates, [*hits[:2], hit(3, "other", 10, shared=True)],
+                                   {"branch": ({"A"}, {"B"})}, 2)
+    assert summary[0]["regions"] == 2
+    strict, detail = summarize_regions(candidates, hits, {"branch": ({"A"}, {"B"})}, 2, unique_phase_hits=hits[1:])
+    assert [row["mode"] for row in strict] == ["paired", "all", "unique_phase"]
+    assert strict[-1]["matched_windows"] == 2 and strict[-1]["supports_before_holdout"] == 1
+    assert strict[-1]["num_holdouts_losing_support"] == 2
+    assert all(row["supports_after_exclusion"] == 0 for row in detail if row["mode"] == "unique_phase")
+
+
+def test_two_reference_region_holdout_keeps_reverse_floor_after_exclusion():
+    from workflow.support.wgd_cross_regions import summarize_regions
+
+    hits = [("event", "A", "B", ("a", i), str(i), (f"a{i}", f"b{i}", f"c{i}", f"d{i}"),
+             (("A", "B", i),), (("A", "a", i), ("B", "b", i))) for i in range(3)]
+    reverse = {hit: {("linked", 1 if i < 2 else 2)} for i, hit in enumerate(hits)}
+    result, _ = summarize_regions([{"species_event_id": "event", "branch_id": 4}], hits,
+                                  {"event": ({"A"}, {"B"})}, 2, reverse_windows=reverse)
+    assert result[0]["regions"] == 3 and result[0]["holds_after_every_one_region"] == 1
+    both = result[-1]
+    assert both["mode"] == "both_orientations" and both["regions"] == 2
+    assert both["supports_before_holdout"] == 1 and both["num_holdouts_losing_support"] == 2
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_region_holdout_matches_recomputing_every_remaining_subset(reverse):
+    import random
+    from itertools import combinations
+
+    from workflow.support.wgd_cross_regions import components, support_after_holdouts
+
+    rng = random.Random(95)
+    for _ in range(30):
+        hits, reverse_windows = [], {}
+        for a, b in (("A", "B"), ("B", "C"), ("C", "A")):
+            for i in range(7):
+                for f in rng.sample(range(12), rng.randrange(1, 4)):
+                    hit = ("event", a, b, (f"{a}_{b}", i), str(f), ("a", "b", "c", "d"),
+                           ((a, b, i // 2),), ((a, f"{a}_{b}", i), (b, f"{b}_{a}", i)))
+                    hits.append(hit)
+                    reverse_windows[hit] = {("ctg", i + rng.choice([0, 1]))}
+        kwargs = {"reverse_windows": reverse_windows} if reverse else {}
+        daughters, floor = ({"A"}, {"B", "C"}), rng.randrange(2, 8)
+        audit = {}
+        baseline, details = support_after_holdouts(hits, daughters, floor, pair_audit=audit, **kwargs)
+        assert (baseline, details) == support_after_holdouts(hits, daughters, floor, **kwargs)
+        if baseline:
+            groups = components(hits, **kwargs)
+            failed = []
+            for i, j in combinations(range(len(groups)), 2):
+                remaining = [hit for k, group in enumerate(groups) if k not in (i, j) for hit in group]
+                if not support_after_holdouts(remaining, daughters, floor, **kwargs)[0]:
+                    failed.append(f"{i + 1},{j + 1}")
+            assert audit["num_two_region_holdouts_losing_support"] == len(failed)
+            assert audit["first_failed_regions"] == (failed[0] if failed else None)
+        else:
+            assert audit["status"] == "not_initially_supported"
+
+
+def test_two_region_holdout_reports_work_cap_without_subset_sampling(monkeypatch):
+    from workflow.support import wgd_cross_regions as regions
+
+    monkeypatch.setattr(regions, "MAX_TWO_REGION_HOLDOUTS", 2)
+    hits = [("event", "A", "B", ("chr", i), str(i), ("a", "b", "c", "d"), (), ()) for i in range(3)]
+    audit = {}
+    assert regions.support_after_holdouts(hits, ({"A"}, {"B"}), 1, pair_audit=audit)[0]
+    assert audit["status"] == "pair_limit_exceeded" and audit["num_two_region_holdouts"] == 0
+    assert audit["num_two_region_holdouts_losing_support"] is None
+
+
+def test_strict_contig_holdout_uses_both_copies_and_keeps_species_namespaces(monkeypatch):
+    from workflow.support import wgd_cross_regions as regions
+
+    event = "ancestor"
+    candidate = {"species_event_id": event, "branch_id": 7}
+    by_path = {}
+    for i in (1, 2, 3):
+        # The second A copy touches a common assembly contig. The B copy on
+        # the same contig label must not be treated as touching the A contig.
+        hit = (event, "A", "B", ("a", i), f"f{i}", ("a", "b", "c", "d"), (),
+               (("A", "a", i), ("B", "common", i), ("A", "common", i), ("B", "z" if i == 1 else "b", i)))
+        by_path[hit] = {("common", i)}
+    groups = {event: ({"A"}, {"B"})}
+    evidence = {event: {"supported": True}}
+    single, double = regions.contig_holdout_rows([candidate], by_path, groups, 2, evidence)
+    assert (single["num_possible_holdouts"], single["num_losing_support"]) == (5, 4)
+    assert (double["num_evaluated_holdouts"], double["num_losing_support"]) == (10, 10)
+    assert single["first_failed_contigs"] == "A:a"
+    monkeypatch.setattr(regions, "MAX_CONTIG_PATH_VISITS", 14)
+    skipped, _ = regions.contig_holdout_rows([candidate], by_path, groups, 2, evidence)
+    assert skipped["status"] == "holdout_limit_exceeded" and skipped["num_evaluated_holdouts"] == 0
+    assert skipped["num_losing_support"] is None
+    with pytest.raises(ValueError, match="changed the pre-holdout support"):
+        list(regions.contig_holdout_rows([candidate], by_path, groups, 2, {event: {"supported": False}}))
+
+
+def test_cross_synteny_node_paths_do_not_transfer_support_to_wrong_copy_or_branch():
+    from collections import defaultdict
+
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_node import cross_node_rows, cross_paths
+    from workflow.support.wgd_cross_phase import record_phase
+
+    tree = read_tree("(((A_a,B_a),(B_b,A_b)),C_c);", "auto", True)
+    index = CladeIndex(tree)
+    event = "AB"
+    node = tree.common_ancestor(["A_a", "A_b"])
+    clade = index.clade_id_for_node(node)
+    hit = (event, "A", "B", ("chr", 1), "family", ("A_a", "B_a", "A_b", "B_b"), (), ())
+    phases = defaultdict(dict)
+    record_phase(phases, hit[:3], hit[3], hit[4], hit[5], 1)
+    row, = cross_paths([hit, hit], phases, {hit}, require_unique=True)
+    assert row["used_in_candidate_mode"] == row["both_orientations"] == 1
+    row = {k: str(v) for k, v in row.items()}
+    mappings = {gene: gene[0] for gene in tree.leaf_names()}
+    reconcile = {"event_type": "duplication", "gene_clade_id": clade, "mapping_status": "mapped",
+                 "event_status": "resolved", "species_event_id": event}
+    states = {event: {"event_support": "duplication-and-synteny-candidate"}}
+    matched, discordant, unavailable = cross_node_rows(tree, index, mappings, states, [reconcile], [
+        row, {**row, "gene_b": "B_b", "gene_b2": "B_a"}, {**row, "gene_b": "B_missing"}])
+    assert matched["mapping_status"] == "exact_node_match" and matched["gene_clade_id"] == clade
+    assert discordant["mapping_status"] == "copy_split_mismatch"
+    assert unavailable["mapping_status"] == "genes_not_in_family_tree"
+    different, = cross_node_rows(tree, index, mappings, states, [{**reconcile, "species_event_id": "older"}], [row])
+    assert different["mapping_status"] == "species_branch_mismatch"
+    assert node.props["cross_synteny_matched_paths"] == 1 and "duplication_origin" not in node.props
+
+
+def test_cross_node_reader_validates_unrelated_family_before_filtering(tmp_path):
+    from workflow.support.wgd_cross_node import CROSS_PATH_FIELDS, load_family_paths
+
+    path = tmp_path / "paths.tsv"
+    row = dict(zip(CROSS_PATH_FIELDS, ("AB", "other", "A", "B", "chr", 1, "a", "b", "a2", "b2", 1, 0, "invalid"),
+                   strict=True))
+    write_rows(path, CROSS_PATH_FIELDS, [row])
+    with pytest.raises(ValueError, match="Invalid cross-synteny node path flags"):
+        list(load_family_paths(path, "requested"))
+
+
+def test_rooted_dS_path_balance_recovers_signed_stems_and_respects_copy_order():
+    from itertools import combinations
+
+    from workflow.support.wgd_rooted_copy_ks import rooted_path_balance, rooted_rate_balance
+
+    # Four pendant lengths, an outgroup arm, and the two stems at the split.
+    pendants = (.11, .22, .40, .50, .60)
+    first, second = .13, .24
+    parts = ({0, 1}, {2, 3})
+    distances = [pendants[i] + pendants[j] + sum(
+        stem for side, stem in zip(parts, (first, second), strict=True) if (i in side) != (j in side))
+        for i, j in combinations(range(5), 2)]
+    balance = rooted_path_balance(distances)
+    assert balance == pytest.approx((2 * (.9 - .33) / (.9 + .33), first, second))
+    pair_map = dict(zip(combinations(range(5), 2), distances, strict=True))
+    swap = (2, 3, 0, 1, 4)
+    swapped = [pair_map[tuple(sorted((swap[i], swap[j])))] for i, j in combinations(range(5), 2)]
+    assert rooted_path_balance(swapped) == pytest.approx((balance[0], second, first))
+    assert rooted_path_balance([0.] * 10)[0] is None
+
+    row = {"species_event_id": "event", "branch_id": 1, "species_a": "A", "species_b": "B",
+           "family_id": "duplicate", "status": "expected_best", "ten_ds": ",".join(map(str, distances))}
+    conflict = [*distances]
+    conflict[3] -= .80
+    assert rooted_path_balance(conflict)[1] < 0
+    combined, = rooted_rate_balance([row, {**row, "ten_ds": ",".join(map(str, conflict))},
+                                     {**row, "family_id": "other"}, {**row, "status": "dS_incomplete"}])
+    assert combined["num_complete_paths"] == 3 and combined["num_families"] == 2
+    assert combined["num_families_with_two_positive_stems_and_expected_split"] == 1
+    assert combined["status"] == "point_only" and combined["split_difference_lower"] is None
+    empty, = rooted_rate_balance([{**row, "status": "dS_incomplete"}])
+    assert empty["status"] == "no_usable_paths"
+
+
+def test_species_tree_label_stays_inside_its_axis_at_both_ends():
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from workflow.support.wgd_ssd import fit_tree_branch_labels
+
+    fig = Figure(figsize=(7, 3))
+    FigureCanvasAgg(fig)
+    tree, names = fig.subplots(ncols=2)
+    tree.set(xlim=(0, 1), ylim=(0, 3))
+    anchors = [(0.01, 2), (0.98, 1)]
+    labels = [tree.annotate("B123  S=1.94% W=11 U=9 R=8", point, xytext=(0, 5),
+                            textcoords="offset points", ha="center") for point in anchors]
+    fit_tree_branch_labels(fig, tree, labels)
+    fig.canvas.draw()
+    for point, label in zip(anchors, labels, strict=True):
+        box = label.get_window_extent()
+        assert tree.bbox.x0 < box.x0 < box.x1 < tree.bbox.x1 < names.bbox.x0
+        assert label.xy == point and label.get_position()[1] == 5
+
+
+def test_window_offset_shifts_observability_and_paths_in_both_references(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_synteny import CrossSynteny
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    comparisons = []
+    for name, boundary in (("A", 48), ("B", 46)):
+        bed = tmp_path / f"{name}.bed"
+        bed.write_text("".join(f"{contig}\t{i}\t{i + 1}\t{name}_{contig}{i}\n"
+                               for contig in ("x", "y") for i in range(60)))
+        anchors = tmp_path / f"{name}.anchors"
+        anchors.write_text("###\n" + "".join(f"{name}_x{i}\t{name}_y{i}\n" for i in range(boundary, boundary + 5)))
+        comparisons.append(dict(species_a=name, species_b=name, bed_a=bed, bed_b=bed, anchors=anchors))
+    direct = tmp_path / "direct.anchors"
+    direct.write_text("".join("###\n" + "".join(f"A_{contig}{48+i}\tB_{contig}{46+i}\n" for i in range(5))
+                              for contig in ("x", "y")))
+    comparisons.append(dict(species_a="A", species_b="B", bed_a=tmp_path / "A.bed", bed_b=tmp_path / "B.bed", anchors=direct))
+    default = CrossSynteny(tree, comparisons, 1, reverse_phase=True)
+    shifted = CrossSynteny(tree, comparisons, 1, reverse_phase=True, window_offset=50)
+    assert [obj.summarize()[1][0]["observable_windows"] for obj in (default, default.reverse)] == [2, 2]
+    assert [obj.summarize()[1][0]["observable_windows"] for obj in (shifted, shifted.reverse)] == [0, 0]
+    assert [obj.summarize()[1][0]["paired_windows"] for obj in (default, default.reverse)] == [1, 1]
+    assert [obj.summarize()[1][0]["paired_windows"] for obj in (shifted, shifted.reverse)] == [0, 0]
+    with pytest.raises(ValueError, match="window offset"):
+        CrossSynteny(tree, comparisons, 1, window_offset=100)
+
+
+def test_cross_synteny_rejects_genes_shared_by_overlapping_species_prefixes(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_synteny import CrossSynteny
+
+    tree = read_tree("((A,A_B),C);", "auto", True)
+    a, b, anchors = (tmp_path / name for name in ("a.bed", "b.bed", "cross.anchors"))
+    a.write_text("chr1\t0\t1\tA_B_g1\n")
+    b.write_text("chr1\t0\t1\tA_B_g1\n")
+    anchors.touch()
+    with pytest.raises(ValueError, match="gene IDs are shared between species"):
+        CrossSynteny(tree, [{"species_a": "A", "species_b": "A_B", "bed_a": a, "bed_b": b,
+                            "anchors": anchors}], 1)
+
+
+def test_nested_copy_overlap_distinguishes_window_and_gene_matches():
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_regions import nested_copy_overlap
+
+    tree = read_tree("(((A,B),C),D);", "auto", True)
+    index = CladeIndex(tree)
+    young, old = (index.clade_id_for_node(tree.common_ancestor(taxa)) for taxa in (["A", "B"], ["A", "C"]))
+    candidates = [{"species_event_id": event, "branch_id": i, "tree_support": "tree_score_supported"}
+                  for i, event in enumerate((young, old), 1)]
+    hits = [(young, "A", "B", ("chr1", 1), "young", ("a", "b", "aa", "bb"), (),
+             (("A", "chr1", 1), ("B", "chr1", 1), ("A", "chr2", 1), ("B", "chr2", 1))),
+            (old, "C", "A", ("chr1", 1), "old", ("cc", "ax", "c", "ay"), (),
+             (("C", "chr1", 1), ("A", "chr2", 1), ("C", "chr2", 1), ("A", "chr1", 1)))]
+    result, = nested_copy_overlap(tree, candidates, hits)
+    assert result["species"] == "A"
+    assert (result["younger_branch_id"], result["older_branch_id"]) == (1, 2)
+    assert (result["shared_window_pairs"], result["shared_gene_pairs"], result["shared_families"]) == (1, 0, 0)
+
+
+def test_paired_tree_support_uses_full_copy_groups_not_anchor_subclades(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_support import DuplicationTreeSupport
+
+    alternative = tmp_path / "ufboot.zip"
+    text = "((((A_x,B_x)14,C_x)97,((A_y,B_y)15,C_y)98)99,(D_x,E_x)99);"
+    with ZipFile(alternative, "w") as stream:
+        stream.writestr("f_generax.ufboot.nwk", text)
+        stream.writestr("m_generax.ufboot.nwk", text.replace("E_x", "E_y"))
+    tree = read_tree(text, "auto", True, quiet=True)
+    rows = [{"species_event_id": "clade", "branch_id": 3}]
+    with DuplicationTreeSupport(alternative) as support:
+        for family in ("z", "m", "f"):
+            hit = ("clade", "A", "B", ("chr1", 1), family, ("A_x", "B_x", "A_y", "B_y"), (), ())
+            support.observe(family, tree, (), {hit})
+    result, different, missing = support.paired_rows(rows)
+    assert [r["family_id"] for r in (result, different, missing)] == ["f", "m", "z"]
+    assert [r["status"] for r in (different, missing)] == ["different_leaves", "archive_missing"]
+    assert result["status"] == "all_splits_present"
+    assert [result[name] for name in ("duplication_support", "first_copy_support", "second_copy_support")] == [99, 97, 98]
+
+
+def test_duplication_support_counts_each_voting_family_and_reports_missing_evidence(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_support import DuplicationTreeSupport
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,(C:1,D:1):1);", "auto", True)
+    primary, alternative = tmp_path / "root.zip", tmp_path / "ufboot.zip"
+    newick = "((((A_a,B_a)97,(A_b,B_b)96)99,((A_c,B_c)30,(A_d,B_d)98)98)99,(C_a,D_a)99);"
+    with ZipFile(primary, "w") as stream:
+        for family in ("strong", "weak", "missing", "different", "not_resolved"):
+            stream.writestr(f"{family}_root.nwk", newick)
+        stream.writestr("ineligible_root.nwk", "((A_a,B_a),(A_b,B_b));")
+        stream.writestr("single_root.nwk", "((A_a,B_a),(C_a,D_a));")
+    with ZipFile(alternative, "w") as stream:
+        stream.writestr("strong_generax.ufboot.nwk", newick)
+        stream.writestr("weak_generax.ufboot.nwk", newick.replace(")96)99", ")96)65"))
+        stream.writestr("different_generax.ufboot.nwk", newick.replace("D_a", "D_b"))
+        stream.writestr("not_resolved_generax.ufboot.nwk", "(A_a,A_b,A_c,A_d,B_a,B_b,B_c,B_d,C_a,D_a);")
+    with DuplicationTreeSupport(alternative) as support:
+        candidates, n = scan_duplications(tree, primary, 0.01,
+                                          observe_duplications=lambda f, t, d, _: support.observe(f, t, d))
+    assert n == 7
+    assert candidates == scan_duplications(tree, primary, 0.01)[0]
+    result, empty = support.rows(candidates)
+    assert result["num_eligible_families"] == 6
+    assert result["num_supporting_families"] == 5
+    assert [result[key] for key in ("num_all_splits_present", "num_archive_missing", "num_different_leaves",
+                                    "num_split_not_supported_or_missing")] == [2, 1, 1, 1]
+    assert [result[f"num_all_splits_ge_{level}"] for level in (50, 70, 95)] == [2, 1, 1]
+    assert empty["num_supporting_families"] == empty["num_all_splits_present"] == 0
+
+
+def test_cross_ks_support_conflict_and_missing_boundary():
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_ks import CrossKs
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,D:3):1,E:4);", "auto", True)
+    scan = CrossKs(tree, {}, {"seed": 7, "ks_bootstrap": 199, "min_cross_windows": 3}, ([], "family", {}))
+    node = tree.common_ancestor(["A", "B"])
+    event = scan.index.clade_id_for_node(node)
+    older = scan.index.clade_id_for_node(node.up)
+    next_older = scan.index.clade_id_for_node(node.up.up)
+
+    def bound(low, high):
+        return {"ci_lower": low, "ci_upper": high, "interval_status": "ok", "status": "ok",
+                "monotone_from_younger_node": "yes"}
+
+    def hits(value):
+        return [(f"f{i}", ("c1", i), ("c2", i), value) for i in range(6)]
+
+    bounds = {(sp, target): interval for sp in ("A", "B") for target, interval in (
+        (event, bound(.2, .3)), (older, bound(.7, .8)), (next_older, bound(1.2, 1.3)))}
+    a, b = (event, "A"), (event, "B")
+    candidate = {"species_event_id": event, "branch_id": 7, "event_support": "duplication-and-synteny-candidate"}
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(1.0)}, {a: 6, b: 6})
+    assert candidate["cross_ks_status"] == "discordant_focals"
+    assert candidate["event_support"] == "duplication-and-synteny-candidate"
+    assert focal_a["status"] == "supports_branch"
+    assert focal_b["status"] == "older_than_branch"
+    assert focal_b["placed_event_id"] == older
+    scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 6, b: 6})
+    assert candidate["cross_ks_status"] == "supports_branch"
+    del bounds["B", older]
+    focal_a, focal_b = scan.summarize([candidate], bounds, {a: hits(.5), b: hits(.5)}, {a: 6, b: 6})
+    assert candidate["cross_ks_status"] == "partial_support"
+    assert focal_b["status"] == "missing_divergence_boundary"
+    assert scan.place("A", event, (.28, .38), bounds, bounds["A", event], bounds["A", older])[0] == "overlaps_divergence_boundary"
+    young_bound, old_bound = bound(.2, .5), bound(.4, .7)
+    for ci, expected in (((.1, .15), "younger_than_branch"), ((.8, .9), "older_than_branch"),
+                         ((.42, .49), "overlapping_divergence_boundaries")):
+        assert scan.place("A", event, ci, {}, young_bound, old_bound) == (expected, "")
+
+
+def test_cross_ks_selects_cds_without_accepting_ambiguous_ids(tmp_path):
+    from workflow.support.wgd_cross_ks import selected_cds
+
+    path = tmp_path / "a.fa"
+    path.write_text(">a\nATGGCTTAA\n>A_b\nATGTAAATG\n>A_other\nA\n")
+    source = {"cds": str(path), "genetic_code": 1}
+    sequences, rejected = selected_cds(source, "A", {"A_a", "A_b"})
+    assert sequences == {"A_a": ("ATGGCT", "MA")}
+    assert rejected == {"A_b": "invalid_cds"}
+    with path.open("a") as stream:
+        stream.write(">A_a\nATGGCT\n")
+    with pytest.raises(ValueError, match="Multiple CDS"):
+        selected_cds(source, "A", {"A_a"})
+
+
+def test_cross_ks_chooses_coverage_trio_and_uses_cds_only_outgroup(tmp_path):
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_cross_ks import CrossKs, boundary
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,(D:2,E:2):1):1,F:4);", "auto", True)
+    scan = CrossKs(tree, {leaf.name: {"genetic_code": 1} for leaf in tree.leaves()},
+                   {"seed": 7, "max_ks_families": 30}, ([], "family", {}))
+    branch = scan.index.clade_id_for_node(tree.common_ancestor(["A", "B"]))
+    a = ("A_copy1", "A_copy2")
+    scan.archived = {f"f{i}": {sp: f"{sp}_{i}" for sp in ("ABCD" if i < 25 else "ABCDE")} for i in range(30)}
+    scan.prepare([(branch, "A", "copy", a, ("c1", 1), ("c2", 1))],
+                 [{"species_event_id": branch, "tree_support": "tree_score_supported"}], {branch: {"supported": True}})
+    parent = scan.index.clade_id_for_node(scan.nodes[branch].up)
+    assert [(t.sister, t.outgroup) for t in scan.trios if t.species_event_id == parent] == [("C", "D")]
+    assert all("E" not in pair for pair in scan.calibration_pairs)
+    ds = {("A", "B"): .3, ("A", "C"): .6, ("B", "C"): .6,
+          ("A", "D"): 1.0, ("C", "D"): 1.0}
+    contrasts = [{"species_a": x, "species_b": y, "family_id": f"f{i}", "ks": value}
+                 for (x, y), value in ds.items() for i in range(30)]
+    bounds = scan.divergence_bounds(contrasts, tmp_path, wgd_ssd.write_table)
+    assert boundary(bounds["A", branch]) == pytest.approx((.3, .3))
+    assert boundary(bounds["A", parent]) == pytest.approx((.6, .6))
+    assert scan.place("A", branch, (.4, .5), bounds, bounds["A", branch], bounds["A", parent])[0] == "supports_branch"
+
+
+def test_cross_ks_quartet_sampling_is_bounded_and_tests_all_three_pairings():
+    from workflow.support.wgd_quartet_ks import quartet_requests, quartet_results
+
+    rows = [{"species_event_id": "e", "branch_id": 2, "event_support": "duplication-and-synteny-candidate"}]
+    hits = [("e", "B", "A", ("c", i), "f", (f"B_a{i}", f"A_a{i}", f"B_b{i}", f"A_b{i}"), (), ())
+            for i in range(4)]
+    selected, requests = quartet_requests(hits, rows, {"A": 1, "B": 1}, 2, 73)
+    assert len(selected) == 2 and len(requests) == 12
+    assert (selected, requests) == quartet_requests(hits[::-1], rows, {"A": 1, "B": 1}, 2, 73)
+    assert quartet_requests(hits, rows, {"A": 1, "B": 2}, 2, 73) == ([], {})
+    first, second = selected
+    assert first[1][0][0].startswith("A_")
+    reports = dict(zip(first[1], [("ok", .1), ("ok", .2), ("ok", .4), ("ok", .5), ("ok", .3), ("ok", .4)], strict=True))
+    reports.update(dict.fromkeys(second[1], ("saturated", "NA")))
+    paired, missing = quartet_results(selected, reports)
+    assert paired["status"] == "paired_minimum"
+    assert paired["paired_margin"] == pytest.approx(.4)
+    assert paired["other_sums_difference"] == pytest.approx(.2)
+    assert missing["status"] == "incomplete" and missing["paired_margin"] is None
+    reports.update(dict.fromkeys(first[1][:2], ("ok", 1.0)))
+    discordant, = quartet_results([first], reports)
+    assert discordant["status"] == "paired_not_minimum"
+
+
+def test_cross_synteny_rejects_duplicate_pair_and_bad_anchor(tmp_path):
+    from workflow.support.wgd_cross_synteny import anchor_links, read_pairs
+
+    manifest = tmp_path / "pairs.tsv"
+    manifest.write_text("species_a\tspecies_b\tbed_a\tbed_b\tanchors\n"
+                        "A\tB\ta.bed\tb.bed\tab.anchors\nB\tA\tb.bed\ta.bed\tba.anchors\n")
+    with pytest.raises(ValueError, match="Duplicate cross-synteny pair"):
+        read_pairs(manifest, lambda path: tmp_path / path, {"A", "B"}, lambda _: None)
+    raw = tmp_path / "bad.anchors"
+    raw.write_text("###\nA_1\tB_missing\t1\n")
+    with pytest.raises(ValueError, match="outside its block or BED"):
+        anchor_links(raw, {"A_1": ("1", 0)}, {"B_1": ("1", 0)})
+
+
+def test_synteny_opportunity_distinguishes_zero_blocks_from_unavailable_ks():
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    ids = CladeIndex(tree)
+    event = ids.clade_id_for_node(tree.children[0])
+    root = ids.clade_id_for_node(tree)
+    interval = {"status": "ok", "interval_status": "ok", "monotone_from_younger_node": "yes"}
+    placer = KsBranchPlacer(tree, {("B", event): {**interval, "ci_lower": 0.1, "ci_upper": 0.2},
+                                   ("B", root): {**interval, "ci_lower": 0.3, "ci_upper": 0.4}})
+    summaries = {"A": {"num_blocks": 0}, "B": {"num_blocks": 3}, "C": {"num_blocks": 3}}
+    anchors = [{"species": "B", "ks_status": "ok", "ks": 0.25},
+               {"species": "C", "ks_status": "missing", "ks": "NA"}]
+    observed = wgd_ssd.observable_synteny(placer, summaries, anchors)
+    assert observed[event] == {"A", "B"}
+    assert root not in observed
+    assert not any("C" in names for names in observed.values())
 
 
 def test_event_summary_does_not_join_unrelated_species_to_candidate_branch():
@@ -421,6 +1470,24 @@ def test_output_protection_preserves_curated_inputs_and_input_ancestors(tmp_path
     wgd_ssd.protect_output(workspace / "output/new", [source], workspace)
 
 
+@pytest.mark.parametrize("parameter", ["count_bootstrap_workers", "count_scan_workers"])
+def test_count_worker_budget_is_checked_before_outputs(tmp_path, parameter):
+    output = tmp_path / "out"
+    plan = {"parameters": {"count_bootstrap": 10, parameter: 3}}
+    with pytest.raises(ValueError, match="exceed the allocated CPUs"):
+        wgd_ssd.run_analysis(plan, output, cpus=2)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("draws,tree_mode", [(3, False), (-1, False), (9, True)])
+def test_background_adequacy_rejects_invalid_count_or_tree_mode_before_outputs(tmp_path, draws, tree_mode):
+    output = tmp_path / "out"
+    plan = {"parameters": {"count_background_adequacy_draws": draws}, "gene_trees": "root.zip" if tree_mode else ""}
+    with pytest.raises(ValueError, match="gene-count mode and at least four draws"):
+        wgd_ssd.run_analysis(plan, output, cpus=1)
+    assert not output.exists()
+
+
 def test_classification_rejects_edited_evidence_table_before_running_tools(tmp_path, monkeypatch):
     species = tmp_path / "species.nwk"
     species.write_text("(A:1,B:1);\n")
@@ -457,6 +1524,158 @@ def test_long_labels_and_deep_topology_plots(tmp_path):
     wgd_ssd.plot_origins(tree, tmp_path)
     for name in ("wgd_candidates.pdf", "duplication_origins.pdf"):
         assert (tmp_path / name).stat().st_size > 1000
+
+
+def test_origin_plot_shows_path_count_without_relabeling_node(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from nwkit.util import read_tree
+
+    tree = read_tree("((A_a:1,A_b:1):1,B_a:2);", 1, True, quiet=True)
+    mapped = tree.children[0]
+    mapped.add_prop("duplication_origin", "unresolved")
+    mapped.add_prop("cross_synteny_matched_paths", 3)
+    observed = []
+
+    def inspect(figure, *_args, **_kwargs):
+        ax, = figure.axes
+        points = [(line.get_marker(), line.get_color(), tuple(line.get_xdata())) for line in ax.lines]
+        assert any(marker == "o" and color == "#777777" and xs == (1,) for marker, color, xs in points)
+        assert any(marker == "D" and xs == (1,) for marker, _, xs in points)
+        observed.extend(t.get_text() for t in ax.texts)
+        legend, = figure.legends
+        assert "Exact synteny path count" in [t.get_text() for t in legend.get_texts()]
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    wgd_ssd.plot_origins(tree, tmp_path)
+    assert "3" in observed and mapped.props["duplication_origin"] == "unresolved"
+
+
+def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from matplotlib.patches import ConnectionPatch
+    from nwkit.clade_index import CladeIndex
+    from nwkit.util import read_tree
+
+    tree = read_tree("((Alpha:1,Beta:1):1,(Gamma:1,Delta:1):1);", "auto", True)
+    clades = CladeIndex(tree)
+    events = [
+        {"species_event_id": clades.clade_id_for_node(node), "branch_id": i, "descendant_taxa": clades.csv_for_node(node),
+         "event_support": "duplication-and-synteny-candidate", "duplication_score": .2, "cross_ks_status": "inconclusive"}
+        for i, node in enumerate(tree.children, 1)
+    ]
+    events[1]["cross_ks_status"] = "age_conflict"
+    regions = [{"species_event_id": event["species_event_id"], "mode": "paired",
+                "matched_windows": 4 - i, "supports_before_holdout": int(i == 0)}
+               for i, event in enumerate(events)]
+    estimate = {"median_ds": .383, "ci_lower": .372, "ci_upper": .396,
+                "younger_ds": .192, "younger_lower": .085, "younger_upper": .303, "younger_boundary_status": "ok",
+                "older_ds": .34, "older_lower": .173, "older_upper": .501, "older_boundary_status": "ok"}
+    focal_rows = [{**estimate, "species_event_id": events[i - 1]["species_event_id"], "branch_id": i,
+                   "focal": name, "num_estimated_pairs": n, "num_window_components": c}
+                  for i, name, n, c in ((2, "Gamma", 0, 0), (1, "Alpha", 2032, 13), (1, "Beta", "1957", 2))]
+    focal_rows[0].update(median_ds="NA", ci_lower="NA", ci_upper="NA")
+    focal_rows[-1].update(ci_lower="NA", ci_upper="NA", older_boundary_status="nonmonotone_or_invalid_interval")
+    matched_trios = [{"species_event_id": clades.clade_id_for_node(node), "focal": "Beta",
+                      "matched_median_ds": center, "matched_lower": lo, "matched_upper": hi}
+                     for node, center, lo, hi in ((tree.children[0], .212, .1, .3), (tree, .357, .18, .5))]
+    captured = []
+    savefig = Figure.savefig
+
+    def capture(fig, path, **kwargs):
+        if path.name.startswith("wgd_species_tree"):
+            tree_ax, label_ax, ds_ax = fig.axes[:3]
+            anchors = [link.xy1 for link in tree_ax.patches if isinstance(link, ConnectionPatch)]
+            names = {t.get_text(): t.get_position()[1] for t in label_ax.texts if t.get_color() == "#47545A"}
+            marks = [(tuple(line.get_xdata()), line.get_ydata()[0]) for line in ds_ax.lines]
+            unusable = [(tuple(line.get_xdata()), line.get_ydata()[0], line.get_marker(), line.get_linestyle())
+                        for line in ds_ax.lines if line.get_marker() == "x" or line.get_linestyle() == "--"]
+            branch_markers = [(line.get_marker(), line.get_ydata()[0])
+                              for line in tree_ax.lines if line.get_marker() != "None"]
+            legend = [label.get_text() for label in tree_ax.get_legend().get_texts()]
+            evidence = ([text.get_text() for text in tree_ax.texts],
+                        [line.get_linestyle() for line in tree_ax.lines if line.get_color() == "#176B67"])
+            matched = [(tuple(line.get_xdata()), line.get_ydata()[0]) for line in ds_ax.lines if line.get_marker() == "D"]
+            ds_legend = [label.get_text() for label in ds_ax.get_legend().get_texts()]
+            fig.canvas.draw()
+            legend_extent = ds_ax.get_legend().get_window_extent(fig.canvas.get_renderer())
+            assert legend_extent.x1 < fig.bbox.x1 and legend_extent.y1 < fig.bbox.y1
+            if any(label.startswith("R:") for label in legend):
+                assert tree_ax.get_legend().get_window_extent(fig.canvas.get_renderer()).y0 > fig.bbox.y0
+            gap = ()
+            if len(fig.axes) > 3:
+                gap_ax, gap_labels = fig.axes[3:]
+                gap = ([label.get_text() for label in gap_labels.texts],
+                       [(line.get_xdata()[0], line.get_ydata()[0]) for line in gap_ax.lines if line.get_marker() == "."],
+                       [collection.get_segments()[0].tolist() for collection in gap_ax.collections])
+            terminals = ([(line.get_xdata()[0], line.get_ydata()[0]) for line in ds_ax.lines if line.get_marker() == "^"],
+                         [(text.get_text(), text.get_position()[1]) for text in label_ax.texts if "(n=" in text.get_text()
+                          and "b=" in text.get_text()])
+            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap, terminals))
+        savefig(fig, path, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions, matched_trios=matched_trios)
+    assert len(captured) == 2
+    assert captured[0] == captured[1]
+    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap, terminals = captured[0]
+    assert not gap
+    assert terminals == ([], [])
+    assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
+    assert "Combined candidate; requires one-copy paths" in legend
+    labels = ("Alpha (n=2,032, c=13)", "Beta (n=1,957, c=2)", "Gamma (n=0, c=0)")
+    assert set(names) == set(labels)
+    alpha, beta, gamma = (names[label] for label in labels)
+    expected = [(0.5, (alpha + beta) / 2), (0.5, gamma)]
+    assert len(anchors) == len(expected)
+    for anchor, match in zip(sorted(anchors), sorted(expected), strict=True):
+        assert anchor == pytest.approx(match)
+    assert ((.383,), alpha) in marks and ((.372, .396), alpha) in marks
+    assert ((.383,), beta) in marks and ((.372, .396), beta) not in marks
+    assert ((.383,), gamma) not in marks
+    assert ((.173, .501), alpha - .23) in marks
+    assert unusable == [((.173, .501), beta - .23, "None", "--"), ((.34,), beta - .23, "x", "None")]
+    assert branch_markers == [("x", gamma)]
+    assert "dS age conflict" in legend and "dS inconclusive" not in legend
+    assert matched == [((.212,), beta + .40), ((.357,), beta - .40)]
+    assert "Matched-family split" in ds_legend
+
+    captured.clear()
+    events[0].update(synteny_method="cross_block_correspondence", synteny_status="assessed_below_threshold",
+                     tree_support="tree_score_supported", event_support="unresolved",
+                     synteny_block_definition="same_original_blocks_with_uniquely_concordant_four_copy_paths")
+    phase = [{"species_event_id": events[0]["species_event_id"], "concordant_only_windows": 1}]
+    regions.append({"species_event_id": events[0]["species_event_id"], "mode": "all", "supports_before_holdout": 1})
+    diagnostics = [
+        {"species_event_id": events[0]["species_event_id"], "focal": "Beta", "common_outgroup": outside,
+         "num_measured_all_outgroups": 9, "median_signed_gap": gap, "gap_lower": low, "gap_upper": high, "status": status}
+        for outside, gap, low, high, status in (("Gamma", -.2, -.4, -.1, "reversed"),
+                                               ("Delta", .3, None, None, "interval_unavailable"))]
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
+                            common_outgroups=diagnostics, terminal_rows=[
+                                {"species_event_id": clades.clade_id_for_node(list(tree.leaves())[0]),
+                                 "median_copy_ds": .123, "copy_lower": .1, "copy_upper": .16,
+                                 "six_pair_families": 12, "original_blocks": 8}])
+    assert "B1  S=20.00%  W=4  U=1" in captured[0][6][0]
+    assert "Assessed; unique-path support below floor" in captured[0][4]
+    labels, points, intervals = captured[0][-2]
+    assert labels == ["Gamma  n=9", "Delta  n=9"]
+    assert points == [(-.2, beta + .21), (.3, beta - .21)]
+    assert intervals == [[[-.4, beta + .21], [-.1, beta + .21]]]
+    points, labels = captured[0][-1]
+    assert labels[0][0] == "Alpha (n=12, b=8)"
+    assert points == [(.123, labels[0][1])]
+    events[0]["synteny_block_definition"] = "uniquely_concordant_four_copy_paths_in_both_orientations"
+    shared = [{"species_event_id": events[0]["species_event_id"], "mode": "unique_phase", "status": "assessed_both",
+               "shared_windows_a": 1, "shared_windows_b": 2}]
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
+                            orientation_rows=shared, copy_holdout=[
+                                {"species_event_id": events[0]["species_event_id"], "focal": "Alpha", "status": "ok",
+                                 "drop_component_min": .36, "drop_component_max": .40}])
+    assert any("U=1  R=1" in label for label in captured[-1][6][0])
+    assert "Range omitting one component" in captured[-1][8]
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):
@@ -566,14 +1785,44 @@ def test_classification_ignores_unrelated_evidence_but_keeps_conflicting_anchor_
     assert outputs[0] == outputs[1]
 
 
-@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv"])
+def test_classification_uses_verified_ds_evidence_without_requiring_the_ds_environment(tmp_path, monkeypatch):
+    args = classification_fixture(tmp_path, "(A_a:1,A_b:1);", [positioned("A_a"), positioned("A_b", rank=2)])
+    path = args.evidence / "summary.json"
+    summary = json.loads(path.read_text())
+    summary["plan"]["cross_ks_likelihood_identity"] = {"method": "gy94", "environment": {"OMP_NUM_THREADS": "1"}}
+    extra = tmp_path / "ds_implementation.py"
+    extra.write_text("original\n")
+    summary["plan"]["input_hashes"][str(extra)] = wgd_ssd.digest(extra)
+    path.write_text(json.dumps(summary))
+    monkeypatch.setattr(wgd_ssd, "likelihood_identity", lambda _: ({"method": "gy94", "environment": {}}, {}))
+    with pytest.raises(ValueError, match="Likelihood dS identity changed"):
+        wgd_ssd.verify(summary["plan"])
+    wgd_ssd.classify(args)
+    assert (args.output / "summary.json").is_file()
+    extra.write_text("changed\n")
+    args.output = tmp_path / "reject"
+    with pytest.raises(ValueError, match="WGD input changed during analysis"):
+        wgd_ssd.classify(args)
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv", "cross_synteny_node_paths.tsv"])
 def test_classification_rejects_malformed_evidence_outside_family_scope(tmp_path, table):
     args = classification_fixture(tmp_path, "(A_a:1,A_b:1);",
                                   [positioned("A_a"), positioned("A_b", rank=2)])
+    if table == "cross_synteny_node_paths.tsv":
+        from workflow.support.wgd_cross_node import CROSS_PATH_FIELDS
+
+        path = args.evidence / table
+        write_rows(path, CROSS_PATH_FIELDS, [])
+        summary_path = args.evidence / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["output_hashes"][table] = wgd_ssd.digest(path)
+        summary_path.write_text(json.dumps(summary))
     with (args.evidence / table).open("a") as handle:
         handle.write("outside_family\n")
     refresh_classification_evidence(args)
-    with pytest.raises(ValueError, match="Invalid TSV row width"):
+    with pytest.raises(ValueError, match="Invalid (TSV|cross-synteny node path) row width"):
         wgd_ssd.classify(args)
     assert not (args.output / "summary.json").exists()
 
@@ -790,6 +2039,43 @@ def test_classification_rejects_inputs_changed_during_reconciliation(tmp_path, m
     with pytest.raises(ValueError, match="changed"):
         wgd_ssd.classify(args)
     assert not (args.output / "summary.json").exists()
+
+
+def test_family_evidence_hash_cache_rejects_same_size_rewrite_with_restored_mtime(tmp_path, monkeypatch):
+    import os
+
+    from workflow.support.content_digest_cache import ContentDigestCache
+
+    path = tmp_path / "shared.tsv"
+    path.write_text("good\n")
+    os.utime(path, ns=(1_700_000_000_000_000_123, 1_700_000_000_000_000_123))
+    cache = ContentDigestCache(tmp_path / "cache.sqlite3")
+    monkeypatch.setitem(wgd_ssd.cached_sha256_file.__globals__, "_CACHE", cache)
+    try:
+        expected = wgd_ssd.digest(path)
+        plan = {"input_hashes": {str(path): expected}}
+        wgd_ssd.verify(plan, wgd_ssd.family_evidence_digest)
+        previous = path.stat()
+        path.write_text("bad!\n")
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        with pytest.raises(ValueError, match="input changed"):
+            wgd_ssd.verify(plan, wgd_ssd.family_evidence_digest)
+    finally:
+        cache.close()
+
+
+def test_classify_resolves_relative_paths_before_launching_tools(tmp_path, monkeypatch):
+    args = classification_fixture(tmp_path, "(A_a:1,override:1);",
+                                  [positioned("A_a"), positioned("override", species="A", rank=2)])
+    mapping = tmp_path / "species-map.tsv"
+    write_rows(mapping, ["leaf_name", "species_label"], [{"leaf_name": "override", "species_label": "A"}])
+    for key in ("gene_tree", "species_tree", "evidence", "output"):
+        setattr(args, key, getattr(args, key).relative_to(tmp_path))
+    args.species_map = mapping.name
+    monkeypatch.chdir(tmp_path)
+    wgd_ssd.classify(args)
+    row, = read_table(args.output / "duplication_origins.tsv")
+    assert row["classification"] == "SSD-supported"
 
 
 def test_nhx_ancestral_branch_mapping_cannot_get_terminal_tandem_label(tmp_path):

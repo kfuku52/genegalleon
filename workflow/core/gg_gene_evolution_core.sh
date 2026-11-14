@@ -4243,6 +4243,7 @@ if [[ ${run_wgd_ssd_classification} -eq 1 ]]; then
     --input "rooted_tree=${file_og_rooted_tree_analysis}" --input "full_species_tree=${species_tree}"
     --input "genome_evidence=${wgd_evidence_dir}" --input "implementation=${gg_support_dir}/wgd_ssd.py"
     --input "evidence_rules=${gg_support_dir}/wgd_evidence.py"
+    --input "cross_node_evidence=${gg_support_dir}/wgd_cross_node.py"
     --output "classification=${file_og_wgd_ssd}"
     --parameter "species_parser=${species_label_parser}" --parameter "species_regex=${species_label_regex}"
     --parameter "proximal_distance=${wgd_proximal_distance}" --parameter "nwkit_identity=${gene_nwkit_identity}"

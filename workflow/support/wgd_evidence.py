@@ -3,6 +3,7 @@
 import csv
 import math
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 
 
@@ -44,41 +45,65 @@ class KsBranchPlacer:
         self.leaves = None
         self.index = None
 
+    def _lineage(self, focal):
+        if self.leaves is None:
+            self.leaves = {}
+            for leaf in self.tree.leaves():
+                self.leaves.setdefault(leaf.name, leaf)
+        if self.index is None:
+            from nwkit.clade_index import CladeIndex
+
+            self.index = CladeIndex(self.tree)
+        child = self.leaves.get(focal)
+        while child is not None and child.up is not None:
+            yield child, self.index.clade_id_for_node(child)
+            child = child.up
+
+    def lineage_branches(self, focal):
+        return (branch for _, branch in self._lineage(focal))
+
+    def _intervals(self, focal):
+        lineage = self._lineage(focal)
+        first = next(lineage, None)
+        if first is None:
+            yield None, "unknown_species", None
+            return
+        lower = 0.0
+        for child, branch in chain((first,), lineage):
+            parent = child.up
+            row = self.bounds.get((focal, self.index.clade_id_for_node(parent)))
+            if (row is None or row.get("status") != "ok"
+                    or row.get("monotone_from_younger_node") not in {"yes", "not_comparable"}):
+                yield None, "unresolved_divergence_boundary", None
+                return
+            # Use the primary boundary interval, not optional bootstrap diagnostics.
+            lo, hi = number(row.get("ci_lower")), number(row.get("ci_upper"))
+            if row.get("interval_status") != "ok" or lo is None or hi is None or hi < lo or lo < lower:
+                yield None, "unresolved_boundary_uncertainty", None
+                return
+            yield branch, "interval_supported", (lower, lo, hi)
+            lower = hi
+
+    def observable_branches(self, focal):
+        """Branches where a nonempty Ks interval could place an anchor."""
+        for branch, _, bounds in self._intervals(focal):
+            if bounds is not None and bounds[0] < bounds[1]:
+                yield branch
+
     def place(self, focal, ks):
         if not isinstance(ks, (tuple, list)):
             ks = (ks, ks)
         ks = tuple(number(value) for value in ks)
         if len(ks) != 2 or any(value is None for value in ks) or ks[0] > ks[1]:
             return None, "missing_or_invalid_ks"
-        if self.leaves is None:
-            self.leaves = {}
-            for leaf in self.tree.leaves():
-                self.leaves.setdefault(leaf.name, leaf)
-        leaf = self.leaves.get(focal)
-        if leaf is None:
-            return None, "unknown_species"
-        if self.index is None:
-            from nwkit.clade_index import CladeIndex
-
-            self.index = CladeIndex(self.tree)
-        child = leaf
-        lower = 0.0
-        while child.up is not None:
-            parent = child.up
-            row = self.bounds.get((focal, self.index.clade_id_for_node(parent)))
-            if (row is None or row.get("status") != "ok"
-                    or row.get("monotone_from_younger_node") not in {"yes", "not_comparable"}):
-                return None, "unresolved_divergence_boundary"
-            # Use the primary boundary interval, not optional bootstrap diagnostics.
-            lo, hi = number(row.get("ci_lower")), number(row.get("ci_upper"))
-            if row.get("interval_status") != "ok" or lo is None or hi is None or hi < lo or lo < lower:
-                return None, "unresolved_boundary_uncertainty"
+        for branch, status, bounds in self._intervals(focal):
+            if bounds is None:
+                return None, status
+            lower, lo, hi = bounds
             if ks[0] > lower and ks[1] < lo:
-                return self.index.clade_id_for_node(child), "interval_supported"
+                return branch, status
             if ks[0] <= hi:
                 return None, "boundary_overlap"
-            lower = hi
-            child = parent
         return None, "older_than_root_unresolved"
 
 
@@ -156,7 +181,8 @@ def combine_node(mapped_branch, pairs, positions, anchors, events, proximal_dist
     return "unresolved", "insufficient_or_conflicting_origin_evidence", features, anchored
 
 
-def summarize_events(candidates, anchors, species_summaries, min_coverage=0.2, min_blocks=3, positions=None):
+def summarize_events(candidates, anchors, species_summaries, min_coverage=0.2, min_blocks=3, positions=None,
+                     synteny_opportunity=None, daughter_taxa=None, cross_evidence=None):
     positions = positions or {}
     evidence = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
     genes = defaultdict(lambda: defaultdict(set))
@@ -195,16 +221,45 @@ def summarize_events(candidates, anchors, species_summaries, min_coverage=0.2, m
                     and min_coverage <= len(genes[branch][name]) / denominator <= 1):
                 species.append(name)
         required = min(2, len(taxa))
-        supported = (bool(taxa) and len(set(taxa)) == len(taxa)
-                     and candidate["count_support"] == "count_supported_conditional" and len(species) >= required
-                     and all(str(candidate.get(field, "")).lower() in {"false", "0"} for field in (
-                         "nuisance_bound_reached", "background_nuisance_bound_reached",
-                         "branch_burst_nuisance_bound_reached")))
-        result.append({**candidate, "event_support": "WGD-supported" if supported else "unresolved",
+        valid_taxa = bool(taxa) and len(set(taxa)) == len(taxa) and all(taxa)
+        tree_mode = "tree_support" in candidate
+        if tree_mode:
+            candidate_ok = valid_taxa and candidate["tree_support"] == "tree_score_supported"
+        else:
+            candidate_ok = (valid_taxa and candidate["count_support"] == "count_supported_conditional"
+                            and all(str(candidate.get(field, "")).lower() in {"false", "0"} for field in (
+                                "nuisance_bound_reached", "background_nuisance_bound_reached",
+                                "branch_burst_nuisance_bound_reached")))
+        # With no explicit opportunity information, do not infer missingness.
+        observable = (set(taxa) if synteny_opportunity is None else
+                      (set(taxa) & set(synteny_opportunity.get(branch, ()))) | set(species))
+        daughters = (daughter_taxa or {}).get(branch, ()) if tree_mode else ()
+        has_support = required > 0 and len(species) >= required and all(group.intersection(species) for group in daughters)
+        is_observable = required > 0 and len(observable) >= required and all(group & observable for group in daughters)
+        if cross_evidence is not None:
+            cross = cross_evidence.get(branch, {})
+            has_support = cross.get("supported", False)
+            is_observable = cross.get("observable", False)
+            species = cross.get("supported_species", [])
+            observable = cross.get("observed_species", [])
+        synteny_state = ("supports" if has_support else
+                         "assessed_below_threshold" if is_observable else
+                         "insufficient_observability")
+        support = "unresolved"
+        if candidate_ok and synteny_state == "supports":
+            support = "duplication-and-synteny-candidate" if tree_mode else "WGD-supported"
+        elif candidate_ok and synteny_state == "insufficient_observability":
+            support = "duplication-only-candidate" if tree_mode else "count-only-candidate"
+        result.append({**candidate, "event_support": support,
                        "num_branch_matched_synteny_species": len(species),
                        "branch_matched_synteny_species": ",".join(species),
                        "minimum_branch_matched_blocks": min_blocks, "minimum_synteny_coverage": min_coverage,
-                       "synteny_coverage_definition": "unique_branch_matched_anchor_loci_over_annotated_loci",
-                       "synteny_block_definition": "locus_disjoint_block_components",
-                       "support_meaning": "experimental_evidence_rule_not_posterior"})
+                       "synteny_coverage_definition": ("direct_cross_anchor_windows" if cross_evidence is not None else
+                                                       "unique_branch_matched_anchor_loci_over_annotated_loci"),
+                       "synteny_block_definition": ("same_original_blocks_with_exact_tree_copy_agreement"
+                                                    if cross_evidence is not None else "locus_disjoint_block_components"),
+                       "support_meaning": "experimental_evidence_rule_not_posterior",
+                       "synteny_status": synteny_state,
+                       "num_synteny_observable_species": len(observable),
+                       "synteny_observable_species": ",".join(sorted(observable))})
     return result

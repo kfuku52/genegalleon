@@ -10,7 +10,7 @@ import pytest
 from Bio.Data import CodonTable
 
 from workflow.support.wgd_evidence import branch_for_ks, read_table
-from workflow.support.wgd_ssd import classify, normalized_counts, species_tree
+from workflow.support.wgd_ssd import classify, normalized_counts, replot, species_tree
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / "workflow/core/gg_genome_evolution_core.sh"
@@ -90,6 +90,9 @@ def test_real_native_count_synteny_ds_and_node_classification_with_cache(tmp_pat
     assert summary["species_synteny"]["Beta_two"]["num_blocks"] == 0
     assert all(row["event_support"] == "unresolved" for row in read_table(root / "wgd_events.tsv"))
     assert (root / "wgd_candidates.pdf").stat().st_size > 1000
+    assert (root / "wgd_species_tree.pdf").stat().st_size > 1000
+    assert (root / "wgd_species_tree.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert {"wgd_species_tree.pdf", "wgd_species_tree.png"}.issubset(summary["plot_hashes"])
     assert sentinel.read_text() == "keep existing orthofinder outputs"
     mtime = (root / "summary.json").stat().st_mtime_ns
     result = run_core(workspace)
@@ -132,6 +135,385 @@ def test_count_selection_keeps_missing_separate_from_zero(tmp_path):
     assert rows[0]["Alpha_one"] == "NA"
     assert len(rows) == 2
     assert read_table(output / "count_family_selection.tsv")[1]["selection"] == "excluded_root_clade_absence"
+
+
+def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    result = run_core(workspace, GG_TASK_CPUS="2", wgd_count_scan_workers="2",
+                      wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2",
+                      wgd_count_event_fractions="0.5", wgd_count_family_gamma_shape="none",
+                      wgd_count_background_adequacy_draws="9",
+                      wgd_count_bootstrap_checkpoint="bootstrap.json")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["parameters"]["count_scan_workers"] == 2
+    assert summary["plan"]["parameters"]["count_bootstrap_workers"] == 2
+    assert summary["plan"]["parameters"]["count_background_adequacy_draws"] == 9
+    model = json.loads((root / "count_model.json").read_text())
+    checkpoint = workspace / "bootstrap.json"
+    assert json.loads(checkpoint.read_text())["statistics"] == model["bootstrap_max_statistics"]
+    assert summary["plan"]["count_bootstrap_checkpoint"] == str(checkpoint)
+    assert "bootstrap.json" not in summary["output_hashes"]
+    assert len(model["bootstrap_max_statistics"]) == 2
+    assert model["background_adequacy"]["num_draws"] == 9
+    assert "count_model.json" in summary["output_hashes"]
+    assert len(model["candidates"]) == 4
+    assert model["event_fractions"] == [0.5] and model["family_rate_scales"] == [1.0]
+    assert all(row["event_fraction"] == "0.5" for row in read_table(root / "count_candidates.tsv"))
+
+
+def test_wgd_stage_forwards_known_observation_probabilities_and_rate_groups(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    detection = workspace / "detection.tsv"
+    detection.write_text("leaf_name\tdetection_probability\nGamma_three\t0.91\nAlpha_one\t0.97\nBeta_two\t1\n")
+    rates = workspace / "regimes.tsv"
+    rates.write_text("branch_id\tregime\n1\tancestral\n2\tterminal\n3\tterminal\n4\tterminal\n")
+    options = {"wgd_count_detection_tsv": detection.name, "wgd_count_rate_groups_tsv": rates.name}
+    result = run_core(workspace, **options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    initial = (root / "summary.json").read_bytes()
+    plan = json.loads(initial)["plan"]
+    assert {str(detection), str(rates)} <= plan["input_hashes"].keys()
+    model = json.loads((root / "count_model.json").read_text())
+    assert dict(zip(model["tip_names"], model["detection_probabilities"], strict=True)) == dict(zip(NAMES, (.97, 1, .91), strict=True))
+    assert model["branch_rate_group_names"] == ["ancestral", "terminal"]
+    detection.write_text(detection.read_text().replace("0.91", "0.92"))
+    result = run_core(workspace, **options)
+    assert result.returncode != 0
+    assert (root / "summary.json").read_bytes() == initial
+
+
+def test_wgd_stage_forwards_fixed_background_events(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    fixed = workspace / "fixed_events.tsv"
+    fixed.write_text("branch_id\tretention\tevent_fraction\tmultiplicity\n1\t0.5\t0.5\t2\n")
+    result = run_core(workspace, wgd_count_fixed_events_tsv=fixed.name, wgd_count_event_fractions="0.5",
+                      wgd_count_family_gamma_shape="none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["count_fixed_events_tsv"] == str(fixed)
+    assert str(fixed) in summary["plan"]["input_hashes"]
+    model = json.loads((root / "count_model.json").read_text())
+    assert [event["branch_id"] for event in model["fixed_background_events"]] == [1]
+    assert {int(row["branch_id"]) for row in read_table(root / "count_candidates.tsv")} == {2, 3, 4}
+    gene = tmp_path / "gene.nwk"
+    gene.write_text("((Alpha_one_a,Beta_two_a),Gamma_three_a);\n")
+    output = tmp_path / "family"
+    native = subprocess.run([sys.executable, str(HELPER), "classify", "--gene-tree", str(gene), "--species-tree",
+                             summary["plan"]["species_tree"], "--evidence", str(root), "--family-id", "sample",
+                             "--output", str(output), "--native-tree-likelihood", "1"],
+                            capture_output=True, text=True, timeout=90)
+    assert native.returncode == 0, native.stdout + native.stderr
+    likelihood = json.loads((output / "native_tree_likelihood.json").read_text())
+    assert likelihood["fixed_background_events"] == model["fixed_background_events"]
+
+
+@pytest.mark.parametrize("holdout", [False, True])
+def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout):
+    from zipfile import ZipFile
+
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    orthogroups = workspace / "output/orthofinder/Orthogroups"
+    (orthogroups / "Orthogroups.GeneCount.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\tTotal\nOG000\t2\t2\t1\t5\nOG001\t1\t1\t1\t3\n")
+    (orthogroups / "Orthogroups.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\n"
+        "OG000\tAlpha_one_a, Alpha_one_b\tBeta_two_a, Beta_two_b\tGamma_three_a\n"
+        "OG001\tAlpha_one_c\tBeta_two_c\tGamma_three_b\n")
+    archive = workspace / "rooted_tree.zip"
+    with ZipFile(archive, "w") as stream:
+        stream.writestr("rooted_tree/OG000_root.nwk",
+                        "(((Alpha_one_a,Beta_two_a),(Alpha_one_b,Beta_two_b)),Gamma_three_a);")
+        stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
+    overlay = {}
+    if holdout:
+        table, model = workspace / "events.tsv", workspace / "counts.json"
+        counts = workspace / "normalized.tsv"
+        counts.write_text("family_id\t" + "\t".join(NAMES) + "\nf1\t2\t2\t1\nf2\t1\t1\t1\n")
+        process = subprocess.run([sys.executable, "-m", "nwkit", "wgd-count", "--infile",
+                                  str(workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"),
+                                  "--counts", str(counts),
+                                  "--event-fractions", "0.5", "--family-gamma-shape", "none",
+                                  "--outfile", str(table), "--model-out", str(model)], capture_output=True, text=True,
+                                 timeout=90)
+        assert process.returncode == 0, process.stdout + process.stderr
+        overlay = {"wgd_count_overlay_table": table.name, "wgd_count_overlay_model": model.name}
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
+                      wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)),
+                      wgd_duplication_root_audit=str(int(holdout)), wgd_duplication_family_panels="3" if holdout else "0",
+                      wgd_duplication_copy_split_audit=str(int(holdout)), **overlay)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["candidate_model"] == "rooted_gene_tree_duplication_score"
+    assert summary["num_input_gene_trees"] == 2
+    row, = read_table(root / "wgd_events.tsv")
+    assert row["event_support"] == "duplication-only-candidate"
+    assert float(row["duplication_score"]) == 0.5
+    assert not (root / "count_model.json").exists()
+    assert (root / "wgd_species_tree.png").stat().st_size > 1000
+    holdout_path = root / "duplication_taxon_holdout.tsv"
+    assert holdout_path.is_file() == holdout
+    assert (holdout_path.name in summary["output_hashes"]) == holdout
+    coverage = root / "duplication_coverage.tsv"
+    assert coverage.is_file() == holdout
+    orientation = root / "duplication_root_orientations.tsv"
+    assert orientation.is_file() == holdout
+    panels = root / "duplication_family_panels.tsv"
+    assert panels.is_file() == holdout
+    strata = root / "duplication_family_size_strata.tsv"
+    assert strata.is_file() == holdout
+    copy_splits = root / "duplication_copy_splits.tsv"
+    assert copy_splits.is_file() == holdout
+    if holdout:
+        overlay_rows = read_table(root / "count_overlay.tsv")
+        assert len(overlay_rows) == 4
+        assert {r["count_support"] for r in overlay_rows} == {"not_calibrated"}
+        assert str(table) in summary["plan"]["input_hashes"] and str(model) in summary["plan"]["input_hashes"]
+        assert "count_overlay.tsv" in summary["output_hashes"]
+        redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
+                                 count_overlay_model=None)
+        replot(redraw)
+        assert (redraw.output / "wgd_species_tree.png").read_bytes() == (root / "wgd_species_tree.png").read_bytes()
+        assert (redraw.output / "count_overlay.tsv").read_bytes() == (root / "count_overlay.tsv").read_bytes()
+        assert (redraw.output / "plot_provenance.json").is_file()
+        copied, = read_table(copy_splits)
+        assert copied["same_tip_and_both_splits"] == "1" and copied["same_tip_and_both_splits_score"] == "0.5"
+        assert copy_splits.name in summary["output_hashes"]
+        assert summary["plan"]["parameters"]["duplication_family_panels"] == 3
+        assert sum(int(row["families_in_panel"]) for row in read_table(panels)) == 2
+        size_rows = [row for row in read_table(strata) if row["metric"] == "tree_tips"]
+        assert sum(int(row["eligible_families"]) for row in size_rows) == 2
+        assert sum(int(row["supporting_families"]) for row in size_rows) == 1
+        assert strata.name in summary["output_hashes"]
+        audited, = read_table(coverage)
+        assert audited["eligible_complete"] == "2" and audited["eligible_partial"] == "0"
+        assert audited["projected_score"] == audited["complete_case_score"] == "0.5"
+        assert audited["partial_case_score"] == ""
+        assert coverage.name in summary["output_hashes"]
+        oriented, = read_table(orientation)
+        assert oriented["rooted_supporting_families"] == "1"
+        assert oriented["extra_families_under_alternate_root"] == "0"
+        assert oriented["any_orientation_score"] == "0.5"
+        assert orientation.name in summary["output_hashes"]
+        estimates = read_table(holdout_path)
+        assert {r["excluded_taxon"] for r in estimates} == set(NAMES)
+        assert all(r["species_event_id"] == row["species_event_id"] for r in estimates)
+        assert all(r["branch_identifiable"] == "0" and r["duplication_score"] == "NA" for r in estimates)
+
+
+@pytest.mark.parametrize("ds_method", ["yn00", "gy94", "gy94-regularized"])
+def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
+    from hashlib import sha256
+    from zipfile import ZipFile
+
+    workspace = tmp_path / "workspace"
+    fixture(workspace, genomes=False)
+    manifest = ["species_a\tspecies_b\tbed_a\tbed_b\tanchors\n"]
+    a, b, c = NAMES
+    for name in (a, b):
+        (workspace / f"{name}.bed").write_text("".join(
+            f"chr{copy}\t{i * 10}\t{i * 10 + 5}\t{name}_{copy}{i}\n"
+            for copy in ("a", "b") for i in range(5)))
+        (workspace / f"{name}.anchors").write_text("###\n" + "".join(
+            f"{name}_a{i}\t{name}_b{i}\t1\n" for i in range(5)))
+        manifest.append(f"{name}\t{name}\t{name}.bed\t{name}.bed\t{name}.anchors\n")
+    (workspace / "cross.anchors").write_text("".join("###\n" + "".join(
+        f"{a}_{copy}{i}\t{b}_{copy}{i}\t1\n" for i in range(5)) for copy in ("a", "b")))
+    manifest.append(f"{a}\t{b}\t{a}.bed\t{b}.bed\tcross.anchors\n")
+    (workspace / "cross.tsv").write_text("".join(manifest))
+    orthogroups = workspace / "output/orthofinder/Orthogroups"
+    (orthogroups / "Orthogroups.GeneCount.tsv").write_text(
+        "Orthogroup\t" + "\t".join(NAMES) + "\tTotal\n" + "".join(f"OG{i:03d}\t2\t2\t1\t5\n" for i in range(5)))
+    (orthogroups / "Orthogroups.tsv").write_text("Orthogroup\t" + "\t".join(NAMES) + "\n" + "".join(
+        f"OG{i:03d}\t{a}_a{i}, {a}_b{i}\t{b}_a{i}, {b}_b{i}\t{c}_a{i}\n" for i in range(5)))
+    (workspace / "cross_cds.tsv").write_text(f"species\tcds\n{a}\t{a}.fa\n{b}\t{b}.fa\n{c}\t{c}.fa\n")
+    for name in (a, b):
+        (workspace / f"{name}.fa").write_text("".join(
+            f">{name}_{copy}{i}\nATG" + ("GCT" if copy == "a" else "GCA") * 90 + "\n"
+            for copy in ("a", "b") for i in range(5)))
+    (workspace / f"{c}.fa").write_text("".join(f">{c}_a{i}\nATG" + "GCTGCCGCA" * 30 + "\n" for i in range(5)))
+    with ZipFile(workspace / "rooted_tree.zip", "w") as stream:
+        for i in range(5):
+            stream.writestr(f"OG{i:03d}_root.nwk", f"((({a}_a{i},{b}_a{i}),({a}_b{i},{b}_b{i})),{c}_a{i});")
+    with ZipFile(workspace / "boot.zip", "w") as stream:
+        stream.writestr("OG000_generax.ufboot.nwk", f"(({a}_a0,{b}_a0)100,({a}_b0,{b}_b0)88,{c}_a0);")
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
+                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
+                      wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
+                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", wgd_ks_component_holdout="1",
+                      wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1", wgd_ks_rooted_copies="1",
+                      wgd_cross_two_region_holdout="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/wgd_ssd"
+    summary = json.loads((root / "summary.json").read_text())
+    assert summary["plan"]["parameters"].get("cross_ks_method", "yn00") == ds_method
+    assert summary["plan"]["parameters"]["ks_rooted_copies"] == 1
+    rooted_rows = read_table(root / "cross_ks_rooted_copies.tsv")
+    assert len(rooted_rows) == 3
+    assert all(r["outgroup_species"] == c and r["common_codons"] == "91" for r in rooted_rows)
+    assert all(len(r["pair_statuses"].split(",")) == 10 for r in rooted_rows)
+    assert len(read_table(root / "cross_ks_rooted_alignments.code1.tsv")) == 30
+    assert "cross_ks_rooted_copy_summary.tsv" in summary["output_hashes"]
+    balance, = read_table(root / "cross_ks_rooted_rate_balance.tsv")
+    assert balance["species_a"] == a and balance["species_b"] == b
+    assert balance["num_families"] == "0" and balance["status"] == "no_usable_paths"
+    if ds_method != "yn00":
+        assert any(path.endswith("/dnds_mle.py") for path in summary["plan"]["input_hashes"])
+        statuses = {row["status"] for row in read_table(root / "cross_ks_pair_ds.code1.tsv")}
+        assert "identical" in statuses
+    row, = read_table(root / "wgd_events.tsv")
+    pair, = read_table(root / "cross_synteny_pairs.tsv")
+    assert row["event_support"] == "duplication-and-synteny-candidate"
+    assert row["species_event_id"] == pair["species_event_id"]
+    assert pair["matched_paired_windows"] == "1" and pair["matched_families"] == "5"
+    assert {"cross_synteny_pairs.tsv", "cross_synteny_windows.tsv", "cross_synteny_copy_phase.tsv"} <= summary["output_hashes"].keys()
+    phase, = read_table(root / "cross_synteny_copy_phase.tsv")
+    distinct_phase, = read_table(root / "cross_synteny_distinct_quartet_phase.tsv")
+    assert distinct_phase["concordant_only_distinct_quartets"] == "5"
+    assert distinct_phase["discordant_only_distinct_quartets"] == distinct_phase["ambiguous_distinct_quartets"] == "0"
+    assert "cross_synteny_distinct_quartet_phase.tsv" in summary["output_hashes"]
+    assert phase["concordant_only_quartets"] == "5" and phase["concordant_only_windows"] == "1"
+    assert phase["ambiguous_quartets"] == phase["discordant_only_quartets"] == "0"
+    overlap, = read_table(root / "duplication_synteny_family_overlap.tsv")
+    assert overlap["matched_paired_families"] == overlap["matched_either"] == "5"
+    assert overlap["score_after_exclusion"] == ""
+    assert "duplication_synteny_family_overlap.tsv" in summary["output_hashes"]
+    coverage, = read_table(root / "cross_synteny_archive_coverage.tsv")
+    assert coverage["num_cross_anchor_pairs"] == coverage["num_archive_family_anchor_pairs"] == "10"
+    assert coverage["num_observable_windows"] == coverage["num_archive_family_windows"] == "2"
+    orientation, = read_table(root / "cross_synteny_orientation.tsv")
+    assert orientation["status"] == "supports_in_both"
+    assert orientation["a_matched_paired_windows"] == orientation["b_matched_paired_windows"] == "1"
+    quartets_overlap, unique_overlap = read_table(root / "cross_synteny_orientation_quartets.tsv")
+    assert quartets_overlap["status"] == "assessed_both" and quartets_overlap["shared_quartets"] == "5"
+    assert quartets_overlap["shared_windows_a"] == quartets_overlap["shared_windows_b"] == "1"
+    assert unique_overlap["mode"] == "unique_phase" and unique_overlap["shared_quartets"] == "5"
+    assert row["synteny_block_definition"] == "uniquely_concordant_four_copy_paths_in_both_orientations"
+    nonreused, = read_table(root / "cross_synteny_anchor_nonreuse.tsv")
+    assert nonreused["num_nonreused_anchor_windows"] == nonreused["num_nonreused_archive_family_windows"] == "2"
+    regions = read_table(root / "cross_synteny_region_summary.tsv")
+    region = regions[0]
+    assert region["mode"] == "paired" and region["regions"] == "1"
+    assert region["num_holdouts_losing_support"] == "1"
+    both = next(row for row in regions if row["mode"] == "both_orientations")
+    assert both["supports_before_holdout"] == "1" and both["num_holdouts_losing_support"] == "1"
+    assert "cross_synteny_regions.tsv" in summary["output_hashes"]
+    two_regions = read_table(root / "cross_synteny_two_region_holdout.tsv")
+    assert all(r["status"] == "fewer_than_two_regions" for r in two_regions)
+    assert "cross_synteny_two_region_holdout.tsv" in summary["output_hashes"]
+    contig_holdouts = read_table(root / "cross_synteny_contig_holdout.tsv")
+    assert {row["num_contigs_removed"] for row in contig_holdouts} == {"1", "2"}
+    assert "cross_synteny_contig_holdout.tsv" in summary["output_hashes"]
+    assert read_table(root / "cross_synteny_nested_copies.tsv") == []
+    support = {row["family_id"]: row for row in read_table(root / "cross_synteny_tree_support.tsv")}
+    assert support["OG000"]["first_copy_support"] == "100.0"
+    assert support["OG000"]["second_copy_support"] == "88.0"
+    assert support["OG000"]["duplication_support"] == ""
+    assert support["OG001"]["status"] == "archive_missing"
+    paths = read_table(root / "cross_synteny_node_paths.tsv")
+    assert len(paths) == 5 and all(path["used_in_candidate_mode"] == "1" for path in paths)
+    if ds_method == "yn00":
+        gene = tmp_path / "cross_node.nwk"
+        gene.write_text(f"((({a}_a0,{b}_a0),({a}_b0,{b}_b0)),{c}_a0);\n")
+        classification = tmp_path / "cross_node"
+        classify(SimpleNamespace(evidence=root, species_tree=Path(summary["plan"]["species_tree"]), gene_tree=gene,
+                                 output=classification, family_id="OG000", species_parser="extended-taxonomic",
+                                 species_regex="", species_map="", proximal_distance=10, native_tree_likelihood=0))
+        path, = read_table(classification / "cross_synteny_node_evidence.tsv")
+        assert path["mapping_status"] == "exact_node_match"
+        origin, = read_table(classification / "duplication_origins.tsv")
+        assert origin["classification"] == "unresolved" and origin["gene_clade_id"] == path["gene_clade_id"]
+        assert "cross_synteny_matched_paths=1" in (classification / "classified_gene_tree.nhx").read_text()
+        redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
+                                 count_overlay_model=None)
+        replot(redraw)
+        for name in ("wgd_species_tree.png", "wgd_cross_ks.png"):
+            assert (redraw.output / name).read_bytes() == (root / name).read_bytes()
+    assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
+    assert row["cross_ks_status"] == "inconclusive"
+    assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10
+    quartets = read_table(root / "cross_ks_quartets.tsv")
+    assert len(quartets) == 3 and {r["species_event_id"] for r in quartets} == {row["species_event_id"]}
+    assert "cross_ks_quartets.tsv" in summary["output_hashes"]
+    assert summary["plan"]["parameters"]["max_ks_outgroup_families"] == 11
+    assert {r["status"] for r in read_table(root / "cross_ks_common_outgroups.tsv")} == {"missing_trio"}
+    assert {r["status"] for r in read_table(root / "cross_ks_outgroup_topology.tsv")} == {"missing_trio"}
+    assert "cross_ks_outgroup_topology.tsv" in summary["output_hashes"]
+    assert {r["status"] for r in read_table(root / "cross_ks_outgroup_sister_order.tsv")} == {"missing_trio"}
+    assert "cross_ks_outgroup_sister_order.tsv" in summary["output_hashes"]
+    assert read_table(root / "cross_ks_common_outgroup_pairs.tsv") == []
+    assert {"cross_ks_common_outgroups.tsv", "cross_ks_common_outgroup_pairs.tsv"} <= summary["output_hashes"].keys()
+    assert summary["plan"]["parameters"]["ks_sister_panels"] == 1
+    assert read_table(root / "cross_ks_sister_panels.tsv") == []
+    assert read_table(root / "cross_ks_sister_panel_pairs.tsv") == []
+    assert summary["plan"]["parameters"]["max_terminal_ks_families"] == 4
+    assert len(read_table(root / "terminal_ks_quartets.tsv")) == 8
+    terminal = {row["species"]: row for row in read_table(root / "terminal_ks_summary.tsv")}
+    assert terminal[a]["status"] == "no_complete_quartets" and terminal[a]["sampled_families"] == "4"
+    assert terminal[c]["status"] == "unavailable_self_or_cds"
+    assert summary["plan"]["parameters"]["ks_component_holdout"] == 1
+    held = read_table(root / "cross_ks_component_holdout.tsv")
+    assert len(held) == 2
+    assert all(r["status"] in {"no_measured_pairs", "single_component"} for r in held)
+    assert all(r["drop_component_min"] == r["drop_component_max"] == "" for r in held)
+    contig_ages = read_table(root / "cross_ks_contig_holdout.tsv")
+    assert len(contig_ages) == 4
+    assert {r["num_contigs_removed"] for r in contig_ages} == {"1", "2"}
+    assert "cross_ks_contig_holdout.tsv" in summary["output_hashes"]
+    assert all(row["status"] == "missing_trio" for row in read_table(root / "cross_ks_matched_boundaries.tsv"))
+    assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
+    assert "wgd_cross_ks.png" in summary["plot_hashes"]
+    assert str(workspace / "cross.anchors") in summary["plan"]["input_hashes"]
+    assert (root / "wgd_species_tree.png").stat().st_size > 1000
+    name = "cross_ks_aligned_pairs.code1.tsv"
+    header, *aligned = (root / name).read_text().splitlines(keepends=True)
+    donors = []
+    for i in (0, 1):
+        saved = workspace / f"prior wgd {i}"
+        saved.mkdir()
+        donors.append(saved)
+        data = (header + "".join(aligned[i::2])).encode()
+        (saved / name).write_bytes(data)
+        previous = {**summary, "output_hashes": {**summary["output_hashes"], name: sha256(data).hexdigest()}}
+        report = "cross_ks_pair_ds.code1.tsv"
+        # The first two donors deliberately contribute only half the alignments.
+        previous["output_hashes"].pop(report)
+        (saved / "summary.json").write_text(json.dumps(previous))
+    if ds_method == "gy94" and summary["plan"].get("cross_ks_likelihood_identity"):
+        import shutil
+
+        saved = workspace / "full report donor"
+        saved.mkdir()
+        for file in (name, report, "summary.json"):
+            shutil.copyfile(root / file, saved / file)
+        donors.append(saved)
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
+                      wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
+                      wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
+                      wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
+                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", artifact_stale_policy="rebuild",
+                      wgd_ks_component_holdout="1", wgd_cross_ks_method=ds_method, wgd_ks_sister_panels="1",
+                      wgd_cross_ks_reuse_summary="\n".join(f"{saved.name}/summary.json" for saved in donors))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reusing 22/22 codon alignments" in result.stdout
+    if len(donors) == 3:
+        assert "reusing the verified gy94 report" in result.stdout
+    reused = json.loads((root / "summary.json").read_text())
+    shared_outputs = {k: v for k, v in summary["output_hashes"].items()
+                      if not k.startswith("cross_ks_rooted_") and k not in
+                      {"cross_synteny_two_region_holdout.tsv", "cross_synteny_contig_holdout.tsv"}}
+    assert reused["output_hashes"] == shared_outputs
+    assert reused["plan"]["reused_cross_ks_alignments"] == {"1": [str(saved / name) for saved in donors]}
+    assert {str(saved / name) for saved in donors} <= reused["plan"]["input_hashes"].keys()
 
 
 def test_boundary_uncertainty_root_and_nonmonotone_values_remain_unresolved(tmp_path):

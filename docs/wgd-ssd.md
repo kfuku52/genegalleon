@@ -36,8 +36,9 @@ Default inputs are:
   is not modeled: do not use copy-number-selected families for confirmatory
   inference. Counts and memberships must represent one copy per gene locus,
   not alternative transcript isoforms. A missing count is not zero.
-- Optional `input/wgd_genomes.tsv`. Without this file, only count candidates
-  are reported, and origins remain unresolved.
+- Optional `input/wgd_genomes.tsv`. Without this file, statistically
+  supported candidates can be reported from gene-family counts alone.
+  Individual gene duplication origins remain unresolved.
 
 The genome manifest contains unique species-tree tips, with these columns:
 
@@ -70,17 +71,491 @@ Without a genome annotation this contract remains the input provider's responsib
 
 ## Candidate Inference
 
+Set `wgd_gene_trees_file` to a rooted GeneGalleon family-tree ZIP (members
+ending in `_root.nwk`) to select the alternative duplication-score mode.
+This mode uses canonical species-prefixed tips and scores internal non-root
+branches without fitting the count model. A family is eligible when its tree
+includes every daughter lineage and at least one species from the immediate
+sister lineage. It supports the branch when a binary duplication spans that
+exact clade, with every daughter lineage represented in both copy groups.
+Each family votes at most once per branch. `wgd_min_duplication_score`
+(default `0.01`) is the minimum supporting / eligible fraction. This is
+an exploratory score, not a P-value, and the result depends on family
+selection, taxon coverage, and gene-tree rooting. It does not classify
+terminal events. At least one descendant species in every daughter
+lineage must have observable synteny for a combined assessment.
+With insufficient synteny opportunity, passing branches
+are labeled `duplication-only-candidate`; with matching synteny, they are
+`duplication-and-synteny-candidate`. Neither label assigns a gene origin.
+This mode writes `duplication_candidates.tsv` instead of the count-model
+outputs and cannot be used with the native per-gene tree likelihood.
+Optionally provide a GeneRax UFBoot tree ZIP as `wgd_cross_tree_support_file`,
+with or without cross-species synteny. `duplication_tree_support.tsv` counts
+each voting family once per branch, separating absent trees, different leaf
+sets, and missing exact split support. The last three columns count families
+with at least one matching duplication whose own split and both copy splits
+all have UFBoot support at or above 50, 70, or 95. These are descriptive
+levels, not WGD significance thresholds or a test of the root position.
+
+Set `wgd_duplication_taxon_holdout=1` to write
+`duplication_taxon_holdout.tsv`. For each original branch and excluded species,
+it reports eligible and voting families and gains and losses relative to the
+full scan. A branch is unidentifiable if the excluded species was its only
+representative in a daughter group or the immediate sister group. If no
+families are eligible, the score is `NA`, not zero. The audit prunes the
+archived topology in memory; it does not re-infer gene trees, change calls, or
+provide a P-value.
+
+Set `wgd_duplication_coverage_audit=1` to write
+`duplication_coverage.tsv`. It splits eligible families by whether all
+descendant species of the branch are present in their archived tree and
+reports a complete-case score. For partially covered families, a separate
+score counts duplications whose species set equals the branch's observed
+descendants, with both copy groups still covering every daughter lineage.
+The immediate sister lineage must still be represented. This sensitivity
+check can recover votes lost to missing taxa, but presence-dependent
+selection, gene-tree error, and sparse sampling can also change these
+scores. It does not alter default calls or provide a P-value.
+
+Set `wgd_duplication_root_audit=1` to write
+`duplication_root_orientations.tsv`. For each family, examine which binary
+duplications could appear by changing only the root direction on its
+existing topology, without rearranging splits or resolving polytomies.
+Report the number of extra eligible families and how many already vote on
+a different branch under the archived root. The any-orientation score is a
+descriptive upper bound on votes on one branch, not a preferred rooting,
+a root confidence interval, or a replacement for the archived-root score.
+
+Set `wgd_duplication_copy_split_audit=1` to write `duplication_copy_splits.tsv`.
+It counts voting families with a node that retains at least one identical
+species in both copies of every daughter lineage, identical species sets
+in both copies, or the original species daughter split in both immediate
+copy clades. The last criterion is exact, not a test of unresolved gene
+nodes or deeper splits. The joint column requires both reciprocal retention
+and both matching splits at the same duplication node. Families count once
+per branch and criterion. True WGD with reciprocal gene loss, incomplete
+sampling, or gene-tree discordance can fail these checks; no calls change.
+
+`wgd_duplication_family_panels` optionally partitions the gene-tree archive
+into 2 to 64 disjoint panels by a seeded hash of the family ID. This makes
+the assignment independent of archive order and keeps all eligible and
+supporting votes from a family together. The per-panel and summary tables
+record sample sizes, branch scores, and how often the configured cutoff is
+met. An untestable panel is not a negative. Panel agreement is not a
+P-value, particularly for linked families, and does not change WGD calls.
+The same setting writes `duplication_family_size_strata.tsv`: scores by
+archived tree tip count (below 20, 20-34, 35-59, or at least 60) and by
+tips per observed species (cut points 1, 1.25, 1.75, and 2.5). Each metric
+partitions the same families and preserves the branch-specific eligibility
+rule. Large or copy-rich families have more opportunities to generate a
+vote; the strata describe sensitivity, not independent trees or P-values.
+
+### Sparse Cross-Species Synteny
+
+In duplication-score mode, set `wgd_cross_synteny_file` to a TSV with
+columns `species_a`, `species_b`, `bed_a`, `bed_b`, and `anchors`.
+Paths are absolute or workspace-relative. Provide each genome's self
+comparison (same species on both sides) and one or more direct cross
+comparisons spanning the daughter lineages at each internal split.
+Species and BED gene IDs must match the input species and gene trees.
+BED gene IDs must be globally unique, and each archive member must name
+a family in the membership table and contain only its genes (subsets allowed).
+For this mode the membership column supplies the species identity, including
+when one species name is a prefix of another.
+
+`duplication_synteny_family_overlap.tsv` reports how many distinct families
+contribute both a duplication vote and a matched cross-synteny path. It also
+shows the score with those families removed from the numerator and denominator.
+The subtraction uses all matched paths even in the strict-phase sensitivity
+run. Exclusion is conditioned on the evidence and is not an independent
+test. The default scores and calls are unchanged.
+
+`cross_synteny_node_paths.tsv` retains exact four-gene paths, including which
+pass the selected phase/reference filter. Passing the filter does not imply
+that the branch meets the window or duplication-score thresholds. Per-family
+classification joins these records by the four literal gene IDs, two copy
+groups, and reconciled species branch. `cross_synteny_node_evidence.tsv`
+records exact matches and discrepancies. `cross_synteny_matched_paths` in
+NHX counts exact matches that pass the configured filter; it is not a
+WGD/SSD assignment or a probability. The gene-tree figure places an unfilled
+diamond and the path count around each matched node; its original origin
+color and classification are unchanged.
+Use one BED per species and original `###`-delimited JCVI anchor files
+(plain or gzip), not lifted anchors or preassigned branch scores. This
+stage reads existing comparisons; it does not launch genome alignments.
+The input tree assigns each cross pair to its MRCA; a root comparison
+is validated but not scored because there is no root stem.
+
+In 100-gene windows of the first species, an observable cross window
+has at least five distinct genes on both sides of one direct block.
+`wgd_cross_window_offset` shifts both reference grids by 0 to 99 genes
+without crossing contigs (default 0). Use separate outputs to compare
+shifted windows; they overlap and are not independent evidence.
+With both self comparisons present, a pair needs at least
+`wgd_min_cross_windows` (default 3) observable windows. If exact copy
+support falls short, the same window floor must also be met by direct
+anchors connecting genes in the same archived family tree. Otherwise the
+pair is `insufficient_archive_anchors`, not observed negative evidence.
+An empty self comparison is observed, not missing. The
+correspondence search requires five distinct genes in each copy slot,
+within the same original blocks. It retains one-copy paths separately,
+without inferring a loss, and tests the exact linked genes against the
+two daughter copies of a duplication in the input gene tree.
+
+A pair supports a candidate when it has at least `wgd_min_cross_windows`
+concordant windows and at least as many distinct matching families.
+For combined assessment or support, every daughter lineage must have
+an assessed or supporting pair, respectively. With this manifest,
+cross-block correspondence determines branch synteny status instead of
+the self-synteny/Ks rule; optional genome inputs can still supply the
+separate Ks outputs. If correspondence can be assessed but falls short,
+the branch stays unresolved. Only branches without sufficient
+observability can use the duplication-only rule. The thresholds
+are exploratory and are not calibrated WGD probabilities.
+
+With `wgd_cross_orientation_audit=1`, `cross_synteny_orientation.tsv` repeats
+the 100-gene window calculation in the second species using the same anchors
+and the same family-tree pass. It reports differences in observability and
+in per-pair support, with separate window and family counts. It is a
+sensitivity audit: the supplied orientation still determines primary calls,
+and two orientations do not count as independent evidence.
+`cross_synteny_orientation_quartets.tsv` additionally counts exact
+copy pairings and families recovered in both orientations, with separate
+window counts for each reference. When unique-phase sensitivity is enabled,
+it also reports pairings that are unique in both orientations.
+
+Optionally set `wgd_cross_require_both_orientations=1` alongside the unique
+phase and orientation options. A pair must meet the minimum family count
+and the minimum window count in **each** reference using the same
+uniquely concordant copy pairings. Cross-block dS and quartet selection use
+only the common set in this mode. For observability, assessed pairs in either
+reference count, even without matching support in the other. A branch whose
+daughter groups are all observed cannot become a duplication-only call just
+because one orientation has sparse windows or lacks corroboration. The tree
+additionally shows `R`, the sum across species pairs of the smaller of their two shared
+unique window counts. This is a sensitivity filter, not independent evidence.
+The region audit adds a `both_orientations` mode. Regions sharing a window
+in either reference are joined; after deleting one region the support rule
+still enforces the window floor in both references. The window totals
+shown in the region tables remain in the supplied reference orientation.
+Existing region and replication modes retain their original scopes.
+Set `wgd_cross_two_region_holdout=1` to additionally test every distinct
+pair of original regions in each supported mode, retaining the family and
+window floors. A family observed in both removed regions counts as lost
+only if no other region retains it. The table reports how many deletions
+remove support and an example of the regions involved. More than 10,000
+combinations are explicitly marked untested. This is a sensitivity
+diagnostic, not an independence test or a change to the call.
+In strict both-reference mode, the same flag also writes
+`cross_synteny_contig_holdout.tsv`. It removes every traced four-gene path
+touching one or two species-qualified assembly contigs, then rechecks the
+shared-family and both-reference window floors. It does not realign or
+rephase the remaining anchors. Large searches are marked untested when
+the number of exclusions times the number of paths exceeds five million.
+The orientation audit also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
+reference windows that contain five gene-disjoint direct pairs within one
+original block, both before and after requiring archive-family agreement.
+This diagnostic does not require five disjoint four-copy paths or change
+the primary definition of an observable window.
+
+`cross_synteny_copy_phase.tsv` separates four-gene sets for the same species
+pair and matched duplication node into concordant-only, discordant-only,
+and ambiguous paths. Ambiguous means the original blocks admit both ways
+of pairing the same four genes across species. Families and windows can
+contain multiple quartets and can appear in more than one category. On the
+species tree, `W` counts matched paired windows and `U` counts windows with
+at least one concordant-only quartet. This audit does not change the primary
+candidate decision or turn phase agreement into an age estimate.
+With `wgd_cross_orientation_audit=1`, `cross_synteny_distinct_quartet_phase.tsv`
+also merges repeats of the same four genes and family across windows. Both
+phase labels on the same quartet count as ambiguous, and unassessed pairs
+stay unavailable. It describes disagreement and leaves calls unchanged.
+
+For a stricter sensitivity run, set `wgd_cross_require_unique_phase=1`.
+Every supporting pair must meet the configured window and family floors
+using concordant-only four-copy paths. Ambiguous paths and one-copy paths
+do not count toward these floors. Observable pairs that fail the stricter
+rule remain assessed, so they cannot trigger a duplication-only fallback.
+The pair, window, and orientation audits still show the underlying paths
+and baseline support. The downstream cross-block copy-pair dS analysis
+also uses only concordant-only paths in this mode. The region holdout tables
+add a `unique_phase` mode to report dependence on any one genomic region.
+
+If a focal species has at least two assessed comparisons on the same branch,
+`cross_synteny_copy_replication.tsv` shows whether their paired paths use the
+same exact focal gene pairs in the same archived families. Strict mode also
+reports the overlap using only concordant-only paths. Shared focal genes or
+family trees make these checks dependent; they are not independent P-values.
+
+To expand an existing manifest without all-vs-all comparisons, run the sparse
+planner in the GeneGalleon runtime:
+
+```bash
+python workflow/support/wgd_synteny_plan.py \
+  --workspace workspace --species-tree /path/to/species_tree.nwk \
+  --cross-synteny /path/to/wgd_cross_synteny.tsv \
+  --pair-evidence /path/to/wgd_ssd/cross_synteny_pairs.tsv \
+  --pairs-out /path/to/next_pairs.tsv --audit-out /path/to/branch_coverage.tsv
+```
+
+The planner visits non-root splits from descendants toward the root, using
+species with self-synteny in the input manifest. It proposes new pairs only
+for daughter lineages that are not covered, preferring pairs that cover more
+missing daughters, then shorter tree distance. With `--pair-evidence`, only
+assessed comparisons count toward coverage; unassessed pairs are not repeated.
+With `--pair-evidence`, an optional `--replication-budget N` proposes up to
+`N` additional near-to-root comparisons on branches with one assessed pair.
+It changes only one member of that pair, so the shared species' exact gene
+pairs can be compared. It does not replace comparisons for missing coverage
+or change any existing candidate calls.
+Without it, coverage means only that a pair was supplied, not that it was
+observable. The audit distinguishes missing self-synteny from exhausted
+cross-pair choices. When the plan is nonempty, `next_pairs.tsv` uses the
+`synteny_pairs_file` columns for the separate pairwise-synteny stage. The
+planner does not create anchors or modify the existing WGD manifest. After
+generating and validating the original anchors, add those comparisons to
+the manifest before rerunning WGD. An empty plan leaves just the header.
+
+### Relative Age From Cross-Block dS
+
+With a cross-synteny manifest, optionally set `wgd_cross_ks_cds_file` to a
+TSV with columns `species` and `cds` (absolute or workspace-relative FASTA
+paths, optionally gzip-compressed). An empty `cds` cell uses the usual
+`input/species_cds` discovery. Use the same representative gene IDs in the CDS.
+A species with CDS but no BED can supply ortholog
+distances for divergence calibration; it does not supply synteny evidence.
+
+For combined candidates, GeneGalleon measures dS for exact within-species
+copy pairs from paired cross-synteny windows that match the same duplication
+in a gene tree. Partial paths are not aged. `wgd_max_pairs` caps the number
+of distinct copy pairs selected per branch and focal species; the selection
+spans windows, and an identical request is estimated only once. Ortholog
+calibration uses archived members of single-copy families, up to
+`wgd_max_ks_families` per comparison. For each nearby boundary, choose
+one nearest-outgroup trio by the smallest shared-family count among its
+three comparisons (larger is better), before measuring dS. Ties are
+broken by input species IDs. It does not run an all-versus-all sequence search.
+Cross-code pairs are not estimated. Low-information alignments (fewer than
+60 retained codons, less than 70% coverage of the longer CDS, or fewer than
+20 synonymous sites) and non-estimable dS values are audited and excluded.
+
+`wgd_cross_ks_method` defaults to `yn00`. Use `gy94` or
+`gy94-regularized` for a separate estimator sensitivity run across all
+cross-block, ortholog and optional terminal/paralog distances in that run.
+The procedure does not substitute YN00 estimates for failed likelihood
+fits or treat GY94 parameter boundaries as measured dS. Pairs with
+identical coding sequences have zero estimated distance but no fitted
+synonymous-site count under GY94; they are recorded as `identical` and
+excluded from the quality-filtered summaries. Alignment reuse is independent
+of the subsequent estimator. This setting does not change self-synteny
+distances outside the cross-block module.
+
+On the species tree, inverted primary boundaries remain visible as dashed
+intervals and crosses. When matched-family estimates are available for such a
+row, open diamonds and dotted intervals show the alternative split estimates.
+These are diagnostics and do not change the primary event-age decision.
+
+Set `wgd_max_ks_outgroup_families` above zero to check the boundary ordering
+with a common external species for both splits. Up to two outgroups outside
+both splits are chosen by phylogenetic proximity and archived-family
+coverage, before looking at dS. The same seeded family sample is measured for
+both outgroups, and only families with all required distances contribute.
+At the corresponding focal lane on the species tree, a separate signed
+axis shows the median of the per-family older-minus-younger corrected dS,
+its simultaneous order-statistic interval (when estimable), and the family
+count. A negative gap reverses the expected order; an interval crossing zero
+does not resolve it. The diagnostic assumes independent family observations
+and is not used to call or date a WGD. The summaries and input pair results
+are in `cross_ks_common_outgroups.tsv` and `cross_ks_common_outgroup_pairs.tsv`.
+The companion `cross_ks_outgroup_topology.tsv` keeps only measured families
+whose archived rooted gene tree supports both focal/sister splits against
+every selected outgroup. It reports the family count before and after
+filtering and the sensitivity of the signed interval. The main plot and
+placement continue to use the unfiltered panel; this filter can select
+against genuine discordance or gene-tree error.
+`cross_ks_outgroup_sister_order.tsv` further requires the focal/younger MRCA
+to be strictly within the focal/older MRCA. It reports sensitivity to the
+full rooted branching order, without changing the figure or placement.
+The default zero skips the extra alignments.
+
+With common-outgroup dS enabled, `wgd_ks_sister_panels=1` adds comparisons
+with up to one additional sister species at each split. Alternatives are
+chosen before measuring dS, on the same genetic code and archived-family
+coverage shared by the already selected species. All sisters and outgroups
+in a focal panel use the intersection of complete families so changing
+sisters does not also change the family sample. See
+`cross_ks_sister_panels.tsv` and `cross_ks_sister_panel_pairs.tsv`. A focal
+with no supported alternative adds no panel; the main outgroup plot and
+WGD calls are unchanged.
+
+To rerun with different WGD settings, `wgd_cross_ks_reuse_summary` accepts
+one or more newline-separated `summary.json` paths in separate, completed
+run directories with their original `cross_ks_aligned_pairs.code*.tsv`
+files. The CLI accepts repeated `--cross-ks-reuse-summary` arguments. No source
+bundle may be the destination. GeneGalleon checks the source hashes, MAFFT and backtranslation
+identity, genetic code, ordered gene IDs, and the exact current CDS for each
+reused row. Identical alignments can be shared by bundles; conflicting
+verified alignments for the same pair and current CDS stop the run instead
+of choosing one by input order. New or changed pairs are aligned normally.
+For GY94, a completed bundle may also supply its two-sequence dS report when
+the full ordered alignment table and estimator identity match exactly. Older
+bundles without that identity, a different method or runtime, or any changed
+alignment require recomputation. The reports are checked against their saved
+hashes and the current requests. Other dS estimates and downstream tests are
+recomputed. Summaries without alignment provenance or unsupported MAFFT
+layouts cannot be used for reuse.
+
+The NWKIT `ksrate` model puts the younger and older species divergence boundaries
+on each focal species' dS scale, using conservative simultaneous
+pair-median intervals. Copy-pair observations sharing either genomic
+window or a family are grouped before taking the median across components.
+Its 95% order-statistic interval needs at least six components (or
+`wgd_min_cross_windows`, when larger); with fewer, only a point is shown.
+This interval assumes independent identically distributed component medians;
+grouping reduces dependence but does not establish that assumption. A focal
+supports placement only when its whole interval lies between the two divergence intervals. Branch-level
+support requires at least one supporting focal in every daughter lineage
+and no focal with a clearly older or younger interval. Missing or overlapping
+boundaries do not establish placement, but a usable boundary can still flag a
+copy interval entirely outside the candidate. Divergent copy ages are flagged,
+not used to reject or move a WGD automatically: dS dates copy divergence,
+which can precede allopolyploidization. The diagnostic is not an independent
+P-value and does not change the original branch or gene-node classification.
+
+Set `wgd_ks_component_holdout=1` to display the minimum and maximum copy
+median after excluding any one linked component. This range is shown just
+below the focal dS point when the extrema differ, and written to
+`cross_ks_component_holdout.tsv` along with the observation and component
+counts. For zero or one component there is no holdout range. It measures
+influence, not confidence, and does not change the primary interval.
+The same setting writes `cross_ks_contig_holdout.tsv`, which rebuilds the
+components after removing all copy pairs touching any one or two assembly
+contigs. It records the median range, the smallest remaining sample, and how
+often the component count falls below the interval floor. These ranges are
+not confidence intervals and do not change the tree display or placement.
+Large searches are reported as untested when exclusions times paired records
+exceed one million.
+
+With `wgd_max_ks_quartets` above zero, `cross_ks_quartets.tsv` adds a
+within-family check for combined candidates with paired paths and same-code
+CDS in both species. The limit is per branch and species pair; each selected
+window/family contributes one quartet, sampled before looking at dS. The six
+dS values compare the three possible pairs of opposing paths. A positive
+`paired_margin` means the two synteny-matched copy paths have the smallest
+sum; `other_sums_difference` records deviation from an additive tree.
+Missing or saturated pairs yield an incomplete quartet. This is a check
+of local copy correspondence, not a clock correction, age estimate, or test
+of the branch or number of WGD events. The default zero skips additional
+alignments; pairs already requested for the age analysis are reused.
+
+With `wgd_ks_rooted_copies=1`, the same sampled quartets are also checked
+with a fifth copy. It must be the only member of its species in the family
+table, from the species-tree sister clade, and in the gene tree immediately
+outside the copy split. This selection precedes dS estimation. One protein
+alignment is backtranslated, and all ten distances are estimated on the
+same unambiguous, gap-free codon columns. The reported residual compares
+the expected rooted copy split against the other 14 five-tip topologies
+with nonnegative branch lengths; a positive gap favors the expected split.
+`cross_ks_rooted_copies.tsv` records incomplete measurements and ties;
+`cross_ks_rooted_copy_summary.tsv` records measured quartets and distinct
+families. This diagnostic depends on the original gene tree and synteny,
+does not infer an absolute age, and does not change the WGD calls.
+`cross_ks_rooted_rate_balance.tsv` compares the two copy-specific distances
+across the same species split. It reports the absolute difference divided by
+their mean, summarized across family medians, with a pointwise order-statistic
+interval when there are enough families. Distances to the same outgroup
+also separate the two signed internal copy stems under an additive tree;
+a family passes only when all its usable paths give two positive stems.
+These are diagnostics of copy-specific rate differences and tree fit, not
+a conversion from dS to time or a correction applied to branch placement.
+
+Set `wgd_max_terminal_ks_families` above zero to inspect terminal copy splits
+in species with supplied self anchors and CDS. The analysis samples at most
+one same-family self-anchor pair per family, in rounds across original anchor
+blocks with the configured seed. A candidate quartet requires a binary
+focal-only ancestor for that pair, a same-code relative from the immediate
+species sister group at the adjacent gene node, and an external copy outside
+both groups in both trees. It records which selections fail and whether the
+six-pair dS comparison is consistent with the focal copies forming a clade.
+Triangles on the terminal rows of the species tree show the median copy
+dS across original-block medians, the 95% order-statistic interval when
+estimable, and the numbers of measured families and blocks. Blocks need not
+be independent, and quartet agreement does not distinguish terminal SSD
+from WGD or establish multiplicity. This option adds diagnostics, not calls.
+See `terminal_ks_quartets.tsv` and `terminal_ks_summary.tsv`.
+
+Without a gene-tree ZIP, the default is the calibrated gene-count mode.
+
 NWKIT models linear duplication/loss, positive-geometric ancestral counts,
 terminal/internal background rate groups, and four fixed-shape gamma family
 rate categories. At an event, each ancestral copy contributes its original
 copy plus binomially retained extra copies. `wgd_multiplicity=2` tests doubling;
 3 is a separate triplication alternative, not an estimated ploidy.
 
+Optionally supply `wgd_count_detection_tsv` with `leaf_name` and
+`detection_probability` columns, covering every tip exactly once with a
+known probability in `(0, 1]`. It models independently missed copies;
+it does not correct extra annotation copies or turn a missing value into
+zero. Do not treat BUSCO completeness as a per-copy probability without
+independent justification. Supply `wgd_count_rate_groups_tsv` with `branch_id`
+and `regime` columns to replace the terminal/internal background groups.
+Include every non-root branch of the input tree once. Specify groups and
+probabilities before inspecting candidate support; rerunning with a different
+table is a sensitivity analysis with its own null fit and bootstrap.
+
 The scan searches every positive-length non-root branch at fractions
-0.25, 0.5, and 0.75. It fits one event at a time. State doubling must meet a
+0.25, 0.5, and 0.75 by default. Set `wgd_count_event_fractions` to a specific
+comma-separated grid measured from each branch's parent, for example `0.5`
+for a midpoint-only scan. `wgd_count_family_gamma_shape` changes the fixed
+shape, or `none` disables family-rate heterogeneity. Changing either is a
+different model/search and requires its own bootstrap and checkpoint.
+It fits one event at a time. State doubling must meet a
 per-family likelihood tolerance; optimization or convergence failures stop
 the stage. A separately fitted branch-specific duplication/loss burst provides
 an AIC diagnostic against coordinated genome multiplication.
+
+To check a candidate in the presence of other events, set
+`wgd_count_fixed_events_tsv` to a table with `branch_id`, `retention`,
+`event_fraction`, and `multiplicity`. Use distinct positive-length branches
+and positive retention. The fixed events are in every model, including the
+simulated null, and their branches are excluded from the candidate search.
+The bootstrap does not account for estimation or selection of the supplied
+events. Treat fits based on events selected from the same families as
+conditional sensitivity checks. Native gene-tree likelihood supports fixed
+background doublings and scores only origin at the additional candidate;
+it does not support fixed background triplications.
+
+In gene-tree duplication mode, supply a completed NWKIT count scan's TSV and
+JSON as `wgd_count_overlay_table` and `wgd_count_overlay_model` to add a
+separate axis to the same species tree. The input tree and candidate search
+must match the model and table; the point shows the search-wide P-value or,
+for an uncalibrated scan, the likelihood ratio. Symbols distinguish count
+support, branch-burst preference, and numerical bounds. The sample size is
+the number of families in the count fit, not the number of gene trees or dS
+pairs. Calibrated points include pointwise 95% Clopper-Pearson intervals for
+the null exceedance rate, reflecting simulation error only, not uncertainty
+in the fitted null or simultaneous coverage across branches. Branch IDs
+identify threshold-passing count results and gene-tree candidates or
+phase-limited branches shown on the left, even when their count P-value is
+large. Absent candidate branches have no mark. This overlay neither changes
+the branch colors nor combines the statistical evidence across analyses.
+
+To redraw a completed result without refitting or realigning, run in the
+GeneGalleon runtime:
+
+```bash
+python workflow/support/wgd_ssd.py replot \
+  --evidence workspace/output/genome_evolution/wgd_ssd \
+  --output workspace/output/wgd_redraw
+```
+
+For a gene-tree result, pass both `--count-overlay-table` and
+`--count-overlay-model` to replace the count panel. Replot reads the
+original tree and the figure input tables with their recorded hashes;
+it does not certify unrelated outputs or recreate a complete WGD bundle.
+It writes the plots, the displayed count table (when applicable), and
+`plot_provenance.json` together to a new directory after the inputs and
+plotting implementation pass a final hash check.
 
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in
@@ -88,10 +563,41 @@ bootstrap P-values, not posterior probabilities or guaranteed error control
 against arbitrary heterogeneous SSD histories. Zero bootstrap replicates are
 an exploratory scan and cannot support a WGD origin. Inspect Monte Carlo
 error, nuisance parameter boundaries, and the competing branch-burst fit.
-Combined WGD support requires explicit non-boundary diagnostics for the event,
+With a runtime that supports `wgd-count --background-adequacy-draws`, set
+`wgd_count_background_adequacy_draws` in count mode (default 0, or at least 4).
+The diagnostic compares the fitted background to measured tip copy counts,
+zero/multiple-copy frequencies, and within-family clade/complement contrasts.
+It preserves original missingness and selection, and writes descriptive ranges
+and joint discrepancies into `count_model.json`, without changing WGD calls.
+Use `wgd_count_bootstrap_workers` with a NWKIT runtime that supports
+`wgd-count --bootstrap-workers` to run more than one null refit at a time.
+Use `wgd_count_scan_workers` with `wgd-count --scan-workers` to parallelize
+the preceding observed candidate fits. The two phases run in sequence and
+each defaults to one worker. Do not exceed the allocated CPUs or memory
+for concurrent fits. With a runtime supporting `wgd-count --bootstrap-checkpoint`,
+set `wgd_count_bootstrap_checkpoint` to a file in an existing directory outside
+curated inputs, task scratch, and managed WGD outputs. Reusing the same path
+with unchanged input, settings, and NWKIT runtime refits only unfinished
+null draws. Recent NWKIT versions can also extend the target draw count
+without discarding the seeded prefix. Choose an extension independently of
+the interim result. An incompatible checkpoint is rejected rather than
+overwritten.
+Set `wgd_alpha` to change the search-wide conditional P-value cutoff
+(default `0.05`). Both combined and count-only support require explicit
+non-boundary diagnostics for the event,
 background, and branch-burst fits. Missing diagnostics or a numerical bound in
 any competing fit leave the event unresolved; an unbounded event fit alone
 does not establish an adequate comparison.
+
+Each branch records its synteny opportunity separately from its support.
+A successful zero-block scan is assessed, not missing. For a nonempty
+scan, a species is observable on a branch when it has a usable anchor Ks
+estimate and a resolvable branch interval; qualifying positive evidence
+also establishes observability. If fewer than two descendant species
+(one for a terminal branch) are observable, a calibrated count-supported
+branch is labeled `count-only-candidate`. When enough species are
+observable but support falls short, the event remains `unresolved`.
+Count-only candidates do not assign individual genes a WGD origin.
 
 Only families observed in every root-child clade are retained; the likelihood
 and simulations condition on this rule separately for each missingness mask.
@@ -248,7 +754,9 @@ root prior, sampling and one candidate doubling**. It is not the probability
 that WGD occurred, a parameter/tree posterior, or an independent significance
 test. It does not change the evidence-rule classification. The complete
 per-candidate table is retained even when its candidate differs from the
-LCA-mapped branch. Multiple-event histories are not jointly inferred.
+LCA-mapped branch. When fixed background doublings are supplied, they
+contribute to both likelihoods, but only the additional candidate can
+contribute to its node-origin probability. Events are not jointly inferred.
 
 ## Outputs and Validation
 
@@ -264,6 +772,64 @@ Genome results are in `output/genome_evolution/wgd_ssd/`:
 - `ks_boundaries.tsv`, `ks_trios.tsv`, `ks_model.json` when contrasts exist.
 - `anchor_evidence.tsv`, `gene_positions.tsv`, `wgd_events.tsv`,
   `wgd_candidates.pdf`, and `summary.json`: integrated evidence and provenance.
+- `wgd_species_tree.pdf` and `wgd_species_tree.png`: the full input species
+  tree, with native branch IDs and scores or P-values for supported candidates.
+  Teal branches indicate combined support; with cross synteny, dash-dot teal
+  indicates a candidate whose support requires one-copy paths. `W` counts
+  matched paired windows (not independent events or gene pairs). Dashed orange
+  indicates duplication-only or count-only candidates. With a cross
+  manifest, dotted purple marks indicate unobserved synteny and a
+  duplication score below the cutoff. Labels use only the supplied
+  tree and inference output. Gray does not mean WGD was ruled out.
+- `cross_synteny_pairs.tsv` and `cross_synteny_windows.tsv` (with a cross
+  manifest): per-pair coverage and exact matched-family evidence.
+- `cross_synteny_archive_coverage.tsv`: counts direct anchor pairs and
+  observable windows before and after requiring both ends of each link to
+  be in the same archived gene tree. This diagnostic does not change the
+  candidate rule or require any particular duplication topology.
+- `cross_synteny_region_summary.tsv` and `cross_synteny_regions.tsv`: merge
+  tree-matched windows that share a source block or a window on either copy.
+  Report paired-only and all paths separately, with the effect of omitting
+  each region on the synteny rule. These are sensitivity diagnostics; a
+  region is not necessarily biologically independent, and the original
+  candidate decision is unchanged.
+- `cross_synteny_nested_copies.tsv`: compare paired hits on nested branches
+  that pass the duplication-score cutoff. In species with paired paths on
+  both branches, report overlaps of unordered copy-window pairs, exact
+  gene pairs, and families separately. Overlap does not by itself establish
+  a common duplication; missing comparisons do not imply independence.
+- Optionally set `wgd_cross_tree_support_file` to GeneGalleon's GeneRax
+  UFBoot ZIP (members named `*_generax.ufboot.nwk`) to write
+  `cross_synteny_tree_support.tsv`. This compares the duplication and both
+  copy splits for each paired hit by exact unrooted bipartition on the same
+  gene set. Missing or unmatched values stay empty; no threshold is applied
+  to the candidate decision. This does not test the root position.
+- With cross-block CDS inputs, `cross_ks_paralogs.tsv`,
+  `cross_ks_orthologs.tsv`, and `cross_ks_focals.tsv` audit genes, selection,
+  and focal placement. `cross_ks_boundaries.tsv` and `cross_ks_trios.tsv`
+  report corrected divergence when contrasts exist. The species-tree plot
+  marks age support and conflicts without changing candidate colors.
+  Inconclusive dS estimates have no branch marker. Dotted guides connect each annotated branch to its focal
+  species' dS tracks in the same PNG and PDF. Dots show copy-pair medians;
+  colored ticks show rate-corrected species divergences, and horizontal
+  segments show their available intervals. Each focal label gives the number
+  of copy pairs with usable dS (`n`) and the number of grouped components (`c`).
+  Nonmonotone split estimates remain visible with crosses and dashed
+  intervals, but are not treated as usable branch boundaries.
+  The dS tracks use a separate axis
+  and do not change the tree's branch units. `wgd_cross_ks.pdf` and
+  `wgd_cross_ks.png` retain the standalone age diagnostics.
+- `cross_ks_matched_boundaries.tsv` re-estimates the gap between the two
+  boundary values on the same complete ortholog families, resampling each
+  family jointly. It diagnoses boundary ordering, not WGD age or a rate
+  difference between retained duplicates and single-copy genes. It does not
+  replace the primary boundary estimates or the branch call.
+- `cross_ks_matched_trios.tsv` reports the median of individual signed
+  three-distance corrections in complete families, with simultaneous
+  order-statistic intervals and counts of negative corrections. It targets
+  the complete-family distribution, which may differ from the primary
+  pair-median estimate if missingness or substitution rates vary by family.
+  It does not replace the primary intervals or the figure's placement rule.
 
 Each family has an additional `wgd_ssd/<family>_wgd_ssd.zip` archive containing
 `duplication_origins.tsv`, `pair_evidence.tsv`, full-tree `reconciliation.tsv`,

@@ -26,6 +26,8 @@
     "test_presence_absence_runtime.py",
     "test_workflow_cds_validation_runtime.py",
     "test_native_mul_reconcile_runtime.py",
+    "test_wgd_count_overlay.py",
+    "test_wgd_rooted_copy_ks.py",
     "test_wgd_ssd_runtime.py",
     "test_wgd_ssd_contracts.py",
     "test_wgd_ssd_gene_stage.py",

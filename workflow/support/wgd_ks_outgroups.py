@@ -1,0 +1,232 @@
+"""Matched-family sensitivity for dS boundaries with common external species."""
+
+import random
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from statistics import median
+from zipfile import ZipFile
+
+import numpy as np
+
+try:
+    from wgd_cross_support import archive_index
+except ImportError:
+    from .wgd_cross_support import archive_index
+
+OUTGROUP_FIELDS = ("species_event_id", "branch_id", "focal", "younger_sister", "older_sister", "common_outgroup",
+                   "num_eligible_families", "num_sampled_families", "num_measured_all_outgroups", "younger_median_ds",
+                   "older_median_ds", "median_signed_gap", "gap_lower", "gap_upper", "status")
+SISTER_FIELDS = OUTGROUP_FIELDS[:-1] + ("num_sister_combinations", "status")
+TOPOLOGY_FIELDS = OUTGROUP_FIELDS[:-1] + ("num_measured_before_topology_filter", "status")
+
+
+@dataclass(frozen=True)
+class CommonOutgroups:
+    event: str
+    focal: str
+    younger: str
+    older: str
+    outgroups: tuple
+    eligible: int
+    families: tuple
+
+    def pair_keys(self, outside):
+        return tuple(tuple(sorted(pair)) for pair in (
+            (self.focal, self.younger), (self.focal, self.older), (self.younger, outside),
+            (self.older, outside), (self.focal, outside),
+        ))
+
+
+@dataclass(frozen=True)
+class SisterPanel:
+    event: str
+    focal: str
+    choices: tuple
+    outgroups: tuple
+    eligible: int
+    families: tuple
+
+
+def select_sister_panels(selections, nodes, archived, codes, maximum, seed):
+    from itertools import product
+
+    archive_by_species = defaultdict(set)
+    for family, species in archived.items():
+        for name in species:
+            archive_by_species[name].add(family)
+    for row in selections:
+        if not row.outgroups:
+            continue
+        node = nodes[row.event]
+        young_groups = [set(c.leaf_names()) for c in node.children]
+        young = set().union(*(g for g in young_groups if row.focal not in g))
+        old = set(node.up.leaf_names()) - set(node.leaf_names())
+        required = (row.focal, row.younger, row.older, *row.outgroups)
+        common = set.intersection(*(archive_by_species[name] for name in required))
+        young_options, old_options = [row.younger], [row.older]
+        for alternatives, options in ((young, young_options), (old, old_options)):
+            compatible = ((-len(common & archive_by_species[sp]), sp) for sp in alternatives - set(options)
+                          if codes.get(sp) == codes[row.focal] and common & archive_by_species[sp])
+            best = min(compatible, default=None)
+            if best:
+                options.append(best[1])
+                common &= archive_by_species[best[1]]
+        if len(young_options) == len(old_options) == 1:
+            continue
+        families = sorted(common)
+        random.Random(seed).shuffle(families)
+        yield SisterPanel(row.event, row.focal, tuple(product(young_options, old_options)), row.outgroups,
+                          len(common), tuple(families[:maximum]))
+
+
+def sibling_panel_requests(panels, archived):
+    selections = (CommonOutgroups(p.event, p.focal, a, b, p.outgroups, p.eligible, p.families)
+                  for p in panels for a, b in p.choices)
+    yield from common_outgroup_requests(selections, archived)
+
+
+def sibling_panel_rows(panels, sampled, branch_ids):
+    denominator = sum(len(p.choices) * len(p.outgroups) for p in panels)
+    for panel in panels:
+        selections = [CommonOutgroups(panel.event, panel.focal, a, b, panel.outgroups, panel.eligible, panel.families)
+                      for a, b in panel.choices]
+        required = {key for row in selections for out in row.outgroups for key in row.pair_keys(out)}
+        families = set(panel.families)
+        complete = set.intersection(*(sampled.get(key, {}).keys() & families for key in required))
+        same_families = {key: {f: sampled[key][f] for f in complete} if complete else {} for key in required}
+        for row in common_outgroup_rows(selections, same_families, branch_ids, denominator=denominator):
+            yield {**row, "num_sister_combinations": len(panel.choices)}
+
+
+def select_common_outgroups(focals, trios, nodes, index, archived, codes, maximum, seed):
+    by_taxon = defaultdict(set)
+    for family, present in archived.items():
+        for sp in present:
+            by_taxon[sp].add(family)
+    by_trio = {(trio.focal, trio.species_event_id): trio for trio in trios}
+    for event, focal in sorted(set(focals)):
+        parent = nodes[event].up
+        young = by_trio.get((focal, event))
+        old = by_trio.get((focal, index.clade_id_for_node(parent)))
+        result = CommonOutgroups(event, focal, young.sister if young else None, old.sister if old else None, (), 0, ())
+        if young is None or old is None:
+            yield result
+            continue
+        candidates = set.intersection(*(by_taxon[sp] for sp in (focal, young.sister, old.sister)))
+        seen = set(parent.leaf_names())
+        options = []
+        for depth, ancestor in enumerate(parent.ancestors()):
+            descendants = set(ancestor.leaf_names())
+            for name in sorted(descendants - seen):
+                if codes.get(name) == codes[focal] and (families := candidates & by_taxon[name]):
+                    options.append((depth, name, families))
+            seen = descendants
+        if not options:
+            yield result
+            continue
+        _, first, common = min(options, key=lambda item: (item[0], -len(item[2]), item[1]))
+        second = min((item for item in options if item[1] != first and item[2] & common),
+                     key=lambda item: (item[0], -len(item[2] & common), item[1]), default=None)
+        names = (first,)
+        if second:
+            names += (second[1],)
+            common &= second[2]
+        families = sorted(common)
+        random.Random(seed).shuffle(families)
+        yield CommonOutgroups(event, focal, young.sister, old.sister, names, len(common), tuple(families[:maximum]))
+
+
+def common_outgroup_requests(selections, archived):
+    for selection in selections:
+        for outside in selection.outgroups:
+            for a, b in selection.pair_keys(outside):
+                for family in selection.families:
+                    genes = archived[family]
+                    yield (genes[a], genes[b]), (a, b, family, "common_outgroup")
+
+
+def topology_outgroup_rows(selections, sampled, branch_ids, archived, tree_archive, *, sister_order=None):
+    """Check both rooted trios for the same measured families and outgroups."""
+    from nwkit.clade_index import LcaIndex
+    from nwkit.rooting_state import require_rooted
+    from nwkit.util import read_tree
+
+    selections = tuple(selections)
+    pair_sets = [{pair for out in row.outgroups for pair in row.pair_keys(out)} for row in selections]
+    requests = defaultdict(list)
+    for i, (row, needed) in enumerate(zip(selections, pair_sets, strict=True)):
+        for family in row.families:
+            if needed and all(family in sampled.get(pair, {}) for pair in needed):
+                requests[family].append((i, row))
+    before = [0] * len(selections)
+    retained = [set() for _ in selections]
+    nested = [set() for _ in selections] if sister_order is not None else None
+    if requests:
+        with ZipFile(tree_archive) as archive:
+            members = archive_index(archive, "_root.nwk")
+            for family, panels in requests.items():
+                member = members.get(family)
+                if member is None:
+                    raise ValueError(f"Missing archived calibration family: {family}")
+                tree = read_tree(archive.read(member).decode("utf-8"), "auto", True, rooted="auto", quiet=True)
+                require_rooted(tree, f"Calibration topology requires a rooted gene tree: {PurePosixPath(member.filename).name}")
+                nodes = {leaf.name: leaf for leaf in tree.leaves()}
+                lca = LcaIndex(tree)
+                genes = archived[family]
+                for i, row in panels:
+                    before[i] += 1
+                    f, y, o = (nodes[genes[sp]] for sp in (row.focal, row.younger, row.older))
+                    split_nodes = lca.common_ancestor(f, y), lca.common_ancestor(f, o)
+                    if all(all(lca.common_ancestor(split, nodes[genes[out]]) is not split for split in split_nodes)
+                           for out in row.outgroups):
+                        retained[i].add(family)
+                        younger, older = split_nodes
+                        if nested is not None and younger is not older and lca.common_ancestor(younger, older) is older:
+                            nested[i].add(family)
+    denominator = sum(len(row.outgroups) for row in selections)
+
+    def rows(group):
+        for selection, needed, families, original in zip(selections, pair_sets, group, before, strict=True):
+            subset = {pair: {family: sampled[pair][family] for family in families} for pair in needed}
+            for row in common_outgroup_rows([selection], subset, branch_ids, denominator=denominator):
+                yield {**row, "num_measured_before_topology_filter": original}
+
+    if nested is not None:
+        sister_order.extend(rows(nested))
+    yield from rows(retained)
+
+
+def common_outgroup_rows(selections, sampled, branch_ids, *, denominator=None):
+    from nwkit.ksrate_model import median_order_statistic_interval
+
+    if denominator is None:
+        denominator = sum(len(row.outgroups) for row in selections)
+    for row in selections:
+        if not row.outgroups:
+            values = (row.event, branch_ids[row.event], row.focal, row.younger, row.older, None, 0, 0, 0,
+                      None, None, None, None, None, "no_common_outgroup" if row.younger and row.older else "missing_trio")
+            yield dict(zip(OUTGROUP_FIELDS, values, strict=True))
+            continue
+        by_outgroup = {}
+        for outside in row.outgroups:
+            distances = [sampled.get(key, {}) for key in row.pair_keys(outside)]
+            by_outgroup[outside] = {f: tuple(d[f] for d in distances) for f in row.families if all(f in d for d in distances)}
+        complete = sorted(set.intersection(*(set(families) for families in by_outgroup.values())))
+        for outside, distances in by_outgroup.items():
+            young = old = gap = lo = hi = None
+            status = "no_complete_families"
+            if complete:
+                fy, fo, yg, og, fg = np.array([distances[f] for f in complete], dtype=float).T
+                signed = (fo - fy) + (yg - og)  # The focal-outgroup term cancels exactly.
+                young = median((np.maximum(fy, fg) - yg) + np.minimum(fy, fg))
+                old = median((np.maximum(fo, fg) - og) + np.minimum(fo, fg))
+                gap = median(signed)
+                low, high = median_order_statistic_interval(signed, .05 / denominator)
+                status = "interval_unavailable"
+                if np.isfinite(low):
+                    lo, hi = low, high
+                    status = "ordered" if lo > 0 else "reversed" if hi < 0 else "order_unresolved"
+            values = (row.event, branch_ids[row.event], row.focal, row.younger, row.older, outside,
+                      row.eligible, len(row.families), len(complete), young, old, gap, lo, hi, status)
+            yield dict(zip(OUTGROUP_FIELDS, values, strict=True))

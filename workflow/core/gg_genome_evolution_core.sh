@@ -28,6 +28,42 @@ wgd_species_tree="${wgd_species_tree:-}"
 wgd_counts_file="${wgd_counts_file:-}"
 wgd_members_file="${wgd_members_file:-}"
 wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
+wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
+wgd_count_bootstrap_checkpoint="${wgd_count_bootstrap_checkpoint:-}"
+wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
+wgd_count_background_adequacy_draws="${wgd_count_background_adequacy_draws:-0}"
+wgd_count_detection_tsv="${wgd_count_detection_tsv:-}"
+wgd_count_rate_groups_tsv="${wgd_count_rate_groups_tsv:-}"
+wgd_count_fixed_events_tsv="${wgd_count_fixed_events_tsv:-}"
+wgd_count_overlay_table="${wgd_count_overlay_table:-}"
+wgd_count_overlay_model="${wgd_count_overlay_model:-}"
+wgd_count_event_fractions="${wgd_count_event_fractions:-}"
+wgd_count_family_gamma_shape="${wgd_count_family_gamma_shape:-}"
+wgd_alpha="${wgd_alpha:-0.05}"
+wgd_gene_trees_file="${wgd_gene_trees_file:-}"
+wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
+wgd_duplication_coverage_audit="${wgd_duplication_coverage_audit:-0}"
+wgd_duplication_root_audit="${wgd_duplication_root_audit:-0}"
+wgd_duplication_copy_split_audit="${wgd_duplication_copy_split_audit:-0}"
+wgd_duplication_family_panels="${wgd_duplication_family_panels:-0}"
+wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
+wgd_cross_orientation_audit="${wgd_cross_orientation_audit:-0}"
+wgd_cross_two_region_holdout="${wgd_cross_two_region_holdout:-0}"
+wgd_cross_window_offset="${wgd_cross_window_offset:-0}"
+wgd_cross_require_unique_phase="${wgd_cross_require_unique_phase:-0}"
+wgd_cross_require_both_orientations="${wgd_cross_require_both_orientations:-0}"
+wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
+wgd_cross_ks_reuse_summary="${wgd_cross_ks_reuse_summary:-}"
+wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
+wgd_max_ks_outgroup_families="${wgd_max_ks_outgroup_families:-0}"
+wgd_max_terminal_ks_families="${wgd_max_terminal_ks_families:-0}"
+wgd_ks_component_holdout="${wgd_ks_component_holdout:-0}"
+wgd_ks_sister_panels="${wgd_ks_sister_panels:-0}"
+wgd_ks_rooted_copies="${wgd_ks_rooted_copies:-0}"
+wgd_cross_ks_method="${wgd_cross_ks_method:-yn00}"
+wgd_cross_tree_support_file="${wgd_cross_tree_support_file:-}"
+wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
+wgd_min_duplication_score="${wgd_min_duplication_score:-0.01}"
 wgd_ks_bootstrap="${wgd_ks_bootstrap:-199}"
 wgd_seed="${wgd_seed:-1}"
 wgd_max_pairs="${wgd_max_pairs:-5000}"
@@ -371,19 +407,54 @@ run_subgenome_dominance_stage() (
   echo "Subgenome outputs: ${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
 )
 run_wgd_ssd_stage() (
-  local scratch_root work_dir plan_file argument needs_update
-  local -a contract_args=()
+  local scratch_root work_dir plan_file argument needs_update prior_summary
+  local -a contract_args=() reuse_args=()
+  local -a numeric_env=(env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1)
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" wgd_ssd || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/wgd_ssd") || exit 1
   ensure_dir "${scratch_root}"
   work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
   plan_file="${work_dir}/plan.json"
-  python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
+  while IFS= read -r prior_summary; do
+    if [[ -n ${prior_summary} ]]; then reuse_args+=(--cross-ks-reuse-summary "${prior_summary}"); fi
+  done <<< "${wgd_cross_ks_reuse_summary}"
+  if [[ -z ${reuse_args[0]:-} ]]; then reuse_args=(--cross-ks-reuse-summary ""); fi
+  "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
+    --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
+    --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
+    --duplication-coverage-audit "${wgd_duplication_coverage_audit}" \
+    --duplication-root-audit "${wgd_duplication_root_audit}" \
+    --duplication-copy-split-audit "${wgd_duplication_copy_split_audit}" \
+    --duplication-family-panels "${wgd_duplication_family_panels}" \
+    --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
+    --cross-orientation-audit "${wgd_cross_orientation_audit}" \
+    --cross-two-region-holdout "${wgd_cross_two_region_holdout}" \
+    --cross-window-offset "${wgd_cross_window_offset}" \
+    --cross-require-unique-phase "${wgd_cross_require_unique_phase}" \
+    --cross-require-both-orientations "${wgd_cross_require_both_orientations}" \
+    --cross-ks-cds "${wgd_cross_ks_cds_file}" \
+    "${reuse_args[@]}" \
+    --max-ks-quartets "${wgd_max_ks_quartets}" \
+    --max-ks-outgroup-families "${wgd_max_ks_outgroup_families}" \
+    --max-terminal-ks-families "${wgd_max_terminal_ks_families}" \
+    --ks-component-holdout "${wgd_ks_component_holdout}" \
+    --ks-sister-panels "${wgd_ks_sister_panels}" \
+    --ks-rooted-copies "${wgd_ks_rooted_copies}" \
+    --cross-ks-method "${wgd_cross_ks_method}" \
+    --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
-    --count-bootstrap "${wgd_count_bootstrap}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap-workers "${wgd_count_bootstrap_workers}" \
+    --count-bootstrap-checkpoint "${wgd_count_bootstrap_checkpoint}" \
+    --count-scan-workers "${wgd_count_scan_workers}" \
+    --count-background-adequacy-draws "${wgd_count_background_adequacy_draws}" \
+    --count-detection-tsv "${wgd_count_detection_tsv}" --count-rate-groups-tsv "${wgd_count_rate_groups_tsv}" \
+    --count-fixed-events-tsv "${wgd_count_fixed_events_tsv}" \
+    --count-overlay-table "${wgd_count_overlay_table}" --count-overlay-model "${wgd_count_overlay_model}" \
+    --count-event-fractions "${wgd_count_event_fractions}" --count-family-gamma-shape "${wgd_count_family_gamma_shape}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
     --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \
@@ -395,9 +466,8 @@ run_wgd_ssd_stage() (
   gg_artifact_prepare_stage needs_update run_wgd_ssd "${contract_args[@]}" || exit $?
   if [[ ${needs_update} -eq 1 ]]; then
     gg_step_start "Native WGD candidates and duplication-origin evidence"
-    env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-      python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
-    python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
     mv_out_bundle "${work_dir}/results" "${gg_workspace_output_dir}/genome_evolution/wgd_ssd"
     gg_artifact_record "${contract_args[@]}"
   else
