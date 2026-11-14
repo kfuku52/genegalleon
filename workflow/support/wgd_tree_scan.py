@@ -5,9 +5,14 @@ from collections import Counter
 from pathlib import PurePosixPath
 from zipfile import ZipFile
 
+try:
+    from wgd_taxon_holdout import DuplicationTaxonHoldout
+except ImportError:
+    from .wgd_taxon_holdout import DuplicationTaxonHoldout
+
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
-                      observe_family=None, observe_duplications=None):
+                      observe_family=None, observe_duplications=None, *, holdout_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -25,6 +30,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
         if not node.is_leaf:
             branches[masks[node]] = (node, sisters, tuple(masks[c] for c in node.children),
                                     index.clade_id_for_node(node))
+    holdout = DuplicationTaxonHoldout(taxa, branches) if holdout_output is not None else None
     prefix = re.compile(r"^(" + "|".join(map(re.escape, sorted(taxa, key=lambda name: (-len(name), name)))) + r")_(?=.)")
     eligible, hits = Counter(), Counter()
     families = set()
@@ -80,6 +86,8 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
                     eligible[mask] += 1
                     if mask in supported:
                         hits[mask] += 1
+            if holdout is not None:
+                holdout.observe(tree, observed, supported)
             if observe is not None or observe_duplications is not None:
                 family_nodes = []
                 for mask, gene in duplication_nodes:
@@ -104,4 +112,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             "minimum_duplication_score": minimum_score,
             "tree_support": "tree_score_supported" if n and score >= minimum_score else "below_threshold",
         })
-    return sorted(rows, key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"])), len(families)
+    rows.sort(key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"]))
+    if holdout is not None:
+        holdout_output.extend(holdout.rows(rows))
+    return rows, len(families)

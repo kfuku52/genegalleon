@@ -30,6 +30,7 @@ try:
     from wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
+    from wgd_taxon_holdout import HOLDOUT_FIELDS
     from wgd_tree_scan import scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
@@ -46,6 +47,7 @@ except ImportError:
     from .wgd_cross_synteny import COVERAGE_OUTPUT, PAIR_OUTPUT, WINDOW_OUTPUT, CrossSynteny, read_pairs
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
+    from .wgd_taxon_holdout import HOLDOUT_FIELDS
     from .wgd_tree_scan import scan_duplications
 
 
@@ -93,6 +95,7 @@ def owned_identity():
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
               Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
+              Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
               Path(__file__).with_name("wgd_cross_support.py").resolve(),
@@ -197,6 +200,11 @@ def make_plan(args):
         "diagonal_bound", "cscore", "self_hit_percent", "minimum_mapping_fraction", "alpha",
         "min_coverage", "min_blocks", "max_states", "max_iterations", "multiplicity")}
     parameters["min_duplication_score"] = getattr(args, "min_duplication_score", 0.01)
+    parameters["duplication_taxon_holdout"] = getattr(args, "duplication_taxon_holdout", 0)
+    if parameters["duplication_taxon_holdout"] not in (0, 1):
+        raise ValueError("Duplication taxon holdout must be 0 or 1")
+    if parameters["duplication_taxon_holdout"] and tree_archive is None:
+        raise ValueError("Duplication taxon holdout requires --gene-trees")
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
@@ -840,13 +848,16 @@ def run_analysis(plan, output, cpus):
                 cross_ks.observe_family(family, leaves)
 
         support_file = plan.get("cross_tree_support")
+        holdout_rows = [] if p.get("duplication_taxon_holdout") else None
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
                 observe=cross.observe if cross is not None else None,
                 family_members=family_members if cross is not None else None,
                 observe_family=observe_family if cross is not None else None,
-                observe_duplications=support.observe if support else None)
+                observe_duplications=support.observe if support else None, holdout_output=holdout_rows)
+        if holdout_rows is not None:
+            write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if support:
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
         del by_family
@@ -1187,6 +1198,7 @@ def main():
                   "cross-tree-support"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
+    plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-count-families", 10000),

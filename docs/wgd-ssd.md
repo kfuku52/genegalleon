@@ -97,6 +97,15 @@ with at least one matching duplication whose own split and both copy splits
 all have UFBoot support at or above 50, 70, or 95. These are descriptive
 levels, not WGD significance thresholds or a test of the root position.
 
+Set `wgd_duplication_taxon_holdout=1` to write
+`duplication_taxon_holdout.tsv`. For each original branch and excluded species,
+it reports eligible and voting families and gains and losses relative to the
+full scan. A branch is unidentifiable if the excluded species was its only
+representative in a daughter group or the immediate sister group. If no
+families are eligible, the score is `NA`, not zero. The audit prunes the
+archived topology in memory; it does not re-infer gene trees, change calls, or
+provide a P-value.
+
 ### Sparse Cross-Species Synteny
 
 In duplication-score mode, set `wgd_cross_synteny_file` to a TSV with

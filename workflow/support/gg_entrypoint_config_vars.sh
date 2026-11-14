@@ -420,6 +420,7 @@ wgd_count_bootstrap_workers
 wgd_count_scan_workers
 wgd_alpha
 wgd_gene_trees_file
+wgd_duplication_taxon_holdout
 wgd_cross_synteny_file
 wgd_cross_ks_cds_file
 wgd_max_ks_quartets

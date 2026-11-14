@@ -32,6 +32,7 @@ wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
 wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
 wgd_alpha="${wgd_alpha:-0.05}"
 wgd_gene_trees_file="${wgd_gene_trees_file:-}"
+wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
 wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
 wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
 wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
@@ -393,6 +394,7 @@ run_wgd_ssd_stage() (
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
     --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
+    --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
     --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
     --cross-ks-cds "${wgd_cross_ks_cds_file}" \
     --max-ks-quartets "${wgd_max_ks_quartets}" \

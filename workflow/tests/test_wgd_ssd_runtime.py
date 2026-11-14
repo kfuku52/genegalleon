@@ -152,7 +152,8 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     assert len(model["candidates"]) == 4
 
 
-def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path):
+@pytest.mark.parametrize("holdout", [False, True])
+def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout):
     from zipfile import ZipFile
 
     workspace = tmp_path / "workspace"
@@ -169,7 +170,8 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path):
         stream.writestr("rooted_tree/OG000_root.nwk",
                         "(((Alpha_one_a,Beta_two_a),(Alpha_one_b,Beta_two_b)),Gamma_three_a);")
         stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
-    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5")
+    result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
+                      wgd_duplication_taxon_holdout=str(int(holdout)))
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -180,6 +182,14 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path):
     assert float(row["duplication_score"]) == 0.5
     assert not (root / "count_model.json").exists()
     assert (root / "wgd_species_tree.png").stat().st_size > 1000
+    holdout_path = root / "duplication_taxon_holdout.tsv"
+    assert holdout_path.is_file() == holdout
+    assert (holdout_path.name in summary["output_hashes"]) == holdout
+    if holdout:
+        estimates = read_table(holdout_path)
+        assert {r["excluded_taxon"] for r in estimates} == set(NAMES)
+        assert all(r["species_event_id"] == row["species_event_id"] for r in estimates)
+        assert all(r["branch_identifiable"] == "0" and r["duplication_score"] == "NA" for r in estimates)
 
 
 def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
