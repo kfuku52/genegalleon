@@ -136,6 +136,17 @@ def test_replot_replaces_only_the_count_panel_and_rejects_tampering(tmp_path, co
     assert not out.exists()
     events.write_bytes(original)
     saved = []
+
+    def mutate_during_render(rows, directory, **kwargs):
+        (directory / "partial.png").write_bytes(b"incomplete")
+        events.write_bytes(original + b"changed while rendering\n")
+
+    monkeypatch.setattr(wgd_ssd, "plot_candidates", mutate_during_render)
+    with pytest.raises(ValueError, match="plot input changed during rendering"):
+        wgd_ssd.replot(args)
+    assert not out.exists()
+    assert not list(tmp_path.glob(".wgd-replot-*"))
+    events.write_bytes(original)
     monkeypatch.setattr(wgd_ssd, "plot_candidates", lambda rows, *_, **kwargs: saved.append((rows, kwargs)))
     wgd_ssd.replot(args)
     (candidates, options), = saved
@@ -145,3 +156,7 @@ def test_replot_replaces_only_the_count_panel_and_rejects_tampering(tmp_path, co
     assert options["orientation_rows"] == [{"shared_windows_a": 1, "shared_windows_b": None}]
     assert type(options["orientation_rows"][0]["shared_windows_a"]) is int
     assert events.read_bytes() == original
+    recorded = (out / "plot_provenance.json").read_bytes()
+    with pytest.raises(FileExistsError, match="output already exists"):
+        wgd_ssd.replot(args)
+    assert (out / "plot_provenance.json").read_bytes() == recorded

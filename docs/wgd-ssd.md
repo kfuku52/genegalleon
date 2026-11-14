@@ -520,7 +520,8 @@ For a gene-tree result, pass both `--count-overlay-table` and
 original tree and the figure input tables with their recorded hashes;
 it does not certify unrelated outputs or recreate a complete WGD bundle.
 It writes the plots, the displayed count table (when applicable), and
-`plot_provenance.json` to a new directory.
+`plot_provenance.json` together to a new directory after the inputs and
+plotting implementation pass a final hash check.
 
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in

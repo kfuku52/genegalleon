@@ -1185,6 +1185,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
 def replot(args):
     source = args.evidence.resolve()
     output = args.output.resolve()
+    if args.output.is_symlink() or output.exists():
+        raise FileExistsError(f"WGD plot output already exists: {output}")
     summary_path = source / "summary.json"
     summary_bytes = summary_path.read_bytes()
     summary_hash = hashlib.sha256(summary_bytes).hexdigest()
@@ -1252,23 +1254,31 @@ def replot(args):
         "orientation_rows": rows("cross_synteny_orientation_quartets.tsv", integers=("shared_windows_a", "shared_windows_b")),
         "copy_holdout": rows("cross_ks_component_holdout.tsv", numeric=("drop_component_min", "drop_component_max")),
     }
-    output.mkdir(parents=True, exist_ok=False)
-    plot_candidates(candidates, output, tree=tree, alpha=params["alpha"],
-                    duplication_threshold=params["min_duplication_score"] if plan.get("gene_trees") else None,
-                    focal_rows=focal, ds_method=params.get("cross_ks_method", "yn00"),
-                    count_overlay=overlay, count_alpha=overlay_alpha, **render)
-    plot_cross_ks(focal, output)
-    if overlay:
-        write_table(output / "count_overlay.tsv", overlay, COUNT_OVERLAY_FIELDS)
-    for path, expected in inputs.items():
-        if digest(path) != expected:
-            raise ValueError(f"WGD plot input changed during rendering: {path}")
-    write_json(output / "plot_provenance.json", {"schema_version": 1, "input_hashes": {str(k): v for k, v in inputs.items()},
-               "plot_implementation": {str(path): digest(path) for path in
-                                       (Path(__file__), Path(__file__).with_name("wgd_count_overlay.py"),
-                                        Path(__file__).with_name("wgd_cross_ks.py"),
-                                        Path(__file__).with_name("wgd_cross_phase.py"))},
-               "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir()) if path.is_file()}})
+    modules = (Path(__file__), *(Path(__file__).with_name(name) for name in
+                                ("wgd_count_overlay.py", "wgd_cross_ks.py", "wgd_cross_phase.py")))
+    implementation = {path: digest(path) for path in modules}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".wgd-replot-", dir=output.parent) as scratch:
+        staged = Path(scratch) / "plots"
+        staged.mkdir()
+        plot_candidates(candidates, staged, tree=tree, alpha=params["alpha"],
+                        duplication_threshold=params["min_duplication_score"] if plan.get("gene_trees") else None,
+                        focal_rows=focal, ds_method=params.get("cross_ks_method", "yn00"),
+                        count_overlay=overlay, count_alpha=overlay_alpha, **render)
+        plot_cross_ks(focal, staged)
+        if overlay:
+            write_table(staged / "count_overlay.tsv", overlay, COUNT_OVERLAY_FIELDS)
+        for hashes, subject in ((inputs, "input"), (implementation, "implementation")):
+            for path, expected in hashes.items():
+                if not path.is_file() or digest(path) != expected:
+                    raise ValueError(f"WGD plot {subject} changed during rendering: {path}")
+        write_json(staged / "plot_provenance.json", {"schema_version": 1,
+                   "input_hashes": {str(k): v for k, v in inputs.items()},
+                   "plot_implementation": {str(k): v for k, v in implementation.items()},
+                   "output_hashes": {p.name: digest(p) for p in sorted(staged.iterdir()) if p.is_file()}})
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(f"WGD plot output already exists: {output}")
+        staged.rename(output)
 
 
 def observable_synteny(placer, summaries, anchors):
