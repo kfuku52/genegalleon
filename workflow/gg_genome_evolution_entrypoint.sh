@@ -149,6 +149,7 @@ wgd_duplication_root_audit=0 # Audit votes possible with a different root on the
 wgd_cross_synteny_file="" # Optional sparse self/cross BED and direct-anchor manifest (duplication-score mode).
 wgd_cross_orientation_audit=0 # Audit coverage/support after reversing the cross-anchor window reference.
 wgd_cross_require_unique_phase=0 # Require concordant-only four-copy paths to support synteny.
+wgd_cross_require_both_orientations=0 # Require identical unique paths in both references; needs both orientation and unique-phase audits.
 wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cross-block age checks.
 wgd_cross_ks_reuse_summary="" # Optional newline-separated summary.json paths from completed runs for exact alignment reuse.
 wgd_max_ks_quartets=0 # Optional maximum four-copy dS comparisons per branch and species pair; 0 disables.

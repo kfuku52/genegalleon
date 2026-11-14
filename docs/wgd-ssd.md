@@ -185,6 +185,17 @@ and two orientations do not count as independent evidence.
 copy pairings and families recovered in both orientations, with separate
 window counts for each reference. When unique-phase sensitivity is enabled,
 it also reports pairings that are unique in both orientations.
+
+Optionally set `wgd_cross_require_both_orientations=1` alongside the unique
+phase and orientation options. A pair must meet the minimum family count
+and the minimum window count in **each** reference using the same
+uniquely concordant copy pairings. Cross-block dS and quartet selection use
+only the common set in this mode. Observability and gene-only fallback
+are unchanged; a positive signal in one orientation without corroboration
+in the other does not become a duplication-only call. The tree additionally
+shows `R`, the sum across species pairs of the smaller of their two shared
+unique window counts. This is a sensitivity filter, not independent evidence.
+Region and replication audits retain their original scopes.
 This option also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
 reference windows that contain five gene-disjoint direct pairs within one
 original block, both before and after requiring archive-family agreement.

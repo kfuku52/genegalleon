@@ -275,6 +275,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
+                      wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
                       wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
@@ -298,9 +299,11 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     orientation, = read_table(root / "cross_synteny_orientation.tsv")
     assert orientation["status"] == "supports_in_both"
     assert orientation["a_matched_paired_windows"] == orientation["b_matched_paired_windows"] == "1"
-    quartets_overlap, = read_table(root / "cross_synteny_orientation_quartets.tsv")
+    quartets_overlap, unique_overlap = read_table(root / "cross_synteny_orientation_quartets.tsv")
     assert quartets_overlap["status"] == "assessed_both" and quartets_overlap["shared_quartets"] == "5"
     assert quartets_overlap["shared_windows_a"] == quartets_overlap["shared_windows_b"] == "1"
+    assert unique_overlap["mode"] == "unique_phase" and unique_overlap["shared_quartets"] == "5"
+    assert row["synteny_block_definition"] == "uniquely_concordant_four_copy_paths_in_both_orientations"
     nonreused, = read_table(root / "cross_synteny_anchor_nonreuse.tsv")
     assert nonreused["num_nonreused_anchor_windows"] == nonreused["num_nonreused_archive_family_windows"] == "2"
     region = read_table(root / "cross_synteny_region_summary.tsv")[0]
@@ -347,6 +350,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
+                      wgd_cross_require_unique_phase="1", wgd_cross_require_both_orientations="1",
                       wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", artifact_stale_policy="rebuild",
                       wgd_cross_ks_reuse_summary="\n".join(f"{saved.name}/summary.json" for saved in donors))
     assert result.returncode == 0, result.stdout + result.stderr

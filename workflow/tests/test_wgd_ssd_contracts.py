@@ -137,7 +137,7 @@ def test_count_only_event_does_not_assign_gene_node_origin():
 
 
 def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family():
-    from workflow.support.wgd_cross_phase import orientation_phase_overlap, record_phase
+    from workflow.support.wgd_cross_phase import orientation_phase_overlap, record_phase, require_paired_orientations
 
     event = "E"
     f = [(event, "A", "B", ("a", 1), "OG", ("a1", "b1", "a2", "b2")),
@@ -157,6 +157,18 @@ def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family
     assert [all_paths[k] for k in ("a_quartets", "b_quartets", "shared_quartets", "shared_families",
                                     "shared_windows_a", "shared_windows_b")] == [2, 2, 1, 1, 1, 1]
     assert strict["a_quartets"] == 1 and strict["shared_quartets"] == 0
+    states = {event: {"observable": True, "supported": True, "supported_species": ["A", "B"]}}
+    daughters = {event: ({"A"}, {"B"})}
+    assert require_paired_orientations(states, daughters, (all_paths, strict), first, second, 1) == set()
+    assert states[event] == {"observable": True, "supported": False, "supported_species": []}
+    reverse_phases.clear()
+    record_phase(reverse_phases, r[0][:3], r[0][3], r[0][4], r[0][5], 1)
+    full = list(orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right],
+                                          first, second, unique=True))
+    assert require_paired_orientations(states, daughters, full, first, second, 1) == {f[0]}
+    assert states[event]["supported"]
+    assert require_paired_orientations(states, daughters, full, first, second, 2) == {f[0]}
+    assert not states[event]["supported"]
     right["status"] = "insufficient_archive_anchors"
     missing, = orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right], first, second)
     assert missing["status"] == "not_assessed_both" and missing["shared_quartets"] is None

@@ -75,26 +75,27 @@ ORIENTATION_PHASE_FIELDS = ("species_event_id", "branch_id", "species_a", "speci
                             "shared_windows_a", "shared_windows_b")
 
 
+def oriented_pairings(scanner, reverse, unique_phase):
+    result = defaultdict(dict)
+    for hit in scanner.orientation_hits if reverse else scanner.traced_hits:
+        event, a, b, _, family, genes, *_ = hit
+        if len(genes) != 4 or (unique_phase and not trace_has_unique_phase(scanner.phases, hit)):
+            continue
+        first, other_a, second, other_b = genes
+        copies = ((other_a, first), (other_b, second)) if reverse else ((first, other_a), (second, other_b))
+        pair = (event, b, a) if reverse else (event, a, b)
+        key = family, *sorted(copies)
+        result[pair].setdefault(key, set()).add(hit)
+    return result
+
+
 def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reverse, *, unique=False):
     branches = {row["species_event_id"]: row["branch_id"] for row in candidates}
     reverse_status = {(r["species_event_id"], r["species_b"], r["species_a"]): r["status"] for r in second_rows}
     forward_status = {(r["species_event_id"], r["species_a"], r["species_b"]): r["status"] for r in first_rows}
 
-    def observed(scanner, invert, unique_phase):
-        result = defaultdict(dict)
-        for hit in scanner.orientation_hits if invert else scanner.traced_hits:
-            event, a, b, window, family, genes, *_ = hit
-            if len(genes) != 4 or (unique_phase and not trace_has_unique_phase(scanner.phases, hit)):
-                continue
-            first, other_a, second, other_b = genes
-            copies = ((other_a, first), (other_b, second)) if invert else ((first, other_a), (second, other_b))
-            pair = (event, b, a) if invert else (event, a, b)
-            key = family, *sorted(copies)
-            result[pair].setdefault(key, set()).add(window)
-        return result
-
     for want_unique in ((False, True) if unique else (False,)):
-        first, second = observed(forward, False, want_unique), observed(reverse, True, want_unique)
+        first, second = oriented_pairings(forward, False, want_unique), oriented_pairings(reverse, True, want_unique)
         for (event, a, b), status in forward_status.items():
             pair = event, a, b
             x, y = first.get(pair, {}), second.get(pair, {})
@@ -106,6 +107,29 @@ def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reve
                       len(x) if assessed_a else None, len(y) if assessed_b else None,
                       len(intersection) if available else None,
                       len({key[0] for key in intersection}) if available else None,
-                      len({w for key in intersection for w in x[key]}) if available else None,
-                      len({w for key in intersection for w in y[key]}) if available else None)
+                      len({hit[3] for key in intersection for hit in x[key]}) if available else None,
+                      len({hit[3] for key in intersection for hit in y[key]}) if available else None)
             yield dict(zip(ORIENTATION_PHASE_FIELDS, values, strict=True))
+
+
+def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor):
+    first, second = oriented_pairings(forward, False, True), oriented_pairings(reverse, True, True)
+    support = defaultdict(set)
+    retained = set()
+    for row in orientation:
+        if row["mode"] != "unique_phase" or row["status"] != "assessed_both":
+            continue
+        event, a, b = (row[key] for key in ("species_event_id", "species_a", "species_b"))
+        pair = event, a, b
+        x, y = first.get(pair, {}), second.get(pair, {})
+        shared = x.keys() & y.keys()
+        # Keep consistent paths for ages and provenance. The support rule
+        # checks independent window counts on both references, not their sum.
+        retained.update(hit for key in shared for hit in x[key])
+        if min(row["shared_families"], row["shared_windows_a"], row["shared_windows_b"]) >= floor:
+            support[event].update((a, b))
+    for event, state in evidence.items():
+        present = support[event]
+        state["supported"] = all(group & present for group in daughters[event])
+        state["supported_species"] = sorted(present)
+    return retained
