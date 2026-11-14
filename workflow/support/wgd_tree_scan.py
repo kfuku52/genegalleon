@@ -1,7 +1,7 @@
 """Branch-matched duplication scores from an archived set of rooted gene trees."""
 
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import PurePosixPath
@@ -21,6 +21,9 @@ PANEL_FIELDS = ("species_event_id", "branch_id", "panel", "families_in_panel", "
                 "supporting_families", "score", "meets_cutoff")
 PANEL_SUMMARY_FIELDS = ("species_event_id", "branch_id", "num_panels", "num_testable_panels", "num_panels_meeting_cutoff",
                         "minimum_panel_score", "maximum_panel_score", "baseline_score")
+STRATUM_FIELDS = ("species_event_id", "branch_id", "metric", "lower_inclusive", "upper_exclusive", "families_in_stratum",
+                  "eligible_families", "supporting_families", "score")
+FAMILY_STRATA = (("tree_tips", (0, 20, 35, 60)), ("copies_per_observed_species", (1., 1.25, 1.75, 2.5)))
 COPY_SPLIT_FIELDS = ("species_event_id", "branch_id", "eligible_families", "supporting_families",
                      "same_tip_in_every_daughter", "same_tip_set", "both_copy_splits", "same_tip_and_both_splits",
                      "same_tip_and_both_splits_score")
@@ -39,6 +42,8 @@ class FamilyPanels:
         self.eligible = [Counter() for _ in range(count)]
         self.support = [Counter() for _ in range(count)]
         self.totals = [0] * count
+        self.strata = defaultdict(lambda: (Counter(), Counter()))
+        self.strata_totals = Counter()
 
     def bucket(self, family):
         identity = sha256(self.salt + family.encode("utf-8")).digest()
@@ -64,6 +69,29 @@ class FamilyPanels:
                       min(scores, default=None), max(scores, default=None), row["duplication_score"])
             summary.append(dict(zip(PANEL_SUMMARY_FIELDS, values, strict=True)))
         return detail, summary
+
+    def observe_strata(self, leaves, taxa_mask, eligible, supported):
+        metrics = leaves, leaves / taxa_mask.bit_count()
+        for (label, edges), value in zip(FAMILY_STRATA, metrics, strict=True):
+            key = label, max(i for i, edge in enumerate(edges) if edge <= value)
+            self.strata_totals[key] += 1
+            possible, votes = self.strata[key]
+            for mask, _ in eligible:
+                possible[mask] += 1
+                if mask in supported:
+                    votes[mask] += 1
+
+    def strata_rows(self, candidates, branches):
+        by_event = {event: mask for mask, (_, _, _, event) in branches.items()}
+        for label, edges in FAMILY_STRATA:
+            for i, (low, high) in enumerate(zip(edges, (*edges[1:], None), strict=True)):
+                key = label, i
+                possible, votes = self.strata[key]
+                for row in candidates:
+                    event = row["species_event_id"]
+                    n, v = possible[by_event[event]], votes[by_event[event]]
+                    values = (event, row["branch_id"], label, low, high, self.strata_totals[key], n, v, v / n if n else None)
+                    yield dict(zip(STRATUM_FIELDS, values, strict=True))
 
 
 def alternate_root_votes(tree, observed, eligible_daughters):
@@ -108,7 +136,8 @@ def alternate_root_votes(tree, observed, eligible_daughters):
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
                       observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None,
-                      root_output=None, observe_topology=None, panels=None, panel_output=None, copy_split_output=None):
+                      root_output=None, observe_topology=None, panels=None, panel_output=None, copy_split_output=None,
+                      stratum_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -190,7 +219,10 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             if observe_topology is not None:
                 observe_topology(family, tree, expected)
             projected, root_eligible = {}, {}
-            for mask, daughters in eligible_branches(full):
+            possible = eligible_branches(full)
+            if panels is not None and stratum_output is not None:
+                panels.observe_strata(len(leaves), full, possible, supported)
+            for mask, daughters in possible:
                 eligible[mask] += 1
                 if panel is not None:
                     panels.eligible[panel][mask] += 1
@@ -280,4 +312,6 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
         holdout_output.extend(holdout.rows(rows))
     if panels is not None:
         panel_output.extend(panels.rows(rows, branches, minimum_score))
+        if stratum_output is not None:
+            stratum_output.extend(panels.strata_rows(rows, branches))
     return rows, len(families)

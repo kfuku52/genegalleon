@@ -143,6 +143,12 @@ supporting votes from a family together. The per-panel and summary tables
 record sample sizes, branch scores, and how often the configured cutoff is
 met. An untestable panel is not a negative. Panel agreement is not a
 P-value, particularly for linked families, and does not change WGD calls.
+The same setting writes `duplication_family_size_strata.tsv`: scores by
+archived tree tip count (below 20, 20-34, 35-59, or at least 60) and by
+tips per observed species (cut points 1, 1.25, 1.75, and 2.5). Each metric
+partitions the same families and preserves the branch-specific eligibility
+rule. Large or copy-rich families have more opportunities to generate a
+vote; the strata describe sensitivity, not independent trees or P-values.
 
 ### Sparse Cross-Species Synteny
 

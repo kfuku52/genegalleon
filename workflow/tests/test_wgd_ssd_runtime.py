@@ -268,6 +268,8 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
     assert orientation.is_file() == holdout
     panels = root / "duplication_family_panels.tsv"
     assert panels.is_file() == holdout
+    strata = root / "duplication_family_size_strata.tsv"
+    assert strata.is_file() == holdout
     copy_splits = root / "duplication_copy_splits.tsv"
     assert copy_splits.is_file() == holdout
     if holdout:
@@ -287,6 +289,10 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         assert copy_splits.name in summary["output_hashes"]
         assert summary["plan"]["parameters"]["duplication_family_panels"] == 3
         assert sum(int(row["families_in_panel"]) for row in read_table(panels)) == 2
+        size_rows = [row for row in read_table(strata) if row["metric"] == "tree_tips"]
+        assert sum(int(row["eligible_families"]) for row in size_rows) == 2
+        assert sum(int(row["supporting_families"]) for row in size_rows) == 1
+        assert strata.name in summary["output_hashes"]
         audited, = read_table(coverage)
         assert audited["eligible_complete"] == "2" and audited["eligible_partial"] == "0"
         assert audited["projected_score"] == audited["complete_case_score"] == "0.5"

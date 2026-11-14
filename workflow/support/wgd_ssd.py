@@ -84,6 +84,7 @@ try:
         PANEL_FIELDS,
         PANEL_SUMMARY_FIELDS,
         ROOT_FIELDS,
+        STRATUM_FIELDS,
         FamilyPanels,
         scan_duplications,
     )
@@ -153,6 +154,7 @@ except ImportError:
         PANEL_FIELDS,
         PANEL_SUMMARY_FIELDS,
         ROOT_FIELDS,
+        STRATUM_FIELDS,
         FamilyPanels,
         scan_duplications,
     )
@@ -1445,6 +1447,7 @@ def run_analysis(plan, output, cpus):
         panel_count = p.get("duplication_family_panels", 0)
         panels = FamilyPanels(panel_count, p["seed"]) if panel_count else None
         panel_output = []
+        stratum_output = [] if panels is not None else None
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
@@ -1454,7 +1457,7 @@ def run_analysis(plan, output, cpus):
                 observe_duplications=observe_support if support or rooted_copy is not None else None, holdout_output=holdout_rows,
                 coverage_output=duplication_coverage, root_output=root_audit,
                 observe_topology=terminal.observe if terminal is not None else None,
-                panels=panels, panel_output=panel_output, copy_split_output=copy_splits)
+                panels=panels, panel_output=panel_output, copy_split_output=copy_splits, stratum_output=stratum_output)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if duplication_coverage is not None:
@@ -1466,6 +1469,7 @@ def run_analysis(plan, output, cpus):
         if panels is not None:
             detail, summary = panel_output
             write_table(output / "duplication_family_panels.tsv", detail, PANEL_FIELDS)
+            write_table(output / "duplication_family_size_strata.tsv", stratum_output, STRATUM_FIELDS)
             write_table(output / "duplication_family_panel_summary.tsv", summary, PANEL_SUMMARY_FIELDS)
         if support:
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)

@@ -251,17 +251,26 @@ def test_duplication_family_panels_are_disjoint_stable_and_have_missing_status(t
         with ZipFile(archive, "w") as stream:
             for name, gene in sites:
                 stream.writestr(f"{name}_root.nwk", gene)
-        panels = []
-        result = scan_duplications(tree, archive, .5, panels=FamilyPanels(5, 7), panel_output=panels)
+        panels, strata = [], []
+        result = scan_duplications(tree, archive, .5, panels=FamilyPanels(5, 7), panel_output=panels, stratum_output=strata)
         assert result == scan_duplications(tree, archive, .5)
-        scans.append(panels)
+        scans.append((panels, strata))
     assert scans[0] == scans[1]
-    detail, [summary] = scans[0]
+    (detail, [summary]), strata = scans[0]
     assert sum(r["families_in_panel"] for r in detail) == 3
     assert sum(r["eligible_families"] for r in detail) == 2
     assert sum(r["supporting_families"] for r in detail) == 1
     assert sum(r["score"] is None for r in detail) >= 3
     assert summary["baseline_score"] == .5
+    for metric in {r["metric"] for r in strata}:
+        rows = [r for r in strata if r["metric"] == metric]
+        assert len(rows) == 4
+        assert sum(r["families_in_stratum"] for r in rows) == 3
+        assert sum(r["eligible_families"] for r in rows) == 2
+        assert sum(r["supporting_families"] for r in rows) == 1
+    bands = [r for r in strata if r["metric"] == "copies_per_observed_species"]
+    assert [(r["lower_inclusive"], r["families_in_stratum"], r["score"]) for r in bands] == [
+        (1., 1, 0.), (1.25, 1, 1.), (1.75, 1, None), (2.5, 0, None)]
 
 
 def test_duplication_copy_split_audit_requires_the_same_duplication_node(tmp_path):
