@@ -39,8 +39,10 @@ try:
     from wgd_cross_phase import (
         ORIENTATION_PHASE_FIELDS,
         PHASE_FIELDS,
+        QUARTET_PHASE_FIELDS,
         orientation_phase_overlap,
         phase_rows,
+        quartet_phase_rows,
         require_paired_orientations,
         trace_has_unique_phase,
         unique_phase_windows,
@@ -109,8 +111,10 @@ except ImportError:
     from .wgd_cross_phase import (
         ORIENTATION_PHASE_FIELDS,
         PHASE_FIELDS,
+        QUARTET_PHASE_FIELDS,
         orientation_phase_overlap,
         phase_rows,
+        quartet_phase_rows,
         require_paired_orientations,
         trace_has_unique_phase,
         unique_phase_windows,
@@ -1486,6 +1490,9 @@ def run_analysis(plan, output, cpus):
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
             phase_diagnostics = list(phase_rows(raw_candidates, pair_rows, cross.phases))
             write_table(output / "cross_synteny_copy_phase.tsv", phase_diagnostics, PHASE_FIELDS)
+            if p.get("cross_orientation_audit"):
+                write_table(output / "cross_synteny_distinct_quartet_phase.tsv",
+                            quartet_phase_rows(raw_candidates, pair_rows, cross.phases), QUARTET_PHASE_FIELDS)
             both_hits = None
             reverse_windows = None
             if reverse is not None:

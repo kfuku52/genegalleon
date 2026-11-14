@@ -266,6 +266,10 @@ contain multiple quartets and can appear in more than one category. On the
 species tree, `W` counts matched paired windows and `U` counts windows with
 at least one concordant-only quartet. This audit does not change the primary
 candidate decision or turn phase agreement into an age estimate.
+With `wgd_cross_orientation_audit=1`, `cross_synteny_distinct_quartet_phase.tsv`
+also merges repeats of the same four genes and family across windows. Both
+phase labels on the same quartet count as ambiguous, and unassessed pairs
+stay unavailable. It describes disagreement and leaves calls unchanged.
 
 For a stricter sensitivity run, set `wgd_cross_require_unique_phase=1`.
 Every supporting pair must meet the configured window and family floors

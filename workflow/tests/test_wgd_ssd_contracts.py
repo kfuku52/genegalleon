@@ -542,6 +542,24 @@ def test_cross_ks_coalesces_shared_copy_windows_and_families():
     assert component_medians(hits) == [.7, 1.5]
 
 
+def test_distinct_synteny_quartets_merge_windows_and_keep_unassessed_missing():
+    from collections import defaultdict
+
+    from workflow.support.wgd_cross_phase import quartet_phase_rows, record_phase
+
+    event, a, b = "branch", "A", "B"
+    phases = defaultdict(dict)
+    record_phase(phases, (event, a, b), ("first", 1), "f", ("a", "b", "aa", "bb"), 1)
+    record_phase(phases, (event, a, b), ("repeat", 2), "f", ("aa", "b", "a", "bb"), 2)
+    record_phase(phases, (event, a, b), ("another", 3), "f", ("a", "b", "aaa", "bb"), 1)
+    pairs = [{"species_event_id": event, "species_a": a, "species_b": b, "status": status}
+             for status in ("assessed", "missing_self_comparison")]
+    found, unavailable = quartet_phase_rows([{"species_event_id": event, "branch_id": 3}], pairs, phases)
+    assert [found[k] for k in ("concordant_only_distinct_quartets", "discordant_only_distinct_quartets",
+                               "ambiguous_distinct_quartets")] == [1, 0, 1]
+    assert unavailable["status"] == "missing_self_comparison" and unavailable["ambiguous_distinct_quartets"] is None
+
+
 def test_copy_median_interval_requires_six_independent_components():
     from workflow.support.wgd_cross_ks import copy_median_interval
 

@@ -1,10 +1,12 @@
 """Audit whether direct cross blocks identify a unique four-copy phase."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 PHASE_STATES = ("concordant_only", "discordant_only", "ambiguous")
 PHASE_FIELDS = ("species_event_id", "branch_id", "species_a", "species_b",
                 *(f"{state}_{unit}" for state in PHASE_STATES for unit in ("quartets", "families", "windows")))
+QUARTET_PHASE_FIELDS = ("species_event_id", "branch_id", "species_a", "species_b", "status",
+                        *(f"{state}_distinct_quartets" for state in PHASE_STATES))
 
 
 def observe_phase(source, other, genes):
@@ -41,6 +43,22 @@ def phase_rows(candidates, comparisons, phases):
         yield dict(zip(PHASE_FIELDS, (event, branches[event], a, b,
                      *(value for state in PHASE_STATES for value in (counts[state], len(families[state]), len(windows[state])))),
                        strict=True))
+
+
+def quartet_phase_rows(candidates, comparisons, phases):
+    """Merge repeat windows and complementary orientations of the same four genes."""
+    branches = {row["species_event_id"]: row["branch_id"] for row in candidates}
+    for row in comparisons:
+        event, a, b = (row[field] for field in ("species_event_id", "species_a", "species_b"))
+        status = row["status"]
+        merged = {}
+        if status == "assessed":
+            for (_, family, x, xx, y, yy), mask in phases.get((event, a, b), {}).items():
+                key = family, *sorted((x, xx)), *sorted((y, yy))
+                merged[key] = merged.get(key, 0) | mask
+        counts = Counter(merged.values())
+        values = (event, branches[event], a, b, status, *(counts[i] if status == "assessed" else None for i in (1, 2, 3)))
+        yield dict(zip(QUARTET_PHASE_FIELDS, values, strict=True))
 
 
 def unique_phase_windows(rows):
