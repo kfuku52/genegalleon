@@ -831,11 +831,11 @@ def _partials(root, store, manifest, key):
         bodies = _DecodedBodies(body_db, manifest["body_codec"])
         if manifest.get("partial_ordered") is True:
             position = 0
-            for found_position, envelope in _partial_entries(root, store, manifest, key, refs):
+            for found_position, envelope, context_owned in _partial_entries(root, store, manifest, key, refs):
                 if found_position != position:
                     raise ValueError("Model-store partial order changed")
                 position += 1
-                yield bodies.unpack(envelope)
+                yield bodies.unpack(envelope, context_owned=context_owned)
             if position != count:
                 raise ValueError("Missing model-store partial reference")
             return
@@ -845,13 +845,13 @@ def _partials(root, store, manifest, key):
             spool = sqlite3.connect(Path(tmp) / "partial.sqlite")
             try:
                 spool.execute("CREATE TABLE entries (position INTEGER PRIMARY KEY,envelope BLOB)")
-                for position, envelope in _partial_entries(root, store, manifest, key, refs):
+                for position, envelope, _ in _partial_entries(root, store, manifest, key, refs):
                     spool.execute("INSERT INTO entries VALUES (?,?)", (position, _json(envelope)))
                 if spool.execute("SELECT COUNT(*) FROM entries").fetchone()[0] != count:
                     raise ValueError("Missing model-store partial reference")
                 for (_, blob) in spool.execute("SELECT position,envelope FROM entries ORDER BY position"):
                     envelope = json.loads(blob)
-                    yield bodies.unpack(envelope)
+                    yield bodies.unpack(envelope, context_owned=True)
             finally:
                 spool.close()
     finally:
@@ -884,8 +884,9 @@ def _partial_entries(root, store, manifest, key, refs):
                 if (type(position) is not int or position < 0 or type(ordinal) is not int
                         or envelope["ordinal"] != ordinal):
                     raise ValueError("Model-store partial reference changed")
-                yield position, envelope
                 reference = next(references, None)
+                # Earlier references to the same envelope must leave it intact.
+                yield position, envelope, reference is None or reference[0] != line
         if count != manifest["shards"][shard_index]["count"]:
             raise ValueError("Model-store partial shard count changed")
         if reference is not None:

@@ -381,16 +381,18 @@ def test_partial_scope_excludes_unrelated_shards_and_preserves_explicit_order(tm
     assert list(store.iter_partial_models(directory, frozen_key=key)) == [records[2], records[0], records[2]]
 
 
-def test_partial_sparse_repeated_reordered_records_keep_full_qc_and_independence(tmp_path):
+@pytest.mark.parametrize("ordinals", [(12, 2, 2, 7, 0, 12), (2, 2, 2, 7, 12, 12)])
+def test_partial_sparse_repeated_records_keep_full_qc_and_independence(tmp_path, ordinals):
     records = [model(i, "accepted_alternative_path" if i == 2 else "proposal") for i in range(13)]
     for i, record in enumerate(records):
         record["problems"] = ["missing_stop", "internal_stop"] if i % 3 == 0 else []
         record["unknown"]["lineage"] = {"source_rescue": [i, "植物🙂"]}
-    partial = [records[i] for i in (12, 2, 2, 7, 0, 12)]
+    partial = [records[i] for i in ordinals]
     directory = tmp_path / "worker"
     manifest = store.write_model_store(directory, records, partial_models=partial,
                                        shard_bytes=5500, codec="gzip")
     assert len(manifest["shards"]) > 1
+    assert manifest["partial_ordered"] == (list(ordinals) == sorted(ordinals))
     receipt(directory)
     restored = list(store.iter_partial_models(directory))
     assert json.dumps(restored, ensure_ascii=False) == json.dumps(partial, ensure_ascii=False)
