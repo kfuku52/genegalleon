@@ -759,7 +759,7 @@ def _build_catalogs(root, value, names, cpus):
     request = value['request']
     assemblies = request.get('transcriptome_sources', {})
     rna_bams = request.get('rna_bams', {})
-    annotation_sizes = []
+    annotation_sizes = {}
     for name in missing:
         if request.get('rna') or rna_bams.get(name):
             return [catalog_species(root, value, name) for name in names]
@@ -767,11 +767,12 @@ def _build_catalogs(root, value, names, cpus):
             source, fields = assemblies[name], ('fasta', 'transcript_gene_map')
         else:
             source, fields = request['sources'][name], ('fasta', 'gff')
-        annotation_sizes.append(sum(Path(source[field]).stat().st_size for field in fields))
+        annotation_sizes[name] = sum(Path(source[field]).stat().st_size for field in fields)
     workers = min(cpus, len(missing), 4)
-    largest = sorted(annotation_sizes, reverse=True)
+    # Start larger builds first so one late catalog cannot strand the other workers.
+    build_order = sorted(missing, key=annotation_sizes.__getitem__, reverse=True)
     available = (int(budget) - 4) * 1024 ** 3
-    while workers > 1 and sum(largest[:workers]) * 64 > available:
+    while workers > 1 and sum(annotation_sizes[name] for name in build_order[:workers]) * 64 > available:
         workers -= 1
     if workers < 2:
         return [catalog_species(root, value, name) for name in names]
@@ -783,7 +784,7 @@ def _build_catalogs(root, value, names, cpus):
 
     pending, receipts = deque(), {}
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
-        for name in missing:
+        for name in build_order:
             pending.append(executor.submit(_build_catalog_worker, root, value, name))
             if len(pending) >= workers * 2:
                 directory, sha = pending.popleft().result()
