@@ -2860,6 +2860,50 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
         return result
 
 
+def complete_worker(root, plan, name, cpus):
+    """Bind fresh rescue, effective and BUSCO evidence to the worker receipt."""
+    plan_sha = plan_digest(root, plan)
+    worker_dir = root / "workers" / name
+    rescued = root / "rescued" / name
+    effective = root / "effective" / name
+    summary = root / "qc/species_cds_busco_short" / (name + ".busco.short.txt")
+    full = root / "qc/species_cds_busco_full" / (name + ".busco.full.tsv")
+    qc_proof = FreshDigestBatch()
+    with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=cpus)) as dependencies:
+        rescue_key_expected = rescue_key(root, plan, name, dependency_snapshot=dependencies)
+        if not verified_dependency(dependencies, rescued, rescue_key_expected):
+            raise ValueError("Rescue worker has no verified models")
+        rescue_receipt = rescued / "receipt.json"
+        rescue_sha = digest(rescue_receipt)
+        effective_key = {"plan": plan_sha, "rescue_receipts": {name: rescue_sha}}
+        if not verified_dependency(dependencies, effective, effective_key):
+            raise ValueError("Rescue worker has no verified exported inputs")
+        effective_receipt = effective / "receipt.json"
+        files = {rescue_receipt: rescue_sha, effective_receipt: digest(effective_receipt)}
+        for receipt, sha in tuple(files.items()):
+            dependencies.check({receipt: sha})
+            raw = receipt.read_bytes()
+            require_same_key(sha, hashlib.sha256(raw).hexdigest())
+            files.update({receipt.parent / member: checksum for member, checksum in json.loads(raw)["files"].items()})
+        files.update({Path(path): sha for path, sha in qc_proof.read((summary, full)).items()})
+        quality = busco_quality(summary)
+        initial = plan["request"]["sources"][name]["quality"]
+        if any(quality[k] != initial[k] for k in COMPARABLE_QUALITY):
+            raise ValueError("Worker BUSCO is not comparable to the initial run")
+        inputs = table(effective / "inputs.tsv")[0]
+        if int(inputs["rescued_models"]) == 0 and quality != initial:
+            raise ValueError("Unchanged species BUSCO differs from the initial run")
+        receipt = {"key": {"plan": plan_sha, "species": name},
+                   "files": {os.path.relpath(path, worker_dir): sha for path, sha in files.items()}}
+        require_same_key(plan_sha, plan_digest(root, plan))
+        try:
+            dependencies.check_all()
+            qc_proof.check()
+        except (ReceiptChanged, OSError) as exc:
+            raise ValueError("Worker dependencies changed during execution") from exc
+        atomic_json(worker_dir / "receipt.json", receipt)
+
+
 def qc_work_items(root, plan, indices, hash_workers=1):
     """Verify the exact effective inputs before dispatching or reusing BUSCO."""
     result = []
@@ -3148,37 +3192,7 @@ def main():
         if not args.task_index or not 1 <= args.task_index <= len(plan["species"]):
             p.error("Worker index outside frozen plan")
         name = plan["species"][args.task_index - 1]
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus):
-            raise ValueError("Rescue worker has no verified models")
-        effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
-            name: digest(root / "rescued" / name / "receipt.json")}}
-        if not verified(root / "effective" / name, effective_key, hash_workers=args.cpus):
-            raise ValueError("Rescue worker has no verified exported inputs")
-        files = [root / "rescued" / name / "receipt.json", root / "effective" / name / "receipt.json",
-                 root / "qc/species_cds_busco_full" / (name + ".busco.full.tsv"),
-                 root / "qc/species_cds_busco_short" / (name + ".busco.short.txt")]
-        summary = files[-1]
-        for directory in (root / "rescued" / name, root / "effective" / name):
-            files += [directory / p for p in json.loads((directory / "receipt.json").read_text())["files"]]
-        worker_dir = root / "workers" / name
-        def current_files():
-            hashes = hash_paths(root, files, workers=args.cpus, hash_function=digest)
-            return {os.path.relpath(root / p, worker_dir): value for p, value in hashes.items()}
-        frozen_files = current_files()
-        quality = busco_quality(summary)
-        initial = plan["request"]["sources"][name]["quality"]
-        if any(quality[k] != initial[k] for k in COMPARABLE_QUALITY):
-            raise ValueError("Worker BUSCO is not comparable to the initial run")
-        effective = table(root / "effective" / name / "inputs.tsv")[0]
-        if int(effective["rescued_models"]) == 0 and quality != initial:
-            raise ValueError("Unchanged species BUSCO differs from the initial run")
-        require_same_key(frozen_files, current_files())
-        if (not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus)
-                or not verified(root / "effective" / name, effective_key, hash_workers=args.cpus)):
-            raise ValueError("Worker dependencies changed during execution")
-        atomic_json(worker_dir / "receipt.json", {
-            "key": {"plan": plan_digest(root, plan), "species": name},
-            "files": frozen_files})
+        complete_worker(root, plan, name, args.cpus)
     if args.command == "qc":
         finalize(root, plan, hash_workers=args.cpus)
         files = {n: args.busco_dir / (n + ".busco.short.txt") for n in plan["species"]}

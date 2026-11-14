@@ -1804,7 +1804,8 @@ def test_external_qc_refuses_inputs_changed_during_report(hidden_models, monkeyp
     assert not (output / "qc_report" / "receipt.json").exists()
 
 
-def test_worker_completion_refuses_qc_changed_after_comparability_check(hidden_models, monkeypatch):
+@pytest.mark.parametrize("changed", ["busco", "effective", "rescue"])
+def test_worker_completion_refuses_dependencies_changed_during_comparability_check(hidden_models, monkeypatch, changed):
     root, names, _ = hidden_models
     output, _, _ = make_plan(hidden_models)
     plan = rescue.load(output)
@@ -1823,11 +1824,15 @@ def test_worker_completion_refuses_qc_changed_after_comparability_check(hidden_m
     summary = short_dir / (name + ".busco.short.txt")
     summary.write_bytes((root / "busco" / summary.name).read_bytes())
     (full_dir / (name + ".busco.full.tsv")).write_text("# synthetic complete table\n")
+    changed_path = {"busco": summary, "effective": output / "effective" / name / "inputs.tsv",
+                    "rescue": output / "rescued" / name / "audit.tsv"}[changed]
     original_quality = rescue.busco_quality
     def replace_after_check(path):
         result = original_quality(path)
         if Path(path) == summary:
-            summary.write_text(summary.read_text().replace("n:100", "n:101"))
+            replacement = changed_path.with_suffix(".replacement")
+            replacement.write_bytes(changed_path.read_bytes())
+            replacement.replace(changed_path)
         return result
     monkeypatch.setattr(rescue, "busco_quality", replace_after_check)
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), "worker-complete", "--output", str(output), "--task-index", "1"])
