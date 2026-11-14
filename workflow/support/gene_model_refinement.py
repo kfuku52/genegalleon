@@ -770,7 +770,7 @@ def catalog_index(root, value, predictions=False):
             else:
                 summary = build_store(directories, db)
             if work != tmp:
-                copy_refinement_index(db, tmp / db.name)
+                shutil.copyfile(db, tmp / db.name)
             if work != tmp or predictions:
                 with (tmp / db.name).open('rb') as handle:
                     os.fsync(handle.fileno())
@@ -806,14 +806,14 @@ def apply_catalog_predictions(db, summary, overlays):
     summary['candidate_count'] += accepted_count
 
 
-def copy_refinement_index(source, destination, expected_sha256=None):
-    """Copy with a checksum in one pass and verify the expected source bytes."""
+def copy_refinement_index(source, destination, expected_sha256):
+    """Copy and check a receipted refinement index in one pass."""
     checksum = hashlib.sha256()
     with source.open('rb') as original, destination.open('wb') as copy_file:
         for chunk in iter(lambda: original.read(1024 * 1024), b''):
             copy_file.write(chunk)
             checksum.update(chunk)
-    if expected_sha256 is not None and checksum.hexdigest() != expected_sha256:
+    if checksum.hexdigest() != expected_sha256:
         raise OSError('Copied refinement SQLite index differs from its source database')
 
 
