@@ -17,6 +17,7 @@ from functools import partial
 from pathlib import Path
 
 try:
+    from content_digest_cache import cached_sha256_file
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
@@ -76,6 +77,7 @@ try:
     )
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
 except ImportError:
+    from .content_digest_cache import cached_sha256_file
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
@@ -456,12 +458,12 @@ def make_plan(args):
             + ([str(code_file)] if not code_file.is_file() else [])}
 
 
-def verify(plan):
+def verify(plan, file_digest=digest):
     identity = plan.get("alignment_identity")
     if identity is not None and alignment_identity(plan["tools"]["ds"])[0] != identity:
         raise ValueError("MAFFT or backtranslation identity changed during WGD analysis")
     for path, expected in plan["input_hashes"].items():
-        if digest(path) != expected:
+        if file_digest(path) != expected:
             raise ValueError(f"WGD input changed during analysis: {path}")
     if any(Path(path).exists() for path in plan.get("absent_inputs", [])):
         raise ValueError("A previously absent WGD input appeared during analysis")
@@ -1552,6 +1554,10 @@ def _load_family_evidence(evidence, gene_ids):
     return positions, events, anchors
 
 
+def family_evidence_digest(path):
+    return cached_sha256_file(Path(path))[0]
+
+
 def classify(args):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
@@ -1565,7 +1571,7 @@ def classify(args):
     summary = json.loads((evidence / "summary.json").read_text())
     if digest(args.species_tree) != summary["plan"]["input_hashes"][str(Path(summary["plan"]["species_tree"]))]:
         raise ValueError("WGD evidence and classification species trees differ")
-    verify(summary["plan"])
+    verify(summary["plan"], family_evidence_digest)
     required = {"gene_positions.tsv", "anchor_evidence.tsv", "wgd_events.tsv"}
     if args.native_tree_likelihood:
         if summary.get("candidate_model") == "rooted_gene_tree_duplication_score":
@@ -1574,7 +1580,7 @@ def classify(args):
     if not required.issubset(summary.get("output_hashes", {})):
         raise ValueError("WGD evidence lacks output integrity hashes; regenerate it")
     for name, expected in summary["output_hashes"].items():
-        if Path(name).name != name or digest(evidence / name) != expected:
+        if Path(name).name != name or family_evidence_digest(evidence / name) != expected:
             raise ValueError("WGD evidence output changed or has an invalid hash path")
     snapshot_paths = [args.gene_tree, args.species_tree, evidence / "summary.json"]
     if args.species_map:
@@ -1673,9 +1679,10 @@ def classify(args):
     write_tree(tree, argparse.Namespace(outfile=str(args.output / "classified_gene_tree.nhx")),
                "auto", quiet=True, props=sorted(properties))
     plot_origins(tree, args.output)
-    verify(summary["plan"])
+    verify(summary["plan"], family_evidence_digest)
     verify({"input_hashes": snapshot})
-    verify({"input_hashes": {str(evidence / name): expected for name, expected in summary["output_hashes"].items()}})
+    verify({"input_hashes": {str(evidence / name): expected for name, expected in summary["output_hashes"].items()}},
+           family_evidence_digest)
     write_json(args.output / "summary.json", {"schema_version": 1, "num_duplications": len(result),
         "class_counts": {status: sum(row["classification"] == status for row in result) for status in ("WGD-supported", "SSD-supported", "unresolved")},
         "native_tree_likelihood": bool(args.native_tree_likelihood),

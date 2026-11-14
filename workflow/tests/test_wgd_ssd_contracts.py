@@ -1852,6 +1852,29 @@ def test_classification_rejects_inputs_changed_during_reconciliation(tmp_path, m
     assert not (args.output / "summary.json").exists()
 
 
+def test_family_evidence_hash_cache_rejects_same_size_rewrite_with_restored_mtime(tmp_path, monkeypatch):
+    import os
+
+    from workflow.support.content_digest_cache import ContentDigestCache
+
+    path = tmp_path / "shared.tsv"
+    path.write_text("good\n")
+    os.utime(path, ns=(1_700_000_000_000_000_123, 1_700_000_000_000_000_123))
+    cache = ContentDigestCache(tmp_path / "cache.sqlite3")
+    monkeypatch.setitem(wgd_ssd.cached_sha256_file.__globals__, "_CACHE", cache)
+    try:
+        expected = wgd_ssd.digest(path)
+        plan = {"input_hashes": {str(path): expected}}
+        wgd_ssd.verify(plan, wgd_ssd.family_evidence_digest)
+        previous = path.stat()
+        path.write_text("bad!\n")
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        with pytest.raises(ValueError, match="input changed"):
+            wgd_ssd.verify(plan, wgd_ssd.family_evidence_digest)
+    finally:
+        cache.close()
+
+
 def test_nhx_ancestral_branch_mapping_cannot_get_terminal_tandem_label(tmp_path):
     args = classification_fixture(tmp_path, "(A_a:1,A_b:1)[&&NHX:D=Y:S=AB];",
                                   [positioned("A_a"), positioned("A_b", rank=2)])
