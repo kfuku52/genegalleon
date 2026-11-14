@@ -198,6 +198,23 @@ def test_weak_donor_cannot_supply_independent_support():
     assert result["problems"] == ["insufficient_independent_support"]
 
 
+def test_classification_reuses_quality_only_for_identical_sequences(monkeypatch):
+    catalog, models, edges = classification_fixture()
+    changed = {**models[1], 'sequence': models[1]['sequence'][:-3] + 'AAA'}
+    original, checked = refinement.validate_candidate, []
+
+    def record(candidate, genetic_code):
+        checked.append(candidate['cds'])
+        return original(candidate, genetic_code)
+
+    monkeypatch.setattr(refinement, 'validate_candidate', record)
+    result, = classify(catalog, [*models, changed], edges)
+    assert checked == [models[0]['sequence'], changed['sequence']]
+    assert result['candidate']['cds'] == models[0]['sequence']
+    assert result['status'] == 'proposal'
+    assert 'invalid_predicted_coding_path' in result['problems']
+
+
 @pytest.mark.parametrize("problem", ["frameshift", "noncanonical_splice", "assembly_gap", "outside_search_window"])
 def test_structural_defect_still_vetoes_shared_path(problem):
     catalog, models, edges = classification_fixture()

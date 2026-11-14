@@ -1448,34 +1448,44 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         # Protected exceptions cannot become normal genes through donor transfer.
         if any(c.get('quality', {}).get('annotated_pseudogene') or c.get('quality', {}).get('translation_exception') or c.get('quality', {}).get('annotated_exception') or c.get('quality', {}).get('sequence_exception') for c in g['candidates']):
             problems.append('protected_annotation_exception')
-        identity = {'assembly': genome_hash, 'gene': m['gene_id'], 'shape': shape, 'cds': candidate['cds']}
-        identifier = catalog['species'] + '_ggrefine_' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
-        candidate.update(candidate_id=identifier, source_transcript_id=identifier,
-                         coding_key=hashlib.sha256(json.dumps(shape).encode()).hexdigest())
-        candidate['quality'] = validate_candidate(candidate, catalog.get('genetic_code', 1))
+        key = m['gene_id'], shape
+        row = grouped.get(key)
+        # The first candidate's quality remains untouched until grouping ends.
+        # Different sequences at the same coordinates still run full QC.
+        if (row is not None and type(candidate['cds']) is str
+                and type(row['candidate']['cds']) is str and candidate['cds'] == row['candidate']['cds']):
+            candidate = row['candidate']
+            retention = row['source_structure_retention']
+            rna_paths = row['rna_paths']
+        else:
+            identity = {'assembly': genome_hash, 'gene': m['gene_id'], 'shape': shape, 'cds': candidate['cds']}
+            identifier = catalog['species'] + '_ggrefine_' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
+            candidate.update(candidate_id=identifier, source_transcript_id=identifier,
+                             coding_key=hashlib.sha256(json.dumps(shape).encode()).hexdigest())
+            candidate['quality'] = validate_candidate(candidate, catalog.get('genetic_code', 1))
+            rna_paths = rna_support(candidate, catalog['species'], rna_rows)
+            candidate['quality']['rna_supported'] = bool(rna_paths)
+            from gene_model_source_retention import source_structure_retention
+            retention = source_structure_retention(candidate, g['candidates'], catalog.get('genetic_code', 1))
         if not candidate['quality']['valid_orf']:
             problems.append('invalid_predicted_coding_path')
         if m['donor_species'] not in trusted_donors[m['gene_id']]:
             problems.append('untrusted_donor_correspondence')
-        candidate['quality']['rna_supported'] = bool(rna_support(candidate, catalog['species'], rna_rows))
         rna_confirmed_structure = (candidate['quality']['rna_supported']
                                    and any(p.endswith('_unconfirmed_coding_structure') for p in alignment_problems))
         if rna_confirmed_structure:
             alignment_problems = [p for p in alignment_problems if not p.endswith('_unconfirmed_coding_structure')]
-        from gene_model_source_retention import source_structure_retention
-        retention = source_structure_retention(candidate, g['candidates'], catalog.get('genetic_code', 1))
         explicit_intact_adoption = (params.get('isoform_adoption') == 'conservation_supported'
                                    and any(c['quality'].get('valid_orf') for c in g['candidates']))
         if not candidate['quality']['rna_supported'] and not retention['preserved'] and not explicit_intact_adoption:
             problems.append('unconfirmed_source_structure_change')
         if not candidate['quality']['rna_supported'] and any(c.get('quality', {}).get('sequence_mismatch') for c in owners):
             problems.append('unresolved_source_sequence_mismatch')
-        key = m['gene_id'], shape
-        if key not in grouped:
-            grouped[key] = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
-                            'donors': [], 'alignments': [], 'rna_paths': rna_support(candidate, catalog['species'], rna_rows),
-                            'source_structure_retention': retention}
-        row = grouped[key]
+        if row is None:
+            row = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
+                   'donors': [], 'alignments': [], 'rna_paths': rna_paths,
+                   'source_structure_retention': retention}
+            grouped[key] = row
         supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
         if supported:
             row['donors'].append(m['donor_species'])
