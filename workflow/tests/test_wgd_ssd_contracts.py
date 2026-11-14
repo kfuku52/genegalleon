@@ -174,6 +174,22 @@ def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family
     assert missing["status"] == "not_assessed_both" and missing["shared_quartets"] is None
 
 
+def test_strict_orientation_uses_either_reference_for_observability_not_support():
+    from types import SimpleNamespace
+
+    from workflow.support.wgd_cross_phase import require_paired_orientations
+
+    forward = SimpleNamespace(traced_hits=(), phases={})
+    reverse = SimpleNamespace(orientation_hits=(), phases={})
+    evidence = {"covered": {"observed_species": ["A", "B"]}, "missing": {"observed_species": ["A"]}}
+    daughters = {event: ({"A"}, {"B"}, {"C"}) for event in evidence}
+    other = {"covered": {"observed_species": ["A", "C"]}, "missing": {"observed_species": ["C"]}}
+    assert not require_paired_orientations(evidence, daughters, (), forward, reverse, 3, reverse_evidence=other)
+    assert evidence["covered"] == {"observable": True, "supported": False,
+                                   "observed_species": ["A", "B", "C"], "supported_species": []}
+    assert not evidence["missing"]["observable"]
+
+
 @pytest.mark.parametrize("values", [[], [0.0], [0.0, 1.0], [0.0, 3.0, 3.0], [0.0, .3, .5, .8, 2., 3.]])
 def test_ks_component_holdout_extrema_match_exhaustive_deletions(values):
     from statistics import median

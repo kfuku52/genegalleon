@@ -198,10 +198,11 @@ Optionally set `wgd_cross_require_both_orientations=1` alongside the unique
 phase and orientation options. A pair must meet the minimum family count
 and the minimum window count in **each** reference using the same
 uniquely concordant copy pairings. Cross-block dS and quartet selection use
-only the common set in this mode. Observability and gene-only fallback
-are unchanged; a positive signal in one orientation without corroboration
-in the other does not become a duplication-only call. The tree additionally
-shows `R`, the sum across species pairs of the smaller of their two shared
+only the common set in this mode. For observability, assessed pairs in either
+reference count, even without matching support in the other. A branch whose
+daughter groups are all observed cannot become a duplication-only call just
+because one orientation has sparse windows or lacks corroboration. The tree
+additionally shows `R`, the sum across species pairs of the smaller of their two shared
 unique window counts. This is a sensitivity filter, not independent evidence.
 The region audit adds a `both_orientations` mode. Regions sharing a window
 in either reference are joined; after deleting one region the support rule

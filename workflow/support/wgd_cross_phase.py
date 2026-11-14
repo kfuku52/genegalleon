@@ -116,7 +116,8 @@ def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reve
             yield dict(zip(ORIENTATION_PHASE_FIELDS, values, strict=True))
 
 
-def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor, *, reverse_windows=None):
+def require_paired_orientations(evidence, daughters, orientation, forward, reverse, floor, *,
+                                reverse_windows=None, reverse_evidence=None):
     first, second = oriented_pairings(forward, False, True), oriented_pairings(reverse, True, True)
     support = defaultdict(set)
     retained = set()
@@ -140,4 +141,8 @@ def require_paired_orientations(evidence, daughters, orientation, forward, rever
         present = support[event]
         state["supported"] = all(group & present for group in daughters[event])
         state["supported_species"] = sorted(present)
+        if reverse_evidence is not None:
+            observed = set(state["observed_species"]) | set(reverse_evidence[event]["observed_species"])
+            state["observable"] = all(group & observed for group in daughters[event])
+            state["observed_species"] = sorted(observed)
     return retained

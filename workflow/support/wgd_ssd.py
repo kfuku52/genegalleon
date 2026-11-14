@@ -1237,7 +1237,7 @@ def run_analysis(plan, output, cpus):
             both_hits = None
             reverse_windows = None
             if reverse is not None:
-                _, reverse_pairs, _ = reverse.summarize(include_windows=False, archive_floor=reverse_floor)
+                reverse_evidence, reverse_pairs, _ = reverse.summarize(include_windows=False, archive_floor=reverse_floor)
                 write_table(output / "cross_synteny_orientation.tsv",
                             orientation_rows(raw_candidates, pair_rows, reverse_pairs, p["min_cross_windows"]),
                             ORIENTATION_OUTPUT)
@@ -1247,7 +1247,8 @@ def run_analysis(plan, output, cpus):
                 if p.get("cross_require_both_orientations"):
                     reverse_windows = {}
                     both_hits = require_paired_orientations(cross_evidence, cross.daughters, orientation, cross,
-                                                           reverse, p["min_cross_windows"], reverse_windows=reverse_windows)
+                                                           reverse, p["min_cross_windows"], reverse_windows=reverse_windows,
+                                                           reverse_evidence=reverse_evidence)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "duplication_synteny_family_overlap.tsv",
