@@ -1397,12 +1397,11 @@ def expand_miniprot_lines(source, representatives):
             identifiers = {}
             for line in block.splitlines(keepends=True):
                 if line.startswith("##PAF\t"):
-                    fields = line.rstrip("\n").split("\t")
-                    fields[1] = original
-                    yield "\t".join(fields) + "\n"
+                    _, _, suffix = line.rstrip("\n").split("\t", 2)
+                    yield "##PAF\t" + original + "\t" + suffix + "\n"
                 elif not line.startswith("#") and line.strip():
-                    fields = line.rstrip("\n").split("\t")
-                    if len(fields) != 9:
+                    fields = line.rstrip("\n").split("\t", 8)
+                    if len(fields) != 9 or "\t" in fields[8]:
                         raise ValueError("Invalid representative miniprot GFF row")
                     values = fields[8].split(";")
                     if fields[2] == "mRNA":
