@@ -249,6 +249,12 @@ def make_plan(args):
         parameters["cross_require_unique_phase"] = 1
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
+    for key in ("count_event_fractions", "count_family_gamma_shape"):
+        value = getattr(args, key, "")
+        if value:
+            if tree_archive is not None:
+                raise ValueError("Count event fractions and family gamma shape require gene-count mode")
+            parameters[key] = value
     count_inputs = {}
     for kind in ("detection", "rate_groups"):
         value = getattr(args, f"count_{kind}_tsv", "")
@@ -947,6 +953,11 @@ def run_analysis(plan, output, cpus):
             if tree_mode or plan[key] not in plan["input_hashes"]:
                 raise ValueError("Count observation and rate-group tables require hashed inputs in gene-count mode")
             count_input_args.extend((option, plan[key]))
+    for key, option in (("count_event_fractions", "--event-fractions"), ("count_family_gamma_shape", "--family-gamma-shape")):
+        if p.get(key):
+            if tree_mode:
+                raise ValueError("Count event fractions and family gamma shape require gene-count mode")
+            count_input_args.extend((option, p[key]))
     bootstrap_workers = p.get("count_bootstrap_workers", 1)
     scan_workers = p.get("count_scan_workers", 1)
     if not tree_mode and scan_workers > cpus:
@@ -1383,7 +1394,7 @@ def main():
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
                   "cross-tree-support", "cross-ks-reuse-summary", "count-bootstrap-checkpoint", "count-detection-tsv",
-                  "count-rate-groups-tsv"):
+                  "count-rate-groups-tsv", "count-event-fractions", "count-family-gamma-shape"):
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)

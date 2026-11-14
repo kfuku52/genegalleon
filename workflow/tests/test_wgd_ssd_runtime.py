@@ -142,6 +142,7 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     fixture(workspace, genomes=False)
     result = run_core(workspace, GG_TASK_CPUS="2", wgd_count_scan_workers="2",
                       wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2",
+                      wgd_count_event_fractions="0.5", wgd_count_family_gamma_shape="none",
                       wgd_count_bootstrap_checkpoint="bootstrap.json")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
@@ -155,6 +156,8 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     assert "bootstrap.json" not in summary["output_hashes"]
     assert len(model["bootstrap_max_statistics"]) == 2
     assert len(model["candidates"]) == 4
+    assert model["event_fractions"] == [0.5] and model["family_rate_scales"] == [1.0]
+    assert all(row["event_fraction"] == "0.5" for row in read_table(root / "count_candidates.tsv"))
 
 
 def test_wgd_stage_forwards_known_observation_probabilities_and_rate_groups(tmp_path):

@@ -300,7 +300,12 @@ probabilities before inspecting candidate support; rerunning with a different
 table is a sensitivity analysis with its own null fit and bootstrap.
 
 The scan searches every positive-length non-root branch at fractions
-0.25, 0.5, and 0.75. It fits one event at a time. State doubling must meet a
+0.25, 0.5, and 0.75 by default. Set `wgd_count_event_fractions` to a specific
+comma-separated grid measured from each branch's parent, for example `0.5`
+for a midpoint-only scan. `wgd_count_family_gamma_shape` changes the fixed
+shape, or `none` disables family-rate heterogeneity. Changing either is a
+different model/search and requires its own bootstrap and checkpoint.
+It fits one event at a time. State doubling must meet a
 per-family likelihood tolerance; optimization or convergence failures stop
 the stage. A separately fitted branch-specific duplication/loss burst provides
 an AIC diagnostic against coordinated genome multiplication.
