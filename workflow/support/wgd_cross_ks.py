@@ -524,9 +524,12 @@ class CrossKs:
             self.outgroup_rows = list(common_outgroup_rows(self.outgroup_selections, sampled, mapping))
             write_table(output / "cross_ks_common_outgroups.tsv", self.outgroup_rows, OUTGROUP_FIELDS)
             if tree_archive is not None:
+                sister_order = []
                 write_table(output / "cross_ks_outgroup_topology.tsv",
-                            topology_outgroup_rows(self.outgroup_selections, sampled, mapping, self.archived, tree_archive),
+                            topology_outgroup_rows(self.outgroup_selections, sampled, mapping, self.archived, tree_archive,
+                                                   sister_order=sister_order),
                             TOPOLOGY_FIELDS)
+                write_table(output / "cross_ks_outgroup_sister_order.tsv", sister_order, TOPOLOGY_FIELDS)
             if self.parameters.get("ks_sister_panels"):
                 audit = []
                 for pair, (a, b, family, _) in sorted(sister_pairs.items()):

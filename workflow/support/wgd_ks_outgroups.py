@@ -146,20 +146,22 @@ def common_outgroup_requests(selections, archived):
                     yield (genes[a], genes[b]), (a, b, family, "common_outgroup")
 
 
-def topology_outgroup_rows(selections, sampled, branch_ids, archived, tree_archive):
+def topology_outgroup_rows(selections, sampled, branch_ids, archived, tree_archive, *, sister_order=None):
     """Check both rooted trios for the same measured families and outgroups."""
     from nwkit.clade_index import LcaIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import read_tree
 
+    selections = tuple(selections)
+    pair_sets = [{pair for out in row.outgroups for pair in row.pair_keys(out)} for row in selections]
     requests = defaultdict(list)
-    for i, row in enumerate(selections):
-        needed = {pair for out in row.outgroups for pair in row.pair_keys(out)}
+    for i, (row, needed) in enumerate(zip(selections, pair_sets, strict=True)):
         for family in row.families:
             if needed and all(family in sampled.get(pair, {}) for pair in needed):
                 requests[family].append((i, row))
     before = [0] * len(selections)
     retained = [set() for _ in selections]
+    nested = [set() for _ in selections] if sister_order is not None else None
     if requests:
         with ZipFile(tree_archive) as archive:
             members = archive_index(archive, "_root.nwk")
@@ -179,12 +181,20 @@ def topology_outgroup_rows(selections, sampled, branch_ids, archived, tree_archi
                     if all(all(lca.common_ancestor(split, nodes[genes[out]]) is not split for split in split_nodes)
                            for out in row.outgroups):
                         retained[i].add(family)
+                        younger, older = split_nodes
+                        if nested is not None and younger is not older and lca.common_ancestor(younger, older) is older:
+                            nested[i].add(family)
     denominator = sum(len(row.outgroups) for row in selections)
-    for i, selection in enumerate(selections):
-        needed = {pair for out in selection.outgroups for pair in selection.pair_keys(out)}
-        subset = {pair: {family: sampled[pair][family] for family in retained[i]} for pair in needed}
-        for row in common_outgroup_rows([selection], subset, branch_ids, denominator=denominator):
-            yield {**row, "num_measured_before_topology_filter": before[i]}
+
+    def rows(group):
+        for selection, needed, families, original in zip(selections, pair_sets, group, before, strict=True):
+            subset = {pair: {family: sampled[pair][family] for family in families} for pair in needed}
+            for row in common_outgroup_rows([selection], subset, branch_ids, denominator=denominator):
+                yield {**row, "num_measured_before_topology_filter": original}
+
+    if nested is not None:
+        sister_order.extend(rows(nested))
+    yield from rows(retained)
 
 
 def common_outgroup_rows(selections, sampled, branch_ids, *, denominator=None):

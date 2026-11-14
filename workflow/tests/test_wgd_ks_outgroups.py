@@ -89,12 +89,14 @@ def test_rooted_filter_uses_only_original_complete_families_and_all_outgroups(tm
     with ZipFile(files, "w") as archive:
         for family, newick in {
             "good": "((((F,Y),X),O),P);",
+            "reverse_sisters": "((((F,X),Y),O),P);",
+            "unresolved_sisters": "(((F,Y,X),O),P);",
             "wrong_one_outgroup": "((((F,P),Y),X),O);",
             "unresolved": "[&R]((F,Y,X,O),P);",
             "not_measured": "((((F,Y),X),O),P);",
         }.items():
             archive.writestr(f"{family}_root.nwk", newick)
-    families = ("good", "wrong_one_outgroup", "unresolved", "not_measured")
+    families = ("good", "reverse_sisters", "unresolved_sisters", "wrong_one_outgroup", "unresolved", "not_measured")
     archived = {family: {name: name for name in "FYXOP"} for family in families}
     selected = CommonOutgroups("event", "F", "Y", "X", ("O", "P"), len(families), families)
     sampled = {}
@@ -102,7 +104,9 @@ def test_rooted_filter_uses_only_original_complete_families_and_all_outgroups(tm
         for key in selected.pair_keys(out):
             sampled[key] = dict.fromkeys(families, 1.)
     sampled[tuple(sorted(("X", "P")))].pop("not_measured")
-    rows = list(topology_outgroup_rows([selected], sampled, {"event": 2}, archived, files))
-    assert {r["num_measured_before_topology_filter"] for r in rows} == {3}
-    assert {r["num_measured_all_outgroups"] for r in rows} == {1}
+    ordered = []
+    rows = list(topology_outgroup_rows(iter([selected]), sampled, {"event": 2}, archived, files, sister_order=ordered))
+    assert {r["num_measured_before_topology_filter"] for r in rows + ordered} == {5}
+    assert {r["num_measured_all_outgroups"] for r in rows} == {3}
+    assert {r["num_measured_all_outgroups"] for r in ordered} == {1}
     assert {r["median_signed_gap"] for r in rows} == {0.}

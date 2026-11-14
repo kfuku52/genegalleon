@@ -373,6 +373,9 @@ every selected outgroup. It reports the family count before and after
 filtering and the sensitivity of the signed interval. The main plot and
 placement continue to use the unfiltered panel; this filter can select
 against genuine discordance or gene-tree error.
+`cross_ks_outgroup_sister_order.tsv` further requires the focal/younger MRCA
+to be strictly within the focal/older MRCA. It reports sensitivity to the
+full rooted branching order, without changing the figure or placement.
 The default zero skips the extra alignments.
 
 With common-outgroup dS enabled, `wgd_ks_sister_panels=1` adds comparisons
