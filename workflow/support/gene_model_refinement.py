@@ -768,7 +768,7 @@ def _build_catalogs(root, value, names, cpus):
         else:
             source, fields = request['sources'][name], ('fasta', 'gff')
         annotation_sizes[name] = sum(Path(source[field]).stat().st_size for field in fields)
-    workers = min(cpus, len(missing), 4)
+    workers = min(cpus, len(missing), 8)
     # Start larger builds first so one late catalog cannot strand the other workers.
     build_order = sorted(missing, key=annotation_sizes.__getitem__, reverse=True)
     available = (int(budget) - 4) * 1024 ** 3
