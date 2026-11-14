@@ -926,7 +926,7 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                 record = terminal[node]
                 if record["copy_lower"] is not None:
                     ds_ax.hlines(y[node], record["copy_lower"], record["copy_upper"], color="#405A83", lw=1.25)
-                ds_ax.plot(record["median_copy_ds"], y[node], "^", color="#405A83", ms=3.5)
+                ds_ax.plot(record["median_copy_ds"], y[node], "^", color="#405A83", ms=3.5, clip_on=False)
         if node is tree:
             continue
         row = events.get(node)
@@ -1005,8 +1005,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     age_handles = [Line2D([], [], marker=marker, mec=edge, mfc="white", ls="none", label=label)
                    for marker, edge, label in dict.fromkeys(style for state, style in age_styles.items() if state in shown_age)]
     handles.extend(age_handles)
-    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0, -.11),
-              ncols=2 if cross_mode else 3, fontsize=8, frameon=False)
+    legend = ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0, -.11),
+                       ncols=2 if cross_mode else 3, fontsize=8, frameon=False)
     if by_node or terminal:
         ds_ax.set_xlim(left=0, right=max(ds_ax.get_xlim()[1], .1) if ds_ax.has_data() else 1)
         ds_handles = ([Line2D([], [], color=color, marker=marker, lw=1.6, label=label)
@@ -1021,7 +1021,15 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         ds_ax.legend(handles=ds_handles, loc="lower left", bbox_to_anchor=(0, 1.0),
                      ncols=2 if matched_seen or terminal else 3, fontsize=8, frameon=False)
     top = min(.92, 1 - .80 / height) if terminal else min(.92, 1 - .64 / height) if matched_seen else .92
-    fig.subplots_adjust(left=0.07, right=0.97, bottom=0.19 if age_handles else 0.15, top=top)
+    bottom = 0.19 if age_handles else 0.15
+    fig.subplots_adjust(left=0.07, right=0.97, bottom=bottom, top=top)
+    if both_orientations:
+        fig.canvas.draw()
+        low = legend.get_window_extent(fig.canvas.get_renderer()).y0 / fig.bbox.height
+        if low < .02:
+            # The legend is anchored to an axis-relative position below the
+            # panel. Increasing the bottom margin also shortens that panel.
+            fig.subplots_adjust(bottom=bottom + (.02 - low) / 1.11)
     for extension in ("pdf", "png"):
         fig.savefig(output / f"wgd_species_tree.{extension}", dpi=175)
     plt.close(fig)

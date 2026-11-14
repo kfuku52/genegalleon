@@ -1198,6 +1198,8 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
             fig.canvas.draw()
             legend_extent = ds_ax.get_legend().get_window_extent(fig.canvas.get_renderer())
             assert legend_extent.x1 < fig.bbox.x1 and legend_extent.y1 < fig.bbox.y1
+            if any(label.startswith("R:") for label in legend):
+                assert tree_ax.get_legend().get_window_extent(fig.canvas.get_renderer()).y0 > fig.bbox.y0
             gap = ()
             if len(fig.axes) > 3:
                 gap_ax, gap_labels = fig.axes[3:]
@@ -1263,6 +1265,13 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
     points, labels = captured[0][-1]
     assert labels[0][0] == "Alpha (n=12, b=8)"
     assert points == [(.123, labels[0][1])]
+    events[0]["synteny_block_definition"] = "uniquely_concordant_four_copy_paths_in_both_orientations"
+    shared = [{"species_event_id": events[0]["species_event_id"], "mode": "unique_phase", "status": "assessed_both",
+               "shared_windows_a": 1, "shared_windows_b": 2}]
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
+                            orientation_rows=shared)
+    assert any("U=1  R=1" in label for label in captured[-1][6][0])
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):
