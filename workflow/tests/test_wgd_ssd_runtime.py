@@ -275,7 +275,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
-                      wgd_max_ks_outgroup_families="11")
+                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -316,6 +316,11 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     assert {r["status"] for r in read_table(root / "cross_ks_common_outgroups.tsv")} == {"missing_trio"}
     assert read_table(root / "cross_ks_common_outgroup_pairs.tsv") == []
     assert {"cross_ks_common_outgroups.tsv", "cross_ks_common_outgroup_pairs.tsv"} <= summary["output_hashes"].keys()
+    assert summary["plan"]["parameters"]["max_terminal_ks_families"] == 4
+    assert len(read_table(root / "terminal_ks_quartets.tsv")) == 8
+    terminal = {row["species"]: row for row in read_table(root / "terminal_ks_summary.tsv")}
+    assert terminal[a]["status"] == "no_complete_quartets" and terminal[a]["sampled_families"] == "4"
+    assert terminal[c]["status"] == "unavailable_self_or_cds"
     assert all(row["status"] == "missing_trio" for row in read_table(root / "cross_ks_matched_boundaries.tsv"))
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
     assert "wgd_cross_ks.png" in summary["plot_hashes"]
@@ -335,7 +340,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
-                      wgd_max_ks_outgroup_families="11", artifact_stale_policy="rebuild",
+                      wgd_max_ks_outgroup_families="11", wgd_max_terminal_ks_families="4", artifact_stale_policy="rebuild",
                       wgd_cross_ks_reuse_summary="\n".join(f"{saved.name}/summary.json" for saved in donors))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout

@@ -153,6 +153,7 @@ wgd_cross_ks_cds_file="" # Optional species/CDS manifest for rate-corrected cros
 wgd_cross_ks_reuse_summary="" # Optional newline-separated summary.json paths from completed runs for exact alignment reuse.
 wgd_max_ks_quartets=0 # Optional maximum four-copy dS comparisons per branch and species pair; 0 disables.
 wgd_max_ks_outgroup_families=0 # Optional common-outgroup dS sensitivity family cap per branch and species.
+wgd_max_terminal_ks_families=0 # Optional block-balanced family cap per species for terminal self-anchor dS.
 wgd_cross_tree_support_file="" # Optional GeneRax UFBoot tree ZIP for duplication and paired cross-block support diagnostics.
 wgd_min_cross_windows=3 # Minimum observable windows and, for support, concordant windows and distinct families per pair.
 wgd_min_duplication_score=0.01 # Minimum supporting / eligible families in duplication-score mode.

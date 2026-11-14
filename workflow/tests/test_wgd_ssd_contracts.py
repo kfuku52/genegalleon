@@ -1150,7 +1150,10 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                 gap = ([label.get_text() for label in gap_labels.texts],
                        [(line.get_xdata()[0], line.get_ydata()[0]) for line in gap_ax.lines if line.get_marker() == "."],
                        [collection.get_segments()[0].tolist() for collection in gap_ax.collections])
-            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap))
+            terminals = ([(line.get_xdata()[0], line.get_ydata()[0]) for line in ds_ax.lines if line.get_marker() == "^"],
+                         [(text.get_text(), text.get_position()[1]) for text in label_ax.texts if "(n=" in text.get_text()
+                          and "b=" in text.get_text()])
+            captured.append((anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap, terminals))
         savefig(fig, path, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", capture)
@@ -1158,8 +1161,9 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                             region_rows=regions, matched_trios=matched_trios)
     assert len(captured) == 2
     assert captured[0] == captured[1]
-    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap = captured[0]
+    anchors, names, marks, branch_markers, legend, unusable, evidence, matched, ds_legend, gap, terminals = captured[0]
     assert not gap
+    assert terminals == ([], [])
     assert evidence == (["B2  S=20.00%  W=3", "B1  S=20.00%  W=4"], ["-.", "-"])
     assert "Combined candidate; requires one-copy paths" in legend
     labels = ("Alpha (n=2,032, c=13)", "Beta (n=1,957, c=2)", "Gamma (n=0, c=0)")
@@ -1192,13 +1196,19 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
                                                ("Delta", .3, None, None, "interval_unavailable"))]
     wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
                             region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase,
-                            common_outgroups=diagnostics)
+                            common_outgroups=diagnostics, terminal_rows=[
+                                {"species_event_id": clades.clade_id_for_node(list(tree.leaves())[0]),
+                                 "median_copy_ds": .123, "copy_lower": .1, "copy_upper": .16,
+                                 "six_pair_families": 12, "original_blocks": 8}])
     assert "B1  S=20.00%  W=4  U=1" in captured[0][6][0]
     assert "Assessed; unique-path support below floor" in captured[0][4]
-    labels, points, intervals = captured[0][-1]
+    labels, points, intervals = captured[0][-2]
     assert labels == ["Gamma  n=9", "Delta  n=9"]
     assert points == [(-.2, beta + .21), (.3, beta - .21)]
     assert intervals == [[[-.4, beta + .21], [-.1, beta + .21]]]
+    points, labels = captured[0][-1]
+    assert labels[0][0] == "Alpha (n=12, b=8)"
+    assert points == [(.123, labels[0][1])]
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):

@@ -46,6 +46,7 @@ try:
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
     from wgd_taxon_holdout import HOLDOUT_FIELDS
+    from wgd_terminal_ks import TerminalKs
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
     from wgd_tree_scan import ROOT_FIELDS, scan_duplications
 except ImportError:
@@ -78,6 +79,7 @@ except ImportError:
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
+    from .wgd_terminal_ks import TerminalKs
     from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
     from .wgd_tree_scan import ROOT_FIELDS, scan_duplications
 
@@ -136,6 +138,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_cross_synteny.py").resolve(),
               Path(__file__).with_name("wgd_ks_outgroups.py").resolve(),
               Path(__file__).with_name("wgd_quartet_ks.py").resolve(),
+              Path(__file__).with_name("wgd_terminal_ks.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
     return {"nwkit": nwkit.__version__, "ds": ds,
@@ -283,6 +286,11 @@ def make_plan(args):
         raise ValueError("Common-outgroup dS requires --cross-ks-cds and a nonnegative family cap")
     if outgroup_limit:
         parameters["max_ks_outgroup_families"] = outgroup_limit
+    terminal_limit = getattr(args, "max_terminal_ks_families", 0)
+    if terminal_limit < 0 or (terminal_limit and not cross_ks_sources):
+        raise ValueError("Terminal dS requires --cross-ks-cds and a nonnegative family cap")
+    if terminal_limit:
+        parameters["max_terminal_ks_families"] = terminal_limit
     if parameters["max_ks_quartets"] and not cross_ks_sources:
         raise ValueError("Four-copy dS diagnostics require --cross-ks-cds")
     if (args.count_bootstrap < 0 or args.ks_bootstrap < 0 or args.seed < 0
@@ -721,7 +729,7 @@ def focal_ks_label(row):
 
 
 def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=None, focal_rows=(), region_rows=(),
-                    matched_trios=(), phase_diagnostics=(), common_outgroups=()):
+                    matched_trios=(), phase_diagnostics=(), common_outgroups=(), terminal_rows=()):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -829,14 +837,21 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     matched_seen = False
     for row in focal_rows:
         by_node[index[row["species_event_id"]]].append(row)
-    if by_node:
+    terminal = {index[row["species_event_id"]]: row for row in terminal_rows if row["median_copy_ds"] is not None}
+
+    def leaf_label(leaf):
+        row = terminal.get(leaf)
+        return (leaf.name if row is None else
+                f"{leaf.name} (n={row['six_pair_families']:,}, b={row['original_blocks']:,})")
+
+    if by_node or terminal:
         # Insert room around each annotated branch without changing root distances.
         offset = 0
         for node in sorted(nodes, key=y.get):
             reserve = len(by_node.get(node, ())) * .58
             y[node] += offset + reserve
             offset += 2 * reserve
-        names = [leaf.name for leaf in leaves] + [focal_ks_label(row) for row in focal_rows]
+        names = [leaf_label(leaf) for leaf in leaves] + [focal_ks_label(row) for row in focal_rows]
         widths = (8.25, max(2.85, 0.087 * max(map(len, names))), 4.1)
         if gap_rows:
             gap_name_width = max(len(row["common_outgroup"]) for group in gap_rows.values() for row in group)
@@ -849,13 +864,14 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
                              gridspec_kw={"width_ratios": widths, "wspace": 0.03})
     ax, labels_ax = axes[:2]
     labels_ax.sharey(ax)
-    if by_node:
+    if by_node or terminal:
         ds_ax = axes[2]
         ds_ax.sharey(ax)
         ds_ax.set(xlabel="dS (focal species scale)")
         ds_ax.set_axisbelow(True)
         ds_ax.grid(axis="x", color="#E5E8EA", linewidth=.7)
         ds_ax.tick_params(axis="x", labelsize=8)
+        ds_ax.tick_params(axis="y", left=False, labelleft=False)
         for side in ("top", "left", "right"):
             ds_ax.spines[side].set_visible(False)
     if gap_rows and by_node:
@@ -874,7 +890,12 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
             children = [y[child] for child in node.children]
             ax.vlines(x[node], min(y[node], *children), max(y[node], *children), color="#9AA5AA", lw=1)
         else:
-            labels_ax.text(0, y[node], node.name, va="center", fontsize=8.5)
+            labels_ax.text(0, y[node], leaf_label(node), va="center", fontsize=8.5)
+            if node in terminal:
+                record = terminal[node]
+                if record["copy_lower"] is not None:
+                    ds_ax.hlines(y[node], record["copy_lower"], record["copy_upper"], color="#405A83", lw=1.25)
+                ds_ax.plot(record["median_copy_ds"], y[node], "^", color="#405A83", ms=3.5)
         if node is tree:
             continue
         row = events.get(node)
@@ -951,18 +972,20 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     handles.extend(age_handles)
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0, -.11),
               ncols=2 if cross_mode else 3, fontsize=8, frameon=False)
-    if by_node:
+    if by_node or terminal:
         ds_ax.set_xlim(left=0, right=max(ds_ax.get_xlim()[1], .1) if ds_ax.has_data() else 1)
-        ds_handles = [Line2D([], [], color=color, marker=marker, lw=1.6, label=label)
-                      for label, color, marker in FOCAL_DS_STYLES]
+        ds_handles = ([Line2D([], [], color=color, marker=marker, lw=1.6, label=label)
+                       for label, color, marker in FOCAL_DS_STYLES] if by_node else [])
         if any(row[f"{name}_boundary_status"] == "nonmonotone_or_invalid_interval"
                and number(row[f"{name}_ds"]) is not None for row in focal_rows for name in ("younger", "older")):
             ds_handles.append(Line2D([], [], color="#646D78", marker="x", ls="--", label="Unusable split"))
         if matched_seen:
             ds_handles.append(Line2D([], [], color="#646D78", marker="D", mfc="white", ls=":", label="Matched-family split"))
-        ds_ax.legend(handles=ds_handles,
-                     loc="lower left", bbox_to_anchor=(0, 1.0), ncols=2 if matched_seen else 3, fontsize=8, frameon=False)
-    top = min(.92, 1 - .64 / height) if matched_seen else .92
+        if terminal:
+            ds_handles.append(Line2D([], [], color="#405A83", marker="^", label="Terminal self anchors (b: blocks)"))
+        ds_ax.legend(handles=ds_handles, loc="lower left", bbox_to_anchor=(0, 1.0),
+                     ncols=2 if matched_seen or terminal else 3, fontsize=8, frameon=False)
+    top = min(.92, 1 - .80 / height) if terminal else min(.92, 1 - .64 / height) if matched_seen else .92
     fig.subplots_adjust(left=0.07, right=0.97, bottom=0.19 if age_handles else 0.15, top=top)
     for extension in ("pdf", "png"):
         fig.savefig(output / f"wgd_species_tree.{extension}", dpi=175)
@@ -1025,7 +1048,7 @@ def run_analysis(plan, output, cpus):
     output.mkdir(parents=True, exist_ok=False)
     normalized_counts(plan, output, tree, count_rows, minimum_families=0 if tree_mode else 2)
     cross_evidence = None
-    cross_ks = None
+    cross_ks = terminal = None
     region_summary = ()
     phase_diagnostics = ()
     traced_ks_hits = ()
@@ -1036,11 +1059,14 @@ def run_analysis(plan, output, cpus):
         pairs = plan.get("cross_pairs")
         if pairs is not None:
             audit_orientation = p.get("cross_orientation_audit")
-            inputs = cross_synteny_inputs(pairs) if audit_orientation else None
+            terminal_limit = p.get("max_terminal_ks_families", 0)
+            inputs = cross_synteny_inputs(pairs) if audit_orientation or terminal_limit else None
             cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
                                  trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs)
             if audit_orientation:
                 reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs)
+            if terminal_limit:
+                terminal = TerminalKs(tree, members, family_key, age_sources, inputs, terminal_limit, p["seed"])
             del inputs
         by_family = {row[family_key]: row for row in members} if cross is not None else {}
 
@@ -1073,7 +1099,8 @@ def run_analysis(plan, output, cpus):
                 family_members=family_members if cross is not None else None,
                 observe_family=observe_family if cross is not None else None,
                 observe_duplications=support.observe if support else None, holdout_output=holdout_rows,
-                coverage_output=duplication_coverage, root_output=root_audit)
+                coverage_output=duplication_coverage, root_output=root_audit,
+                observe_topology=terminal.observe if terminal is not None else None)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if duplication_coverage is not None:
@@ -1183,7 +1210,7 @@ def run_analysis(plan, output, cpus):
     age_summary, focal_rows = {}, ()
     if cross_ks:
         estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"))
-        focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits)
+        focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal)
         plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
             status = row["cross_ks_status"]
@@ -1193,7 +1220,8 @@ def run_analysis(plan, output, cpus):
                     duplication_threshold=p["min_duplication_score"] if tree_mode else None,
                     focal_rows=focal_rows, region_rows=region_summary,
                     matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
-                    phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else ())
+                    phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
+                    terminal_rows=cross_ks.terminal_rows if cross_ks else ())
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())
@@ -1458,6 +1486,7 @@ def main():
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-ks-outgroup-families", 0),
+                           ("max-terminal-ks-families", 0),
                            ("max-count-families", 10000),
                            ("diagonal-bound", 300), ("min-blocks", 3), ("min-cross-windows", 3), ("max-states", 256),
                            ("max-iterations", 200), ("multiplicity", 2)):

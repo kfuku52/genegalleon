@@ -435,6 +435,7 @@ wgd_cross_ks_cds_file
 wgd_cross_ks_reuse_summary
 wgd_max_ks_quartets
 wgd_max_ks_outgroup_families
+wgd_max_terminal_ks_families
 wgd_cross_tree_support_file
 wgd_min_cross_windows
 wgd_min_duplication_score

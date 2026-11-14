@@ -59,7 +59,7 @@ def alternate_root_votes(tree, observed, eligible_daughters):
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
                       observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None,
-                      root_output=None):
+                      root_output=None, observe_topology=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -130,6 +130,8 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             full = observed[tree]
             if observe_family is not None:
                 observe_family(family, leaves)
+            if observe_topology is not None:
+                observe_topology(family, tree, expected)
             projected, root_eligible = {}, {}
             for mask, (_, sisters, daughters, _) in branches.items():
                 if full & sisters and all(full & daughter for daughter in daughters):

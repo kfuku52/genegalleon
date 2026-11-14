@@ -23,6 +23,7 @@ try:
         select_common_outgroups,
     )
     from wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
+    from wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny import source_file
@@ -34,6 +35,7 @@ except ImportError:
         select_common_outgroups,
     )
     from .wgd_quartet_ks import QUARTET_FIELDS, quartet_requests, quartet_results
+    from .wgd_terminal_ks import TERMINAL_FIELDS, TERMINAL_PAIR_FIELDS
 
 
 PAIR_FIELDS = ("species_event_id", "focal", "family_id", "gene_a", "gene_b",
@@ -279,6 +281,7 @@ class CrossKs:
         self.trios = []
         self.outgroup_selections = ()
         self.outgroup_rows = ()
+        self.terminal_rows = ()
 
     def observe_family(self, family, leaves):
         if family in self.single_copy:
@@ -357,7 +360,7 @@ class CrossKs:
                 requested.setdefault(pair, (focal, focal, "", "paralog"))
         return requested
 
-    def run(self, output, cpus, candidates, estimate, write_table, traced_hits=()):
+    def run(self, output, cpus, candidates, estimate, write_table, traced_hits=(), *, terminal=None):
         requested = self.requests()
         outgroup_pairs = dict(common_outgroup_requests(self.outgroup_selections, self.archived))
         for pair, info in outgroup_pairs.items():
@@ -367,6 +370,9 @@ class CrossKs:
         if quartet_limit:
             selected, pairs = quartet_requests(traced_hits, candidates, self.codes, quartet_limit, self.parameters["seed"])
             for pair, info in pairs.items():
+                requested.setdefault(pair, info)
+        if terminal is not None:
+            for pair, info in terminal.requested.items():
                 requested.setdefault(pair, info)
         genes = defaultdict(set)
         for pair, info in requested.items():
@@ -428,6 +434,11 @@ class CrossKs:
             write_table(output / "cross_ks_common_outgroups.tsv", self.outgroup_rows, OUTGROUP_FIELDS)
         if quartet_limit:
             write_table(output / "cross_ks_quartets.tsv", quartet_results(selected, results), QUARTET_FIELDS)
+        if terminal is not None:
+            pairs, summaries = terminal.summarize(results)
+            self.terminal_rows = summaries
+            write_table(output / "terminal_ks_quartets.tsv", pairs, TERMINAL_PAIR_FIELDS)
+            write_table(output / "terminal_ks_summary.tsv", summaries, TERMINAL_FIELDS)
         return rows
 
     def divergence_bounds(self, contrasts, output, write_table):

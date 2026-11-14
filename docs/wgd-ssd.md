@@ -317,6 +317,21 @@ of local copy correspondence, not a clock correction, age estimate, or test
 of the branch or number of WGD events. The default zero skips additional
 alignments; pairs already requested for the age analysis are reused.
 
+Set `wgd_max_terminal_ks_families` above zero to inspect terminal copy splits
+in species with supplied self anchors and CDS. The analysis samples at most
+one same-family self-anchor pair per family, in rounds across original anchor
+blocks with the configured seed. A candidate quartet requires a binary
+focal-only ancestor for that pair, a same-code relative from the immediate
+species sister group at the adjacent gene node, and an external copy outside
+both groups in both trees. It records which selections fail and whether the
+six-pair dS comparison is consistent with the focal copies forming a clade.
+Triangles on the terminal rows of the species tree show the median copy
+dS across original-block medians, the 95% order-statistic interval when
+estimable, and the numbers of measured families and blocks. Blocks need not
+be independent, and quartet agreement does not distinguish terminal SSD
+from WGD or establish multiplicity. This option adds diagnostics, not calls.
+See `terminal_ks_quartets.tsv` and `terminal_ks_summary.tsv`.
+
 Without a gene-tree ZIP, the default is the calibrated gene-count mode.
 
 NWKIT models linear duplication/loss, positive-geometric ancestral counts,
