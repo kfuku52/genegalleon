@@ -453,6 +453,10 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
     assert len(held) == 2
     assert all(r["status"] in {"no_measured_pairs", "single_component"} for r in held)
     assert all(r["drop_component_min"] == r["drop_component_max"] == "" for r in held)
+    contig_ages = read_table(root / "cross_ks_contig_holdout.tsv")
+    assert len(contig_ages) == 4
+    assert {r["num_contigs_removed"] for r in contig_ages} == {"1", "2"}
+    assert "cross_ks_contig_holdout.tsv" in summary["output_hashes"]
     assert all(row["status"] == "missing_trio" for row in read_table(root / "cross_ks_matched_boundaries.tsv"))
     assert all(row["status"] == "insufficient_window_components" for row in read_table(root / "cross_ks_focals.tsv"))
     assert "wgd_cross_ks.png" in summary["plot_hashes"]

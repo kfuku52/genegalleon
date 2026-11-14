@@ -245,6 +245,11 @@ def component_medians(hits):
 
 COPY_HOLDOUT_FIELDS = ("species_event_id", "branch_id", "focal", "num_estimated_pairs", "num_window_components",
                        "point_ds", "drop_component_min", "drop_component_max", "status")
+COPY_CONTIG_FIELDS = ("species_event_id", "branch_id", "focal", "num_estimated_pairs", "num_contigs_removed",
+                      "num_contigs_with_pairs", "num_possible_holdouts", "num_evaluated_holdouts", "num_without_pairs",
+                      "num_below_interval_floor", "minimum_remaining_pairs", "minimum_remaining_components",
+                      "minimum_median_ds", "maximum_median_ds", "status")
+MAX_COPY_CONTIG_PAIR_VISITS = 1_000_000
 
 
 def component_median_holdout_bounds(values):
@@ -255,6 +260,36 @@ def component_median_holdout_bounds(values):
     if len(values) % 2 == 0:
         return values[middle - 1], values[middle]
     return median(values[middle - 1:middle + 1]), median(values[middle:middle + 2])
+
+
+def copy_contig_holdout(records, component_floor):
+    """Rebuild linked components after omitting copy pairs on whole contigs."""
+    tagged = [(frozenset((row[1][0], row[2][0])), row) for row in records]
+    contigs = sorted({name for names, _ in tagged for name in names})
+    for count in (1, 2):
+        total = len(contigs) if count == 1 else len(contigs) * (len(contigs) - 1) // 2
+        status = ("no_measured_pairs" if not records else "insufficient_contigs" if not total else
+                  "holdout_limit_exceeded" if total * len(records) > MAX_COPY_CONTIG_PAIR_VISITS else "ok")
+        if status != "ok":
+            yield count, len(contigs), total, 0, None, None, None, None, None, None, status
+            continue
+        missing_pairs = missing_interval = 0
+        fewest_pairs, fewest_components = len(records), len(records)
+        low, high = None, None
+        for omitted in itertools.combinations(contigs, count):
+            removed = frozenset(omitted)
+            remaining = [row for names, row in tagged if names.isdisjoint(removed)]
+            values = component_medians(remaining)
+            missing_pairs += not values
+            missing_interval += len(values) < component_floor
+            fewest_pairs = min(fewest_pairs, len(remaining))
+            fewest_components = min(fewest_components, len(values))
+            if values:
+                point = median(values)
+                low = point if low is None else min(low, point)
+                high = point if high is None else max(high, point)
+        yield (count, len(contigs), total, total, missing_pairs, missing_interval, fewest_pairs, fewest_components,
+               low, high, status)
 
 
 def copy_median_interval(values):
@@ -464,11 +499,13 @@ class CrossKs:
             audit.append(dict(zip(PAIR_FIELDS, (event, focal, family, *pair, *first, *second, status, ds), strict=True)))
         write_table(output / "cross_ks_paralogs.tsv", audit, PAIR_FIELDS)
         holdout = [] if self.parameters.get("ks_component_holdout") else None
-        rows = self.summarize(candidates, bounds, hits, totals, holdout=holdout)
+        contig_holdout = [] if holdout is not None else None
+        rows = self.summarize(candidates, bounds, hits, totals, holdout=holdout, contig_holdout=contig_holdout)
         write_table(output / "cross_ks_focals.tsv", rows, FOCAL_FIELDS)
         if holdout is not None:
             self.copy_holdout_rows = holdout
             write_table(output / "cross_ks_component_holdout.tsv", holdout, COPY_HOLDOUT_FIELDS)
+            write_table(output / "cross_ks_contig_holdout.tsv", contig_holdout, COPY_CONTIG_FIELDS)
         by_pair = ortholog_distances(contrasts)
         write_table(output / "cross_ks_matched_boundaries.tsv",
                     matched_boundary_rows(self.tree, rows, self.trios, by_pair, self.parameters), MATCHED_FIELDS)
@@ -549,10 +586,11 @@ class CrossKs:
         write_table(output / "cross_ks_boundaries.tsv", bounds.values(), fields)
         return bounds
 
-    def summarize(self, candidates, bounds, hits, totals, *, holdout=None):
+    def summarize(self, candidates, bounds, hits, totals, *, holdout=None, contig_holdout=None):
         by_event = defaultdict(list)
         minimum = max(6, self.parameters["min_cross_windows"])
-        ids = {row["species_event_id"]: row["branch_id"] for row in candidates} if holdout is not None else None
+        ids = ({row["species_event_id"]: row["branch_id"] for row in candidates}
+               if holdout is not None or contig_holdout is not None else None)
         for (event, focal), total in sorted(totals.items()):
             records = hits[event, focal]
             values = component_medians(records)
@@ -562,6 +600,10 @@ class CrossKs:
                 status = "ok" if lo is not None else "single_component" if values else "no_measured_pairs"
                 result = (event, ids[event], focal, len(records), len(values), center, lo, hi, status)
                 holdout.append(dict(zip(COPY_HOLDOUT_FIELDS, result, strict=True)))
+            if contig_holdout is not None:
+                base = (event, ids[event], focal, len(records))
+                contig_holdout.extend(dict(zip(COPY_CONTIG_FIELDS, (*base, *row), strict=True))
+                                      for row in copy_contig_holdout(records, minimum))
             node = self.nodes[event]
             younger = bounds.get((focal, event), {})
             older = bounds.get((focal, self.index.clade_id_for_node(node.up)), {})

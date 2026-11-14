@@ -528,6 +528,21 @@ def test_copy_median_interval_requires_six_independent_components():
     assert copy_median_interval([.1, .2, .3, .4, .5, .6]) == (.1, .6)
 
 
+def test_copy_contig_holdout_rebuilds_components_and_keeps_missing_separate(monkeypatch):
+    from workflow.support import wgd_cross_ks as ks
+
+    hits = [("family1", ("a", 1), ("b", 1), 1.),
+            ("family2", ("b", 1), ("c", 1), 20.),
+            ("family2", ("d", 1), ("d", 2), 3.)]
+    first, second = ks.copy_contig_holdout(hits, 2)
+    assert first == (1, 4, 4, 4, 0, 3, 1, 1, 2., 11.5, "ok")
+    assert second == (2, 4, 6, 6, 1, 6, 0, 0, 1., 20., "ok")
+    assert all(row[-1] == "no_measured_pairs" for row in ks.copy_contig_holdout([], 2))
+    monkeypatch.setattr(ks, "MAX_COPY_CONTIG_PAIR_VISITS", 17)
+    first, second = ks.copy_contig_holdout(hits, 2)
+    assert first[-1] == "ok" and second[3] == 0 and second[-1] == "holdout_limit_exceeded"
+
+
 def test_cross_ks_matched_boundaries_exclude_incomplete_families_and_keep_covariance():
     import numpy as np
     from nwkit.ksrate_model import KsTrio

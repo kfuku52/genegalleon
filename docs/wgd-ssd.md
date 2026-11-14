@@ -414,6 +414,13 @@ below the focal dS point when the extrema differ, and written to
 `cross_ks_component_holdout.tsv` along with the observation and component
 counts. For zero or one component there is no holdout range. It measures
 influence, not confidence, and does not change the primary interval.
+The same setting writes `cross_ks_contig_holdout.tsv`, which rebuilds the
+components after removing all copy pairs touching any one or two assembly
+contigs. It records the median range, the smallest remaining sample, and how
+often the component count falls below the interval floor. These ranges are
+not confidence intervals and do not change the tree display or placement.
+Large searches are reported as untested when exclusions times paired records
+exceed one million.
 
 With `wgd_max_ks_quartets` above zero, `cross_ks_quartets.tsv` adds a
 within-family check for combined candidates with paired paths and same-code
