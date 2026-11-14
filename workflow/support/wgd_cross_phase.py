@@ -68,3 +68,44 @@ def trace_has_unique_phase(phases, hit):
     first, second, first_copy, second_copy = genes
     key = window, family, first, first_copy, *sorted((second, second_copy))
     return phases.get((event, a, b), {}).get(key) == 1
+
+
+ORIENTATION_PHASE_FIELDS = ("species_event_id", "branch_id", "species_a", "species_b", "mode", "status",
+                            "a_quartets", "b_quartets", "shared_quartets", "shared_families",
+                            "shared_windows_a", "shared_windows_b")
+
+
+def orientation_phase_overlap(candidates, first_rows, second_rows, forward, reverse, *, unique=False):
+    branches = {row["species_event_id"]: row["branch_id"] for row in candidates}
+    reverse_status = {(r["species_event_id"], r["species_b"], r["species_a"]): r["status"] for r in second_rows}
+    forward_status = {(r["species_event_id"], r["species_a"], r["species_b"]): r["status"] for r in first_rows}
+
+    def observed(scanner, invert, unique_phase):
+        result = defaultdict(dict)
+        for hit in scanner.orientation_hits if invert else scanner.traced_hits:
+            event, a, b, window, family, genes, *_ = hit
+            if len(genes) != 4 or (unique_phase and not trace_has_unique_phase(scanner.phases, hit)):
+                continue
+            first, other_a, second, other_b = genes
+            copies = ((other_a, first), (other_b, second)) if invert else ((first, other_a), (second, other_b))
+            pair = (event, b, a) if invert else (event, a, b)
+            key = family, *sorted(copies)
+            result[pair].setdefault(key, set()).add(window)
+        return result
+
+    for want_unique in ((False, True) if unique else (False,)):
+        first, second = observed(forward, False, want_unique), observed(reverse, True, want_unique)
+        for (event, a, b), status in forward_status.items():
+            pair = event, a, b
+            x, y = first.get(pair, {}), second.get(pair, {})
+            assessed_a, assessed_b = status == "assessed", reverse_status[pair] == "assessed"
+            available = assessed_a and assessed_b
+            intersection = x.keys() & y.keys() if available else ()
+            values = (event, branches[event], a, b, "unique_phase" if want_unique else "all_concordant",
+                      "assessed_both" if available else "not_assessed_both",
+                      len(x) if assessed_a else None, len(y) if assessed_b else None,
+                      len(intersection) if available else None,
+                      len({key[0] for key in intersection}) if available else None,
+                      len({w for key in intersection for w in x[key]}) if available else None,
+                      len({w for key in intersection for w in y[key]}) if available else None)
+            yield dict(zip(ORIENTATION_PHASE_FIELDS, values, strict=True))

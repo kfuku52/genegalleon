@@ -181,6 +181,10 @@ and the same family-tree pass. It reports differences in observability and
 in per-pair support, with separate window and family counts. It is a
 sensitivity audit: the supplied orientation still determines primary calls,
 and two orientations do not count as independent evidence.
+`cross_synteny_orientation_quartets.tsv` additionally counts exact
+copy pairings and families recovered in both orientations, with separate
+window counts for each reference. When unique-phase sensitivity is enabled,
+it also reports pairings that are unique in both orientations.
 This option also writes `cross_synteny_anchor_nonreuse.tsv`. It counts
 reference windows that contain five gene-disjoint direct pairs within one
 original block, both before and after requiring archive-family agreement.

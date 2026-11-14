@@ -242,7 +242,7 @@ class CrossSynteny:
     """Collect exact copy-level agreement with the same duplication nodes used for scoring."""
 
     def __init__(self, tree, pairs, min_windows, age_species=(), trace_branches=(), audit_coverage=False,
-                 *, reverse_cross=False, inputs=None, audit_phase=False):
+                 *, reverse_cross=False, inputs=None, audit_phase=False, orientation_paths=False):
         from nwkit.clade_index import CladeIndex
 
         self.min_windows = min_windows
@@ -251,6 +251,7 @@ class CrossSynteny:
         self.age_species = set(age_species)
         self.age_pairs = set()
         self.traced_hits = set()
+        self.orientation_hits = set() if orientation_paths else None
         self.coverage = [] if audit_coverage else None
         self.coverage_genes = set() if audit_coverage else None
         self.archive_families = {}
@@ -293,7 +294,8 @@ class CrossSynteny:
                             (sp, tuple(sorted((x, y))), window_for(beds[sp], x), window_for(beds[sp], y))
                             for sp, x, y in zip(age, genes[:2], genes[2:], strict=True) if sp in self.age_species)
                         trace = (a, b, provenance[window, genes], beds) if provenance is not None and status == "assessed" else None
-                        phase_pair = (branch, a, b) if audit_phase and status == "assessed" and len(genes) == 4 else None
+                        phase_pair = ((branch, a, b) if (audit_phase or orientation_paths)
+                                      and status == "assessed" and len(genes) == 4 else None)
                         self.matches[branch][genes[0]].append((genes, window, observed, regions_for_age, trace, phase_pair))
 
     def observe_family(self, family, leaves):
@@ -343,10 +345,12 @@ class CrossSynteny:
         for source, other in ((left, right), (right, left)):
             for gene in source.intersection(targets):
                 for genes, window, observed, regions_for_age, trace, phase_pair in targets[gene]:
-                    if phase_pair is not None and (phase := observe_phase(source, other, genes)):
+                    if self.phases is not None and phase_pair is not None and (phase := observe_phase(source, other, genes)):
                         record_phase(self.phases, phase_pair, window, family, genes, phase)
                     if genes[1] in source and all(g in other for g in genes[2:]):
                         observed[window].add(family)
+                        if self.orientation_hits is not None and phase_pair is not None:
+                            self.orientation_hits.add((*phase_pair, window, family, genes))
                         for sp, pair, first, second in regions_for_age or ():
                             self.age_pairs.add((branch, sp, family, pair, *sorted((first, second))))
                         if trace is not None:

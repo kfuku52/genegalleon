@@ -23,7 +23,14 @@ try:
     from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
-    from wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
+    from wgd_cross_phase import (
+        ORIENTATION_PHASE_FIELDS,
+        PHASE_FIELDS,
+        orientation_phase_overlap,
+        phase_rows,
+        trace_has_unique_phase,
+        unique_phase_windows,
+    )
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from wgd_cross_support import (
@@ -57,7 +64,14 @@ except ImportError:
     from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
-    from .wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
+    from .wgd_cross_phase import (
+        ORIENTATION_PHASE_FIELDS,
+        PHASE_FIELDS,
+        orientation_phase_overlap,
+        phase_rows,
+        trace_has_unique_phase,
+        unique_phase_windows,
+    )
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
     from .wgd_cross_support import (
@@ -1067,7 +1081,8 @@ def run_analysis(plan, output, cpus):
             cross = CrossSynteny(tree, pairs, p["min_cross_windows"], age_sources,
                                  trace_branches=None, audit_coverage=True, audit_phase=True, inputs=inputs)
             if audit_orientation:
-                reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs)
+                reverse = CrossSynteny(tree, pairs, p["min_cross_windows"], reverse_cross=True, inputs=inputs,
+                                       audit_phase=bool(p.get("cross_require_unique_phase")), orientation_paths=True)
             if terminal_limit:
                 terminal = TerminalKs(tree, members, family_key, age_sources, inputs, terminal_limit, p["seed"])
             del inputs
@@ -1130,6 +1145,9 @@ def run_analysis(plan, output, cpus):
                 write_table(output / "cross_synteny_orientation.tsv",
                             orientation_rows(raw_candidates, pair_rows, reverse_pairs, p["min_cross_windows"]),
                             ORIENTATION_OUTPUT)
+                write_table(output / "cross_synteny_orientation_quartets.tsv",
+                            orientation_phase_overlap(raw_candidates, pair_rows, reverse_pairs, cross, reverse,
+                                                      unique=bool(p.get("cross_require_unique_phase"))), ORIENTATION_PHASE_FIELDS)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
             write_table(output / "duplication_synteny_family_overlap.tsv",

@@ -3,6 +3,7 @@
 import copy
 import csv
 import json
+from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,6 +134,32 @@ def test_count_only_event_does_not_assign_gene_node_origin():
     origin = combine_node("event_AB", [("A_a", "A_b")], pair_positions(),
                           {("A_a", "A_b"): [row]}, {"event_AB": {"event_support": "count-only-candidate"}})
     assert origin[0] == "unresolved"
+
+
+def test_orientation_quartet_overlap_matches_exact_copy_pairings_not_just_family():
+    from workflow.support.wgd_cross_phase import orientation_phase_overlap, record_phase
+
+    event = "E"
+    f = [(event, "A", "B", ("a", 1), "OG", ("a1", "b1", "a2", "b2")),
+         (event, "A", "B", ("a", 1), "OG", ("a3", "b3", "a4", "b4"))]
+    r = [(event, "B", "A", ("b", 2), "OG", ("b2", "a2", "b1", "a1")),
+         (event, "B", "A", ("b", 3), "OG", ("b3", "a4", "b4", "a3"))]
+    phases = defaultdict(dict)
+    record_phase(phases, f[0][:3], f[0][3], f[0][4], f[0][5], 1)
+    reverse_phases = defaultdict(dict)
+    record_phase(reverse_phases, r[0][:3], r[0][3], r[0][4], r[0][5], 3)
+    first = SimpleNamespace(traced_hits=f, phases=phases)
+    second = SimpleNamespace(orientation_hits=r, phases=reverse_phases)
+    left, right = ({"species_event_id": event, "species_a": a, "species_b": b, "status": "assessed"}
+                   for a, b in (("A", "B"), ("B", "A")))
+    all_paths, strict = orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right],
+                                                  first, second, unique=True)
+    assert [all_paths[k] for k in ("a_quartets", "b_quartets", "shared_quartets", "shared_families",
+                                    "shared_windows_a", "shared_windows_b")] == [2, 2, 1, 1, 1, 1]
+    assert strict["a_quartets"] == 1 and strict["shared_quartets"] == 0
+    right["status"] = "insufficient_archive_anchors"
+    missing, = orientation_phase_overlap([{"species_event_id": event, "branch_id": 9}], [left], [right], first, second)
+    assert missing["status"] == "not_assessed_both" and missing["shared_quartets"] is None
 
 
 def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_path):

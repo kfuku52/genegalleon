@@ -298,6 +298,9 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     orientation, = read_table(root / "cross_synteny_orientation.tsv")
     assert orientation["status"] == "supports_in_both"
     assert orientation["a_matched_paired_windows"] == orientation["b_matched_paired_windows"] == "1"
+    quartets_overlap, = read_table(root / "cross_synteny_orientation_quartets.tsv")
+    assert quartets_overlap["status"] == "assessed_both" and quartets_overlap["shared_quartets"] == "5"
+    assert quartets_overlap["shared_windows_a"] == quartets_overlap["shared_windows_b"] == "1"
     nonreused, = read_table(root / "cross_synteny_anchor_nonreuse.tsv")
     assert nonreused["num_nonreused_anchor_windows"] == nonreused["num_nonreused_archive_family_windows"] == "2"
     region = read_table(root / "cross_synteny_region_summary.tsv")[0]
