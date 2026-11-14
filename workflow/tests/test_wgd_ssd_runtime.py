@@ -288,6 +288,10 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path):
     phase, = read_table(root / "cross_synteny_copy_phase.tsv")
     assert phase["concordant_only_quartets"] == "5" and phase["concordant_only_windows"] == "1"
     assert phase["ambiguous_quartets"] == phase["discordant_only_quartets"] == "0"
+    overlap, = read_table(root / "duplication_synteny_family_overlap.tsv")
+    assert overlap["matched_paired_families"] == overlap["matched_either"] == "5"
+    assert overlap["score_after_exclusion"] == ""
+    assert "duplication_synteny_family_overlap.tsv" in summary["output_hashes"]
     coverage, = read_table(root / "cross_synteny_archive_coverage.tsv")
     assert coverage["num_cross_anchor_pairs"] == coverage["num_archive_family_anchor_pairs"] == "10"
     assert coverage["num_observable_windows"] == coverage["num_archive_family_windows"] == "2"

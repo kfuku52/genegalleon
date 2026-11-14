@@ -22,6 +22,7 @@ try:
     from parallel_io import ordered_bounded_results
     from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
@@ -55,6 +56,7 @@ except ImportError:
     from .parallel_io import ordered_bounded_results
     from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
+    from .wgd_cross_overlap import OVERLAP_FIELDS, duplication_synteny_overlap
     from .wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_replication import REPLICATION_FIELDS, replicated_copy_rows
@@ -131,6 +133,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_tree_scan.py").resolve(),
               Path(__file__).with_name("wgd_taxon_holdout.py").resolve(),
               Path(__file__).with_name("wgd_cross_ks.py").resolve(),
+              Path(__file__).with_name("wgd_cross_overlap.py").resolve(),
               Path(__file__).with_name("wgd_cross_phase.py").resolve(),
               Path(__file__).with_name("wgd_cross_regions.py").resolve(),
               Path(__file__).with_name("wgd_cross_replication.py").resolve(),
@@ -1129,6 +1132,8 @@ def run_analysis(plan, output, cpus):
                             ORIENTATION_OUTPUT)
                 del reverse
             write_table(output / "cross_synteny_windows.tsv", window_rows, WINDOW_OUTPUT)
+            write_table(output / "duplication_synteny_family_overlap.tsv",
+                        duplication_synteny_overlap(raw_candidates, window_rows), OVERLAP_FIELDS)
             write_table(output / "cross_synteny_archive_coverage.tsv", coverage_rows, COVERAGE_OUTPUT)
             unique_hits = ({hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
                            if p.get("cross_require_unique_phase") else None)

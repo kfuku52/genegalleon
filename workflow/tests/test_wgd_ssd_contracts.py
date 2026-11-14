@@ -248,6 +248,21 @@ def test_duplication_scan_uses_membership_species_when_prefixes_overlap(tmp_path
     assert scan_duplications(tree, archive, .01)[0][0]["num_supporting_families"] == 0
 
 
+def test_duplication_synteny_overlap_counts_distinct_families():
+    from workflow.support.wgd_cross_overlap import duplication_synteny_overlap
+
+    candidates = [{"species_event_id": "e", "branch_id": 4, "num_eligible_families": 10, "num_supporting_families": 4},
+                  {"species_event_id": "f", "branch_id": 7, "num_eligible_families": 0, "num_supporting_families": 0}]
+    windows = [{"species_event_id": "e", "matched_paired_families": "a,b", "matched_partial_only_families": "b"},
+               {"species_event_id": "e", "matched_paired_families": "a", "matched_partial_only_families": "c"}]
+    a, b = duplication_synteny_overlap(candidates, windows)
+    assert (a["matched_paired_families"], a["matched_partial_only_families"], a["matched_either"]) == (2, 1, 3)
+    assert (a["eligible_after_exclusion"], a["support_after_exclusion"], a["score_after_exclusion"]) == (7, 1, 1 / 7)
+    assert b["score_after_exclusion"] is None
+    with pytest.raises(ValueError, match="subset"):
+        list(duplication_synteny_overlap([{**candidates[0], "num_supporting_families": 2}], windows))
+
+
 def test_duplication_score_requires_synteny_opportunity_in_each_daughter():
     event = {"species_event_id": "event_ABC", "descendant_taxa": "A,B,C", "tree_support": "tree_score_supported"}
     daughters = {"event_ABC": ({"A", "B"}, {"C"})}

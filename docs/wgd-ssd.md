@@ -138,6 +138,13 @@ BED gene IDs must be globally unique, and each archive member must name
 a family in the membership table and contain only its genes (subsets allowed).
 For this mode the membership column supplies the species identity, including
 when one species name is a prefix of another.
+
+`duplication_synteny_family_overlap.tsv` reports how many distinct families
+contribute both a duplication vote and a matched cross-synteny path. It also
+shows the score with those families removed from the numerator and denominator.
+The subtraction uses all matched paths even in the strict-phase sensitivity
+run. Exclusion is conditioned on the evidence and is not an independent
+test. The default scores and calls are unchanged.
 Use one BED per species and original `###`-delimited JCVI anchor files
 (plain or gzip), not lifted anchors or preassigned branch scores. This
 stage reads existing comparisons; it does not launch genome alignments.
