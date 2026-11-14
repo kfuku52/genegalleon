@@ -201,7 +201,8 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     from nwkit.clade_index import CladeIndex
     from nwkit.util import read_tree
 
-    from workflow.support.wgd_cross_phase import phase_rows
+    from workflow.support.wgd_cross_ks import CrossKs
+    from workflow.support.wgd_cross_phase import phase_rows, trace_has_unique_phase
     from workflow.support.wgd_cross_synteny import CrossSynteny, archive_window_floor, cross_synteny_inputs
     from workflow.support.wgd_tree_scan import scan_duplications
 
@@ -261,6 +262,11 @@ def test_cross_block_correspondence_resolves_exact_copy_evidence(tmp_path, case,
     assert phase["discordant_only_quartets"] == (5 if case == "wrong_phase" else 0)
     assert phase["ambiguous_quartets"] == (5 if case == "both_phases" else 0)
     assert phase["ambiguous_windows"] == (1 if case == "both_phases" else 0)
+    strict, _, _ = cross.summarize(archive_floor=archive_window_floor(coverage), require_unique_phase=True)
+    assert strict[event_id]["observable"] == evidence[event_id]["observable"]
+    assert strict[event_id]["supported"] == (case in {"paired", "positive_below_archive_floor"})
+    phased_hits = {hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
+    assert CrossKs.age_pairs_from_trace(phased_hits, {"A", "B"}) == (cross.age_pairs if strict[event_id]["supported"] else set())
     if case == "missing_archive_anchors":
         assert coverage[0]["num_observable_windows"] == 2
         assert coverage[0]["num_archive_family_windows"] == 0
@@ -1066,6 +1072,17 @@ def test_wgd_species_tree_shows_focal_ks_by_branch(tmp_path, monkeypatch):
     assert "dS age conflict" in legend and "dS inconclusive" not in legend
     assert matched == [((.212,), beta + .40), ((.357,), beta - .40)]
     assert "Matched-family split" in ds_legend
+
+    captured.clear()
+    events[0].update(synteny_method="cross_block_correspondence", synteny_status="assessed_below_threshold",
+                     tree_support="tree_score_supported", event_support="unresolved",
+                     synteny_block_definition="same_original_blocks_with_uniquely_concordant_four_copy_paths")
+    phase = [{"species_event_id": events[0]["species_event_id"], "concordant_only_windows": 1}]
+    regions.append({"species_event_id": events[0]["species_event_id"], "mode": "all", "supports_before_holdout": 1})
+    wgd_ssd.plot_candidates(events, tmp_path, tree=tree, duplication_threshold=.01, focal_rows=focal_rows,
+                            region_rows=regions, matched_trios=matched_trios, phase_diagnostics=phase)
+    assert "B1  S=20.00%  W=4  U=1" in captured[0][6][0]
+    assert "Assessed; unique-path support below floor" in captured[0][4]
 
 
 def test_missing_gene_support_is_na_but_explicit_zero_and_one_are_preserved(tmp_path):

@@ -22,7 +22,7 @@ try:
     from parallel_io import ordered_bounded_results
     from wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
-    from wgd_cross_phase import PHASE_FIELDS, phase_rows, unique_phase_windows
+    from wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -52,7 +52,7 @@ except ImportError:
     from .parallel_io import ordered_bounded_results
     from .wgd_alignment_reuse import alignment_identity, matching_rows, reuse_sources
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
-    from .wgd_cross_phase import PHASE_FIELDS, phase_rows, unique_phase_windows
+    from .wgd_cross_phase import PHASE_FIELDS, phase_rows, trace_has_unique_phase, unique_phase_windows
     from .wgd_cross_regions import NESTED_FIELDS, REGION_DETAIL, REGION_SUMMARY, nested_copy_overlap, summarize_regions
     from .wgd_cross_support import (
         DUPLICATION_SUPPORT_FIELDS,
@@ -240,6 +240,10 @@ def make_plan(args):
         raise ValueError("Cross-synteny orientation audit must be 0 or 1")
     if parameters["cross_orientation_audit"] and cross_pairs is None:
         raise ValueError("Cross-synteny orientation audit requires --cross-synteny")
+    if getattr(args, "cross_require_unique_phase", 0):
+        if cross_pairs is None:
+            raise ValueError("Unique cross-synteny phase requires --cross-synteny")
+        parameters["cross_require_unique_phase"] = 1
     parameters["count_bootstrap_workers"] = getattr(args, "count_bootstrap_workers", 1)
     parameters["count_scan_workers"] = getattr(args, "count_scan_workers", 1)
     count_inputs = {}
@@ -702,7 +706,11 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
 
     tree_mode = duplication_threshold is not None
     cross_mode = any(row.get("synteny_method") == "cross_block_correspondence" for row in rows)
+    strict_phase = any(row.get("synteny_block_definition") == "same_original_blocks_with_uniquely_concordant_four_copy_paths"
+                       for row in rows)
     paired_regions = {row["species_event_id"]: row for row in region_rows if row["mode"] == "paired"}
+    baseline_cross_support = {row["species_event_id"] for row in region_rows
+                              if row["mode"] == "all" and int(row["supports_before_holdout"])}
     phase_windows = unique_phase_windows(phase_diagnostics)
     age_styles = {"supports_branch": ("o", "#15504B", "dS supports placement"),
                   "partial_support": ("o", "#9F620A", "dS supports one daughter"),
@@ -711,15 +719,26 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     metric = "duplication_score" if tree_mode else "likelihood_ratio_statistic"
     cutoff = (f"duplication score >= {duplication_threshold:g} (exploratory)" if tree_mode else
               f"search-wide P <= {alpha:g}")
+    if strict_phase:
+        cutoff += "; unique paired paths"
     styles = {"duplication-and-synteny-candidate" if tree_mode else "WGD-supported": (
                   "#176B67", "", "Duplications + synteny" if tree_mode else "Counts + synteny"),
               "duplication-only-candidate" if tree_mode else "count-only-candidate": (
                   "#A34D22", "//", "Duplication-only candidate" if tree_mode else "Count-only candidate"),
               "unresolved": ("#777777", "", "Unresolved")}
     one_copy_style = "#176B67", "..", "Combined candidate; requires one-copy paths"
+    phase_limited_style = "#826326", "//", "Assessed; unique-path support below floor"
+
+    def phase_limited(row):
+        return (strict_phase and row["event_support"] == "unresolved"
+                and row.get("tree_support") == "tree_score_supported"
+                and row.get("synteny_status") == "assessed_below_threshold"
+                and row["species_event_id"] in baseline_cross_support)
 
     def row_style(row):
         state = row["event_support"]
+        if phase_limited(row):
+            return phase_limited_style
         region = paired_regions.get(row.get("species_event_id"))
         if (state == "duplication-and-synteny-candidate" and region is not None
                 and not int(region["supports_before_holdout"])):
@@ -729,6 +748,8 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     active_styles = [*styles.values()]
     if any(row_style(row) == one_copy_style for row in rows):
         active_styles.append(one_copy_style)
+    if any(phase_limited(row) for row in rows):
+        active_styles.append(phase_limited_style)
     shown = sorted(rows, key=lambda row: float(row[metric]), reverse=True)[:40]
     labels = []
     for row in reversed(shown):
@@ -828,10 +849,11 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
         if age:
             marker, edge, _ = age
             ax.plot(midpoint, y[node], marker=marker, mec=edge, mfc="white", ms=5.5, mew=1.2, zorder=4)
-        if row and (state != "unresolved" or unobserved):
+        if row and (state != "unresolved" or unobserved or phase_limited(row)):
             value = f"S={float(row[metric]):.2%}" if tree_mode else f"P={float(row['p_value']):.3g}"
             region = paired_regions.get(row["species_event_id"])
-            windows = f"  W={region['matched_windows']}" if region is not None and state == "duplication-and-synteny-candidate" else ""
+            windows = (f"  W={region['matched_windows']}" if region is not None
+                       and (state == "duplication-and-synteny-candidate" or phase_limited(row)) else "")
             if windows and row["species_event_id"] in phase_windows:
                 windows += f"  U={phase_windows[row['species_event_id']]}"
             ax.annotate(f"B{row['branch_id']}  {value}{windows}",
@@ -1001,7 +1023,9 @@ def run_analysis(plan, output, cpus):
             else:
                 coverage_rows, nonreuse_rows, reverse_floor = cross.nonreused_coverage_rows()
                 write_table(output / "cross_synteny_anchor_nonreuse.tsv", nonreuse_rows, NONREUSE_OUTPUT)
-            cross_evidence, pair_rows, window_rows = cross.summarize(archive_floor=archive_window_floor(coverage_rows))
+            cross_evidence, pair_rows, window_rows = cross.summarize(
+                archive_floor=archive_window_floor(coverage_rows),
+                require_unique_phase=p.get("cross_require_unique_phase", 0))
             write_table(output / "cross_synteny_pairs.tsv", pair_rows, PAIR_OUTPUT)
             phase_diagnostics = list(phase_rows(raw_candidates, pair_rows, cross.phases))
             write_table(output / "cross_synteny_copy_phase.tsv", phase_diagnostics, PHASE_FIELDS)
@@ -1024,9 +1048,15 @@ def run_analysis(plan, output, cpus):
                             paired_tree_support(plan["gene_trees"], plan["cross_tree_support"], raw_candidates,
                                                 cross.traced_hits), SUPPORT_FIELDS)
             if cross_ks:
-                cross_ks.prepare(cross.age_pairs, raw_candidates, cross_evidence)
+                strict_phase = p.get("cross_require_unique_phase")
+                if strict_phase:
+                    traced_ks_hits = {hit for hit in cross.traced_hits if trace_has_unique_phase(cross.phases, hit)}
+                    age_pairs = CrossKs.age_pairs_from_trace(traced_ks_hits, cross.age_species)
+                else:
+                    age_pairs = cross.age_pairs
+                cross_ks.prepare(age_pairs, raw_candidates, cross_evidence)
                 if p.get("max_ks_quartets"):
-                    traced_ks_hits = cross.traced_hits
+                    traced_ks_hits = traced_ks_hits if strict_phase else cross.traced_hits
             del cross
         if not raw_candidates:
             raise ValueError("Duplication scoring needs at least one non-root internal species branch")
@@ -1082,6 +1112,8 @@ def run_analysis(plan, output, cpus):
         for row in candidates:
             row["synteny_method"] = "cross_block_correspondence"
             row["minimum_cross_windows"] = p["min_cross_windows"]
+            if p.get("cross_require_unique_phase"):
+                row["synteny_block_definition"] = "same_original_blocks_with_uniquely_concordant_four_copy_paths"
     age_summary, focal_rows = {}, ()
     if cross_ks:
         estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"))
@@ -1353,6 +1385,7 @@ def main():
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),
                            ("ks-bootstrap", 199), ("seed", 1),
                            ("max-pairs", 5000), ("max-ks-families", 500), ("max-ks-quartets", 0), ("max-count-families", 10000),

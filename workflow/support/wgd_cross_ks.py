@@ -229,6 +229,17 @@ def boundary_status(row):
 
 
 class CrossKs:
+    @staticmethod
+    def age_pairs_from_trace(hits, age_species):
+        pairs = set()
+        for event, a, b, _, family, genes, _, positions in hits:
+            for i, sp in enumerate((a, b)):
+                if sp in age_species:
+                    pair = tuple(sorted((genes[i], genes[i + 2])))
+                    first, second = sorted((positions[i][1:], positions[i + 2][1:]))
+                    pairs.add((event, sp, family, pair, first, second))
+        return pairs
+
     def __init__(self, tree, sources, parameters, family_tables):
         from nwkit.clade_index import CladeIndex
 

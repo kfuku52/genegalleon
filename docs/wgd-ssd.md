@@ -169,6 +169,15 @@ species tree, `W` counts matched paired windows and `U` counts windows with
 at least one concordant-only quartet. This audit does not change the primary
 candidate decision or turn phase agreement into an age estimate.
 
+For a stricter sensitivity run, set `wgd_cross_require_unique_phase=1`.
+Every supporting pair must meet the configured window and family floors
+using concordant-only four-copy paths. Ambiguous paths and one-copy paths
+do not count toward these floors. Observable pairs that fail the stricter
+rule remain assessed, so they cannot trigger a duplication-only fallback.
+The pair, window, and orientation audits still show the underlying paths
+and baseline support. The downstream cross-block copy-pair dS analysis
+also uses only concordant-only paths in this mode.
+
 To expand an existing manifest without all-vs-all comparisons, run the sparse
 planner in the GeneGalleon runtime:
 

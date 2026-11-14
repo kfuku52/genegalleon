@@ -7,10 +7,10 @@ from collections import defaultdict
 from pathlib import Path
 
 try:
-    from wgd_cross_phase import observe_phase, record_phase
+    from wgd_cross_phase import observe_phase, record_phase, unique_phase_support
     from wgd_evidence import read_table
 except ImportError:
-    from .wgd_cross_phase import observe_phase, record_phase
+    from .wgd_cross_phase import observe_phase, record_phase, unique_phase_support
     from .wgd_evidence import read_table
 
 
@@ -357,7 +357,9 @@ class CrossSynteny:
                                               for sp in (a if gene in beds[a] else b,))
                             self.traced_hits.add((branch, a, b, window, family, genes, blocks, positions))
 
-    def summarize(self, *, include_windows=True, archive_floor=None):
+    def summarize(self, *, include_windows=True, archive_floor=None, require_unique_phase=False):
+        if require_unique_phase and self.phases is None:
+            raise ValueError("Unique cross-synteny support requires a four-copy phase audit")
         branches, pairs, windows = {}, [], []
         for branch, entries in self.entries.items():
             observed_species, supported_species = set(), set()
@@ -370,7 +372,7 @@ class CrossSynteny:
                     status = "insufficient_archive_anchors"
                 if status == "assessed":
                     observed_species.update((a, b))
-                    if supports:
+                    if supports and (not require_unique_phase or unique_phase_support(self.phases[branch, a, b], self.min_windows)):
                         supported_species.update((a, b))
                 key = {"species_event_id": branch, "species_a": a, "species_b": b}
                 pairs.append({**key, "status": status, "observable_windows": len(observable),

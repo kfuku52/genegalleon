@@ -48,3 +48,23 @@ def unique_phase_windows(rows):
     for row in rows:
         by_branch[row["species_event_id"]] += row["concordant_only_windows"]
     return by_branch
+
+
+def unique_phase_support(quartets, floor):
+    windows, families = set(), set()
+    for (window, family, *_), phase in quartets.items():
+        if phase == 1:
+            windows.add(window)
+            families.add(family)
+            if len(windows) >= floor and len(families) >= floor:
+                return True
+    return False
+
+
+def trace_has_unique_phase(phases, hit):
+    event, a, b, window, family, genes, *_ = hit
+    if len(genes) != 4:
+        return False
+    first, second, first_copy, second_copy = genes
+    key = window, family, first, first_copy, *sorted((second, second_copy))
+    return phases.get((event, a, b), {}).get(key) == 1
