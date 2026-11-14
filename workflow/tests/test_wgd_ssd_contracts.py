@@ -156,6 +156,41 @@ def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_p
     assert scan_duplications(tree, archive, 0.51)[0][0]["tree_support"] == "below_threshold"
 
 
+def test_duplication_coverage_audit_only_projects_taxa_missing_from_the_family(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import scan_duplications
+
+    tree = read_tree("((((A:1,B:1):1,C:2):1,D:3):1,E:4);", "auto", True)
+    trees = {
+        "complete_hit": "(((A_1,(C_1,(B_1,D_1))),(A_2,(C_2,(B_2,D_2)))),E_1);",
+        "complete_miss": "(((A_1,(C_1,D_1)),(A_2,(C_2,D_2))),(B_1,E_1));",
+        "partial_two_votes": "((((A_1,(C_1,D_1)),(A_2,(C_2,D_2))),((A_3,(C_3,D_3)),(A_4,(C_4,D_4)))),E_1);",
+        "partial_miss_one_daughter": "(((A_1,(C_1,D_1)),(A_2,C_2)),E_1);",
+        "partial_no_sister": "((A_1,(C_1,D_1)),(A_2,(C_2,D_2)));",
+        "nested_with_observed_sister": "((((A_1,C_1),(A_2,C_2)),D_1),E_1);",
+    }
+    archive = tmp_path / "trees.zip"
+    with ZipFile(archive, "w") as handle:
+        for family, gene in trees.items():
+            handle.writestr(f"{family}_root.nwk", gene)
+    coverage = []
+    baseline, _ = scan_duplications(tree, archive, .01)
+    audited, _ = scan_duplications(tree, archive, .01, coverage_output=coverage)
+    assert baseline == audited
+    by_taxa = {r["descendant_taxa"]: r["species_event_id"] for r in baseline}
+    by_event = {r["species_event_id"]: r for r in coverage}
+    outer = by_event[by_taxa["A,B,C,D"]]
+    assert (outer["eligible_complete"], outer["eligible_partial"]) == (2, 3)
+    assert outer["support_complete"] == outer["support_partial_projected"] == 1
+    assert outer["complete_case_score"] == .5 and outer["partial_case_score"] == pytest.approx(1 / 3)
+    assert outer["projected_score"] == .4
+    inner = by_event[by_taxa["A,B,C"]]
+    assert inner["support_complete"] == 0 and inner["support_partial_projected"] == 1
+
+
 def test_duplication_scan_uses_membership_species_when_prefixes_overlap(tmp_path):
     from zipfile import ZipFile
 

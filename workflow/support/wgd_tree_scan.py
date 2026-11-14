@@ -10,9 +10,12 @@ try:
 except ImportError:
     from .wgd_taxon_holdout import DuplicationTaxonHoldout
 
+COVERAGE_FIELDS = ("species_event_id", "branch_id", "eligible_complete", "eligible_partial", "support_complete",
+                   "support_partial_projected", "complete_case_score", "partial_case_score", "projected_score")
+
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
-                      observe_family=None, observe_duplications=None, *, holdout_output=None):
+                      observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -33,6 +36,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
     holdout = DuplicationTaxonHoldout(taxa, branches) if holdout_output is not None else None
     prefix = re.compile(r"^(" + "|".join(map(re.escape, sorted(taxa, key=lambda name: (-len(name), name)))) + r")_(?=.)")
     eligible, hits = Counter(), Counter()
+    complete, partial_hits = Counter(), Counter()
     families = set()
     with ZipFile(archive_path) as archive:
         for member in archive.infolist():
@@ -81,11 +85,29 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             full = observed[tree]
             if observe_family is not None:
                 observe_family(family, leaves)
+            projected = {}
             for mask, (_, sisters, daughters, _) in branches.items():
                 if full & sisters and all(full & daughter for daughter in daughters):
                     eligible[mask] += 1
                     if mask in supported:
                         hits[mask] += 1
+                    if coverage_output is not None:
+                        if full & mask == mask:
+                            complete[mask] += 1
+                        else:
+                            projected[full & mask] = mask, daughters
+            if projected:
+                # Each eligible split still has observed daughters and a sister,
+                # so projected clades cannot coincide with another eligible split.
+                seen = set()
+                for gene, union in observed.items():
+                    if union not in projected or len(gene.children) != 2 or union in seen:
+                        continue
+                    mask, daughters = projected[union]
+                    left, right = (observed[c] for c in gene.children)
+                    if left & right and all(left & d and right & d for d in daughters):
+                        partial_hits[mask] += 1
+                        seen.add(union)
             if holdout is not None:
                 holdout.observe(tree, observed, supported)
             if observe is not None or observe_duplications is not None:
@@ -112,6 +134,13 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             "minimum_duplication_score": minimum_score,
             "tree_support": "tree_score_supported" if n and score >= minimum_score else "below_threshold",
         })
+        if coverage_output is not None:
+            full, partial = complete[mask], n - complete[mask]
+            projected = partial_hits[mask]
+            values = (branch, branch_ids[node], full, partial, support, projected,
+                      support / full if full else None, projected / partial if partial else None,
+                      (support + projected) / n if n else None)
+            coverage_output.append(dict(zip(COVERAGE_FIELDS, values, strict=True)))
     rows.sort(key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"]))
     if holdout is not None:
         holdout_output.extend(holdout.rows(rows))

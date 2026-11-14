@@ -106,6 +106,17 @@ families are eligible, the score is `NA`, not zero. The audit prunes the
 archived topology in memory; it does not re-infer gene trees, change calls, or
 provide a P-value.
 
+Set `wgd_duplication_coverage_audit=1` to write
+`duplication_coverage.tsv`. It splits eligible families by whether all
+descendant species of the branch are present in their archived tree and
+reports a complete-case score. For partially covered families, a separate
+score counts duplications whose species set equals the branch's observed
+descendants, with both copy groups still covering every daughter lineage.
+The immediate sister lineage must still be represented. This sensitivity
+check can recover votes lost to missing taxa, but presence-dependent
+selection, gene-tree error, and sparse sampling can also change these
+scores. It does not alter default calls or provide a P-value.
+
 ### Sparse Cross-Species Synteny
 
 In duplication-score mode, set `wgd_cross_synteny_file` to a TSV with

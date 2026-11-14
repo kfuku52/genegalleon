@@ -46,6 +46,7 @@ try:
     from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
     from wgd_taxon_holdout import HOLDOUT_FIELDS
+    from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
     from wgd_tree_scan import scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
@@ -77,6 +78,7 @@ except ImportError:
     from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
+    from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
     from .wgd_tree_scan import scan_duplications
 
 
@@ -238,6 +240,10 @@ def make_plan(args):
         raise ValueError("Duplication taxon holdout must be 0 or 1")
     if parameters["duplication_taxon_holdout"] and tree_archive is None:
         raise ValueError("Duplication taxon holdout requires --gene-trees")
+    if getattr(args, "duplication_coverage_audit", 0):
+        if tree_archive is None:
+            raise ValueError("Duplication coverage audit requires --gene-trees")
+        parameters["duplication_coverage_audit"] = 1
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["cross_orientation_audit"] = getattr(args, "cross_orientation_audit", 0)
     if parameters["cross_orientation_audit"] not in (0, 1):
@@ -1054,15 +1060,19 @@ def run_analysis(plan, output, cpus):
 
         support_file = plan.get("cross_tree_support")
         holdout_rows = [] if p.get("duplication_taxon_holdout") else None
+        duplication_coverage = [] if p.get("duplication_coverage_audit") else None
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
                 observe=observe,
                 family_members=family_members if cross is not None else None,
                 observe_family=observe_family if cross is not None else None,
-                observe_duplications=support.observe if support else None, holdout_output=holdout_rows)
+                observe_duplications=support.observe if support else None, holdout_output=holdout_rows,
+                coverage_output=duplication_coverage)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
+        if duplication_coverage is not None:
+            write_table(output / "duplication_coverage.tsv", duplication_coverage, DUPLICATION_COVERAGE_FIELDS)
         if support:
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
         del by_family
@@ -1433,6 +1443,7 @@ def main():
         plan.add_argument("--" + field, default="")
     plan.add_argument("--sequence-mode", choices=("cds", "protein"), default="cds")
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--duplication-coverage-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     for field, default in (("genetic-code", 1), ("count-bootstrap", 199), ("count-bootstrap-workers", 1), ("count-scan-workers", 1),

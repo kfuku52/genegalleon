@@ -426,6 +426,7 @@ wgd_count_family_gamma_shape
 wgd_alpha
 wgd_gene_trees_file
 wgd_duplication_taxon_holdout
+wgd_duplication_coverage_audit
 wgd_cross_synteny_file
 wgd_cross_orientation_audit
 wgd_cross_require_unique_phase
