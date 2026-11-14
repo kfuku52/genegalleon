@@ -24,7 +24,14 @@ try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from parallel_io import ordered_bounded_results
-    from wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
+    from wgd_alignment_reuse import (
+        alignment_identity,
+        likelihood_identity,
+        likelihood_reuse,
+        matching_cached_rows,
+        reuse_bundle,
+        reuse_likelihood_report,
+    )
     from wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from wgd_cross_node import CROSS_PATH_FIELDS, NODE_PATH_FIELDS, cross_node_rows, cross_paths, load_family_paths
@@ -86,7 +93,14 @@ except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .parallel_io import ordered_bounded_results
-    from .wgd_alignment_reuse import alignment_identity, matching_cached_rows, reuse_bundle
+    from .wgd_alignment_reuse import (
+        alignment_identity,
+        likelihood_identity,
+        likelihood_reuse,
+        matching_cached_rows,
+        reuse_bundle,
+        reuse_likelihood_report,
+    )
     from .wgd_count_overlay import COUNT_OVERLAY_FIELDS, draw_count_overlay, load_count_overlay
     from .wgd_cross_ks import CrossKs, cross_ks_cds_sources, plot_cross_ks
     from .wgd_cross_node import CROSS_PATH_FIELDS, NODE_PATH_FIELDS, cross_node_rows, cross_paths, load_family_paths
@@ -450,9 +464,14 @@ def make_plan(args):
         raise ValueError("Cross-block alignment reuse requires --cross-ks-cds")
     alignment, files = alignment_identity(tools["ds"]) if cross_ks_sources else (None, ())
     inputs.update(files)
-    reused_alignments = {}
+    likelihood, likelihood_hashes = likelihood_identity(ds_method) if ds_method != "yn00" else (None, {})
+    inputs.update(likelihood_hashes)
+    reused_alignments, reused_reports = {}, {}
     if reuse:
-        reused_alignments, hashes = reuse_bundle((resolve(summary, "") for summary in reuse), alignment)
+        prior_paths = [resolve(summary, "") for summary in reuse]
+        reused_alignments, hashes = reuse_bundle(prior_paths, alignment)
+        if likelihood is not None:
+            reused_reports = likelihood_reuse(prior_paths, likelihood, hashes)
         managed_output = workspace / "output/genome_evolution/wgd_ssd"
         protect_output(managed_output, hashes)
         inputs.update(hashes)
@@ -463,6 +482,7 @@ def make_plan(args):
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
+            **({"cross_ks_likelihood_identity": likelihood, "reused_cross_ks_likelihood": reused_reports} if likelihood else {}),
             "count_bootstrap_checkpoint": checkpoint, **count_inputs, **overlay_paths,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
@@ -474,6 +494,9 @@ def verify(plan, file_digest=digest):
     identity = plan.get("alignment_identity")
     if identity is not None and alignment_identity(plan["tools"]["ds"])[0] != identity:
         raise ValueError("MAFFT or backtranslation identity changed during WGD analysis")
+    likelihood = plan.get("cross_ks_likelihood_identity")
+    if likelihood is not None and likelihood_identity(likelihood["method"])[0] != likelihood:
+        raise ValueError("Likelihood dS identity changed during WGD analysis")
     for path, expected in plan["input_hashes"].items():
         if file_digest(path) != expected:
             raise ValueError(f"WGD input changed during analysis: {path}")
@@ -771,16 +794,16 @@ def estimate_ks(plan, output, sequences, anchors, cpus, family_tables=None):
     return reports, contrasts
 
 
-def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix="", *, reuse=None, method="yn00"):
+def estimate_pair_reports(output, sequences, codes, requests, cpus, prefix="", *, reuse=None, method="yn00", reuse_reports=None):
     # MAFFT's many short-lived files need not traverse a shared workspace mount.
     if prefix and not os.environ.get("MAFFT_TMPDIR") and requests:
         with tempfile.TemporaryDirectory(prefix="gg-wgd-mafft-", dir="/tmp") as scratch:
             return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix,
-                                          {**os.environ, "MAFFT_TMPDIR": scratch}, reuse, method)
-    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None, reuse, method)
+                                          {**os.environ, "MAFFT_TMPDIR": scratch}, reuse, method, reuse_reports)
+    return _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, None, reuse, method, reuse_reports)
 
 
-def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env, reuse, method):
+def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, align_env, reuse, method, reuse_reports=None):
     reports = {}
     by_code = defaultdict(list)
     for pair, info in requests.items():
@@ -805,8 +828,11 @@ def _estimate_pair_reports(output, sequences, codes, requests, cpus, prefix, ali
             with closing(ordered_bounded_results(pool, align, ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
                 write_table(pairs_file, aligned, PAIR_COLUMNS)
         method_args = ["--method", method] if method != "yn00" else []
-        run_tool(["cdskit", "dnds", "--pairs_file", pairs_file, *method_args,
-                  "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"{prefix}dnds.code{code}")
+        if prefix == "cross_ks_" and reuse_likelihood_report(reuse_reports, code, pairs_file, ds_file):
+            print(f"Cross-block dS code {code}: reusing the verified {method} report", flush=True)
+        else:
+            run_tool(["cdskit", "dnds", "--pairs_file", pairs_file, *method_args,
+                      "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"{prefix}dnds.code{code}")
         expected = {"|".join(pair) for pair, _ in selected}
         observed = set()
         statuses = DS_STATUSES if method == "yn00" else DS_STATUSES | CROSS_GY94_STATUSES
@@ -1574,7 +1600,7 @@ def run_analysis(plan, output, cpus):
     if cross_ks:
         ds_method = p.get("cross_ks_method", "yn00")
         estimate = partial(estimate_pair_reports, reuse=plan.get("reused_cross_ks_alignments"),
-                           method=ds_method)
+                           reuse_reports=plan.get("reused_cross_ks_likelihood"), method=ds_method)
         focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal,
                                   rooted_copy=rooted_copy, run_tool=run_tool, tree_archive=plan["gene_trees"],
                                   method_label=CROSS_DS_REPORT_LABELS.get(ds_method, plan["tools"]["ds"]["method"]))

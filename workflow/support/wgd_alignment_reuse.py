@@ -1,11 +1,14 @@
 """Reuse exact codon alignments from an explicitly supplied WGD archive."""
 
 import csv
+import hashlib
 import json
 import os
 import platform
 import re
 import shutil
+import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 try:
@@ -18,6 +21,50 @@ except ImportError:
 ALIGNMENT_NAME = re.compile(r"cross_ks_aligned_pairs\.code([1-9][0-9]*)\.tsv\Z")
 CODON_ALIGNMENT = re.compile(r"(?:[ACGTRYSWKMBDHVN]{3}|---)+\Z")
 MAFFT_DEFAULT = re.compile(rb"^[ \t]*prefix=(/[a-zA-Z0-9_./-]+)[ \t]*$", re.MULTILINE)
+
+
+def likelihood_identity(method):
+    import cdskit
+    import numpy
+    import scipy
+    import scipy.linalg
+    import scipy.optimize
+
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError:
+        return None, {}
+
+    executable = shutil.which("cdskit")
+    if executable is None:
+        raise ValueError("Cross-block likelihood dS needs the CDSKIT executable")
+    root = Path(cdskit.__file__).resolve().parent
+    paths = [Path(executable).resolve(), Path(sys.executable).resolve(), *sorted(root.rglob("*.py"))]
+    # Exact optimization/spectral kernels can change without a version change
+    # in locally rebuilt numerical packages.
+    for module in ("scipy.optimize._lbfgsb", "scipy.linalg._flapack", "scipy.linalg._matfuncs_expm"):
+        spec = find_spec(module)
+        if spec is None or spec.origin is None:
+            return None, {}
+        paths.append(Path(spec.origin).resolve())
+    kernels = paths[-3:]
+    libraries = threadpool_info()
+    if not any(record.get("user_api") == "blas" and record.get("filepath") for record in libraries):
+        return None, {}
+    paths.extend(Path(record["filepath"]).resolve() for record in libraries if record.get("filepath"))
+    files = {str(path): digest(path) for path in dict.fromkeys(paths)}
+    identity = {"version": 1, "method": method, "python": sys.version, "numpy": numpy.__version__,
+                "scipy": scipy.__version__, "cdskit": cdskit.__version__,
+                "code": {str(path.relative_to(root)): files[str(path)] for path in paths if path.is_relative_to(root)},
+                "platform": [platform.system(), platform.machine(), *platform.libc_ver()],
+                "executable": files[str(paths[0])], "interpreter": files[str(paths[1])],
+                "kernels": {path.name: files[str(path)] for path in kernels},
+                "libraries": sorted(((record.get("internal_api"), record.get("architecture", ""), record.get("num_threads"),
+                                      files[str(Path(record["filepath"]).resolve())])
+                                     for record in libraries if record.get("filepath")), key=str),
+                "environment": {key: os.environ.get(key) for key in ("OPENBLAS_CORETYPE", "NPY_DISABLE_CPU_FEATURES",
+                                "MKL_CBWR", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS")}}
+    return json.loads(json.dumps(identity)), files
 
 
 def alignment_identity(ds):
@@ -44,8 +91,9 @@ def alignment_identity(ds):
 
 
 def reuse_sources(summary, identity):
-    archived_hash = digest(summary)
-    previous = json.loads(summary.read_text(encoding="utf-8"))
+    payload = summary.read_bytes()
+    archived_hash = hashlib.sha256(payload).hexdigest()
+    previous = json.loads(payload)
     if identity is None or previous.get("plan", {}).get("alignment_identity") != identity:
         raise ValueError("Prior WGD alignments do not have the same verified MAFFT and backtranslation identity")
     sources, hashes = {}, {str(summary): archived_hash}
@@ -79,6 +127,48 @@ def reuse_bundle(summaries, identity):
         # Retain the single-source representation in existing plans.
         bundles = {code: sources[0] for code, sources in bundles.items()}
     return bundles, hashes
+
+
+def likelihood_reuse(summaries, identity, hashes):
+    """Find verified whole-table reports, keyed by exact aligned input bytes."""
+    sources = {}
+    for summary in dict.fromkeys(summaries):
+        payload = summary.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != hashes[str(summary)]:
+            raise ValueError(f"Prior WGD summary changed while selecting dS reuse: {summary}")
+        previous = json.loads(payload)
+        if previous.get("plan", {}).get("cross_ks_likelihood_identity") != identity:
+            continue
+        output_hashes = previous["output_hashes"]
+        for name, aligned_hash in output_hashes.items():
+            match = ALIGNMENT_NAME.fullmatch(name)
+            if match is None:
+                continue
+            code = match[1]
+            report_name = f"cross_ks_pair_ds.code{code}.tsv"
+            if report_name not in output_hashes:
+                continue
+            report = (summary.parent / report_name).resolve()
+            expected = output_hashes[report_name]
+            if digest(report) != expected or hashes.setdefault(str(report), expected) != expected:
+                raise ValueError(f"Prior WGD dS report hash does not match its summary: {report}")
+            by_alignment = sources.setdefault(code, {})
+            record = {"path": str(report), "sha256": expected}
+            if by_alignment.setdefault(aligned_hash, record)["sha256"] != expected:
+                raise ValueError(f"Conflicting verified WGD dS reports for the same alignment: {report}")
+    return sources
+
+
+def reuse_likelihood_report(reuse, code, pairs_file, ds_file):
+    if not reuse or not (entries := reuse.get(str(code))):
+        return False
+    record = entries.get(digest(pairs_file))
+    if record is None:
+        return False
+    shutil.copyfile(record["path"], ds_file)
+    if digest(ds_file) != record["sha256"]:
+        raise ValueError("Prior WGD dS report changed while copying")
+    return True
 
 
 def matching_cached_rows(paths, selected, sequences):

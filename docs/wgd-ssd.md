@@ -382,9 +382,14 @@ bundle may be the destination. GeneGalleon checks the source hashes, MAFFT and b
 identity, genetic code, ordered gene IDs, and the exact current CDS for each
 reused row. Identical alignments can be shared by bundles; conflicting
 verified alignments for the same pair and current CDS stop the run instead
-of choosing one by input order. New or changed pairs are aligned normally. All dS estimates and
-downstream tests are recomputed. Summaries without alignment provenance or
-unsupported MAFFT layouts cannot be used for reuse.
+of choosing one by input order. New or changed pairs are aligned normally.
+For GY94, a completed bundle may also supply its two-sequence dS report when
+the full ordered alignment table and estimator identity match exactly. Older
+bundles without that identity, a different method or runtime, or any changed
+alignment require recomputation. The reports are checked against their saved
+hashes and the current requests. Other dS estimates and downstream tests are
+recomputed. Summaries without alignment provenance or unsupported MAFFT
+layouts cannot be used for reuse.
 
 The NWKIT `ksrate` model puts the younger and older species divergence boundaries
 on each focal species' dS scale, using conservative simultaneous

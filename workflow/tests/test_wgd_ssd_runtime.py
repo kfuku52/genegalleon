@@ -468,7 +468,18 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
         data = (header + "".join(aligned[i::2])).encode()
         (saved / name).write_bytes(data)
         previous = {**summary, "output_hashes": {**summary["output_hashes"], name: sha256(data).hexdigest()}}
+        report = "cross_ks_pair_ds.code1.tsv"
+        # The first two donors deliberately contribute only half the alignments.
+        previous["output_hashes"].pop(report)
         (saved / "summary.json").write_text(json.dumps(previous))
+    if ds_method == "gy94" and summary["plan"].get("cross_ks_likelihood_identity"):
+        import shutil
+
+        saved = workspace / "full report donor"
+        saved.mkdir()
+        for file in (name, report, "summary.json"):
+            shutil.copyfile(root / file, saved / file)
+        donors.append(saved)
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_cross_synteny_file="cross.tsv",
                       wgd_min_cross_windows="1", wgd_cross_ks_cds_file="cross_cds.tsv",
                       wgd_cross_tree_support_file="boot.zip", wgd_max_ks_quartets="3", wgd_cross_orientation_audit="1",
@@ -478,6 +489,8 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
                       wgd_cross_ks_reuse_summary="\n".join(f"{saved.name}/summary.json" for saved in donors))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 22/22 codon alignments" in result.stdout
+    if len(donors) == 3:
+        assert "reusing the verified gy94 report" in result.stdout
     reused = json.loads((root / "summary.json").read_text())
     shared_outputs = {k: v for k, v in summary["output_hashes"].items()
                       if not k.startswith("cross_ks_rooted_") and k not in

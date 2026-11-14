@@ -86,3 +86,31 @@ def test_alignment_identity_tracks_helpers_and_declines_unknown_layout(tmp_path,
     assert reuse.alignment_identity(identity)[0] != before
     wrapper.write_text("unsupported wrapper\n")
     assert reuse.alignment_identity(identity) == (None, ())
+
+
+def test_likelihood_reuse_requires_exact_aligned_bytes_and_method(tmp_path):
+    aligned = tmp_path / "cross_ks_aligned_pairs.code1.tsv"
+    aligned.write_text("properly ordered original alignments\n")
+    report = tmp_path / "cross_ks_pair_ds.code1.tsv"
+    report.write_text("original report\n")
+    summary = tmp_path / "summary.json"
+    method = {"version": 1, "method": "gy94"}
+    summary.write_text(json.dumps({"plan": {"alignment_identity": {"test": True}, "cross_ks_likelihood_identity": method},
+                                  "output_hashes": {p.name: reuse.digest(p) for p in (aligned, report)}}))
+    _, hashes = reuse.reuse_bundle([summary], {"test": True})
+    assert reuse.likelihood_reuse([summary], {**method, "method": "gy94-regularized"}, hashes) == {}
+    source = reuse.likelihood_reuse([summary], method, hashes)
+    out = tmp_path / "result.tsv"
+    assert reuse.reuse_likelihood_report(source, 1, aligned, out)
+    assert out.read_bytes() == report.read_bytes()
+    assert not reuse.reuse_likelihood_report(source, 2, aligned, out)
+    report.write_text("tampered estimate\n")
+    with pytest.raises(ValueError, match="changed while copying"):
+        reuse.reuse_likelihood_report(source, 1, aligned, out)
+    with pytest.raises(ValueError, match="hash does not match"):
+        reuse.likelihood_reuse([summary], method, hashes)
+    aligned.write_text("different current alignments\n")
+    assert not reuse.reuse_likelihood_report(source, 1, aligned, out)
+    summary.write_text("{}")
+    with pytest.raises(ValueError, match="summary changed"):
+        reuse.likelihood_reuse([summary], method, hashes)

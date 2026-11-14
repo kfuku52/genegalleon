@@ -409,6 +409,7 @@ run_subgenome_dominance_stage() (
 run_wgd_ssd_stage() (
   local scratch_root work_dir plan_file argument needs_update prior_summary
   local -a contract_args=() reuse_args=()
+  local -a numeric_env=(env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1)
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" wgd_ssd || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/wgd_ssd") || exit 1
@@ -419,7 +420,7 @@ run_wgd_ssd_stage() (
     if [[ -n ${prior_summary} ]]; then reuse_args+=(--cross-ks-reuse-summary "${prior_summary}"); fi
   done <<< "${wgd_cross_ks_reuse_summary}"
   if [[ -z ${reuse_args[0]:-} ]]; then reuse_args=(--cross-ks-reuse-summary ""); fi
-  python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
+  "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
     --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
@@ -465,9 +466,8 @@ run_wgd_ssd_stage() (
   gg_artifact_prepare_stage needs_update run_wgd_ssd "${contract_args[@]}" || exit $?
   if [[ ${needs_update} -eq 1 ]]; then
     gg_step_start "Native WGD candidates and duplication-origin evidence"
-    env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-      python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
-    python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
     mv_out_bundle "${work_dir}/results" "${gg_workspace_output_dir}/genome_evolution/wgd_ssd"
     gg_artifact_record "${contract_args[@]}"
   else
