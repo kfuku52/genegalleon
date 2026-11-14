@@ -422,11 +422,13 @@ class CrossKs:
         low, high = boundary(younger), boundary(older)
         if low and high and low[1] < high[0] and low[1] < ci[0] <= ci[1] < high[0]:
             return "supports_branch", event
-        if low and high and low[1] >= high[0]:
-            return "overlapping_divergence_boundaries", ""
-        status = ("younger_than_branch" if low and ci[1] < low[0] else
-                  "older_than_branch" if high and ci[0] > high[1] else "")
+        younger_conflict = low is not None and ci[1] < low[0]
+        older_conflict = high is not None and ci[0] > high[1]
+        status = ("younger_than_branch" if younger_conflict else "older_than_branch"
+                  ) if younger_conflict != older_conflict else ""
         if not status:
+            if low and high and low[1] >= high[0]:
+                return "overlapping_divergence_boundaries", ""
             return ("overlaps_divergence_boundary" if low and high else "missing_divergence_boundary"), ""
         alternate = []
         node = self.leaves[focal]

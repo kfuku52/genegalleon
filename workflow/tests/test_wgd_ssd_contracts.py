@@ -364,6 +364,10 @@ def test_cross_ks_support_conflict_and_missing_boundary():
     assert candidate["cross_ks_status"] == "partial_support"
     assert focal_b["status"] == "missing_divergence_boundary"
     assert scan.place("A", event, (.28, .38), bounds, bounds["A", event], bounds["A", older])[0] == "overlaps_divergence_boundary"
+    young_bound, old_bound = bound(.2, .5), bound(.4, .7)
+    for ci, expected in (((.1, .15), "younger_than_branch"), ((.8, .9), "older_than_branch"),
+                         ((.42, .49), "overlapping_divergence_boundaries")):
+        assert scan.place("A", event, ci, {}, young_bound, old_bound) == (expected, "")
 
 
 def test_cross_ks_selects_cds_without_accepting_ambiguous_ids(tmp_path):

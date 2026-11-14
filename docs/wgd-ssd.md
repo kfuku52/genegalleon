@@ -166,7 +166,8 @@ At least three components (or `wgd_min_cross_windows`, when larger) and
 its whole interval lies between the two divergence intervals. Branch-level
 support requires at least one supporting focal in every daughter lineage
 and no focal with a clearly older or younger interval. Missing or overlapping
-boundaries do not count against a candidate. Divergent copy ages are flagged,
+boundaries do not establish placement, but a usable boundary can still flag a
+copy interval entirely outside the candidate. Divergent copy ages are flagged,
 not used to reject or move a WGD automatically: dS dates copy divergence,
 which can precede allopolyploidization. The diagnostic is not an independent
 P-value and does not change the original branch or gene-node classification.
