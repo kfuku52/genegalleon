@@ -1046,18 +1046,21 @@ def select(root, value, predictions=False):
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     if predictions:
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
-        # Assembly-only targets have no genomic prediction or repair.
-        if set(target_species(value)) <= value['request'].get('transcriptome_sources', {}).keys():
-            initial = select(root, value)
-            dependencies['initial'] = digest(initial / 'receipt.json')
+        initial = select(root, value)
+        dependencies['initial'] = digest(initial / 'receipt.json')
 
     def build(tmp):
-        if 'initial' in dependencies:
-            if json.loads((db.parent / 'summary.json').read_text())['accepted_prediction_count'] != 0:
+        if predictions:
+            count = json.loads((db.parent / 'summary.json').read_text())['accepted_prediction_count']
+            assembly_only = set(target_species(value)) <= value['request'].get('transcriptome_sources', {}).keys()
+            if assembly_only and count != 0:
                 raise ValueError('Assembly-only target has an unexpected genomic prediction')
-            for filename in ('selection.json', 'representative_map.tsv'):
-                shutil.copyfile(initial / filename, tmp / filename)
-            return
+            if count == 0:
+                # Correspondence and indexed coding loci are unchanged. All
+                # same-coordinate repairs require an accepted prediction.
+                for filename in ('selection.json', 'representative_map.tsv'):
+                    shutil.copyfile(initial / filename, tmp / filename)
+                return
         edges = json.loads((directory / 'edges.json').read_text())
         # Graph components read loci in an order that is expensive on shared
         # storage. Verify one sequential copy before opening it for selection.
@@ -3018,8 +3021,7 @@ def inspect_stages(root, value, cpus=1):
     expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'index': initial_index,
                                                         'predictions': predictions}}
     final_selection_dependencies = {**selection_dependencies, 'predictions': predictions, 'index': final_index}
-    if set(target_species(value)) <= request.get('transcriptome_sources', {}).keys():
-        final_selection_dependencies['initial'] = prediction_dependencies['initial']
+    final_selection_dependencies['initial'] = prediction_dependencies['initial']
     expected['selection_final'] = {'dependencies': final_selection_dependencies}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}

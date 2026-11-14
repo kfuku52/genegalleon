@@ -175,9 +175,13 @@ class SameCoordinateRepair(unittest.TestCase):
                 row, = classify()
                 for kind, directory in paths.items():
                     directory.mkdir(parents=True)
-                    member = ("predictions.json" if kind == "predictions" else
-                              "edges.json" if kind == "correspondence" else "small.json")
-                    payload = json.dumps([row] if kind == "predictions" else [])
+                    member, records = {
+                        "predictions": ("predictions.json", [row]),
+                        "correspondence": ("edges.json", []),
+                        "index": ("summary.json", {"accepted_prediction_count": 1}),
+                        "catalog": ("small.json", []),
+                    }[kind]
+                    payload = json.dumps(records)
                     (directory / member).write_text(payload)
                     key = {"fixture": kind}
                     (directory / "receipt.json").write_text(json.dumps({

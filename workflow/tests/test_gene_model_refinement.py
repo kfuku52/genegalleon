@@ -1451,14 +1451,25 @@ def test_all_index_consumers_refuse_changes_during_cached_invocation(tmp_path, m
             return refinement.correspondence(root, value)
         publication = root / 'correspondence'
     elif consumer.startswith('selection_'):
-        original = refinement.select_from_store
+        if final_index:
+            original_copy = refinement.shutil.copyfile
 
-        def changing_selection(*args, **kwargs):
-            result = original(*args, **kwargs)
-            change_index()
-            return result
+            def changing_selection_copy(source, destination):
+                result = original_copy(source, destination)
+                if Path(source) == root / 'selection_initial/selection.json':
+                    change_index()
+                return result
 
-        monkeypatch.setattr(refinement, 'select_from_store', changing_selection)
+            monkeypatch.setattr(refinement.shutil, 'copyfile', changing_selection_copy)
+        else:
+            original = refinement.select_from_store
+
+            def changing_selection(*args, **kwargs):
+                result = original(*args, **kwargs)
+                change_index()
+                return result
+
+            monkeypatch.setattr(refinement, 'select_from_store', changing_selection)
         def operation():
             return refinement.select(root, value, predictions=final_index)
         publication = root / consumer
