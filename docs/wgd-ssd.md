@@ -537,7 +537,10 @@ for concurrent fits. With a runtime supporting `wgd-count --bootstrap-checkpoint
 set `wgd_count_bootstrap_checkpoint` to a file in an existing directory outside
 curated inputs, task scratch, and managed WGD outputs. Reusing the same path
 with unchanged input, settings, and NWKIT runtime refits only unfinished
-null draws. An incompatible checkpoint is rejected rather than overwritten.
+null draws. Recent NWKIT versions can also extend the target draw count
+without discarding the seeded prefix. Choose an extension independently of
+the interim result. An incompatible checkpoint is rejected rather than
+overwritten.
 Set `wgd_alpha` to change the search-wide conditional P-value cutoff
 (default `0.05`). Both combined and count-only support require explicit
 non-boundary diagnostics for the event,
