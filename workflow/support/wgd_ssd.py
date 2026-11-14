@@ -490,12 +490,12 @@ def make_plan(args):
             + ([str(code_file)] if not code_file.is_file() else [])}
 
 
-def verify(plan, file_digest=digest):
+def verify(plan, file_digest=digest, *, check_likelihood_runtime=True):
     identity = plan.get("alignment_identity")
     if identity is not None and alignment_identity(plan["tools"]["ds"])[0] != identity:
         raise ValueError("MAFFT or backtranslation identity changed during WGD analysis")
     likelihood = plan.get("cross_ks_likelihood_identity")
-    if likelihood is not None and likelihood_identity(likelihood["method"])[0] != likelihood:
+    if check_likelihood_runtime and likelihood is not None and likelihood_identity(likelihood["method"])[0] != likelihood:
         raise ValueError("Likelihood dS identity changed during WGD analysis")
     for path, expected in plan["input_hashes"].items():
         if file_digest(path) != expected:
@@ -1726,7 +1726,7 @@ def classify(args):
     summary = json.loads(summary_bytes)
     if digest(args.species_tree) != summary["plan"]["input_hashes"][str(Path(summary["plan"]["species_tree"]))]:
         raise ValueError("WGD evidence and classification species trees differ")
-    verify(summary["plan"], family_evidence_digest)
+    verify(summary["plan"], family_evidence_digest, check_likelihood_runtime=False)
     required = {"gene_positions.tsv", "anchor_evidence.tsv", "wgd_events.tsv"}
     if args.native_tree_likelihood:
         if summary.get("candidate_model") == "rooted_gene_tree_duplication_score":
@@ -1835,7 +1835,7 @@ def classify(args):
     write_tree(tree, argparse.Namespace(outfile=str(args.output / "classified_gene_tree.nhx")),
                "auto", quiet=True, props=sorted(properties))
     plot_origins(tree, args.output)
-    verify(summary["plan"], family_evidence_digest)
+    verify(summary["plan"], family_evidence_digest, check_likelihood_runtime=False)
     verify({"input_hashes": snapshot})
     verify({"input_hashes": {str(evidence / name): expected for name, expected in summary["output_hashes"].items()}},
            family_evidence_digest)

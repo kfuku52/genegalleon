@@ -1721,6 +1721,27 @@ def test_classification_ignores_unrelated_evidence_but_keeps_conflicting_anchor_
     assert outputs[0] == outputs[1]
 
 
+def test_classification_uses_verified_ds_evidence_without_requiring_the_ds_environment(tmp_path, monkeypatch):
+    args = classification_fixture(tmp_path, "(A_a:1,A_b:1);", [positioned("A_a"), positioned("A_b", rank=2)])
+    path = args.evidence / "summary.json"
+    summary = json.loads(path.read_text())
+    summary["plan"]["cross_ks_likelihood_identity"] = {"method": "gy94", "environment": {"OMP_NUM_THREADS": "1"}}
+    extra = tmp_path / "ds_implementation.py"
+    extra.write_text("original\n")
+    summary["plan"]["input_hashes"][str(extra)] = wgd_ssd.digest(extra)
+    path.write_text(json.dumps(summary))
+    monkeypatch.setattr(wgd_ssd, "likelihood_identity", lambda _: ({"method": "gy94", "environment": {}}, {}))
+    with pytest.raises(ValueError, match="Likelihood dS identity changed"):
+        wgd_ssd.verify(summary["plan"])
+    wgd_ssd.classify(args)
+    assert (args.output / "summary.json").is_file()
+    extra.write_text("changed\n")
+    args.output = tmp_path / "reject"
+    with pytest.raises(ValueError, match="WGD input changed during analysis"):
+        wgd_ssd.classify(args)
+    assert not args.output.exists()
+
+
 @pytest.mark.parametrize("table", ["gene_positions.tsv", "wgd_events.tsv", "anchor_evidence.tsv", "cross_synteny_node_paths.tsv"])
 def test_classification_rejects_malformed_evidence_outside_family_scope(tmp_path, table):
     args = classification_fixture(tmp_path, "(A_a:1,A_b:1);",
