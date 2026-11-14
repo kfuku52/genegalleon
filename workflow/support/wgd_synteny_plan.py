@@ -46,7 +46,7 @@ def closest_untried(first, second, used):
     return None
 
 
-def plan_pairs(tree, pairs, assessed=None):
+def plan_pairs(tree, pairs, assessed=None, *, replication_budget=0):
     from nwkit.clade_index import CladeIndex, LcaIndex
     from nwkit.util import assign_branch_ids
 
@@ -60,7 +60,17 @@ def plan_pairs(tree, pairs, assessed=None):
     for a, b in pairs:
         if a != b:
             previous[lcas.common_ancestor(leaves[a], leaves[b])].add(tuple(sorted((a, b))))
+    if replication_budget < 0:
+        raise ValueError("Replication budget must be nonnegative")
+    if replication_budget and assessed is None:
+        raise ValueError("Replication planning requires assessed pair evidence")
     rows, audit = [], []
+
+    def append(pair):
+        a, b = pair
+        key = hashlib.sha256(f"{a}\0{b}".encode()).hexdigest()[:20]
+        rows.append(dict(zip(PAIR_FIELDS, (f"wgd-{key}", a, b), strict=True)))
+
     for node in tree.traverse("postorder"):
         if node.is_root or node.is_leaf:
             continue
@@ -86,17 +96,34 @@ def plan_pairs(tree, pairs, assessed=None):
             best = min(viable, default=None)
             if best is None:
                 break
-            _, _, (a, b), i, j = best
+            _, _, pair, i, j = best
             del options[i, j]
             covered.update((i, j))
             count += 1
-            key = hashlib.sha256(f"{a}\0{b}".encode()).hexdigest()[:20]
-            rows.append(dict(zip(PAIR_FIELDS, (f"wgd-{key}", a, b), strict=True)))
+            append(pair)
+        replication = False
+        if replication_budget and not count and len(observed) == len(node.children):
+            assessed_pairs = eligible & assessed
+            if len(assessed_pairs) == 1:
+                # Change the comparison partner while retaining a shared focal,
+                # so exact copy pairs can be tested in the follow-up.
+                a, b = next(iter(assessed_pairs))
+                options = [closest_untried(((depth[leaves[focal]] - depth[node], focal),),
+                                          groups[group_for[other]], used)
+                           for focal, other in ((a, b), (b, a))]
+                nearest = min((option for option in options if option), default=None)
+                if nearest:
+                    append(nearest[1])
+                    replication_budget -= 1
+                    count = 1
+                    replication = True
         all_groups = len(node.children)
         if len(groups) < all_groups:
             status = "missing_self_synteny"
         elif len(covered) < all_groups:
             status = "unassessed_pairs_exhausted"
+        elif replication:
+            status = "replication_comparison_planned"
         elif count:
             status = "comparisons_planned"
         else:
@@ -113,6 +140,8 @@ def main(argv=None):
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--cross-synteny", required=True, type=Path, help="Existing self/cross anchor manifest")
     parser.add_argument("--pair-evidence", type=Path, help="Optional cross_synteny_pairs.tsv for retrying unassessed branches")
+    parser.add_argument("--replication-budget", type=int, default=0,
+                        help="At most this many follow-up comparisons on branches with one assessed pair")
     parser.add_argument("--pairs-out", required=True, type=Path, help="New cross-species pairs in pairwise synteny input format")
     parser.add_argument("--audit-out", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -144,7 +173,7 @@ def main(argv=None):
         protect_output(output, inputs | {other.resolve()}, workspace)
         if output.exists():
             raise ValueError(f"Refusing to replace existing planning output: {output}")
-    rows, audit = plan_pairs(tree, pairs, assessed)
+    rows, audit = plan_pairs(tree, pairs, assessed, replication_budget=args.replication_budget)
     write_table(args.pairs_out, rows, PAIR_FIELDS)
     write_table(args.audit_out, audit, AUDIT_FIELDS)
 

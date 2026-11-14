@@ -47,6 +47,21 @@ def test_multifurcating_plan_covers_every_available_daughter_without_all_pairs()
     assert row["status"] == "missing_self_synteny"
 
 
+def test_sparse_replication_planning_preserves_a_focal_and_bounds_extra_pairs():
+    tree = species_tree("(((A:1,B:2):1,(C:1,D:3):1):1,E:4);")
+    seeds = {(name, name) for name in "ABCDE"}
+    assessed = {("A", "C"), ("A", "B"), ("C", "D")}
+    with pytest.raises(ValueError, match="assessed pair evidence"):
+        plan_pairs(tree, seeds, replication_budget=1)
+    known = seeds | assessed
+    rows, audit = plan_pairs(tree, known, assessed, replication_budget=1)
+    assert [(row["target_species"], row["query_species"]) for row in rows] == [("B", "C")]
+    assert audit[-1]["status"] == "replication_comparison_planned"
+    assert not plan_pairs(tree, known | {("B", "C")}, assessed | {("B", "C")}, replication_budget=1)[0]
+    rows, audit = plan_pairs(tree, known | {("B", "C")}, assessed, replication_budget=1)
+    assert [(row["target_species"], row["query_species"]) for row in rows] == [("A", "D")]
+
+
 def test_planner_cli_writes_pairwise_schema_and_protects_inputs(tmp_path):
     tree = tmp_path / "tree.nwk"
     tree.write_text("((A:1,B:1):1,C:2);\n")

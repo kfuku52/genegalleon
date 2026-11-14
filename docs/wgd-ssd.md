@@ -201,6 +201,11 @@ species with self-synteny in the input manifest. It proposes new pairs only
 for daughter lineages that are not covered, preferring pairs that cover more
 missing daughters, then shorter tree distance. With `--pair-evidence`, only
 assessed comparisons count toward coverage; unassessed pairs are not repeated.
+With `--pair-evidence`, an optional `--replication-budget N` proposes up to
+`N` additional near-to-root comparisons on branches with one assessed pair.
+It changes only one member of that pair, so the shared species' exact gene
+pairs can be compared. It does not replace comparisons for missing coverage
+or change any existing candidate calls.
 Without it, coverage means only that a pair was supplied, not that it was
 observable. The audit distinguishes missing self-synteny from exhausted
 cross-pair choices. When the plan is nonempty, `next_pairs.tsv` uses the
