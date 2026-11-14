@@ -87,6 +87,16 @@ def test_count_plot_labels_significant_branches_at_their_unchanged_p_values(coun
     assert axis.lines[-1].get_xdata()[0] == .5
     assert axis.collections[-1].get_segments()[0].tolist() == [[.4, 2.84], [.6, 2.84]]
 
+    other.update(p_value=1., mc_p_lower=.91, mc_p_upper=1.)
+    axis = Figure().subplots()
+    draw_count_overlay(axis, {row["species_event_id"]: 2.5, "other": 2.84}, [row, other], alpha,
+                       highlighted=("other",))
+    label = axis.texts[-1]
+    assert label.get_text() == "B99"
+    assert label.xy == (1., 2.84)
+    assert label.get_ha() == "right"
+    assert axis.lines[-1].get_xdata()[0] == 1.
+
 
 @pytest.mark.parametrize(("draw", "p_value", "status", "boundary"), [
     (0., .025, "count_supported_conditional", "mc_p_lower"),

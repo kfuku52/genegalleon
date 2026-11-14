@@ -1093,7 +1093,11 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     if count_overlay:
         count_ax = axes[-1]
         count_ax.sharey(ax)
-        draw_count_overlay(count_ax, {key: y[node] for key, node in index.items()}, count_overlay, count_alpha)
+        highlighted = [row["species_event_id"] for row in rows
+                       if row["event_support"] in {"duplication-and-synteny-candidate", "duplication-only-candidate"}
+                       or phase_limited(row)]
+        draw_count_overlay(count_ax, {key: y[node] for key, node in index.items()}, count_overlay, count_alpha,
+                           highlighted=highlighted)
     branch_labels = []
     for node in reversed(nodes):
         if not node.is_leaf:

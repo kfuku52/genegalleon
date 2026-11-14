@@ -98,7 +98,7 @@ def load_count_overlay(tree, table, model_file):
     return sorted(rows, key=lambda row: row["branch_id"]), alpha
 
 
-def draw_count_overlay(ax, positions, rows, alpha):
+def draw_count_overlay(ax, positions, rows, alpha, *, highlighted=()):
     from matplotlib.lines import Line2D
 
     calibrated = any(row["p_value"] is not None for row in rows)
@@ -116,6 +116,7 @@ def draw_count_overlay(ax, positions, rows, alpha):
     if calibrated:
         ax.axvline(alpha, color="#A3ABB2", ls=":", lw=.85)
         ax.set_xlim(-.04, 1.04)
+    highlighted = set(highlighted)
     for row in rows:
         if row["species_event_id"] not in positions:
             continue
@@ -125,8 +126,10 @@ def draw_count_overlay(ax, positions, rows, alpha):
         if calibrated:
             ax.hlines(y, row["mc_p_lower"], row["mc_p_upper"], color=color, lw=.75, alpha=.6)
         ax.plot(x, y, marker=marker, color=color, ls="none", ms=4.2)
-        if calibrated and x <= alpha:
-            ax.annotate(f"B{row['branch_id']}", (x, y), xytext=(4, 0), textcoords="offset points",
+        if (calibrated and x <= alpha) or row["species_event_id"] in highlighted:
+            left = calibrated and x >= .8
+            ax.annotate(f"B{row['branch_id']}", (x, y), xytext=(-4 if left else 4, 0),
+                        textcoords="offset points", ha="right" if left else "left",
                         va="center", color=color, fontsize=7)
     states = {row["overlay_status"] for row in rows}
     handles = [Line2D([], [], marker=marker, color=color, ls="none", label=label)

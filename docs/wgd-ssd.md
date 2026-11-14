@@ -534,9 +534,11 @@ support, branch-burst preference, and numerical bounds. The sample size is
 the number of families in the count fit, not the number of gene trees or dS
 pairs. Calibrated points include pointwise 95% Clopper-Pearson intervals for
 the null exceedance rate, reflecting simulation error only, not uncertainty
-in the fitted null or simultaneous coverage across branches. Absent
-candidate branches have no mark. This overlay neither changes the branch
-colors nor combines the statistical evidence across analyses.
+in the fitted null or simultaneous coverage across branches. Branch IDs
+identify threshold-passing count results and gene-tree candidates or
+phase-limited branches shown on the left, even when their count P-value is
+large. Absent candidate branches have no mark. This overlay neither changes
+the branch colors nor combines the statistical evidence across analyses.
 
 To redraw a completed result without refitting or realigning, run in the
 GeneGalleon runtime:
