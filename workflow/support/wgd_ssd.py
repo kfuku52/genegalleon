@@ -1179,6 +1179,90 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     plt.close(fig)
 
 
+def replot(args):
+    source = args.evidence.resolve()
+    output = args.output.resolve()
+    summary_path = source / "summary.json"
+    summary_hash = digest(summary_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if summary.get("schema_version") != 1:
+        raise ValueError("Replot requires a version 1 WGD summary")
+    plan = summary["plan"]
+    tree_path = Path(plan["species_tree"])
+    inputs = {summary_path: summary_hash, tree_path: plan["input_hashes"][str(tree_path)]}
+    replacement = args.count_overlay_table, args.count_overlay_model
+    if (replacement[0] is None) != (replacement[1] is None):
+        raise ValueError("Replot count overlay requires both the count table and model")
+    for path in (path for path in replacement if path is not None):
+        inputs[path] = digest(path)
+    protect_output(output, [source, *inputs], Path(plan["workspace"]) if "workspace" in plan else None)
+
+    def rows(name, *, numeric=(), integers=(), required=False):
+        expected = summary["output_hashes"].get(name)
+        if expected is None:
+            if required:
+                raise ValueError(f"WGD summary does not include a hash for {name}")
+            return ()
+        path = source / name
+        if digest(path) != expected:
+            raise ValueError(f"WGD plot input changed: {name}")
+        inputs[path] = expected
+        data = read_table(path)
+        for row in data:
+            row.update((key, number(row[key])) for key in numeric)
+            row.update((key, int(row[key])) for key in integers)
+        return data
+
+    if digest(tree_path) != inputs[tree_path]:
+        raise ValueError("WGD plot species tree differs from the original analysis")
+    tree = species_tree(tree_path)
+    candidates = rows("wgd_events.tsv", required=True)
+    focal = rows("cross_ks_focals.tsv")
+    params = plan["parameters"]
+    overlay_alpha = params["alpha"]
+    if replacement[0] is not None:
+        if summary["candidate_model"] != "rooted_gene_tree_duplication_score":
+            raise ValueError("A separate count overlay requires rooted gene-tree candidates")
+        overlay, overlay_alpha = load_count_overlay(tree, *replacement)
+    else:
+        overlay = ()
+        if plan.get("count_overlay_model"):
+            original = tuple(Path(plan[key]) for key in ("count_overlay_table", "count_overlay_model"))
+            for path in original:
+                expected = plan["input_hashes"][str(path)]
+                if digest(path) != expected:
+                    raise ValueError(f"Original count overlay input changed: {path}")
+                inputs[path] = expected
+            overlay, overlay_alpha = load_count_overlay(tree, *original)
+    render = {
+        "region_rows": rows("cross_synteny_region_summary.tsv"),
+        "matched_trios": rows("cross_ks_matched_trios.tsv"),
+        "phase_diagnostics": rows("cross_synteny_copy_phase.tsv", integers=("concordant_only_windows",)),
+        "common_outgroups": rows("cross_ks_common_outgroups.tsv", numeric=("median_signed_gap", "gap_lower", "gap_upper")),
+        "terminal_rows": rows("terminal_ks_summary.tsv", numeric=("median_copy_ds", "copy_lower", "copy_upper"),
+                              integers=("six_pair_families", "original_blocks")),
+        "orientation_rows": rows("cross_synteny_orientation_quartets.tsv", numeric=("shared_windows_a", "shared_windows_b")),
+        "copy_holdout": rows("cross_ks_component_holdout.tsv", numeric=("drop_component_min", "drop_component_max")),
+    }
+    output.mkdir(parents=True, exist_ok=False)
+    plot_candidates(candidates, output, tree=tree, alpha=params["alpha"],
+                    duplication_threshold=params["min_duplication_score"] if plan.get("gene_trees") else None,
+                    focal_rows=focal, ds_method=params.get("cross_ks_method", "yn00"),
+                    count_overlay=overlay, count_alpha=overlay_alpha, **render)
+    plot_cross_ks(focal, output)
+    if overlay:
+        write_table(output / "count_overlay.tsv", overlay, COUNT_OVERLAY_FIELDS)
+    for path, expected in inputs.items():
+        if digest(path) != expected:
+            raise ValueError(f"WGD plot input changed during rendering: {path}")
+    write_json(output / "plot_provenance.json", {"schema_version": 1, "input_hashes": {str(k): v for k, v in inputs.items()},
+               "plot_implementation": {str(path): digest(path) for path in
+                                       (Path(__file__), Path(__file__).with_name("wgd_count_overlay.py"),
+                                        Path(__file__).with_name("wgd_cross_ks.py"),
+                                        Path(__file__).with_name("wgd_cross_phase.py"))},
+               "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir()) if path.is_file()}})
+
+
 def observable_synteny(placer, summaries, anchors):
     species_with_ks = {row["species"] for row in anchors
                        if row["ks_status"] == "ok" and number(row["ks"]) is not None}
@@ -1785,11 +1869,16 @@ def main():
     node.add_argument("--mul-max-candidates", type=int, default=10000)
     node.add_argument("--mul-max-state-pairs", type=int, default=10000000)
     node.add_argument("--mul-max-maps", type=int, default=100000)
+    redraw = commands.add_parser("replot")
+    for field in ("evidence", "output", "count-overlay-table", "count-overlay-model"):
+        redraw.add_argument("--" + field, type=Path, required=field in {"evidence", "output"})
     args = parser.parse_args()
     if args.command == "plan":
         write_json(args.outfile, make_plan(args))
     elif args.command == "classify":
         classify(args)
+    elif args.command == "replot":
+        replot(args)
     else:
         payload = json.loads(args.plan.read_text())
         if args.command == "verify":

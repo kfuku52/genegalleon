@@ -10,7 +10,7 @@ import pytest
 from Bio.Data import CodonTable
 
 from workflow.support.wgd_evidence import branch_for_ks, read_table
-from workflow.support.wgd_ssd import classify, normalized_counts, species_tree
+from workflow.support.wgd_ssd import classify, normalized_counts, replot, species_tree
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / "workflow/core/gg_genome_evolution_core.sh"
@@ -272,6 +272,12 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         assert {r["count_support"] for r in overlay_rows} == {"not_calibrated"}
         assert str(table) in summary["plan"]["input_hashes"] and str(model) in summary["plan"]["input_hashes"]
         assert "count_overlay.tsv" in summary["output_hashes"]
+        redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
+                                 count_overlay_model=None)
+        replot(redraw)
+        assert (redraw.output / "wgd_species_tree.png").read_bytes() == (root / "wgd_species_tree.png").read_bytes()
+        assert (redraw.output / "count_overlay.tsv").read_bytes() == (root / "count_overlay.tsv").read_bytes()
+        assert (redraw.output / "plot_provenance.json").is_file()
         copied, = read_table(copy_splits)
         assert copied["same_tip_and_both_splits"] == "1" and copied["same_tip_and_both_splits_score"] == "0.5"
         assert copy_splits.name in summary["output_hashes"]
@@ -407,6 +413,11 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
         origin, = read_table(classification / "duplication_origins.tsv")
         assert origin["classification"] == "unresolved" and origin["gene_clade_id"] == path["gene_clade_id"]
         assert "cross_synteny_matched_paths=1" in (classification / "classified_gene_tree.nhx").read_text()
+        redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
+                                 count_overlay_model=None)
+        replot(redraw)
+        for name in ("wgd_species_tree.png", "wgd_cross_ks.png"):
+            assert (redraw.output / name).read_bytes() == (root / name).read_bytes()
     assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]
     assert row["cross_ks_status"] == "inconclusive"
     assert len(read_table(root / "cross_ks_paralogs.tsv")) == 10

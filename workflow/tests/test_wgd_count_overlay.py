@@ -1,5 +1,6 @@
 import csv
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,3 +98,43 @@ def test_mc_interval_includes_zero_and_one_at_binomial_boundaries(count_bundle, 
     row.update(p_value=p_value, count_support=status)
     (result,), _ = load_count_overlay(*bundle())
     assert result[boundary] == float(draw > 0)
+
+
+def test_replot_replaces_only_the_count_panel_and_rejects_tampering(tmp_path, count_bundle, monkeypatch):
+    from workflow.support import wgd_ssd
+
+    _, row, bundle = count_bundle
+    _, table, model = bundle()
+    source, out = tmp_path / "source", tmp_path / "plot"
+    source.mkdir()
+    tree = tmp_path / "species.nwk"
+    tree.write_text("((A:1,B:1):1,C:2);\n")
+    events = source / "wgd_events.tsv"
+    events.write_text("species_event_id\tevent_support\n" + row["species_event_id"] + "\tunresolved\n")
+    (source / "summary.json").write_text(json.dumps({
+        "schema_version": 1, "candidate_model": "rooted_gene_tree_duplication_score",
+        "plan": {"species_tree": str(tree), "input_hashes": {str(tree): wgd_ssd.digest(tree)},
+                 "parameters": {"alpha": .05, "min_duplication_score": .01}, "gene_trees": "archive.zip"},
+        "output_hashes": {"wgd_events.tsv": wgd_ssd.digest(events)},
+    }))
+    args = SimpleNamespace(evidence=source, output=out, count_overlay_table=table, count_overlay_model=None)
+    with pytest.raises(ValueError, match="requires both"):
+        wgd_ssd.replot(args)
+    args.count_overlay_model = model
+    args.output = source / "illegal"
+    with pytest.raises(ValueError, match="must not replace"):
+        wgd_ssd.replot(args)
+    args.output = out
+    original = events.read_bytes()
+    events.write_bytes(original + b"changed\n")
+    with pytest.raises(ValueError, match="plot input changed"):
+        wgd_ssd.replot(args)
+    assert not out.exists()
+    events.write_bytes(original)
+    saved = []
+    monkeypatch.setattr(wgd_ssd, "plot_candidates", lambda rows, *_, **kwargs: saved.append((rows, kwargs)))
+    wgd_ssd.replot(args)
+    (candidates, options), = saved
+    assert candidates == [{"species_event_id": row["species_event_id"], "event_support": "unresolved"}]
+    assert options["count_overlay"][0]["p_value"] == .05 and options["count_alpha"] == .1
+    assert events.read_bytes() == original

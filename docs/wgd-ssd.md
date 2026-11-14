@@ -492,6 +492,22 @@ in the fitted null or simultaneous coverage across branches. Absent
 candidate branches have no mark. This overlay neither changes the branch
 colors nor combines the statistical evidence across analyses.
 
+To redraw a completed result without refitting or realigning, run in the
+GeneGalleon runtime:
+
+```bash
+python workflow/support/wgd_ssd.py replot \
+  --evidence workspace/output/genome_evolution/wgd_ssd \
+  --output workspace/output/wgd_redraw
+```
+
+For a gene-tree result, pass both `--count-overlay-table` and
+`--count-overlay-model` to replace the count panel. Replot reads the
+original tree and the figure input tables with their recorded hashes;
+it does not certify unrelated outputs or recreate a complete WGD bundle.
+It writes the plots, the displayed count table (when applicable), and
+`plot_provenance.json` to a new directory.
+
 `wgd_count_bootstrap=199` refits null simulations and calibrates the maximum
 statistic over the searched branch/time grid. These are conditional plug-in
 bootstrap P-values, not posterior probabilities or guaranteed error control
