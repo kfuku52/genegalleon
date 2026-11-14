@@ -2760,7 +2760,7 @@ finish_gene_model_rescue() {
 prepare_gene_model_refinement() {
   local genomic_inputs=0 assembly_dir rna_bam_dir
   assembly_dir=$(refinement_assembly_directory)
-  local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
+  local -a refinement_args=(plan --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
     --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
     --isoform-adoption "${gene_model_refinement_isoform_adoption}"
     --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"

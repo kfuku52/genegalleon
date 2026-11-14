@@ -245,10 +245,12 @@ def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
 
 
 def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, transcriptome_inputs=None, rna_bam_dir=None, transcriptome_assembly_dir=None,
-         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, **parameters):
+         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, cpus=1, **parameters):
+    if type(cpus) is not int or cpus < 1:
+        raise ValueError('--cpus must be positive')
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    with exclusive_lock(root / '.plan.lock'):
+    with exclusive_lock(root / '.plan.lock'), ReceiptSnapshot(_receipt_verifier(cpus)) as rescue_proof:
         transcriptome_sources = {}
         transcriptome_proof = FreshDigestBatch()
         if transcriptome_inputs:
@@ -265,6 +267,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             # Consume the frozen producer; its schema, receipts and inputs are
             # verified below. A downstream catalogue update does not rerun it.
             anchors = rescue.load(anchor_root, inspect_only=True)
+            anchor_plan_sha = rescue.plan_digest(anchor_root, anchors)
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
@@ -286,9 +289,12 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             if augmented.exists():
                 for name in anchors['species']:
                     directory = anchor_root / 'rescued' / name
-                    if not rescue.verified(directory, rescue.rescue_key(anchor_root, anchors, name)):
+                    worker_key = rescue.rescue_key(anchor_root, anchors, name, dependency_snapshot=rescue_proof)
+                    if not rescue.verified_dependency(rescue_proof, directory, worker_key):
                         raise ValueError('Missing-gene rescue incomplete or corrupt: ' + name)
-                    receipts[name] = digest(directory / 'receipt.json')
+                    receipt_path = directory / 'receipt.json'
+                    receipts[name] = digest(receipt_path)
+                    rescue_proof.check({receipt_path: receipts[name]})
                     files.append(str(directory / 'receipt.json'))
                     revision_path = directory / 'revision_candidates.json'
                     if (directory / 'model_store/manifest.json').is_file():
@@ -302,8 +308,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                             raise ValueError('Rescue revisions are not a verified worker publication: ' + name)
                         revision_candidates[name] = str(revision_path.resolve())
                         files.append(str(revision_path.resolve()))
-                augmented_key = {'plan': digest(anchor_root / 'plan.json'), 'rescue_receipts': receipts}
-                if not rescue.verified(augmented, augmented_key):
+                augmented_key = {'plan': anchor_plan_sha, 'rescue_receipts': receipts}
+                if not rescue.verified_dependency(rescue_proof, augmented, augmented_key):
                     raise ValueError('Augmented rescue inputs incomplete or corrupt')
                 rows = read_table(augmented / 'inputs.tsv')
                 if len(rows) != len(anchors['species']) or {row['species'] for row in rows} != set(anchors['species']):
@@ -325,7 +331,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                     if donor not in sources:
                         raise ValueError('Rescue revision donor is absent from the frozen cohort: ' + donor)
                     directory = anchor_root / 'prepared' / donor
-                    if not rescue.verified(directory, {'plan': digest(anchor_root / 'plan.json'), 'species': donor}):
+                    if not rescue.verified_dependency(rescue_proof, directory, {'plan': augmented_key['plan'], 'species': donor}):
                         raise ValueError('Rescue revision donor preparation is incomplete: ' + donor)
                     metadata = {role: str((directory / filename).resolve()) for role, filename in
                                 (('mapping', 'genes.id_map.tsv'), ('protein', 'genes.pep'), ('receipt', 'receipt.json'))}
@@ -490,6 +496,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
+        if anchor_root:
+            rescue.require_same_key(anchor_plan_sha, request['files'][str(anchor_root / 'plan.json')])
         if any(request['files'][path] != expected for path, expected in publications.items()):
             raise ValueError('Reviewed candidate publication changed during planning')
         request.update(reviews)
@@ -515,6 +523,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if genomic_prediction and not tool:
             raise ValueError('miniprot is required for prediction')
         transcriptome_proof.check()
+        rescue_proof.check_all()
         path = root / 'plan.json'
         if path.exists():
             previous = json.loads(path.read_text())
@@ -3165,6 +3174,7 @@ def parser():
     prep.add_argument('--transcriptome-assembly-dir', type=Path, help='Discover assemblies in standard transcriptome generation output')
     prep.add_argument('--assembly-genetic-codes', type=Path, help='Species genetic code TSV for discovered assemblies')
     prep.add_argument('--assembly-cpus', type=int, default=1)
+    prep.add_argument('--cpus', type=int, default=1)
     prep.add_argument('--transcriptome-inputs', type=Path, help='Assembly species TSV: species,cds,transcript_gene_map[,genetic_code]')
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--donor-plan', type=Path, help='Frozen rescue donor plan for one transcriptome target; genomic targets inherit it from rescue')
@@ -3225,7 +3235,7 @@ def _main(args):
              split_model_merges=args.split_model_merges, model_repairs=args.model_repairs,
              transcriptome_inputs=args.transcriptome_inputs, rna_bam_dir=args.rna_bam_dir,
              transcriptome_assembly_dir=args.transcriptome_assembly_dir,
-             assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus, donor_plan=args.donor_plan, target=args.target,
+             assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus, donor_plan=args.donor_plan, target=args.target, cpus=args.cpus,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:

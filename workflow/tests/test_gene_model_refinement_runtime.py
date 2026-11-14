@@ -52,7 +52,7 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
     with pytest.raises(ValueError, match='Rescue schema/tools changed'):
         refinement.rescue.load(anchor_root)
     # Published producers remain readable after a downstream-only helper update.
-    refinement.plan(root, rescue_output=anchor_root, mode='off')
+    refinement.plan(root, rescue_output=anchor_root, mode='off', cpus=4)
     value = refinement.load(root)
     source = value['request']['sources'][names[0]]
     assert Path(source['fasta']).is_relative_to(anchor_root / 'augmented')
@@ -67,6 +67,21 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
     assert len(records) == 16  # Fifteen original annotations plus one missing model.
     assert accepted[0]['model_id'] in (root / 'effective/full_annotation' / (names[0] + '.gff3')).read_text()
     assert all(path.read_bytes() == content for path, content in before.items())
+    worker_file = anchor_root / 'rescued' / names[0] / 'models.json'
+    changed = tmp_path / 'changed-worker'
+    original_identities = refinement.dependency_identities
+
+    def replace_verified_worker():
+        replacement = worker_file.with_suffix('.replacement')
+        replacement.write_bytes(worker_file.read_bytes())
+        replacement.replace(worker_file)
+        return original_identities()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(refinement, 'dependency_identities', replace_verified_worker)
+        with pytest.raises(ValueError, match='Stage dependency content changed'):
+            refinement.plan(changed, rescue_output=anchor_root, mode='off', cpus=4)
+    assert not (changed / 'plan.json').exists()
     augmented = anchor_root / 'augmented/species_cds' / (names[0] + '.rescue.cds.fa')
     augmented.write_text(augmented.read_text() + '\n')
     with pytest.raises(ValueError, match='Frozen refinement input changed'):
