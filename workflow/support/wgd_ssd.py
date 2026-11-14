@@ -57,7 +57,7 @@ try:
     from wgd_taxon_holdout import HOLDOUT_FIELDS
     from wgd_terminal_ks import TerminalKs
     from wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from wgd_tree_scan import ROOT_FIELDS, scan_duplications
+    from wgd_tree_scan import PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
@@ -99,7 +99,7 @@ except ImportError:
     from .wgd_taxon_holdout import HOLDOUT_FIELDS
     from .wgd_terminal_ks import TerminalKs
     from .wgd_tree_scan import COVERAGE_FIELDS as DUPLICATION_COVERAGE_FIELDS
-    from .wgd_tree_scan import ROOT_FIELDS, scan_duplications
+    from .wgd_tree_scan import PANEL_FIELDS, PANEL_SUMMARY_FIELDS, ROOT_FIELDS, FamilyPanels, scan_duplications
 
 
 CROSS_DS_METHODS = ("yn00", "gy94", "gy94-regularized")
@@ -273,6 +273,11 @@ def make_plan(args):
             if tree_archive is None:
                 raise ValueError(f"{audit.replace('_', ' ').capitalize()} requires --gene-trees")
             parameters[audit] = 1
+    panel_count = getattr(args, "duplication_family_panels", 0)
+    if panel_count and (not 2 <= panel_count <= 64 or tree_archive is None):
+        raise ValueError("Family panels require --gene-trees and a panel count of 2 to 64, or 0 to disable")
+    if panel_count:
+        parameters["duplication_family_panels"] = panel_count
     parameters["min_cross_windows"] = getattr(args, "min_cross_windows", 3)
     parameters["cross_orientation_audit"] = getattr(args, "cross_orientation_audit", 0)
     if parameters["cross_orientation_audit"] not in (0, 1):
@@ -1171,6 +1176,9 @@ def run_analysis(plan, output, cpus):
         holdout_rows = [] if p.get("duplication_taxon_holdout") else None
         duplication_coverage = [] if p.get("duplication_coverage_audit") else None
         root_audit = [] if p.get("duplication_root_audit") else None
+        panel_count = p.get("duplication_family_panels", 0)
+        panels = FamilyPanels(panel_count, p["seed"]) if panel_count else None
+        panel_output = []
         with DuplicationTreeSupport(support_file) if support_file else nullcontext() as support:
             raw_candidates, num_trees = scan_duplications(
                 tree, plan["gene_trees"], p["min_duplication_score"],
@@ -1179,13 +1187,17 @@ def run_analysis(plan, output, cpus):
                 observe_family=observe_family if cross is not None else None,
                 observe_duplications=support.observe if support else None, holdout_output=holdout_rows,
                 coverage_output=duplication_coverage, root_output=root_audit,
-                observe_topology=terminal.observe if terminal is not None else None)
+                observe_topology=terminal.observe if terminal is not None else None, panels=panels, panel_output=panel_output)
         if holdout_rows is not None:
             write_table(output / "duplication_taxon_holdout.tsv", holdout_rows, HOLDOUT_FIELDS)
         if duplication_coverage is not None:
             write_table(output / "duplication_coverage.tsv", duplication_coverage, DUPLICATION_COVERAGE_FIELDS)
         if root_audit is not None:
             write_table(output / "duplication_root_orientations.tsv", root_audit, ROOT_FIELDS)
+        if panels is not None:
+            detail, summary = panel_output
+            write_table(output / "duplication_family_panels.tsv", detail, PANEL_FIELDS)
+            write_table(output / "duplication_family_panel_summary.tsv", summary, PANEL_SUMMARY_FIELDS)
         if support:
             write_table(output / "duplication_tree_support.tsv", support.rows(raw_candidates), DUPLICATION_SUPPORT_FIELDS)
         del by_family
@@ -1574,6 +1586,7 @@ def main():
     plan.add_argument("--duplication-taxon-holdout", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-coverage-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--duplication-root-audit", type=int, choices=(0, 1), default=0)
+    plan.add_argument("--duplication-family-panels", type=int, default=0)
     plan.add_argument("--cross-orientation-audit", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-unique-phase", type=int, choices=(0, 1), default=0)
     plan.add_argument("--cross-require-both-orientations", type=int, choices=(0, 1), default=0)

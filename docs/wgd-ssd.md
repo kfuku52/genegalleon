@@ -126,6 +126,14 @@ a different branch under the archived root. The any-orientation score is a
 descriptive upper bound on votes on one branch, not a preferred rooting,
 a root confidence interval, or a replacement for the archived-root score.
 
+`wgd_duplication_family_panels` optionally partitions the gene-tree archive
+into 2 to 64 disjoint panels by a seeded hash of the family ID. This makes
+the assignment independent of archive order and keeps all eligible and
+supporting votes from a family together. The per-panel and summary tables
+record sample sizes, branch scores, and how often the configured cutoff is
+met. An untestable panel is not a negative. Panel agreement is not a
+P-value, particularly for linked families, and does not change WGD calls.
+
 ### Sparse Cross-Species Synteny
 
 In duplication-score mode, set `wgd_cross_synteny_file` to a TSV with

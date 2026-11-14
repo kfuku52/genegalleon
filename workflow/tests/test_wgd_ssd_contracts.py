@@ -206,6 +206,35 @@ def test_duplication_score_uses_rooted_archive_and_counts_each_family_once(tmp_p
     assert scan_duplications(tree, archive, 0.51)[0][0]["tree_support"] == "below_threshold"
 
 
+def test_duplication_family_panels_are_disjoint_stable_and_have_missing_status(tmp_path):
+    from zipfile import ZipFile
+
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_tree_scan import FamilyPanels, scan_duplications
+
+    tree = read_tree("((A:1,B:1):1,C:2);", "auto", True)
+    families = [("one", "(((A_a,B_a),(A_b,B_b)),C_a);"),
+                ("two", "((A_e,B_e),C_b);"), ("three", "((A_f,B_f),(A_g,B_g));")]
+    scans = []
+    for i, sites in enumerate((families, families[::-1])):
+        archive = tmp_path / f"order{i}.zip"
+        with ZipFile(archive, "w") as stream:
+            for name, gene in sites:
+                stream.writestr(f"{name}_root.nwk", gene)
+        panels = []
+        result = scan_duplications(tree, archive, .5, panels=FamilyPanels(5, 7), panel_output=panels)
+        assert result == scan_duplications(tree, archive, .5)
+        scans.append(panels)
+    assert scans[0] == scans[1]
+    detail, [summary] = scans[0]
+    assert sum(r["families_in_panel"] for r in detail) == 3
+    assert sum(r["eligible_families"] for r in detail) == 2
+    assert sum(r["supporting_families"] for r in detail) == 1
+    assert sum(r["score"] is None for r in detail) >= 3
+    assert summary["baseline_score"] == .5
+
+
 def test_duplication_coverage_audit_only_projects_taxa_missing_from_the_family(tmp_path):
     from zipfile import ZipFile
 

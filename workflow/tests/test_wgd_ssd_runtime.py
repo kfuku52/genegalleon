@@ -203,7 +203,7 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         stream.writestr("rooted_tree/OG001_root.nwk", "((Alpha_one_c,Beta_two_c),Gamma_three_b);")
     result = run_core(workspace, wgd_gene_trees_file="rooted_tree.zip", wgd_min_duplication_score="0.5",
                       wgd_duplication_taxon_holdout=str(int(holdout)), wgd_duplication_coverage_audit=str(int(holdout)),
-                      wgd_duplication_root_audit=str(int(holdout)))
+                      wgd_duplication_root_audit=str(int(holdout)), wgd_duplication_family_panels="3" if holdout else "0")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
     summary = json.loads((root / "summary.json").read_text())
@@ -221,7 +221,11 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
     assert coverage.is_file() == holdout
     orientation = root / "duplication_root_orientations.tsv"
     assert orientation.is_file() == holdout
+    panels = root / "duplication_family_panels.tsv"
+    assert panels.is_file() == holdout
     if holdout:
+        assert summary["plan"]["parameters"]["duplication_family_panels"] == 3
+        assert sum(int(row["families_in_panel"]) for row in read_table(panels)) == 2
         audited, = read_table(coverage)
         assert audited["eligible_complete"] == "2" and audited["eligible_partial"] == "0"
         assert audited["projected_score"] == audited["complete_case_score"] == "0.5"

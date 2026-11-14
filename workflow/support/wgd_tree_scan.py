@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from hashlib import sha256
 from pathlib import PurePosixPath
 from zipfile import ZipFile
 
@@ -15,6 +16,43 @@ COVERAGE_FIELDS = ("species_event_id", "branch_id", "eligible_complete", "eligib
 ROOT_FIELDS = ("species_event_id", "branch_id", "eligible_families", "rooted_supporting_families",
                "extra_families_under_alternate_root", "extra_families_with_other_rooted_branch",
                "any_orientation_score")
+PANEL_FIELDS = ("species_event_id", "branch_id", "panel", "families_in_panel", "eligible_families",
+                "supporting_families", "score", "meets_cutoff")
+PANEL_SUMMARY_FIELDS = ("species_event_id", "branch_id", "num_panels", "num_testable_panels", "num_panels_meeting_cutoff",
+                        "minimum_panel_score", "maximum_panel_score", "baseline_score")
+
+
+class FamilyPanels:
+    def __init__(self, count, seed):
+        self.salt = f"wgd-family-panels-v1:{seed}:".encode()
+        self.eligible = [Counter() for _ in range(count)]
+        self.support = [Counter() for _ in range(count)]
+        self.totals = [0] * count
+
+    def bucket(self, family):
+        identity = sha256(self.salt + family.encode("utf-8")).digest()
+        i = int.from_bytes(identity[:8], "big") % len(self.totals)
+        self.totals[i] += 1
+        return i
+
+    def rows(self, candidates, branches, cutoff):
+        by_event = {event: mask for mask, (_, _, _, event) in branches.items()}
+        detail, summary = [], []
+        for row in candidates:
+            event, branch = row["species_event_id"], row["branch_id"]
+            mask = by_event[event]
+            scores = []
+            for i, total in enumerate(self.totals):
+                n, hits = self.eligible[i][mask], self.support[i][mask]
+                score = hits / n if n else None
+                if score is not None:
+                    scores.append(score)
+                values = (event, branch, i + 1, total, n, hits, score, int(score >= cutoff) if n else None)
+                detail.append(dict(zip(PANEL_FIELDS, values, strict=True)))
+            values = (event, branch, len(self.totals), len(scores), sum(s >= cutoff for s in scores),
+                      min(scores, default=None), max(scores, default=None), row["duplication_score"])
+            summary.append(dict(zip(PANEL_SUMMARY_FIELDS, values, strict=True)))
+        return detail, summary
 
 
 def alternate_root_votes(tree, observed, eligible_daughters):
@@ -59,7 +97,7 @@ def alternate_root_votes(tree, observed, eligible_daughters):
 
 def scan_duplications(species_tree, archive_path, minimum_score, observe=None, family_members=None,
                       observe_family=None, observe_duplications=None, *, holdout_output=None, coverage_output=None,
-                      root_output=None, observe_topology=None):
+                      root_output=None, observe_topology=None, panels=None, panel_output=None):
     from nwkit.clade_index import CladeIndex
     from nwkit.rooting_state import require_rooted
     from nwkit.util import assign_branch_ids, read_tree
@@ -92,6 +130,7 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             if not family or family in families:
                 raise ValueError(f"Duplicate or empty gene-tree family: {name}")
             families.add(family)
+            panel = panels.bucket(family) if panels is not None else None
             tree = read_tree(archive.read(member).decode("utf-8"), "auto", True, rooted="auto", quiet=True)
             require_rooted(tree, f"WGD duplication score requires rooted gene trees: {name}")
             leaves = set()
@@ -136,8 +175,12 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             for mask, (_, sisters, daughters, _) in branches.items():
                 if full & sisters and all(full & daughter for daughter in daughters):
                     eligible[mask] += 1
+                    if panel is not None:
+                        panels.eligible[panel][mask] += 1
                     if mask in supported:
                         hits[mask] += 1
+                        if panel is not None:
+                            panels.support[panel][mask] += 1
                     if coverage_output is not None:
                         if full & mask == mask:
                             complete[mask] += 1
@@ -202,4 +245,6 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
     rows.sort(key=lambda r: (-r["duplication_score"], -r["num_supporting_families"], r["branch_id"]))
     if holdout is not None:
         holdout_output.extend(holdout.rows(rows))
+    if panels is not None:
+        panel_output.extend(panels.rows(rows, branches, minimum_score))
     return rows, len(families)
