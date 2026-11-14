@@ -1382,27 +1382,29 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                 ambiguous_loci.add(gene)
             else:
                 trusted_donors[gene].add(edge['species_' + other])
-    spans = []
+    tracks = defaultdict(list)
     for g in loci.values():
         blocks = [b for c in g['candidates'] for b in c['blocks']]
-        if blocks:
-            spans.append((g['seqid'], min(b[0] for b in blocks), max(b[1] for b in blocks), g['gene_id'],
-                          '.' if g.get('ambiguous_coordinates') else g.get('strand', '.'), (() if g.get('ambiguous_coordinates') or
-                            any(c.get('quality', {}).get('structure_problem') for c in g['candidates'])
-                            else tuple(tuple(b[:2]) for b in blocks))))
-    spans.extend((r['seqid'], r['start'], r['end'], r['gene_id'], r.get('strand', '.'),
-                  tuple(tuple(b[:2]) for b in r.get('cds_blocks', ()))) for r in catalog.get('annotation_spans', []))
-    tracks = defaultdict(list)
-    for seqid, start, end, owner, strand, blocks in spans:
-        tracks[seqid].append((start, end, owner, strand, blocks))
+        if not blocks:
+            continue
+        ambiguous = g.get('ambiguous_coordinates')
+        strand = '.' if ambiguous else g.get('strand', '.')
+        start = min(b[0] for b in blocks)
+        end = max(b[1] for b in blocks)
+        coding = (() if ambiguous or any(c.get('quality', {}).get('structure_problem') for c in g['candidates'])
+                  else tuple(tuple(b[:2]) for b in blocks))
+        tracks[g['seqid']].append((start, end, g['gene_id'], strand, coding))
+    for row in catalog.get('annotation_spans', []):
+        coding = tuple(tuple(b[:2]) for b in row.get('cds_blocks', ()))
+        tracks[row['seqid']].append((row['start'], row['end'], row['gene_id'], row.get('strand', '.'), coding))
     indexes = {}
     for seqid, rows in tracks.items():
-        ordered = sorted(rows)
+        rows.sort()
         maxima, maximum = [], 0
-        for _, end, *_ in ordered:
+        for _, end, *_ in rows:
             maximum = max(maximum, end)
             maxima.append(maximum)
-        indexes[seqid] = [r[0] for r in ordered], ordered, maxima
+        indexes[seqid] = [r[0] for r in rows], rows, maxima
     def foreign_overlap(seqid, strand, blocks, start, end, owner):
         starts, rows, maxima = indexes.get(seqid, ([], [], []))
         i = bisect.bisect_left(starts, end) - 1
