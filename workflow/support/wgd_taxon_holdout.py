@@ -1,6 +1,8 @@
 """Leave-one-taxon sensitivity for exact branch-matched duplication scores."""
 
 from collections import Counter, defaultdict
+from functools import lru_cache
+from types import MappingProxyType
 
 HOLDOUT_FIELDS = ("species_event_id", "branch_id", "excluded_taxon", "branch_identifiable", "eligible_families",
                   "supporting_families", "gained_votes", "lost_votes_among_eligible", "duplication_score",
@@ -50,17 +52,21 @@ class DuplicationTaxonHoldout:
         self.votes = Counter()
         self.gained = Counter()
         self.lost = Counter()
+        self._eligibility = lru_cache(maxsize=512)(self._eligible_after_exclusion)
 
-    def observe(self, tree, observed, baseline_votes):
-        full = observed[tree]
-        eligible = {}
+    def _eligible_after_exclusion(self, full):
+        eligible, ineligible = {}, []
         for mask, groups in self.groups.items():
             present = tuple(full & group for group in groups)
             if all(present):
                 lost_taxa = lone_taxa(present)
                 eligible[mask] = self.universe ^ lost_taxa
-                self.ineligible_after_exclusion.update((mask, taxon) for taxon in selected_bits(lost_taxa))
+                ineligible.extend((mask, taxon) for taxon in selected_bits(lost_taxa))
+        return MappingProxyType(eligible), tuple(ineligible)
 
+    def observe(self, tree, observed, baseline_votes):
+        eligible, ineligible = self._eligibility(observed[tree])
+        self.ineligible_after_exclusion.update(ineligible)
         # A removed child makes a unary node disappear and may make a
         # multifurcation binary. Other changes need no new gene-tree parse.
         votes = defaultdict(int, {mask: eligible.get(mask, 0) & ~mask for mask in baseline_votes})

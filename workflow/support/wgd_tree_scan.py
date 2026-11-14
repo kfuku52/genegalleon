@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import PurePosixPath
 from zipfile import ZipFile
@@ -126,6 +127,12 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             branches[masks[node]] = (node, sisters, tuple(masks[c] for c in node.children),
                                     index.clade_id_for_node(node))
     holdout = DuplicationTaxonHoldout(taxa, branches) if holdout_output is not None else None
+
+    @lru_cache(maxsize=512)
+    def eligible_branches(full):
+        return tuple((mask, daughters) for mask, (_, sisters, daughters, _) in branches.items()
+                     if full & sisters and all(full & daughter for daughter in daughters))
+
     prefix = re.compile(r"^(" + "|".join(map(re.escape, sorted(taxa, key=lambda name: (-len(name), name)))) + r")_(?=.)")
     eligible, hits = Counter(), Counter()
     complete, partial_hits = Counter(), Counter()
@@ -183,22 +190,21 @@ def scan_duplications(species_tree, archive_path, minimum_score, observe=None, f
             if observe_topology is not None:
                 observe_topology(family, tree, expected)
             projected, root_eligible = {}, {}
-            for mask, (_, sisters, daughters, _) in branches.items():
-                if full & sisters and all(full & daughter for daughter in daughters):
-                    eligible[mask] += 1
+            for mask, daughters in eligible_branches(full):
+                eligible[mask] += 1
+                if panel is not None:
+                    panels.eligible[panel][mask] += 1
+                if mask in supported:
+                    hits[mask] += 1
                     if panel is not None:
-                        panels.eligible[panel][mask] += 1
-                    if mask in supported:
-                        hits[mask] += 1
-                        if panel is not None:
-                            panels.support[panel][mask] += 1
-                    if coverage_output is not None:
-                        if full & mask == mask:
-                            complete[mask] += 1
-                        else:
-                            projected[full & mask] = mask, daughters
-                    if root_output is not None:
-                        root_eligible[mask] = daughters
+                        panels.support[panel][mask] += 1
+                if coverage_output is not None:
+                    if full & mask == mask:
+                        complete[mask] += 1
+                    else:
+                        projected[full & mask] = mask, daughters
+                if root_output is not None:
+                    root_eligible[mask] = daughters
             if root_eligible:
                 new_votes = alternate_root_votes(tree, observed, root_eligible) - supported
                 alternate.update(new_votes)

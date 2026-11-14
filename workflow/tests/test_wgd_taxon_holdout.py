@@ -91,3 +91,27 @@ def test_taxon_holdout_matches_explicit_tree_pruning():
     assert rows["AB", "A"]["branch_identifiable"] == 0
     assert rows["AB", "A"]["duplication_score"] == "NA"
     assert rows["AB", "F"]["branch_identifiable"] == 1
+
+
+def test_reused_coverage_does_not_share_votes_between_gene_trees():
+    from nwkit.util import read_tree
+
+    audit = DuplicationTaxonHoldout(("A", "B", "C", "D"), {3: (None, 12, (1, 2), "AB")})
+    bits = dict(zip("ABCD", (1, 2, 4, 8), strict=True))
+
+    def observe(newick, votes):
+        tree = read_tree(newick, "auto", True, quiet=True)
+        counts = {}
+        for node in tree.traverse("postorder"):
+            counts[node] = bits[node.name[0]] if node.is_leaf else counts[node.children[0]] | counts[node.children[1]]
+        audit.observe(tree, counts, votes)
+
+    observe("(((A_x,B_x),(A_y,B_y)),(C_x,D_x));", {3})
+    assert audit._eligibility.cache_info().hits == 0
+    observe("((A_x,B_x),(C_x,D_x));", set())
+    assert audit._eligibility.cache_info().hits == 1
+    rows = list(audit.rows([dict(species_event_id="AB", branch_id=1, num_eligible_families=2,
+                                num_supporting_families=1, duplication_score=.5)]))
+    assert [(r["excluded_taxon"], r["eligible_families"], r["supporting_families"]) for r in rows] == [
+        ("A", 0, 0), ("B", 0, 0), ("C", 2, 1), ("D", 2, 1),
+    ]
