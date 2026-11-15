@@ -1942,3 +1942,33 @@ def test_rna_bam_discovery_rejects_cross_species_aliases_and_reindexes_stale_ind
     (tmp_path / 'Plant_second.bam').symlink_to(first)
     with pytest.raises(ValueError, match='assigned to multiple species'):
         refinement.refinement_rna.discover(tmp_path, ['Plant_first', 'Plant_second'])
+
+
+@pytest.mark.parametrize('same_locus', [False, True])
+def test_nearest_donor_fusion_uses_rna_from_a_qualifying_isoform_of_same_locus(tmp_path, monkeypatch, same_locus):
+    panel = {'sister_clades': {'target': [[['fusion'], ['split1']], [['split2']]]}}
+    search = refinement.refinement_native_splits.DonorSearch(
+        panel, None, tmp_path, 1, {('fusion', 'chr', '+', ((0, 12), (20, 32))): 2})
+    original, left, right = 'MMMMKKKK', 'MMMM', 'KKKK'
+    alignments = []
+    for donor, protein, identifier, score in [
+        ('fusion', original, 'best', 100), ('fusion', original, 'rna_isoform', 95),
+        ('split1', left, 'left', 90), ('split1', right, 'right', 90),
+        ('split2', left, 'left', 90), ('split2', right, 'right', 90),
+    ]:
+        alignments.append((protein, {'donor': donor, 'query': identifier, 'bitscore': score,
+                                     'identity': 1., 'coverage': 1.}, str(len(protein)), 0, len(protein)))
+    split_positions = {'left': ('left', 'chr', '+', 0, 12), 'right': ('right', 'chr', '+', 20, 32)}
+    search.positions = {'split1': split_positions, 'split2': split_positions,
+                        'fusion': {'best': ('old', 'chr', '+', 0, 32),
+                                   'rna_isoform': ('old' if same_locus else 'another_gene', 'chr', '+', 0, 32)}}
+    search.observed_fusions['fusion'] = {'rna_isoform': 2}
+    monkeypatch.setattr(search, 'alignments', lambda *args, **kwargs: iter(alignments))
+    decision, = search.fission_support('target', {'split': {
+        'source_protein': original, 'proteins': (left, right),
+        'source_windows': (set(range(4)), set(range(4, 8))),
+    }}, {'min_support': 2}).values()
+    assert decision['reason'] == ('closest_donor_fusion_supported_by_rna' if same_locus else 'supported_split')
+    assert decision['fusion_annotation_support'][0]['query'] == 'best'
+    assert decision['fusion_annotation_support'][0]['rna_witnesses'] == (2 if same_locus else 0)
+    assert decision['fusion_annotation_support'][0].get('rna_supported_query') == ('rna_isoform' if same_locus else None)

@@ -2855,10 +2855,10 @@ def native_rna_counts(request, name, paths, donor_search, genome, supplied):
     return {**(supplied or {}), **{key: max(count, (supplied or {}).get(key, 0)) for key, count in bam.items()}}
 
 
-def native_model_choices(extensions, merges, originals, ownership, genome, code, params,
-                         request, name, donor_search, rna_counts, automatic):
+def nominate_native_models(extensions, merges, originals, ownership, genome, code, params,
+                           request, name, rna_counts, automatic):
     if not (extensions or merges):
-        return []
+        return {}
     rna_available = bool(request.get('rna_bams', {}).get(name)) or any(
         key[0] == name for key in (rna_counts or {}))
     existing = {coding_shape(review) for review, _ in automatic}
@@ -2867,9 +2867,13 @@ def native_model_choices(extensions, merges, originals, ownership, genome, code,
     joined = refinement_native_splits.nominate(
         merges, originals, ownership, genome, code, params, name, existing,
         rna_available=rna_available, intact_only=name in request.get('native_split_publications', {}))
-    proposals = {shape: candidate for shape, candidate in (extensions | joined).items() if shape not in existing}
-    hits = donor_search.support(name, proposals, params)
+    return {shape: candidate for shape, candidate in (extensions | joined).items() if shape not in existing}
 
+
+def native_model_choices(proposals, params, request, name, donor_search, genome, rna_counts, *, batch=None):
+    if not proposals:
+        return []
+    hits = donor_search.support(name, proposals, params, batch=batch)
     rna_paths = []
     for shape in hits:
         candidate = proposals[shape]
@@ -3001,9 +3005,24 @@ def _prepare_reviewed_models(request, name, db, selected, *, donor_search=None,
         if published_native:
             automatic.extend(adopt_published_native_splits(
                 published_native, split_originals, ownership, genome, code, parameters, name, existing))
-        automatic.extend(native_model_choices(
+        native = nominate_native_models(
             extensions or {}, native_paths or [], split_originals, ownership, genome, code, parameters,
-            request, name, donor_search, rna_counts, automatic))
+            request, name, rna_counts, automatic)
+        split_proposals = {}
+        if fission_groups:
+            blocked = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                             for row in chain(merges, repairs, (row for row, _ in automatic))])
+            split_proposals = refinement_native_splits.nominate_fissions(
+                fission_groups, split_originals, genome, code, parameters, blocked)
+        batch = None
+        if native and split_proposals:
+            proteins = [proposal['protein'] for proposal in native.values()]
+            for proposal in split_proposals.values():
+                proteins.extend((proposal['source_protein'], *proposal['proteins']))
+            batch = donor_search.search(proteins)
+        native_choices = native_model_choices(
+            native, parameters, request, name, donor_search, genome, rna_counts, batch=batch)
+        automatic.extend(native_choices)
         automatic_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
                                                  for row, _ in automatic])
         manual_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
@@ -3093,12 +3112,15 @@ def _prepare_reviewed_models(request, name, db, selected, *, donor_search=None,
                                  if automatic_adoption else
                                  ('reviewed_rescue_model_repair' if kind else 'reviewed_rescue_split_model')}
             footprints.append({**coordinates, 'gene_id': identifier})
-        if fission_groups:
+        if split_proposals:
+            # New native repairs are selected after the shared search. Their
+            # footprints still take precedence over a competing split.
             blocked = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
-                                             for row in chain(merges, repairs, (row for row, _ in automatic))])
-            proposals = refinement_native_splits.nominate_fissions(
-                fission_groups, split_originals, genome, code, parameters, blocked)
-            decisions = donor_search.fission_support(name, proposals, parameters)
+                                             for row, _ in native_choices])
+            proposals = {key: candidate for key, candidate in split_proposals.items()
+                         if not refinement_native_splits.fission_overlaps(
+                             candidate, split_originals[candidate['owner']], blocked)}
+            decisions = donor_search.fission_support(name, proposals, parameters, batch=batch)
             ready = {proposals[key]['owner'] for key, record in decisions.items()
                      if record['reason'] == 'supported_split'}
             entries = request.get('rna_bams', {}).get(name, [])

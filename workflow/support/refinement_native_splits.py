@@ -188,6 +188,12 @@ def native_paths_by_ownership(paths, ownership, *, include_merges, extensions=No
                          if len({path['native_gene_id'] for path in paths}) >= 2}
 
 
+def fission_overlaps(candidate, original, blocked):
+    blocks = original['blocks']
+    source = {**original, 'cds': blocks, 'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
+    return blocked.overlapping(source) or any(blocked.overlapping(path) for path in candidate['paths'])
+
+
 def nominate_fissions(groups, originals, genome, code, params, blocked):
     """Find two complete ORFs that reconstruct a source CDS across a splice."""
     candidates = {}
@@ -318,6 +324,7 @@ class DonorSearch:
                 self.rna_counts[species][seqid, strand, blocks] = count
         self.observed_fusions = {}
         self.database = self.directory / 'donors.dmnd'
+        self._queries = ()
 
     def _proteins(self, name):
         path = self.panel.get('proteins', {}).get(name)
@@ -344,16 +351,18 @@ class DonorSearch:
                  '--threads', self.cpus], self.directory, 'makedb')
         fasta.unlink()
 
-    def alignments(self, species, proteins):
-        if not proteins:
-            return
+    def search(self, proteins):
+        """Write one temporary DIAMOND result and return its query index."""
+        self._queries = ()
+        sequences = tuple(dict.fromkeys(proteins))
+        if not sequences:
+            return ()
         if not self.directory.exists():
             self._build()
         if not self.subjects:
-            return
+            return ()
         query = self.directory / 'queries.fa'
         output = self.directory / 'hits.tsv'
-        sequences = list(dict.fromkeys(proteins))
         with query.open('w') as handle:
             for index, protein in enumerate(sequences):
                 handle.write(f'>q{index}\n{protein}\n')
@@ -361,28 +370,44 @@ class DonorSearch:
              '--threads', self.cpus, '--very-sensitive', '--evalue', '1e-5', '--max-target-seqs', '0',
              '--max-hsps', '1', '--outfmt', '6', 'qseqid', 'sseqid', 'pident', 'qstart', 'qend', 'qlen',
              'sstart', 'send', 'slen', 'bitscore', 'btop'], self.directory, 'blastp', output)
+        self._queries = sequences
+        return sequences
+
+    def alignments(self, species, proteins, *, batch=None):
+        if not proteins:
+            return
+        sequences = self.search(proteins) if batch is None else batch
+        if not sequences:
+            return
+        if sequences is not self._queries:
+            raise ValueError('DIAMOND result was replaced by another search')
+        query_ids = {index for index, protein in enumerate(sequences) if protein in proteins}
+        output = self.directory / 'hits.tsv'
         allowed = set(self.panel['donors'][species])
         with output.open() as handle:
             for line in handle:
                 q, s, identity, qstart, qend, qlen, sstart, send, slen, bitscore, traceback = line.split()
+                index = int(q[1:])
+                if index not in query_ids:
+                    continue
                 donor, identifier = self.subjects[int(s[1:])]
                 if donor not in allowed:
                     continue
                 qstart, qend, qlen, sstart, send, slen = map(int, (qstart, qend, qlen, sstart, send, slen))
                 query_coverage = (qend - qstart + 1) / qlen
                 donor_coverage = (send - sstart + 1) / slen
-                yield sequences[int(q[1:])], {
+                yield sequences[index], {
                     'donor': donor, 'query': identifier, 'identity': float(identity) / 100,
                     'coverage': min(query_coverage, donor_coverage), 'query_coverage': query_coverage,
                     'donor_coverage': donor_coverage, 'bitscore': float(bitscore),
                 }, traceback, qstart - 1, max(qlen, slen)
 
-    def support(self, species, candidates, params):
+    def support(self, species, candidates, params, *, batch=None):
         queries = defaultdict(list)
         for shape, candidate in candidates.items():
             queries[candidate['protein']].append((shape, candidate['windows']))
         best = defaultdict(dict)
-        for protein, hit, traceback, start, length in self.alignments(species, queries):
+        for protein, hit, traceback, start, length in self.alignments(species, queries, batch=batch):
             coverage, identity = hit['coverage'], hit['identity']
             if identity < .50 or coverage < .90 or not homology_supported(coverage, identity, params):
                 continue
@@ -451,7 +476,7 @@ class DonorSearch:
             self.observed_fusions[donor] = direct
         return self.observed_fusions[donor]
 
-    def fission_support(self, species, candidates, params):
+    def fission_support(self, species, candidates, params, *, batch=None):
         proteins = {protein for candidate in candidates.values()
                     for protein in (candidate['source_protein'], *candidate['proteins'])}
         source_windows = defaultdict(dict)
@@ -459,7 +484,8 @@ class DonorSearch:
             source_windows[candidate['source_protein']][key] = candidate['source_windows']
         best = defaultdict(dict)
         spanning = defaultdict(dict)
-        for protein, hit, traceback, start, length in self.alignments(species, proteins):
+        spanning_rna_donors = defaultdict(lambda: defaultdict(set))
+        for protein, hit, traceback, start, length in self.alignments(species, proteins, batch=batch):
             if hit['identity'] < .45 or hit['coverage'] < .65:
                 continue
             paired = _paired_positions(traceback, start)
@@ -470,6 +496,8 @@ class DonorSearch:
                 if hit['identity'] >= .50 and proportion >= .80 and all(
                         len(paired & window) >= .80 * len(window) for window in windows):
                     donor = hit['donor']
+                    if donor in self.rna_counts:
+                        spanning_rna_donors[key][donor].add(hit['query'])
                     previous = spanning[key].get(donor)
                     if previous is None or (hit['bitscore'], hit['query']) > (previous['bitscore'], previous['query']):
                         spanning[key][donor] = {**hit, 'paired_coverage': proportion}
@@ -500,10 +528,27 @@ class DonorSearch:
             # Treat donor species with both architectures as ambiguous at this locus.
             unambiguous = {name: hit for name, hit in support.items() if name not in opposed}
             decision = fission_decision(groups, unambiguous, opposed, minimum)
-            for donor in set(decision['closest_informative_species']) & opposed.keys() & self.rna_counts.keys():
-                count = self._rna_supported_donor_models(donor).get(opposed[donor]['query'], 0)
+            rna_donors = set(decision['closest_informative_species']) & spanning_rna_donors[key].keys()
+            for donor in rna_donors:
+                representative = opposed[donor]['query']
+                verified = self._rna_supported_donor_models(donor)
+                witness = representative
+                count = verified.get(representative, 0)
+                if count < 2 and verified:
+                    # A lower-scoring isoform of the same locus can supply the
+                    # RNA witness. Evidence from other paralogous loci cannot.
+                    positions = self._positions(donor)
+                    position = positions.get(representative)
+                    if position is not None:
+                        alternatives = [(verified[candidate], candidate)
+                                        for candidate in spanning_rna_donors[key][donor] & verified.keys()
+                                        if (other := positions.get(candidate)) is not None and other[:3] == position[:3]]
+                        count, witness = max(alternatives, default=(count, witness))
                 opposed[donor]['rna_witnesses'] = count
-            decision = fission_decision(groups, unambiguous, opposed, minimum)
+                if witness != representative:
+                    opposed[donor]['rna_supported_query'] = witness
+            if rna_donors:
+                decision = fission_decision(groups, unambiguous, opposed, minimum)
             result[key] = {**decision, 'support': list(unambiguous.values()),
                            'fusion_annotation_support': [opposed[donor] for donor in sorted(opposed)],
                            'ambiguous_donor_species': sorted(support.keys() & opposed.keys())}
