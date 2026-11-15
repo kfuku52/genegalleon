@@ -321,9 +321,18 @@ def read_retained(root, plan, name, previous_worker, receipt_sha, batch, history
     return retained
 
 
+def _diagnostics():
+    try:
+        import rescue_diagnostics
+    except ImportError:
+        from . import rescue_diagnostics
+    return rescue_diagnostics
+
+
 def _rewrite_table(source, destination, updates, appended, make_row, count, *, allow_tail=False):
     import csv
-    with source.open(newline='') as inp, destination.open('x', newline='') as out:
+    diagnostic = _diagnostics()
+    with diagnostic.text_open(source, 'r') as inp, diagnostic.text_open(destination, 'x') as out:
         writer = csv.writer(out, delimiter='\t', lineterminator='\n')
         writer.writerow(next(csv.reader(inp, delimiter='\t')))
         field_limit = csv.field_size_limit()
@@ -407,6 +416,10 @@ def rescue(root, plan, name, cpus, *, dependencies):
         partials = {i: copy.deepcopy(m.get('partial_evidence')) for i, m in current.items()}
         # Each decoded row is independent. Its fingerprint and partial
         # evidence above preserve the pre-admission values for comparison.
+        diagnostic = _diagnostics()
+        summary = (json.loads((old_worker / diagnostic.SUMMARY).read_text())
+                   if diagnostic.SUMMARY in old_receipt['files'] else None)
+        prior_diagnostics = diagnostic.summarize(current.values()) if summary is not None else None
         for model in current.values():
             reset_admission(model)
         if any(m.get('evidence', {}).get(engine) and not plan['request'].get(engine)
@@ -473,7 +486,8 @@ def rescue(root, plan, name, cpus, *, dependencies):
                                      append_partial_evidence=native_audit is not None,
                                      publication_workers=min(cpus, 4))
         # Copy every other receipt member without truncating a shared inode.
-        mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
+        mutable = {'audit.tsv', 'quality_flags.tsv', 'audit.tsv.gz', 'quality_flags.tsv.gz',
+                   diagnostic.SUMMARY, 'search_inputs.json', 'placement_audit.json',
                    'split_model_candidates.json', 'model_repair_candidates.json',
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
         if native_audit is not None:
@@ -494,17 +508,20 @@ def rescue(root, plan, name, cpus, *, dependencies):
 
         hash_paths(old_worker, sidecars, workers=min(cpus, 4), hash_function=copy_sidecar)
 
-        def audit(m):
-            return (m['query'], m['evidence']['query'], m['status'], ','.join(m['problems']),
-                    m['coverage'], m['identity'], m.get('model_id', ''))
-        def quality(m):
-            q = m['quality_evidence']
-            return (m['query'], m.get('model_id', ''), m['status'], q['start_codon'],
-                    q['terminal_alignment']['n_aligned'], q['terminal_alignment']['c_aligned'],
-                    ','.join(q['donor_species']), ','.join(q['flags']), q['query_alignment']['aligned_query_fraction'],
-                    q['query_alignment']['internal_unaligned_query_fraction'])
-        _rewrite_table(old_worker / 'audit.tsv', tmp / 'audit.tsv', current, extra, audit, counts['raw_records'], allow_tail=True)
-        _rewrite_table(old_worker / 'quality_flags.tsv', tmp / 'quality_flags.tsv', current, extra, quality, counts['raw_records'])
+        if summary is not None:
+            changed_diagnostics = diagnostic.summarize(chain(current.values(), extra))
+            r.atomic_json(tmp / diagnostic.SUMMARY,
+                          diagnostic.replace_counts(summary, prior_diagnostics, changed_diagnostics))
+        else:
+            audit_path = diagnostic.legacy_table(old_worker, 'audit.tsv')
+            quality_path = diagnostic.legacy_table(old_worker, 'quality_flags.tsv')
+            if (audit_path is None or quality_path is None
+                    or not {audit_path.name, quality_path.name} <= old_receipt['files'].keys()):
+                raise ValueError('Admission producer lacks diagnostics covered by its receipt')
+            _rewrite_table(audit_path, tmp / audit_path.name, current, extra, diagnostic.audit_row,
+                           counts['raw_records'], allow_tail=True)
+            _rewrite_table(quality_path, tmp / quality_path.name, current, extra, diagnostic.quality_row,
+                           counts['raw_records'])
         if 'search_inputs.json' in old_receipt['files']:
             search = json.loads((old_worker / 'search_inputs.json').read_text())
         elif counts['raw_records'] == 0:

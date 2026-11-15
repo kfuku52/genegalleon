@@ -5,6 +5,7 @@ Independent CLI. Input files and the first BUSCO/reference selection are frozen;
 no orthogroup, inferred species tree, or family-loss calls are required.
 """
 import argparse
+import contextlib
 import copy
 import csv
 import gzip
@@ -162,6 +163,12 @@ PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscor
               "terminal_max_unaligned_c_overhang")
 
 
+try:
+    import rescue_diagnostics
+except ImportError:
+    from . import rescue_diagnostics
+
+
 def run(command, directory, label, stdout=None):
     command = [str(x) for x in command]
     logs = directory / "logs"
@@ -176,7 +183,7 @@ def run(command, directory, label, stdout=None):
 
 
 def table(path):
-    with Path(path).open(newline="") as handle:
+    with open_text(Path(path), newline='') as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
@@ -239,6 +246,8 @@ def identities():
     versions["search_inputs_implementation"] = digest(sys.modules[local_record.__module__].__file__)
     versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
     versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
+    versions["rescue_diagnostics_implementation"] = digest(Path(rescue_diagnostics.__file__))
+    versions["rescue_checkpoint_storage_implementation"] = digest(Path(__file__).with_name("rescue_checkpoint_storage.py"))
     versions["cached_validation_implementation"] = digest(Path(__file__).with_name("rescue_cached_validation.py"))
     for module in ('rescue_admission_replay', 'rescue_model_store_patch'):
         versions[('admission_replay' if module == 'rescue_admission_replay' else 'admission_patch')
@@ -427,8 +436,11 @@ def build_plan(args):
                     donor_receipts[name] = digest(path)
                     proof.check({path: donor_receipts[name]})
             request["fixed_donor_pool"]["prepared_receipts"] = donor_receipts
-        request["output_storage"] = {"format": getattr(args, "model_storage", "compact"),
-                                     "retain_search_inputs": bool(getattr(args, "retain_search_inputs", False))}
+        storage_format = getattr(args, "model_storage", "compact")
+        request["output_storage"] = {"format": storage_format,
+                                     "retain_search_inputs": bool(getattr(args, "retain_search_inputs", False)),
+                                     "diagnostics": getattr(args, "diagnostics", None) or (
+                                         "summary" if storage_format == "compact" else "legacy")}
         repair_targets = getattr(args, "model_repair_targets", None)
         if repair_targets:
             repair_targets = repair_targets.resolve()
@@ -815,7 +827,7 @@ def comparison_cache_key(root, plan, job, prepared_snapshot=None):
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
 
 
-def copy_verified_comparison(source, destination, key, hash_workers=1, *, receipt_sha256=None):
+def copy_verified_comparison(source, destination, key, hash_workers=1, *, receipt_sha256=None, share_checkpoint=False):
     """Hash source bytes while copying into a fresh stage, then rehash outputs.
 
     One invocation's source/receipt/path observations fence the complete copy;
@@ -831,13 +843,33 @@ def copy_verified_comparison(source, destination, key, hash_workers=1, *, receip
         raise ValueError("Comparison copy destination overlaps its source")
     proof = _ReceiptProof(source)
     receipt_path = source / "receipt.json"
-    receipt = proof.receipt(receipt_path, receipt_sha256 or digest(receipt_path))
+    receipt_sha256 = receipt_sha256 or digest(receipt_path)
+    receipt = proof.receipt(receipt_path, receipt_sha256)
     if receipt["key"] != key:
         raise ValueError("Comparison cache incomplete or corrupted")
+    linked = set()
+    if share_checkpoint:
+        try:
+            from rescue_checkpoint_storage import SHARED, link_member
+        except ImportError:
+            from .rescue_checkpoint_storage import SHARED, link_member
+        for relative in SHARED & receipt["files"].keys():
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if link_member(source / relative, target):
+                linked.add(relative)
+        # Linking updates ctime. Start a fresh proof before validating bytes.
+        proof = _ReceiptProof(source)
+        proof.receipt(receipt_path, receipt_sha256)
+
     def copy_member(path):
         relative = str(path.relative_to(source))
         expected = receipt["files"][relative]
         target = destination / relative
+        if relative in linked:
+            if not os.path.samefile(path, target) or digest(target) != expected:
+                raise ValueError("Miniprot checkpoint changed during sharing")
+            return expected
         target.parent.mkdir(parents=True, exist_ok=True)
         copied = hashlib.sha256()
         with os.fdopen(os.open(source / relative, os.O_RDONLY | os.O_NONBLOCK), "rb") as src:
@@ -1432,7 +1464,10 @@ def expand_miniprot_lines(source, representatives):
 
 def output_storage(plan):
     value = plan["request"].get("output_storage", {"format": "legacy", "retain_search_inputs": True})
-    if (not isinstance(value, dict) or set(value) != {"format", "retain_search_inputs"}
+    if (not isinstance(value, dict) or set(value) - {"format", "retain_search_inputs", "diagnostics"}
+            or not {"format", "retain_search_inputs"} <= value.keys()
+            or not isinstance(value.get("diagnostics", "legacy"), str)
+            or value.get("diagnostics", "legacy") not in {"summary", "full", "legacy"}
             or not isinstance(value["format"], str) or value["format"] not in {"compact", "legacy"}
             or type(value["retain_search_inputs"]) is not bool):
         raise ValueError("Unknown or malformed rescue output-storage configuration")
@@ -1444,11 +1479,13 @@ LOCAL_VALIDATED = "local_validated.jsonl.gz"
 TARGETED_VALIDATED = "targeted_validated.json"
 
 
-def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1, packing_workers=None):
+def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1, packing_workers=None,
+                        diagnostics="legacy", unresolved_count=0):
     """Write candidate quality and revision views in original model order."""
     if packing_workers is None:
         packing_workers = publication_workers
     revisions = {}
+    counts = rescue_diagnostics.new_counts()
 
     def with_quality(quality_writer):
         for model in models:
@@ -1464,18 +1501,19 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
                 if shape not in revisions:
                     revisions[shape] = {**model, "support": []}
                 revisions[shape]["support"].append(evidence)
-            terminal = quality["terminal_alignment"]
-            alignment = quality["query_alignment"]
-            quality_writer.writerow((model["query"], model.get("model_id", ""), model["status"], quality["start_codon"],
-                terminal["n_aligned"], terminal["c_aligned"], ",".join(quality["donor_species"]), ",".join(quality["flags"]),
-                alignment["aligned_query_fraction"], alignment["internal_unaligned_query_fraction"]))
+            if quality_writer is None:
+                rescue_diagnostics.update(counts, model)
+            else:
+                quality_writer.writerow(rescue_diagnostics.quality_row(model))
             yield model
 
-    with (directory / "quality_flags.tsv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle, delimiter="\t")
-        writer.writerow(("candidate", "model_id", "status", "start_codon", "donor_n_terminus_aligned",
-                         "donor_c_terminus_aligned", "donor_species", "flags", "donor_aligned_query_fraction",
-                         "donor_internal_unaligned_query_fraction"))
+    detail = directory / rescue_diagnostics.detail_name("quality_flags.tsv", diagnostics)
+    context = (contextlib.nullcontext() if diagnostics == "summary" else rescue_diagnostics.text_open(detail, "w"))
+    with context as handle:
+        writer = (csv.writer(handle, delimiter="\t") if diagnostics == "legacy" else
+                  rescue_diagnostics.table_writer(handle)) if handle is not None else None
+        if writer:
+            writer.writerow(rescue_diagnostics.QUALITY)
         enriched = with_quality(writer)
         if compact:
             # The store consumes revisions after the main model stream.
@@ -1487,6 +1525,10 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
             atomic_json(directory / "models.json", models)
             atomic_json(directory / "revision_candidates.json", list(revisions.values()))
             atomic_json(directory / "partial_models.json", [m for m in models if m.get("partial_evidence", {}).get("partial")])
+
+    if diagnostics == "summary":
+        atomic_json(directory / rescue_diagnostics.SUMMARY,
+                    {"schema": 1, **counts, "unresolved_queries": unresolved_count})
 
 
 def rescue(root, plan, name, cpus, interval_workers=None, *, phase="all"):
@@ -1509,6 +1551,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         import rescue_admission_replay
         return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies)
     storage = output_storage(plan)
+    diagnostics = storage.get("diagnostics", "legacy")
     donors = [name, *plan["donors"][name]]
     if phase != "postprocess":
         for donor in donors:
@@ -1544,7 +1587,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         genomewide_audit = None
         if checkpoint is not None:
             try:
-                copy_verified_comparison(checkpoint, tmp, key, hash_workers=cpus, receipt_sha256=checkpoint_sha256)
+                copy_verified_comparison(checkpoint, tmp, key, hash_workers=cpus, receipt_sha256=checkpoint_sha256,
+                                         share_checkpoint=True)
             except (FileNotFoundError, ValueError) as exc:
                 raise ValueError(f"{invalid_checkpoint}: {exc}") from exc
             state = json.loads((tmp / PREDICTION_STATE).read_text())
@@ -1599,16 +1643,11 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             atomic_json(tmp / "candidates.json", [])
             atomic_json(tmp / "split_model_candidates.json", [])
             atomic_json(tmp / "model_repair_candidates.json", [])
-            if storage["format"] == "compact":
-                write_model_store(tmp, [], revisions=[])
-            else:
-                atomic_json(tmp / "models.json", [])
-                atomic_json(tmp / "revision_candidates.json", [])
-                atomic_json(tmp / "partial_models.json", [])
-            write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"), [])
-            write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
-                      "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
-                      "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"), [])
+            if diagnostics != "summary":
+                rescue_diagnostics.write_table(tmp / rescue_diagnostics.detail_name("audit.tsv", diagnostics),
+                                               rescue_diagnostics.AUDIT, ())
+            write_rescue_models(tmp, [], source["genetic_code"], compact=storage["format"] == "compact",
+                                diagnostics=diagnostics)
             return
         with open_text(Path(source["gff"])) as handle:
             existing = original_ownership(handle, attributes)
@@ -1889,16 +1928,31 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     "cached_search_contract": cached.search_contract if cached else None,
                     "cached_local_search_compatible": cached.local_search_compatible if cached else None,
                     "cached_genome_search_compatible": cached.genome_search_compatible if cached else None})
-        def audit_rows():
-            detected = {m["query"] for m in validated}
-            for m in models:
-                yield (m["query"], m["evidence"]["query"], m["status"], ",".join(m["problems"]),
-                       m["coverage"], m["identity"], m.get("model_id", ""))
-            for r in candidate_regions:
-                if r["id"] not in detected:
-                    yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
-        write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
-                  audit_rows())
+        detected = {m["query"] for m in validated}
+        unresolved_count = 0
+
+        def unresolved_rows():
+            nonlocal unresolved_count
+            for row in candidate_regions:
+                if row["id"] not in detected:
+                    unresolved_count += 1
+                    yield row["id"], row["query"]
+
+        missing = unresolved_rows()
+        if diagnostics == "summary":
+            first = next(missing, None)
+            if first is not None:
+                rescue_diagnostics.write_table(tmp / rescue_diagnostics.UNRESOLVED, ("candidate", "donor_gene"),
+                                               chain((first,), missing))
+        else:
+            audit_rows = chain(map(rescue_diagnostics.audit_row, models),
+                               (rescue_diagnostics.unresolved_row(*row) for row in missing))
+            if diagnostics == "legacy":
+                # Preserve exact tabular bytes for older frozen plans.
+                write_tsv(tmp / "audit.tsv", rescue_diagnostics.AUDIT, audit_rows)
+            else:
+                rescue_diagnostics.write_table(tmp / "audit.tsv.gz", rescue_diagnostics.AUDIT, audit_rows)
+        detected.clear()
         if storage["format"] == "compact":
             # Larger streams amortize the higher encoding process count.
             packing_workers = min(cpus, 8 if len(models) >= 1_000_000 else 4)
@@ -1911,9 +1965,11 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     yield models.pop()
 
             write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True,
-                                publication_workers=min(cpus, 4), packing_workers=packing_workers)
+                                publication_workers=min(cpus, 4), packing_workers=packing_workers,
+                                diagnostics=diagnostics, unresolved_count=unresolved_count)
         else:
-            write_rescue_models(tmp, models, source["genetic_code"], compact=False)
+            write_rescue_models(tmp, models, source["genetic_code"], compact=False,
+                                diagnostics=diagnostics, unresolved_count=unresolved_count)
         # Huge indexes are execution scratch, not reusable unverified outputs.
         (tmp / "genome.mpi").unlink(missing_ok=True)
         (tmp / "genome.fa").unlink(missing_ok=True)
@@ -2961,6 +3017,45 @@ def export_destination(root, destination):
     return destination
 
 
+def export_worker_diagnostics(root, plan, name, destination, cpus=1, *, candidates=()):
+    """Publish detailed tables on demand from a verified raw or compact worker."""
+    try:
+        from rescue_model_store import iter_models
+    except ImportError:
+        from .rescue_model_store import iter_models
+    destination = export_destination(root, destination)
+    worker = root / "rescued" / name
+    with ReceiptSnapshot(lambda path, key: verified(path, key, hash_workers=cpus)) as proof:
+        if not verified_dependency(proof, worker, rescue_key(root, plan, name)):
+            raise ValueError("Diagnostic export requires a complete verified rescue")
+        files = json.loads((worker / "receipt.json").read_text())["files"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".working-diagnostics-", dir=destination.parent) as scratch:
+            temp = Path(scratch) / "diagnostics"
+            temp.mkdir()
+            if rescue_diagnostics.SUMMARY in files:
+                rescue_diagnostics.export_tables(worker, temp, iter_models(worker, verify=False), candidates)
+            else:
+                for stem in ("audit.tsv", "quality_flags.tsv"):
+                    source = rescue_diagnostics.legacy_table(worker, stem)
+                    if source is None or source.name not in files:
+                        raise ValueError("Missing rescue details: " + stem)
+                    if candidates:
+                        with rescue_diagnostics.text_open(source, 'r') as stream:
+                            rows = csv.reader(stream, delimiter='\t')
+                            rescue_diagnostics.write_table(temp / stem, next(rows),
+                                                           (row for row in rows if row[0] in candidates))
+                    else:
+                        opener = gzip.open if source.suffix == ".gz" else open
+                        with opener(source, "rb") as stream, (temp / stem).open("xb") as target:
+                            shutil.copyfileobj(stream, target)
+            proof.check_all()
+            if destination.exists():
+                raise FileExistsError(destination)
+            temp.rename(destination)
+    return destination
+
+
 def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=1):
     """Read a completed producer without rerunning it or changing its receipt."""
     try:
@@ -3097,6 +3192,8 @@ def parser():
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")
+    plan.add_argument("--diagnostics", choices=("summary", "full", "legacy"),
+                      help="Summary (compact default), compressed full tables, or legacy plain tables")
     plan.add_argument("--retain-search-inputs", action="store_true",
                       help="Retain diagnostic and completed predictor FASTAs (default: regenerate on demand)")
     plan.add_argument("--max-genome-queries", type=int, default=20000)
@@ -3106,7 +3203,7 @@ def parser():
     plan.add_argument("--gemoma-jar", type=Path, help="Optional GeMoMa refinement; requires Java and tblastn")
     plan.add_argument("--gemoma-java", default="java", help="Java executable compatible with the supplied GeMoMa jar")
     for name in ("prepare", "synteny", "rescue", "predict", "postprocess", "finalize", "run", "status", "qc",
-                 "worker-complete", "qc-inputs", "export-search-inputs", "export-models"):
+                 "worker-complete", "qc-inputs", "export-search-inputs", "export-models", "export-diagnostics", "split-candidates"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
         cmd.add_argument("--cpus", type=int, default=1, help="Predictor and full-checksum CPU budget")
@@ -3114,11 +3211,13 @@ def parser():
             cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
         if name in {"synteny", "run"}:
             cmd.add_argument("--comparison-cache", type=Path, help="Shared comparison cache (default: OUTPUT parent/gene_model_rescue_comparison_cache)")
-        if name in {"prepare", "synteny", "rescue", "predict", "postprocess", "worker-complete", "qc-inputs"}:
+        if name in {"prepare", "synteny", "rescue", "predict", "postprocess", "worker-complete", "qc-inputs", "split-candidates"}:
             cmd.add_argument("--task-index", type=int, help="One-based frozen job/species index; omit to run all")
-        if name in {"export-search-inputs", "export-models"}:
+        if name in {"export-search-inputs", "export-models", "export-diagnostics"}:
             cmd.add_argument("--task-index", type=int, required=True, help="One-based frozen species index")
             cmd.add_argument("--destination", type=Path, required=True, help="New export directory; producer files are untouched")
+        if name == "export-diagnostics":
+            cmd.add_argument("--candidate", action="append", default=[], help="Export only this candidate ID; repeatable")
         if name == "export-search-inputs":
             cmd.add_argument("--combined", action="store_true", help="Also recreate repeated regions.fa/queries.fa diagnostics")
         if name == "qc":
@@ -3159,7 +3258,7 @@ def main():
                           "common_references": plan["common_references"]}))
         return
     root = args.output.resolve()
-    plan = load(root, inspect_only=args.command in {"export-search-inputs", "export-models"})
+    plan = load(root, inspect_only=args.command in {"export-search-inputs", "export-models", "export-diagnostics", "split-candidates"})
     if getattr(args, "cpus", 1) < 1:
         p.error("cpus must be positive")
     if args.command == 'native-genomewide-prepare':
@@ -3176,6 +3275,11 @@ def main():
         count = len(plan["synteny_jobs"]) if args.command == "synteny" else len(plan["species"])
         if not 1 <= args.task_index <= count:
             p.error("task index outside frozen plan")
+    if args.command == 'split-candidates':
+        import rescue_split_replay
+        names = [plan['species'][args.task_index - 1]] if args.task_index else plan['species']
+        rescue_split_replay.publish(root, plan, names, args.cpus)
+        return
     if args.command == "prepare":
         names = [plan["species"][args.task_index - 1]] if args.task_index else plan["species"]
         for name in names:
@@ -3184,6 +3288,10 @@ def main():
     if args.command == "export-search-inputs":
         print(export_worker_inputs(root, plan, plan["species"][args.task_index - 1], args.destination,
                                    combined=args.combined, cpus=args.cpus))
+        return
+    if args.command == "export-diagnostics":
+        name = plan["species"][args.task_index - 1]
+        print(export_worker_diagnostics(root, plan, name, args.destination, args.cpus, candidates=set(args.candidate)))
         return
     if args.command == "export-models":
         destination = export_destination(root, args.destination)
@@ -3256,6 +3364,9 @@ def main():
                 finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
     if args.command in {"finalize", "run"}:
         finalize(root, plan, hash_workers=args.cpus)
+        if plan['request'].get('oriongeno'):
+            import rescue_split_replay
+            rescue_split_replay.publish(root, plan, plan['species'], args.cpus)
 
 
 if __name__ == "__main__":

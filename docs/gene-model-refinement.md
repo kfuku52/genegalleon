@@ -118,6 +118,9 @@ flowchart LR
 4. **Effective inputs:** retain original transcripts in `full_annotation`, add
    accepted paths with stable assembly/coordinate/phase/CDS-derived IDs, and
    publish a selected GFF with the exact transcript behind every representative.
+   The self-contained genome copy preserves the supplied gzip bytes. Consumers
+   use the genome path in `effective/inputs.tsv` and expand it in scratch when
+   their tools need an uncompressed FASTA.
    Selected transcripts receive [longest projected UTRs](oriongeno-genome-annotation.md#longest-projected-utr-per-side) from existing annotation and optional OrionGeno predictions; original exon/UTR metadata stays archived. CDSs of
    unresolved biological negatives remain unchanged; unusable translations are
    excluded from the analysis protein FASTA with an explicit admission audit.
@@ -314,7 +317,7 @@ Important settings:
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
 | `gene_model_refinement_model_repairs` | blank | Reviewed single-locus candidates from a completed rescue publication. |
 | `gene_model_refinement_min_margin` | `0.10` | Experimental score margin for adoption. |
-| `gene_model_refinement_min_support` | `2` | Independent donor species for acceptance/adoption. |
+| `gene_model_refinement_min_support` | `2` | Independent donor species for cross-species acceptance/adoption. |
 | `gene_model_refinement_candidate_limit` | `32` | Exceeding the selection limit abstains; prediction does not silently truncate alternatives. |
 | `gene_model_refinement_padding` | `2000` | Local window padding in bp. |
 
@@ -325,16 +328,121 @@ as its margin and donor gates. These distinct comparisons are not accuracy
 estimates. The new output namespace does not replace rescue
 outputs or install files into curated `workspace/input`.
 
+### Automatic OrionGeno CDS extensions
+
+In conservative mode, a native OrionGeno CDS can extend a single unambiguous
+source model when the two paths belong to the same locus. The extension must
+add at least 90 coding bases and 20% of the source CDS length, retain at least
+90% of the source CDS in frame, and produce a genomic ORF with validated start,
+stop, phases and splice sites. For a partial source CDS, it must preserve any
+validated source terminus. When neither source terminus is known, at least
+95% of the source CDS must remain in frame.
+
+At least two external donor species (or the configured minimum, if greater)
+must support both the retained and added portions of the OrionGeno CDS.
+When the source already encodes a complete ORF, the new path also requires
+at least two distinct, whole-CDS target RNA witnesses. Whole-CDS RNA support
+for the original candidate or a competing qualifying repair holds the
+extension. Accepted extensions preserve the locus ID and appear in
+`effective/model_repairs.json`.
+
 ### Automatic split-model merges
 
 In conservative mode, refinement adopts a unique split-model candidate when
 two or more external donor species support the same complete genomic CDS.
-Each fragment must be an incomplete, usable source coding model and the
-candidate must preserve at least two-thirds of each fragment in frame. The
-existing geometry, splice, homology, ORF and ownership checks also apply.
-Competing paths, complete source models and protected annotations stay out
-of automatic merges. The resulting change is recorded in
-`effective/split_model_merges.json` with `adoption: automatic`.
+Each fragment must be usable, and the candidate must preserve at least
+two-thirds of each incomplete fragment in frame. If one source model has a
+complete ORF, the merged CDS must preserve it in full and extend it in frame.
+For the external-donor route with a complete source ORF, a frozen OrionGeno
+transcript must match every CDS boundary and phase. The source fragments must
+align to ordered, disjoint regions of each supporting donor protein.
+
+A second route uses a complete, independently annotated copy at a different
+locus in the same genome. It applies to two single-exon source models when the
+upstream model lacks a stop codon and the downstream model has a complete ORF.
+One complete genomic CDS must contain both originals in frame. The intervening
+segment must encode at least eight amino acids and align contiguously with its
+flanks to the reference copy, with at least 75% identity in the intervening
+segment. The whole alignment requires 90% coverage of each protein and 80%
+identity, as well as the configured homology checks. This route uses a
+within-species comparison and a conserved coding bridge as evidence.
+
+Refinement also searches native OrionGeno paths that span adjacent source CDSs,
+including loci absent from the rescue split publication. A path must preserve at
+least two-thirds of each usable source CDS in frame. It can recover missing
+coding regions beyond those CDSs when a single protein per supporting donor
+species aligns across at least 90% of the length of both proteins with at least
+50% identity. At least 80% of the projected codons from each source fragment
+must align to a donor residue. The configured coverage minimum also applies to
+the proportion of paired residues across the two proteins. The configured
+homology and independent-species minimums also apply. This search
+uses the frozen rescue donor panel or the original proteins of the input
+genomes when running refinement directly.
+
+For a completed rescue, refinement uses the verified `native_split_candidates`
+publication when the annotation, OrionGeno input and homology settings match.
+The rescue `split-candidates` command can recreate that publication from
+existing rescue outputs.
+
+The genomic ownership, splice and ORF checks apply to all routes. A native
+OrionGeno path bridging two or more complete source ORFs requires at least
+80% in-frame retention of every fragment, full cross-fragment protein support
+from at least two external donor species, and at least two distinct
+whole-CDS RNA witnesses from the target species. A whole-CDS RNA witness for
+any original complete path holds the candidate. Competing paths and protected
+annotations remain unresolved. Target RNA checks query shortlisted paths in
+indexed BAMs or use the supplied whole-CDS RNA table.
+
+`effective/split_model_merges.json` records the adoption basis and the matching
+OrionGeno transcripts or source reference locus. RNA-supported merges also
+record the whole-CDS witness count.
+
+### Automatic resolution of fused gene models
+
+With native OrionGeno predictions in conservative mode, refinement can replace
+one selected original CDS with two independently supported genes. Each
+non-overlapping prediction must have a complete ORF of at least 100 amino acids, preserve at least 80% of
+its own coding bases in frame in the source CDS, and explain at least 10% of the
+source CDS. Together the predictions must explain at least 85% of the original
+CDS in frame, with one original splice junction that connects the two regions.
+The automatic route requires a single original model without protected
+annotation.
+
+For each replacement, its best qualifying protein hit in each donor must have at
+least 45% identity, 65% coverage on both proteins and 60% of the longer protein
+paired to a residue. In at least two donor species (or the configured
+independent-species minimum, if greater), the hits must be to distinct genes on
+the same chromosome and strand, in the same transcriptional order, within 10 kb.
+The eligible donors must occupy at least two different sister branches along
+the target lineage. At the nearest ancestor with informative donors, at least
+one donor must support the split. A source-like full-length donor annotation
+is recorded as opposing evidence. Donors with both architectures do not count
+towards split support. A nearest donor whose fusion model is supported by at
+least two matching whole-CDS RNA witnesses in `--rna` holds the candidate for
+review.
+
+Refinement reuses the rescue guide tree. A guide generated by BUSCO/RapidNJ
+is midpoint-rooted for this comparison. For a direct-input run, supply a
+rooted Newick with `--species-tree`; `gg_input_generation` forwards the
+configured `taxonomy_species_tree` for direct genomic inputs. A run lacking a
+species tree reports candidates for review. Competing splits or model edits
+also leave the locus unresolved.
+
+If target RNA is available, refinement checks only fusion candidates that pass
+the comparative screen. RNA BAM queries require a primary, strand-matched
+read spanning the intact CDS, including its fusion splice. Duplicate read
+names across BAMs count once. The same path can be supplied via `--rna` with
+counts from independent molecules. One whole-CDS witness holds the split for
+review and two or more support retaining the fused model. A missing RNA input
+or zero validated witnesses contributes no evidence to the decision.
+
+The representative CDS, protein, and GFF views publish the two new genes.
+`effective/fused_model_split_decisions.json` records split and fusion support,
+the nearest informative donors, and the decision for each tested candidate.
+`effective/fused_model_splits.json` gives the accepted IDs, source splice
+coordinates (zero-based, half-open), OrionGeno transcripts, and CDS hashes.
+Source views retain the input annotation. The check reuses rescue protein and
+coordinate inputs without rerunning whole-genome Miniprot.
 
 ### Reviewed split-model merges
 
@@ -845,15 +953,20 @@ The existing BUSCO comparison and Swiss-Prot diagnostic interfaces remain availa
 `effective/inputs.tsv` binds paths, hashes and genetic codes for:
 
 - `species_cds`, `species_protein`, `species_gff`, `species_genome`;
-- `analysis_cds`, `analysis_gff`, `coding_admission.tsv`: admitted coding paths
+- `analysis_cds`, `analysis_gff`, `coding_admission.tsv.gz`: admitted coding paths
   with known first-phase bases and terminal incomplete codon bases removed;
   CDS coordinates and phases agree with the analysis sequence and protein;
 - `representative_map.tsv`, with one explicit locus-to-transcript choice;
 - `species_genetic_code.tsv`;
-- `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv`;
-- `species_transcript`, `utr_audit`, and `utr_summary.tsv` for projected representative UTRs;
+- `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv.gz`;
+- `species_transcript`, `utr_audit/SPECIES.json.gz`, and `utr_summary.tsv` for projected representative UTRs;
 - exact supplied CDS files in `source_cds`, decoded original GFF in
   `source_annotation`, `effective_exclusions.tsv`, `gene_bounds_changes.json`.
+
+Admission and per-species UTR diagnostics use streaming gzip compression. The
+decompressed TSV and JSON schemas stay the same. BUSCO protein preparation,
+refinement review, and UTR reassessment also read receipted plain-text outputs
+from previous runs.
 
 Inspect `predictions/SPECIES/predictions.json` for accepted/proposed candidates,
 reasons, donor support and `homology_only_predicted` versus `rna_path_supported`.

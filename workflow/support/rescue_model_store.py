@@ -299,7 +299,7 @@ def _add_packed_overlay(db, ordinal, body, sha, encoded, level, codec, cache):
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
-                      shard_bytes=8 * 1024 * 1024, codec="auto", compression_level=1,
+                      shard_bytes=32 * 1024 * 1024, codec="auto", compression_level=1,
                       publication_workers=1, packing_workers=1):
     """Atomically publish into ``directory/model_store`` without replacing data.
 

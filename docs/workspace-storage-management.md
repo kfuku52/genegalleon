@@ -32,6 +32,29 @@ Review the dry-run JSON report before running the third command. The sections
 below explain catalog overrides, unmatched files, quota estimates, target
 selection, rollback, and verification in detail.
 
+## Compact diagnostic publications
+
+Routine gene-family database preparation audits every provenance contract.
+The report groups current contracts by step and keeps individual exceptions and
+untracked artifacts. Run the provenance audit explicitly with
+`--report-detail full` for its complete row-level report. Diagnostic report
+detail does not affect checks, staleness decisions or exit status.
+
+Compact Rescue uses summary counts and the existing model store instead of
+separate row-level audit and flag tables. Refine preserves compressed genome
+inputs and gzip-compresses its UTR and sequence-admission diagnostics.
+See [Rescue diagnostics and checkpoints](gene-model-rescue.md#rescue-diagnostic-retention)
+and [model refinement](gene-model-refinement.md).
+
+Expression/trait regression stores the RSC, method and species-expression
+audit tables together in one per-family `expression_trait_audit/*.zip`,
+with their original member bytes. CSUBST keeps one copy of each published
+scan table and a checksum reference in the diagnostic ZIP. BUSCO copy-selection
+reports from genome evolution use gzip with the full ranking evidence intact.
+The default BUSCO exclusion policy skips the empty selection report, and
+both BUSCO extraction paths skip the unused temporary marker count tables.
+Current results can still reuse their historical audits in the older formats.
+
 ## Managed and excluded paths
 
 The command detects these workspace layouts:

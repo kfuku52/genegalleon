@@ -916,6 +916,7 @@ run_gene_family_database_for_source() {
     --logical-root "${dir_gene_family}"
     --workspace-root "${gg_workspace_dir}"
     --output-tsv "${provenance_report}"
+    --report-detail exceptions
     --mode "${gene_family_source}"
     --workers "${GG_TASK_CPUS:-1}"
     --check-csubst-branches

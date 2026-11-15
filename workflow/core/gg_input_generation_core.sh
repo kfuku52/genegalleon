@@ -53,6 +53,7 @@ gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
 gene_model_rescue_prediction_cache="${gene_model_rescue_prediction_cache:-}"
 gene_model_rescue_model_storage="${gene_model_rescue_model_storage:-compact}"
+gene_model_rescue_diagnostics="${gene_model_rescue_diagnostics:-}"
 gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs:-0}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
@@ -236,6 +237,13 @@ do
     exit 1
   fi
 done
+case "${gene_model_rescue_diagnostics}" in
+  ''|summary|full|legacy) ;;
+  *)
+    echo "Invalid gene_model_rescue_diagnostics=${gene_model_rescue_diagnostics} (expected summary, full, or legacy)" >&2
+    exit 1
+    ;;
+esac
 
 if ! [[ "${download_timeout}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid download_timeout: ${download_timeout}"
@@ -2693,6 +2701,7 @@ prepare_gene_model_rescue() {
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
+  [[ -z "${gene_model_rescue_diagnostics}" ]] || rescue_args+=(--diagnostics "${gene_model_rescue_diagnostics}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
@@ -2777,6 +2786,7 @@ prepare_gene_model_refinement() {
   fi
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
+    [[ "${taxonomy_species_tree}" == auto ]] || refinement_args+=(--species-tree "${taxonomy_species_tree}")
     genomic_inputs=1
   elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]] ||
        { [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] &&

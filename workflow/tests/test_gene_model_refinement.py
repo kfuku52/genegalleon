@@ -296,7 +296,7 @@ def test_explained_formatter_difference_retains_dna_with_separate_translation_ad
     assert (effective / "species_cds" / (species + ".fa")).read_text() == f">{species}_g\n{coding}\n"
     assert (effective / "source_annotation" / (species + ".gff3")).read_text() == Path(target["gff"]).read_text()
     assert not [r for r in refinement.read_table(effective / "effective_exclusions.tsv") if r["species"] == species]
-    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv") if r["species"] == species)
+    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv.gz") if r["species"] == species)
     quality = json.loads(admitted["quality"])
     assert not quality["sequence_mismatch"]
     assert quality["partial"] is partial
@@ -358,7 +358,7 @@ def test_effective_withholds_dual_context_protein_and_analysis_but_preserves_dna
         assert (effective / 'source_cds' / (name + '.fa')).read_bytes() == before[row['cds']]
         assert (effective / 'source_annotation' / (name + '.gff3')).read_bytes() == before[row['gff']]
         assert '\tCDS\t1\t9\t' in (effective / 'full_annotation' / (name + '.gff3')).read_text()
-    audit = refinement.read_table(effective / 'translation_admission.tsv')
+    audit = refinement.read_table(effective / 'translation_admission.tsv.gz')
     assert all(row['status'] == 'excluded' and json.loads(row['quality'])['translation_uncertain']
                and json.loads(row['quality'])['rna_supported'] for row in audit)
     assert all(Path(path).read_bytes() == content for path, content in before.items())
@@ -866,6 +866,27 @@ def test_effective_verification_binds_parsing_before_the_hash_batch(tmp_path, mo
     monkeypatch.setattr(refinement, 'digest_paths', changed_before_batch)
     with pytest.raises(OSError, match='manifest or receipt changed while verifying'):
         refinement.verify_inputs(manifest)
+
+
+def test_effective_genome_preserves_original_gzip_and_uses_manifest_path(tmp_path):
+    import gzip
+
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    for row in rows:
+        plain = Path(row['genome'])
+        compressed = plain.with_suffix('.fa.gz')
+        compressed.write_bytes(gzip.compress(plain.read_bytes()))
+        row['genome'] = str(compressed)
+    write_tsv(inputs, list(rows[0]), rows)
+    root = tmp_path / 'refinement'
+    effective = refinement.finalize(root, refinement.plan(root, inputs=inputs, edges=edges, mode='off'))
+    source = {row['species']: row['genome'] for row in rows}
+    for row in refinement.verify_inputs(effective / 'inputs.tsv'):
+        genome = Path(row['genome'])
+        assert genome.suffix == '.gz'
+        assert genome.read_bytes() == Path(source[row['species']]).read_bytes()
+        with refinement.indexed_genome(genome) as reference:
+            assert reference.references
 
 
 def test_effective_verification_retains_external_role_paths_and_checks_their_bytes(tmp_path):
@@ -1648,7 +1669,7 @@ def test_analysis_view_clips_only_known_partial_bases_and_retains_raw_cds(tmp_pa
     assert candidate['cds'] == 'ATGAAATAA' and candidate['protein'] == 'MK'
     assert candidate['quality']['usable']
     assert 'Note=original' in (effective / 'analysis_gff' / (name + '.gff3')).read_text()
-    admission = next(row for row in refinement.read_table(effective / 'coding_admission.tsv') if row['species'] == name)
+    admission = next(row for row in refinement.read_table(effective / 'coding_admission.tsv.gz') if row['species'] == name)
     assert (admission['head_bases_removed'], admission['tail_bases_removed']) == ('1', '0')
     layout = refinement.verify_inputs(effective / 'inputs.tsv', 'coding_layout').split('\t')
     assert Path(layout[0]) == effective / 'analysis_cds'

@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import io
 import math
 import os
 import re
 import sys
 from collections import OrderedDict, defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, TextIO
 
@@ -47,11 +49,19 @@ def open_output_append(path: Path) -> TextIO:
     return os.fdopen(descriptor, "a", encoding="utf-8")
 
 
-def open_output_replace(path: Path) -> TextIO:
+@contextmanager
+def open_output_replace(path: Path) -> Iterator[TextIO]:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o666)
-    return os.fdopen(descriptor, "w", encoding="utf-8")
+    if path.suffix == ".gz":
+        with os.fdopen(descriptor, "wb") as binary, gzip.GzipFile(
+                filename="", mode="wb", fileobj=binary, compresslevel=1, mtime=0) as compressed:
+            with io.TextIOWrapper(compressed, encoding="utf-8") as stream:
+                yield stream
+    else:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            yield stream
 
 
 def open_text(path: Path) -> TextIO:
@@ -237,7 +247,7 @@ def validate_output_layout(args, fasta_paths, expected, selection):
         raise ExtractionError("Output paths overlap input files: output directory contains inputs")
     if selection is not None and root.is_relative_to(args.busco_full_dir.resolve()):
         raise ExtractionError("Output paths overlap input BUSCO full-table directory")
-    reports = [args.report] + ([args.selection_report] if args.selection_report else [])
+    reports = [path for path in (args.report, args.selection_report) if path is not None]
     output_paths = {safe_output_path(args.output_dir, marker, args.suffix).resolve() for marker in expected}
     output_inodes = {(path.stat().st_dev, path.stat().st_ino) for path in output_paths if path.exists()}
     seen = set()
@@ -325,14 +335,13 @@ def run(args: argparse.Namespace) -> int:
         with open_output_replace(args.selection_report) as handle:
             write_selection_report(handle, selection.report_rows if selection else [])
     missing = [busco_id for busco_id, count in expected.items() if found.get(busco_id, 0) != count]
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    if args.report.is_symlink():
-        raise ExtractionError(f"Refusing to replace BUSCO report symlink: {args.report}")
-    with open_output_replace(args.report) as handle:
-        handle.write("busco_id\texpected\tfound\toutput\n")
-        for busco_id in expected:
-            output = safe_output_path(args.output_dir, busco_id, args.suffix)
-            handle.write(f"{busco_id}\t{expected[busco_id]}\t{found.get(busco_id, 0)}\t{output}\n")
+    if args.report is not None:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        with open_output_replace(args.report) as handle:
+            handle.write("busco_id\texpected\tfound\toutput\n")
+            for busco_id in expected:
+                output = safe_output_path(args.output_dir, busco_id, args.suffix)
+                handle.write(f"{busco_id}\t{expected[busco_id]}\t{found.get(busco_id, 0)}\t{output}\n")
     print(
         f"Extracted {len(expected) - len(missing)} complete BUSCO marker FASTAs "
         f"from {len(fasta_paths)} species FASTA file(s) in one pass."
@@ -354,7 +363,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--fasta-list", required=True, type=Path)
     result.add_argument("--output-dir", required=True, type=Path)
     result.add_argument("--suffix", required=True)
-    result.add_argument("--report", required=True, type=Path)
+    result.add_argument("--report", type=Path, help="Optional per-marker sequence counts and FASTA paths")
     result.add_argument("--mode", choices=("single-copy", "duplicate-aware"), required=True)
     result.add_argument("--copy-policy", choices=("single-copy", "best-score"), default="single-copy",
                         help="Opt-in best-score: one candidate per species/BUSCO, ranked by HMM score, aligned length, then gene ID; not proof of orthology")

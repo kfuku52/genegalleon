@@ -13,6 +13,8 @@ from urllib.parse import quote, unquote
 import annevo_gene_models
 import rescue_gene_models as rescue
 import transcript_utrs as utrs
+from fasta_sequence_store import open_text
+from filesystem_io import receipted_compressed_member
 from gene_model_catalog import indexed_genome
 from input_generation_array_state import atomic_json, digest
 from rescue_prepared_snapshot import _Proof
@@ -133,7 +135,7 @@ def reproject(source_output, output, expected_receipt, species=None):
         row = by_name[name]
         paths = {role: member(row[role]) for role in ('gff', 'genome', 'cds', 'analysis_gff')}
         paths.update({role: member(source / role / (name+'.gff3')) for role in ('full_annotation', 'source_annotation')})
-        paths['utr_audit'] = member(source / 'utr_audit' / (name+'.json'))
+        paths['utr_audit'] = member(source / receipted_compressed_member(receipt['files'], f'utr_audit/{name}.json'))
         prediction = plan['request'].get('oriongeno', {}).get('predictions', {}).get(name)
         if prediction:
             for role in ('gff', 'receipt'):
@@ -151,7 +153,8 @@ def reproject(source_output, output, expected_receipt, species=None):
         inputs[name] = paths, prediction
     proof.check()
     code = {name: digest(Path(__file__).with_name(name)) for name in
-            ('transcript_utr_reassessment.py', 'transcript_utrs.py')}
+            ('transcript_utr_reassessment.py', 'transcript_utrs.py', 'filesystem_io.py',
+             'input_generation_array_state.py')}
     key = dict(schema='genegalleon-utr-reassessment-v1', source_receipt=receipt_sha,
                source_plan=plan_sha, species=names, files=consumed, implementation=code)
     existing = output / 'effective' / 'receipt.json'
@@ -184,7 +187,8 @@ def reproject(source_output, output, expected_receipt, species=None):
                 for tid, sequence in sorted(sequences.items()):
                     stream.write('>'+quote(tid, safe='._-:')+' utr_policy=projected_longest_per_side\n'+sequence+'\n')
             audited = {r['transcript_id'] for r in audit}
-            audit += [r for r in json.loads(paths['utr_audit'].read_text()) if r['transcript_id'] not in audited]
+            with open_text(paths['utr_audit']) as handle:
+                audit += [r for r in json.load(handle) if r['transcript_id'] not in audited]
             final_genes = [line[1:].split()[0] for line in paths['cds'].read_text().splitlines() if line.startswith('>')]
             if len(final_genes) != len(set(final_genes)):
                 raise ValueError('Duplicate final coding-model identity')
@@ -204,7 +208,7 @@ def reproject(source_output, output, expected_receipt, species=None):
                         or record.get('source_exon_interpretations')):
                     normalized.add(gene)
                 reasons[record.get('native_correspondence', {}).get('status', record.get('status', 'unknown'))].add(gene)
-            atomic_json(tmp / 'utr_audit' / (name+'.json'), audit)
+            atomic_json(tmp / 'utr_audit' / (name+'.json.gz'), audit)
             summaries.append(dict(species=name, final_gene_models=len(final_genes), with_5prime_utr=len(with5),
                 with_3prime_utr=len(with3), with_both_utrs=len(with5 & with3), with_any_utr=len(with5 | with3),
                 interpreted_coge_models=len(normalized), correspondence={k: len(v) for k, v in reasons.items()},

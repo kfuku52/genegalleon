@@ -141,3 +141,34 @@ def test_failed_copy_does_not_replace_previous_complete_stage(comparison, tmp_pa
                      lambda p: rescue.copy_verified_comparison(source, p, key, hash_workers=workers))
     assert (tmp_path / 'published/old').read_text() == 'previous'
     assert rescue.verified(tmp_path / 'published', key)
+
+
+@pytest.mark.parametrize('corrupt', [False, True])
+def test_checkpoint_cleanup_preserves_receipts_and_retires_only_verified_copies(tmp_path, corrupt):
+    from workflow.support.rescue_checkpoint_storage import deduplicate
+
+    name = 'Species_target'
+    checkpoint, worker = (tmp_path / stage / name for stage in ('miniprot_predictions', 'rescued'))
+    key, member = {'species': name}, 'genome.unique.gff'
+    for directory in (checkpoint, worker):
+        directory.mkdir(parents=True)
+        (directory / member).write_text('##gff-version 3\n')
+    files = {member: rescue.digest(checkpoint / member)}
+    rescue.atomic_json(checkpoint / 'receipt.json', {'key': key, 'files': files})
+    marker = worker / 'miniprot_checkpoint.json'
+    rescue.atomic_json(marker, {'receipt_sha256': rescue.digest(checkpoint / 'receipt.json')})
+    rescue.atomic_json(worker / 'receipt.json', {'key': key, 'files': {**files, marker.name: rescue.digest(marker)}})
+    receipt = rescue.digest(worker / 'receipt.json')
+    assert list(deduplicate(tmp_path))[0]['candidate_bytes'] == 16
+    assert not (worker / member).samefile(checkpoint / member)
+    if corrupt:
+        (worker / member).write_text('wrong original')
+        with pytest.raises(ValueError, match='differs from its receipt'):
+            list(deduplicate(tmp_path, apply=True))
+        assert (worker / member).read_text() == 'wrong original'
+    else:
+        assert list(deduplicate(tmp_path, apply=True))[0]['freed_bytes'] == 16
+        assert (worker / member).samefile(checkpoint / member)
+        assert rescue.verified(worker, key)
+        assert list(deduplicate(tmp_path, apply=True))[0]['freed_bytes'] == 0
+    assert rescue.digest(worker / 'receipt.json') == receipt

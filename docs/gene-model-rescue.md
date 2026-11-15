@@ -618,7 +618,8 @@ completion, placement and donor support are evaluated independently.
 | `prepared/SPECIES/genes.anchor_admission.json`, `.tsv` | Existing-model decisions, evidence and counts |
 | `synteny/comparison_NNNNNN/` | Raw anchors, all blocks, commands and logs |
 | `rescued/SPECIES/candidates.json` | Donor gene, flanks, interval, orientation and comparison |
-| `rescued/SPECIES/model_store/`, `audit.tsv` | Complete ordered models, direct accepted/revision access and partial references; legacy mode writes three JSON arrays |
+| `rescued/SPECIES/model_store/`, `diagnostics.json` | Complete ordered models, direct accepted/revision access, partial references and counts of statuses, rejection reasons and quality flags |
+| `rescued/SPECIES/unresolved_queries.tsv.gz` | Candidate IDs and donor queries for searches that returned no alignment, when present |
 | `rescued/SPECIES/local_search_inputs.jsonl.gz`, `genome_search_inputs.jsonl.gz`, `search_inputs.json` | Reversible successful-search input descriptions, source hashes and expanded GFF hash |
 | `rescued/SPECIES/genome_search_nomination.json`, `placement_audit.json`, `prediction_reuse.json` | Extra-query limits, unassigned placement decisions and verified search reuse |
 | `effective/SPECIES/` | Validated per-species augmented inputs, ready for BUSCO workers |
@@ -744,12 +745,38 @@ python workflow/gg_input_generation_array.py --task-plan /path/to/task_plan.json
   --rescue-cpus 2 --rescue-memory 32G --submit
 ```
 
+### Rescue diagnostic retention
+
+New compact-storage plans write a small diagnostic summary. Model-level
+diagnostics are already part of the model store, whose compressed shards now
+target 32 MiB of uncompressed model-envelope data. Requests for full tables
+can use `--diagnostics full` to write both TSVs with gzip compression, or
+`--diagnostics legacy` for the historical plain TSVs. Set
+`gene_model_rescue_diagnostics` for the same override in the input-generation
+entrypoint. Older frozen plans retain their original diagnostic scheme.
+
+Export detailed audit and quality tables from a completed worker with
+`rescue_gene_models.py export-diagnostics --output RESCUE_ROOT --task-index N
+--destination NEW_DIRECTORY`. Repeat `--candidate` to limit the export to
+particular candidate IDs. Reclassification reads old plain/compressed tables
+or updates the compact summary from the affected model records.
+
 Prediction evaluates local alignments to determine which queries still need
 a whole-genome search. It then saves the raw whole-genome GFF with embedded
 PAF, query mappings, validated local models and targeted repair evidence under
 `miniprot_predictions/SPECIES/`. It also saves a receipt for species without
 search work. The checkpoint excludes the temporary genome index. Its receipt
 binds the files to the frozen plan and prepared/comparison inputs.
+
+Large immutable predictor files are shared as hard links on the same
+filesystem. The postprocessing and prediction paths both remain available
+with their own verified receipts. When the filesystem cannot link the files,
+postprocessing copies and verifies them as before. To retire separate copies
+from a closed run, use `rescue_checkpoint_storage.py --output RESCUE_ROOT`
+to inventory eligible duplicates and repeat with `--apply` after writers
+and dependent jobs are idle. Each replacement is checked against both
+receipts and keeps the original logical path. Exporting one stage copies
+ordinary file contents, including files shared by hard links.
 
 Postprocessing verifies the checkpoint and uses it for genome-wide model
 validation, placement, consolidation and effective CDS/GFF export. The array
@@ -913,3 +940,25 @@ Separately declared annotation ancestors in older integration publications are
 retained through frozen plan/worker receipts and matching genome/code identity.
 Their accepted CDS nominate historical paths only; current QC, donor support and
 admission still apply. They cannot supply reusable native support or extra donors.
+
+### Rerun split candidate discovery
+
+For a completed rescue with OrionGeno predictions, rerun split candidate
+discovery separately when the missing-gene predictions and genomic annotation
+are already available.
+
+```bash
+python workflow/support/rescue_gene_models.py split-candidates \
+  --output /previous/rescue --cpus 4
+```
+
+Use `--task-index` for one species in the frozen plan order. The command
+reads the verified augmented annotation, or the completed per-species effective
+annotation, plus the frozen OrionGeno GFF and prepared donor proteins. It writes
+a restartable `native_split_candidates/SPECIES/` publication. A matching
+publication is reused on later calls. This step runs the split-specific
+protein search and does not rerun the original Miniprot mappings, synteny or
+OrionGeno prediction. The current `run` and `finalize` commands also publish
+these candidates. A newly created refinement plan for the same rescue uses the
+published protein evidence and rechecks the selected source models before
+adopting a merge.

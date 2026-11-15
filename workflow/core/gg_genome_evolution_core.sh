@@ -2807,7 +2807,8 @@ fi
 # Output files
 # Species tree
 file_species_busco_summary_table="${dir_species_tree}/busco_summary_table/busco_summary.tsv"
-file_species_busco_copy_selection="${dir_species_tree}/busco_summary_table/busco_copy_selection.tsv"
+file_species_busco_copy_selection="${dir_species_tree}/busco_summary_table/busco_copy_selection.tsv.gz"
+file_species_busco_representative_selection="${dir_species_tree}/busco_representative_selection.tsv.gz"
 file_astral_tree_dna_q1="${dir_astral_dna}/single_copy.astral.dna.q1.nwk"     # Quartet supports for the main topology; The lengths of terminal branches are not computed.
 file_astral_tree_dna="${dir_astral_dna}/single_copy.astral.dna.optimized.nwk" # ASTRAL topology with branch lengths optimized by IQ-TREE.
 file_astral_log_dna="${dir_astral_dna}/single_copy.astral.dna.log"
@@ -3382,9 +3383,12 @@ extract_species_tree_fasta_provenance_args+=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "sequence_label=${species_tree_sequence_label}"
 )
+busco_selection_output_label=""
+busco_selection_output_path=""
 if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
+  busco_selection_output_label="copy_selection"
+  busco_selection_output_path="${file_species_busco_copy_selection}"
   extract_species_tree_fasta_provenance_args+=(
-    --output "copy_selection=${file_species_busco_copy_selection}"
     --parameter "duplicate_policy=${species_tree_busco_duplicate_policy}"
     --input "busco_full_directory=${dir_species_busco_full}"
     --input "species_sequences=$(effective_species_input_source_dir_path)"
@@ -3395,20 +3399,27 @@ if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
     gg_artifact_add_input_if_present extract_species_tree_fasta_provenance_args "species_genetic_codes" "${file_species_genetic_code}"
   fi
 elif [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
-  extract_species_tree_fasta_provenance_args+=(
-    --input "busco_full_tables=${dir_species_busco_full}"
-    --output "representative_selection=${dir_species_tree}/busco_representative_selection.tsv"
-  )
+  busco_selection_output_label="representative_selection"
+  busco_selection_output_path="${file_species_busco_representative_selection}"
+  extract_species_tree_fasta_provenance_args+=(--input "busco_full_tables=${dir_species_busco_full}")
 fi
-gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
+extract_species_tree_fasta_check_args=("${extract_species_tree_fasta_provenance_args[@]}")
+if [[ -n "${busco_selection_output_path}" ]]; then
+  busco_selection_check_path="${busco_selection_output_path}"
+  if [[ ! -e "${busco_selection_check_path}" && -f "${busco_selection_check_path%.gz}" ]]; then
+    busco_selection_check_path="${busco_selection_check_path%.gz}"
+  fi
+  extract_species_tree_fasta_check_args+=(--output "${busco_selection_output_label}=${busco_selection_check_path}")
+  extract_species_tree_fasta_provenance_args+=(--output "${busco_selection_output_label}=${busco_selection_output_path}")
+fi
+gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_check_args[@]}" || exit $?
 if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   busco_batch_raw_dir="${dir_tmp}/species_tree_busco_batch_raw"
-  busco_batch_report="${dir_tmp}/species_tree_busco_batch.tsv"
-  busco_copy_selection_report="${dir_tmp}/species_tree_busco_copy_selection.tsv"
+  busco_copy_selection_report="${dir_tmp}/species_tree_busco_copy_selection.tsv.gz"
   busco_batch_final_dir="${dir_tmp}/species_tree_busco_batch_final"
   rm -rf -- "${busco_batch_raw_dir}"
   ensure_dir "${busco_batch_raw_dir}"
@@ -3419,11 +3430,12 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     --fasta-list "species_tree_input_fasta_list.txt"
     --output-dir "${busco_batch_raw_dir}"
     --suffix ".raw.fa"
-    --report "${busco_batch_report}"
     --mode single-copy
     --duplicate-policy "${species_tree_busco_duplicate_policy}"
-    --selection-report "${busco_copy_selection_report}"
   )
+  if [[ -n "${busco_selection_output_path}" ]]; then
+    busco_batch_args+=(--selection-report "${busco_copy_selection_report}")
+  fi
   if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
     busco_fasta_species_map="${dir_tmp}/species_tree_busco_fasta_species.tsv"
     printf 'species\tfasta\n' > "${busco_fasta_species_map}"
@@ -3483,14 +3495,16 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     busco_id=$(basename "${busco_batch_raw_file}" .raw.fa)
     mv_out "${busco_batch_final_dir}/${busco_id}${single_copy_fasta_suffix}" "${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
   done
-  if [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
-    mv_out "${busco_copy_selection_report}" "${dir_species_tree}/busco_representative_selection.tsv"
-  else
-    mv_out "${busco_copy_selection_report}" "${file_species_busco_copy_selection}"
+  if [[ -n "${busco_selection_output_path}" ]]; then
+    mv_out "${busco_copy_selection_report}" "${busco_selection_output_path}"
   fi
+  for previous_busco_selection in "${file_species_busco_copy_selection}" "${file_species_busco_representative_selection}"; do
+    if [[ "${previous_busco_selection}" != "${busco_selection_output_path}" ]]; then
+      rm -f -- "${previous_busco_selection}"
+    fi
+  done
   rm -rf -- "${busco_batch_raw_dir}"
   rm -rf -- "${busco_batch_final_dir}"
-  rm -f -- "${busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${extract_species_tree_fasta_provenance_args[@]}"
 else
@@ -5906,7 +5920,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   ensure_dir "${dir_busco_fasta}"
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   genome_busco_batch_raw_dir="${dir_tmp}/genome_busco_batch_raw"
-  genome_busco_batch_report="${dir_tmp}/genome_busco_batch.tsv"
   rm -rf -- "${genome_busco_batch_raw_dir}"
   ensure_dir "${genome_busco_batch_raw_dir}"
   python "${gg_support_dir}/batch_extract_busco_fasta.py" \
@@ -5914,7 +5927,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
     --fasta-list "species_tree_input_fasta_list.txt" \
     --output-dir "${genome_busco_batch_raw_dir}" \
     --suffix ".raw.fa" \
-    --report "${genome_busco_batch_report}" \
     --mode duplicate-aware
 
   finalize_genome_busco_fasta() {
@@ -5939,7 +5951,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   done
   wait_for_background_jobs
   rm -rf -- "${genome_busco_batch_raw_dir}"
-  rm -f -- "${genome_busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${busco_extract_provenance_args[@]}"
 else

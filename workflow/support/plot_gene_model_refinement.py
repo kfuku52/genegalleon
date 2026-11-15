@@ -11,6 +11,8 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from fasta_sequence_store import open_text
+from filesystem_io import receipted_compressed_member
 from gene_model_refinement import verify_inputs
 from gene_model_store import _connection as store_connection
 from gene_model_store import load_locus
@@ -29,8 +31,8 @@ def verified_json(directory, name, plan_hash):
 
 
 def table(path):
-    with Path(path).open(newline="") as handle:
-        return list(csv.DictReader(handle, delimiter="\t"))
+    with open_text(path, newline='') as handle:
+        yield from csv.DictReader(handle, delimiter="\t")
 
 
 def collect(root, max_loci=200, preferred_species="", cds_dir=None):
@@ -42,6 +44,9 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
               if any(row["status"] == "merged_split_model" for row in changes) else [])
     repairs = (verified_json(root / "effective", "model_repairs.json", plan_hash)
                if any(row["status"] == "repaired_model" for row in changes) else [])
+    fissions = (verified_json(root / "effective", "fused_model_splits.json", plan_hash)
+                if any(row["status"] == "split_fused_model" for row in changes) else [])
+    fissions_by_species = Counter(row["species"] for row in fissions)
     selections, selected_by_species = {}, defaultdict(list)
     for selected in changes:
         key = selected["species"], selected["gene_id"]
@@ -64,8 +69,9 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
             "accepted_repair_paths": sum(r["change_type"] == "model_revision" for r in accepted),
             "accepted_isoform_paths": sum(r["change_type"] == "isoform_addition" for r in accepted),
             "accepted_loci": len({r["gene_id"] for r in accepted}),
-            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired", "merged_split_model", "repaired_model"}
+            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired", "merged_split_model", "repaired_model", "split_fused_model"}
                                            for r in selected),
+            "fused_models_split": fissions_by_species[name],
             "predicted_representatives": sum(r["selected_origin"] == "predicted" for r in selected),
             "proposed_paths": len(models) - len(accepted),
             "selection_status": dict(Counter(r["status"] for r in selected)),
@@ -77,7 +83,10 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     for r in table(root / "effective" / "effective_exclusions.tsv"):
         stats[r["species"]].setdefault("effective_exclusions", 0)
         stats[r["species"]]["effective_exclusions"] += 1
-    for r in table(root / "effective" / "translation_admission.tsv"):
+    effective = root / "effective"
+    receipt = json.loads((effective / "receipt.json").read_text())
+    admission = receipted_compressed_member(receipt["files"], "translation_admission.tsv")
+    for r in table(effective / admission):
         quality = json.loads(r["quality"])
         if r["status"] == "included" and quality.get("phase_inferred"):
             stats[r["species"]].setdefault("phase_resolved_representatives", 0)
@@ -157,7 +166,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         "effective_receipt_sha256": digest(root / "effective" / "receipt.json"),
         "species": stats, "details": details, "changed_loci_available": len(detail_keys),
         "coding_path_phase_loci_available": len(phase_detail_keys),
-        "split_model_merges": merges, "model_repairs": repairs,
+        "split_model_merges": merges, "model_repairs": repairs, "fused_model_splits": fissions,
         "gallery_limit": max_loci, "performance": performance,
         "limits": "Counts cover all species and paths. The locus gallery is bounded. Ranking margins are not probabilities. RNA chain support does not establish translation initiation. Accepted paths and selected representatives are distinct decisions.",
     }
@@ -297,7 +306,7 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
     columns = [("Species", ""), ("Source loci", "source_loci"), ("Source coding paths", "source_candidates"),
                ("Repair paths", "accepted_repair_paths"), ("Added isoform paths", "accepted_isoform_paths"),
                ("Accepted loci", "accepted_loci"), ("Changed representatives", "changed_representatives"),
-               ("Predicted representatives", "predicted_representatives"), ("Proposal paths", "proposed_paths"),
+               ("Fused models split", "fused_models_split"), ("Predicted representatives", "predicted_representatives"), ("Proposal paths", "proposed_paths"),
                ("Phase-resolved representatives", "phase_resolved_representatives"),
                ("Sequence/GFF exclusions", "effective_exclusions"), ("Translations withheld", "translation_withheld")]
     html_text += '<th>Refinement status / reason</th>' + "".join(f'<th>{label}</th>' for label, _ in columns) + '</tr></thead><tbody>'
@@ -312,6 +321,11 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
             '<li>' + html.escape(row["species"] + ' ' + row["gene_id"] + ' replaces '
                                  + ', '.join(row["replaced_gene_ids"]) + ' (' + row.get("adoption", "reviewed") + ')') + '</li>'
             for row in data["split_model_merges"]) + '</ul></details>'
+    if data.get("fused_model_splits"):
+        html_text += '<details><summary>Fused models split</summary><ul>' + "".join(
+            '<li>' + html.escape(row["replaced_gene_id"] + ' was replaced by '
+                                 + ', '.join(model["gene_id"] for model in row["models"])) + '</li>'
+            for row in data["fused_model_splits"]) + '</ul></details>'
     if data.get("model_repairs"):
         html_text += '<details><summary>Single-locus model repairs</summary><ul>' + "".join(
             '<li>' + html.escape(row["gene_id"] + ' (' + row.get("adoption", "reviewed") + ', ' + row["kind"].replace('_', ' ') + ')') + '</li>'

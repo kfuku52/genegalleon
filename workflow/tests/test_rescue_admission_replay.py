@@ -136,24 +136,33 @@ def completed(tmp_path, request):
     rejected = copy.deepcopy(intact)
     rejected.update(query='strict-rejection', seqid='disrupted', sequence='ATGTAATAA', problems=['internal_stop'])
     rows = [intact, rejected]
+    diagnostics = getattr(request, 'param', 'legacy')
+    diagnostic = rescue.rescue_diagnostics
+    if diagnostics == 'summary':
+        for model in rows:
+            model['quality_evidence'] = rescue.model_quality(model, 1)
     for name in targets:
         records = rows if name == names[0] else []
         def build(tmp, records=records, name=name):
             store.write_model_store(tmp, records, shard_bytes=400, codec='gzip')
             rescue.atomic_json(tmp / 'candidates.json', [])
             rescue.atomic_json(tmp / 'search_inputs.json', {'prepared_receipts': {}, 'schema': 1})
-            rescue.write_tsv(tmp / 'audit.tsv', ['candidate', 'donor_gene', 'status', 'reasons', 'coverage', 'identity', 'model_id'],
-                             [(m['query'], m['evidence']['query'], m['status'], ','.join(m['problems']), 1, 1, '') for m in records]
-                             + [('no-result', donor, 'unresolved', 'no_alignment', '', '', '')])
-            rescue.write_tsv(tmp / 'quality_flags.tsv', ['candidate', 'model_id', 'status', 'start_codon',
-                             'donor_n_terminus_aligned', 'donor_c_terminus_aligned', 'donor_species', 'flags',
-                             'donor_aligned_query_fraction', 'donor_internal_unaligned_query_fraction'],
-                             [(m['query'], '', m['status'], '', '', '', '', '', '', '') for m in records])
+            if diagnostics == 'summary':
+                rescue.atomic_json(tmp / diagnostic.SUMMARY,
+                    {'schema': 1, **diagnostic.summarize(records), 'unresolved_queries': 1})
+                diagnostic.write_table(tmp / diagnostic.UNRESOLVED, ('candidate', 'donor_gene'),
+                                       [('no-result', donor)])
+            else:
+                diagnostic.write_table(tmp / diagnostic.detail_name('audit.tsv', diagnostics), diagnostic.AUDIT,
+                    [diagnostic.audit_row(m) for m in records] + [diagnostic.unresolved_row('no-result', donor)])
+                diagnostic.write_table(tmp / diagnostic.detail_name('quality_flags.tsv', diagnostics), diagnostic.QUALITY,
+                    [(m['query'], '', m['status'], '', '', '', '', '', '', '') for m in records])
             (tmp / 'unknown.txt').write_text('complete original publication\n')
         rescue.stage(root, Path('rescued') / name, rescue.rescue_key(root, plan, name), build)
     return root, source, plan, rows
 
 
+@pytest.mark.parametrize('completed', ['legacy', 'full', 'summary'], indirect=True)
 def test_standard_replay_reuses_evidence_rechecks_admission_and_retains_rejections(completed, tmp_path, monkeypatch):
     previous, producer, old, rows = completed
     before = {str(p): p.read_bytes() for p in previous.rglob('*') if p.is_file()}
@@ -179,8 +188,17 @@ def test_standard_replay_reuses_evidence_rechecks_admission_and_retains_rejectio
     assert current[0]['unknown'] == rows[0]['unknown']
     assert calls == ['transfer']
     assert list(store.iter_accepted_models(result)) == [current[0]]
-    audit = (result / 'audit.tsv').read_text().splitlines()
-    assert audit[-1].startswith('no-result\t') and len(audit) == 4
+    diagnostic = rescue.rescue_diagnostics
+    if (result / diagnostic.SUMMARY).exists():
+        summary = json.loads((result / diagnostic.SUMMARY).read_text())
+        assert summary['status_counts'] == {'accepted': 1, 'unresolved': 1}
+        assert summary['reason_counts'] == {'internal_stop': 1}
+        assert list(diagnostic.unresolved_rows(result))[0][0] == 'no-result'
+        assert diagnostic.legacy_table(result, 'audit.tsv') is None
+    else:
+        with diagnostic.text_open(diagnostic.legacy_table(result, 'audit.tsv'), 'r') as stream:
+            audit = stream.read().splitlines()
+        assert audit[-1].startswith('no-result\t') and len(audit) == 4
     assert (result / 'unknown.txt').read_text() == 'complete original publication\n'
     proof = json.loads((result / 'admission_replay.json').read_text())
     assert proof['full_stream_verified'] and proof['admitted_cds_freshly_validated']

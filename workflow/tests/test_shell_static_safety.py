@@ -2137,8 +2137,10 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert "--scan_pvalue_calibration none" in core
     assert "--scan_n_permutations 0" in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
-    assert 'mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
-    assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
+    assert '"${gg_support_dir}/diagnostic_archive.py" pack' in core
+    assert '    mv_out_bundle \\\n      "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
+    assert '"${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
+    assert '"${og_id}.csubst_scan_audit.zip" "${file_og_csubst_scan_audit}"' in core
 
 
 def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_chain():

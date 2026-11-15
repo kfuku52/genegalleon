@@ -10,6 +10,7 @@ import sys
 from importlib import import_module
 from pathlib import Path
 
+import pysam
 import pytest
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
@@ -90,8 +91,11 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
         refinement.plan(tmp_path / 'new-refinement', rescue_output=anchor_root, mode='off')
 
 
-@pytest.mark.parametrize(('fragment_count', 'manual'), [(2, False), (3, False), (3, True)])
-def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
+@pytest.mark.parametrize(('fragment_count', 'route'), [
+    (2, 'partial'), (3, 'partial'), (3, 'manual'),
+    (3, 'intact_without_prediction'), (3, 'intact_with_oriongeno'), (3, 'intact_with_other_path'),
+])
+def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, route):
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
     _, names, truth = data
@@ -104,7 +108,7 @@ def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
         boundaries = [0, 240, len(sequence)]
     else:
         # At codon 106 the last fragment has its own in-frame ATG and stop.
-        boundaries = [0, 159, 318 if manual else 321, len(sequence)]
+        boundaries = [0, 159, 321 if route == 'partial' else 318, len(sequence)]
     fragments = [sequence[a:b] for a, b in zip(boundaries, boundaries[1:], strict=False)]
     intron = 'GT' + 'C' * (40 if fragment_count == 2 else 26) + 'AG'
     span = str(Seq(intron.join(fragments)).reverse_complement())
@@ -149,12 +153,25 @@ def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
         refinement.plan(tmp_path / 'audit', rescue_output=anchor, mode='audit', split_model_merges=approvals)
 
     output = tmp_path / 'refinement'
-    approval_args = ('--split-model-merges', approvals) if manual else ()
-    cli('plan', '--rescue-output', anchor, '--output', output, *approval_args)
+    approval_args = ('--split-model-merges', approvals) if route == 'manual' else ()
+    native_args = ()
+    if route in {'intact_with_oriongeno', 'intact_with_other_path'}:
+        blocks = [block[:] for block in review['cds']]
+        if route == 'intact_with_other_path':
+            blocks[0][1] += 3
+        text = '##gff-version 3\n' + annotation('chr1', 'native_merge', 'native_merge.t1', blocks, '-')
+        table, _, _ = native_candidate_table(tmp_path, target, genome, text, engine='oriongeno')
+        native_args = ('--oriongeno-inputs', table)
+    cli('plan', '--rescue-output', anchor, '--output', output, *approval_args, *native_args)
     cli('run', '--output', output, '--cpus', 2)
     cli('qc', '--output', output)
     effective = output / 'effective'
     inputs = next(row for row in refinement.verify_inputs(effective / 'inputs.tsv') if row['species'] == target)
+    if route in {'intact_without_prediction', 'intact_with_other_path'}:
+        records = {gene for gene, _, _ in fasta_records(Path(inputs['cds']))}
+        assert original_ids <= records and identifier not in records
+        assert not (effective / 'split_model_merges.json').exists()
+        return
     for role in ('cds', 'analysis_cds', 'protein'):
         records = {gene: value for gene, _, value in fasta_records(Path(inputs[role]))}
         assert records[identifier] == (str(Seq(sequence).translate()).removesuffix('*') if role == 'protein' else sequence)
@@ -173,16 +190,112 @@ def test_split_model_merge_from_real_rescue(tmp_path, fragment_count, manual):
     assert not original_ids & mapping.keys()
     audit = json.loads((effective / 'split_model_merges.json').read_text())
     assert len(audit) == 1 and set(audit[0]['replaced_gene_ids']) == original_ids
-    if not manual:
+    if route != 'manual':
         assert audit[0]['adoption'] == 'automatic'
+    if route == 'intact_with_oriongeno':
+        assert audit[0]['basis'] == 'oriongeno_and_complementary_donors'
+        assert audit[0]['oriongeno_transcripts'] == ['native_merge.t1']
+        assert len({hit['donor'] for hit in audit[0]['support']}) >= 2
+        for hit in audit[0]['support']:
+            spans = hit['fragment_donor_intervals']
+            assert [span['gene_id'] for span in spans] == source_genes
+            assert all(a['end'] <= b['start'] for a, b in zip(spans, spans[1:], strict=False))
+
     review_data = import_module('plot_gene_model_refinement').collect(output)
     assert review_data['split_model_merges'] == audit
     assert all(path.read_bytes() == content for path, content in before.items())
     assert (worker / 'receipt.json').read_bytes() == producer_receipt
-    if manual:
+    if route == 'manual':
         approvals.write_text(approvals.read_text() + '\n')
         with pytest.raises(ValueError, match='Frozen refinement input changed'):
             refinement.load(output)
+
+
+@pytest.mark.parametrize(('strand', 'reference_case'), [
+    ('+', 'conserved'), ('-', 'conserved'), ('+', 'divergent_bridge'), ('+', 'unmapped_reference'),
+    ('+', 'competing_path'), ('+', 'generated_reference'),
+])
+def test_single_exon_split_merge_revalidates_same_species_copy(tmp_path, strand, reference_case):
+    name = 'Plant_example'
+    sequence = coding(107)
+    bridge_start, bridge_end = 330, 378
+    sequence = sequence[:bridge_end] + 'ATG' + sequence[bridge_end + 3:]
+    reference = sequence
+    if reference_case == 'divergent_bridge':
+        alternative = coding(913)
+        reference = sequence[:bridge_start] + alternative[bridge_start:bridge_end] + sequence[bridge_end:]
+    # Two intact candidate starts give distinct valid CDSs when both are published.
+    sequence = 'ATG' + sequence
+    bridge_start, bridge_end = bridge_start + 3, bridge_end + 3
+
+    def coordinates(left, right):
+        return [[left, right, 0]] if strand == '+' else [[len(sequence) - right, len(sequence) - left, 0]]
+
+    genome, gff, fasta = (tmp_path / n for n in ('genome.fa', 'source.gff3', 'source.fa'))
+    genomic = sequence if strand == '+' else str(Seq(sequence).reverse_complement())
+    genome.write_text(f'>split\n{genomic}\n>reference\n{reference}\n')
+    copy_gff = annotation('reference', 'copy', 'copy.t1', [[0, len(reference), 0]])
+    if reference_case == 'generated_reference':
+        copy_gff = copy_gff.replace('\tsynthetic\t', '\tGeneGalleon\t')
+    gff.write_text('##gff-version 3\n'
+                   + annotation('split', 'upstream', 'upstream.t1', coordinates(12, bridge_start), strand)
+                   + annotation('split', 'downstream', 'downstream.t1', coordinates(bridge_end, len(sequence)), strand)
+                   + copy_gff)
+    fasta.write_text(f'>{name}_upstream\n{sequence[12:bridge_start]}\n'
+                     f'>{name}_downstream\n{sequence[bridge_end:]}\n>{name}_copy\n{reference}\n')
+    catalog = refinement.build_catalog(name, fasta, gff, genome)
+    catalog_dir, db = tmp_path / 'catalog', tmp_path / 'loci.sqlite'
+    refinement.write_catalog(catalog, catalog_dir)
+    refinement.build_store([catalog_dir], db)
+    selected = {locus['gene_id']: {'candidate_id': refinement._baseline(locus, locus['candidates'])['candidate_id']}
+                for locus in catalog['loci']}
+
+    prefix = name + '_'
+    query = prefix + 'copy'
+    with gff.open() as handle:
+        owner_index = refinement.rescue.OwnershipIndex(
+            refinement.rescue.original_ownership(handle, refinement.rescue.attributes))
+    proposals = []
+    for left in ([0, 3] if reference_case == 'competing_path' else [0]):
+        shape = {'seqid': 'split', 'strand': strand, 'cds': coordinates(left, len(sequence))}
+        proposals.append({**shape, 'candidate_id': prefix + f'join{left}',
+                          'owner_overlap': refinement.rescue.split_model_geometry(
+                              refinement.repair_coordinates(shape), owner_index),
+                          'cds_sha256': hashlib.sha256(sequence[left:].encode()).hexdigest(),
+                          'support': [{'donor': name, 'query': query, 'coverage': .99, 'identity': .95}]})
+        assert len(proposals[-1]['owner_overlap']) == 2
+
+    rescue_root = tmp_path / 'rescue'
+    prepared = rescue_root / 'prepared' / name
+    prepared.mkdir(parents=True)
+    pep, mapping = prepared / 'genes.pep', prepared / 'genes.id_map.tsv'
+    pep.write_text(f'>{query}\n{str(Seq(reference).translate()).removesuffix("*")}\n')
+    locus = 'downstream' if reference_case == 'unmapped_reference' else 'copy'
+    write_tsv(mapping, ['original_id', 'locus_id', 'jcvi_id', 'status'],
+              [{'original_id': query, 'locus_id': locus, 'jcvi_id': query, 'status': 'selected'}])
+    plan_sha = 'a' * 64
+    (prepared / 'receipt.json').write_text(json.dumps({'key': {'plan': plan_sha, 'species': name},
+        'files': {path.name: refinement.digest(path) for path in (pep, mapping)}}))
+    request = {'parameters': refinement.DEFAULTS.copy(),
+               'sources': {name: {'fasta': str(fasta), 'gff': str(gff), 'genome': str(genome), 'genetic_code': 1}},
+               'automatic_split_merges': {name: proposals}}
+    assert all(refinement.same_species_split_hits(row, name) for row in proposals)
+    with refinement.ReceiptSnapshot(refinement._receipt_verifier(1)) as proof:
+        proteins, loci = refinement.freeze_split_donors(
+            request['automatic_split_merges'], None, rescue_root, plan_sha, request['sources'], proof)
+    request.update(split_merge_donor_proteins=proteins, split_merge_same_species_loci=loci)
+    new_genes, _, merges, _, _ = refinement.prepare_reviewed_models(request, name, db, selected)
+    if reference_case != 'conserved':
+        assert new_genes == merges == []
+        return
+    assert len(new_genes) == len(merges) == 1
+    assert new_genes[0]['candidates'][0]['cds'] == sequence
+    assert merges[0]['basis'] == 'same_species_copy_and_conserved_coding_bridge'
+    assert set(merges[0]['replaced_gene_ids']) == {prefix + 'upstream', prefix + 'downstream'}
+    support, = merges[0]['support']
+    assert support['reference_gene_id'] == 'copy'
+    assert support['coding_bridge']['identical_bridge_residues'] == 16
+    assert support['coding_bridge']['candidate_interval'] == [bridge_start // 3, bridge_end // 3]
 
 
 @pytest.mark.parametrize('case', ['partial', 'intact', 'reciprocal', 'manual'])
@@ -310,7 +423,7 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
     assert all(path.read_bytes() == content for path, content in before.items())
 
 
-def native_candidate_table(tmp_path, target, genome, gff_text):
+def native_candidate_table(tmp_path, target, genome, gff_text, *, engine='annevo'):
     """Mock only the native predictor boundary, never genomic/donor evidence."""
     gff, receipt, table = (tmp_path / name for name in ('native.gff3', 'native.receipt.json', 'native.tsv'))
     gff.write_text(gff_text)
@@ -319,9 +432,334 @@ def native_candidate_table(tmp_path, target, genome, gff_text):
                  model_sha256='b' * 64, source_commit='c' * 40, cache_key='d' * 64,
                  genome_sha256=hashlib.sha256(Path(genome).read_bytes()).hexdigest(),
                  GFF_sha256=hashlib.sha256(gff.read_bytes()).hexdigest(), GFF_bytes=gff.stat().st_size)
+    if engine == 'oriongeno':
+        value.update(kind='genegalleon-oriongeno-native-prediction', model_profile='plants',
+                     inference_settings={'lineage': 'plants'})
     receipt.write_text(json.dumps(value))
     write_tsv(table, ['species', 'gff', 'receipt'], [dict(species=target, gff=str(gff), receipt=str(receipt))])
     return table, gff, receipt
+
+
+@pytest.mark.parametrize('replay_rescue', [False, True])
+def test_native_oriongeno_discovers_unpublished_split_models(tmp_path, replay_rescue):
+    """Exercise discovery, paired residue support and publication from the CLI."""
+    names = ['Species_target', 'Species_donor1', 'Species_donor2']
+    targets = ('recover', 'only_one_fragment')
+    sequences = {'recover': coding(313, residues=300),
+                 'only_one_fragment': coding(314, residues=300)}
+    cutoff = 72
+    sequence = sequences['only_one_fragment']
+    sequences['only_one_fragment'] = sequence[:cutoff] + 'ATG' + sequence[cutoff + 3:]
+    sources, native_gff = [], ['##gff-version 3\n']
+    for name in names:
+        genome, annotation_rows, fasta = [], ['##gff-version 3\n'], []
+        for locus in targets:
+            sequence = sequences[locus]
+            if locus == 'recover' and name != names[0]:
+                # A homologous model can retain a long insertion between the two fragments.
+                sequence = sequence[:420] + coding(315, residues=60)[:-3] + sequence[420:]
+            dna, blocks = spliced_gene(sequence)
+            models = [(locus, blocks, sequence)]
+            if locus == 'only_one_fragment':
+                right = [[blocks[0][0] + cutoff, blocks[0][1], 0], *blocks[1:]]
+                models = [(locus, right, sequence[cutoff:])]
+            if name == names[0]:
+                if locus == 'recover':
+                    models = [(locus + '_a', blocks[:1], sequence[:300]),
+                              (locus + '_b', blocks[-1:], sequence[540:])]
+                else:
+                    first = [[blocks[0][0], blocks[0][0] + cutoff, 0]]
+                    models = [(locus + '_a', first, sequence[:cutoff]),
+                              (locus + '_b', right, sequence[cutoff:])]
+                native_gff.append(annotation(locus, locus + '_native', locus + '_native.t1', blocks))
+            for gene, cds, supplied in models:
+                annotation_rows.append(annotation(locus, gene, gene + '.t1', cds))
+                fasta.append(f'>{gene}.t1\n{supplied}\n')
+            genome.append(f'>{locus}\n{dna}\n')
+        paths = {key: tmp_path / f'{name}.{key}{suffix}'
+                 for key, suffix in (('genome', '.fa'), ('cds', '.fa'), ('gff', '.gff3'))}
+        for key, lines in (('genome', genome), ('cds', fasta), ('gff', annotation_rows)):
+            paths[key].write_text(''.join(lines))
+        sources.append({'species': name, 'genetic_code': 1, **paths})
+
+    inputs, edges = tmp_path / 'inputs.tsv', tmp_path / 'edges.tsv'
+    write_tsv(inputs, list(sources[0]), sources)
+    write_tsv(edges, ['species_a', 'gene_a', 'species_b', 'gene_b', 'weight'], [])
+    native, _, _ = native_candidate_table(tmp_path, names[0], sources[0]['genome'],
+                                           ''.join(native_gff), engine='oriongeno')
+    output = tmp_path / 'refinement'
+    if replay_rescue:
+        fixture = import_module('test_rescue_gene_models_runtime')
+        for role in ('cds', 'gff', 'genome', 'busco'):
+            (tmp_path / role).mkdir()
+        for source in sources:
+            name = source['species']
+            for role, suffix in (('cds', '.cds.fa'), ('gff', '.gff3'), ('genome', '.genome.fa')):
+                (tmp_path / role / (name + suffix)).symlink_to(source[role])
+            (tmp_path / 'busco' / (name + '.busco.short.txt')).write_text(
+                '# BUSCO version is: 6.0.0\n# The lineage dataset is: embryophyta_odb12\n'
+                '# BUSCO was run in mode: transcriptome\nC:95.0%[S:95.0%,D:0.0%],F:0.0%,M:5.0%,n:100\n')
+        (tmp_path / 'tree.nwk').write_text('((Species_target:1,Species_donor1:1):1,Species_donor2:2);\n')
+        rescue_root, _, _ = fixture.make_plan((tmp_path, names, ()), model_storage='compact',
+                                              extra_args=('--oriongeno-inputs', native, '--common-references', 3))
+        for stage in ('prepare', 'synteny', 'rescue'):
+            fixture.cli(stage, '--output', rescue_root, '--cpus', 2)
+        name = names[0]
+        worker = rescue_root / 'rescued' / name / 'receipt.json'
+        before = worker.read_bytes()
+        replay = rescue_root / 'native_split_candidates' / name
+        fixture.cli('split-candidates', '--output', rescue_root, '--cpus', 2)
+        assert worker.read_bytes() == before
+        stamp = (replay / 'receipt.json').stat().st_mtime_ns
+        assert 'Reused native_split_candidates/' + name in fixture.cli(
+            'split-candidates', '--output', rescue_root, '--cpus', 2).stdout
+        fixture.cli('finalize', '--output', rescue_root, '--cpus', 2)
+        assert (replay / 'receipt.json').stat().st_mtime_ns == stamp
+        assert worker.read_bytes() == before
+        cli('plan', '--rescue-output', rescue_root, '--edges', edges, '--output', output)
+        frozen = refinement.load(output)['request']
+        assert frozen['native_split_panel']['donors'] == {name: names[1:]}
+        row, = frozen['native_split_publications'][name]
+        assert row['oriongeno_transcripts'] == ['recover_native.t1']
+    else:
+        cli('plan', '--inputs', inputs, '--edges', edges, '--oriongeno-inputs', native, '--output', output)
+        frozen = refinement.load(output)['request']
+        assert frozen['native_split_panel']['donors'] == {names[0]: names[1:]}
+    assert 'automatic_split_merges' not in frozen
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    effective = output / 'effective'
+    accepted, = json.loads((effective / 'split_model_merges.json').read_text())
+    assert accepted['basis'] == 'oriongeno_and_cross_fragment_protein_homology'
+    assert accepted['oriongeno_transcripts'] == ['recover_native.t1']
+    assert {hit['donor'] for hit in accepted['support']} == set(names[1:])
+    assert all(hit['paired_coverage'] < .90 <= hit['coverage'] for hit in accepted['support'])
+    assert {x['gene_id'] for x in accepted['owner_overlap']} == {'recover_a', 'recover_b'}
+    assert sum(x['overlap_bases'] for x in accepted['owner_overlap']) < .75 * len(sequences['recover'])
+    emitted = effective / 'analysis_cds' / (names[0] + '.fa')
+    sequences_by_gene = {gene: value for gene, _, value in fasta_records(emitted)}
+    assert sequences_by_gene[accepted['gene_id']] == sequences['recover']
+    assert {names[0] + '_' + locus for locus in ('only_one_fragment_a', 'only_one_fragment_b')} <= sequences_by_gene.keys()
+
+
+def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_path):
+    target = 'Species_target'
+    donors = [f'Species_donor{i:02}' for i in range(1, 13)]
+    names = [target, *donors]
+    cases = ('recover', 'ten_split_two_fused', 'closest_fusion_only', 'close_donor_rna',
+             'one_collinear_pair', 'one_sister_branch', 'intact_rna', 'one_rna', 'junction_only')
+    fused_donors = {'ten_split_two_fused': donors[-2:], 'closest_fusion_only': donors[:2],
+                    'close_donor_rna': donors[:1]}
+    linked_donors = {'one_collinear_pair': donors[:1], 'one_sister_branch': donors[:2]}
+    desired, source_paths, sources = {}, {}, []
+    native_gff = ['##gff-version 3\n']
+    for name in names:
+        genome, gff, cds = [], ['##gff-version 3\n'], []
+        for index, locus in enumerate(cases):
+            first = coding(711 + index, residues=223)
+            second = coding(815 + index, residues=120)
+            intron = 'GT' + 'AC' * 12 + 'AG'
+            # The fusion splices past the independent upstream stop exon.
+            head = first[:-9]
+            tail = first[-9:]
+            sequence = 'AC' * 30 + head + intron + tail + intron + second + 'AC' * 30
+            a = [60, 60 + len(head), 0]
+            b = [a[1] + len(intron), a[1] + len(intron) + len(tail), 0]
+            c = [b[1] + len(intron), b[1] + len(intron) + len(second), 0]
+            strand = '-' if locus == 'recover' else '+'
+            if strand == '-':
+                size = len(sequence)
+                a, b, c = ([size - end, size - start, 0] for start, end, _ in (a, b, c))
+                sequence = str(Seq(sequence).reverse_complement())
+            genome.append(f'>{locus}\n{sequence}\n')
+            models = [(locus + '_first', [a, b], first), (locus + '_second', [c], second)]
+            if name == names[0]:
+                for gene, blocks, _ in models:
+                    native_gff.append(annotation(locus, 'native_' + gene, 'native_' + gene + '.t', blocks, strand))
+                desired[locus] = (first, second)
+                source_paths[locus] = [a, c]
+            if name == target or name in fused_donors.get(locus, ()):
+                models = [(locus, [a, c], head + second)]
+            elif locus in linked_donors and name not in linked_donors[locus]:
+                # The short homolog has the right protein but is on an unlinked contig.
+                scaffold = locus + '_unlinked'
+                genome.append(f'>{scaffold}\n{sequence}\n')
+                gff.append(annotation(scaffold, locus + '_second', locus + '_second.t', [c], strand))
+                cds.append(f'>{locus}_second.t\n{second}\n')
+                models = models[:1]
+            for gene, blocks, supplied in models:
+                gff.append(annotation(locus, gene, gene + '.t', blocks, strand))
+                cds.append(f'>{gene}.t\n{supplied}\n')
+        paths = {role: tmp_path / f'{name}.{role}' for role in ('genome', 'gff', 'cds')}
+        for role, lines in (('genome', genome), ('gff', gff), ('cds', cds)):
+            paths[role].write_text(''.join(lines))
+        sources.append({'species': name, 'genetic_code': 1, **paths})
+    inputs, edges, rna, tree = (tmp_path / label for label in ('inputs.tsv', 'edges.tsv', 'rna.tsv', 'tree.nwk'))
+    write_tsv(inputs, list(sources[0]), sources)
+    write_tsv(edges, ['species_a', 'gene_a', 'species_b', 'gene_b', 'weight'], [])
+    write_tsv(rna, ['species', 'seqid', 'strand', 'cds_blocks', 'count', 'transcript_id'], [{
+        'species': donors[0], 'seqid': 'close_donor_rna', 'strand': '+',
+        'cds_blocks': json.dumps([block[:2] for block in source_paths['close_donor_rna']]),
+        'count': 2, 'transcript_id': 'replicated_donor_fusion',
+    }])
+    subtrees = ['(' + ','.join(donors[a:b]) + ')' for a, b in ((0, 2), (2, 4), (4, 8), (8, 12))]
+    tree.write_text('((((' + target + ',' + '),'.join(subtrees) + ');\n')
+
+    rna_bams = tmp_path / 'rna_bam'
+    rna_bams.mkdir()
+    header = {'HD': {'VN': '1.6', 'SO': 'coordinate'}, 'SQ': [
+        {'SN': contig, 'LN': len(seq)} for contig, _, seq in fasta_records(sources[0]['genome'])]}
+    entries = {'intact_rna': ('molecule_a', 'molecule_b'), 'one_rna': ('one_molecule',),
+               'junction_only': ('local_read1', 'local_read2')}
+    for library in ('a', 'b'):
+        bam = rna_bams / f'{target}.{library}.bam'
+        with pysam.AlignmentFile(bam, 'wb', header=header) as stream:
+            for locus, ids in entries.items():
+                (a, b, _), (c, d, _) = source_paths[locus]
+                for identifier in ids:
+                    read = pysam.AlignedSegment(stream.header)
+                    read.reference_id = stream.get_tid(locus)
+                    left, right = (15, 15) if locus == 'junction_only' else (b - a, d - c)
+                    read.reference_start = b - left
+                    read.cigartuples = [(0, left), (3, c - b), (0, right)]
+                    read.query_name, read.query_sequence = identifier, 'A' * (left + right)
+                    read.mapping_quality = 60
+                    read.set_tag('XS', '+')
+                    stream.write(read)
+        pysam.index(str(bam))
+
+    native, _, _ = native_candidate_table(tmp_path, target, sources[0]['genome'],
+                                           ''.join(native_gff), engine='oriongeno')
+    output = tmp_path / 'refinement'
+    cli('plan', '--inputs', inputs, '--edges', edges, '--rna', rna, '--rna-bam-dir', rna_bams,
+        '--species-tree', tree, '--oriongeno-inputs', native, '--output', output)
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    effective = output / 'effective'
+    published_splits = json.loads((effective / 'fused_model_splits.json').read_text())
+    by_source = {row['source_gene_id']: row for row in published_splits}
+    assert set(by_source) == {'recover', 'ten_split_two_fused', 'junction_only'}
+    accepted = by_source['recover']
+    assert accepted['replaced_gene_id'] == target + '_recover'
+    assert accepted['replaced_splice'] == [source_paths['recover'][1][1], source_paths['recover'][0][0]]
+    assert {row['species'] for row in accepted['support']} == set(donors)
+    conflict = by_source['ten_split_two_fused']
+    assert len(conflict['support']) == 10
+    assert {row['donor'] for row in conflict['fusion_annotation_support']} == set(donors[-2:])
+    assert conflict['closest_informative_species'] == donors[:2]
+
+    decisions = {row['source_gene_id']: row for row in json.loads(
+        (effective / 'fused_model_split_decisions.json').read_text())}
+    assert decisions['intact_rna']['reason'] == 'target_fusion_supported_by_rna'
+    assert decisions['intact_rna']['rna_witnesses'] == 2
+    assert decisions['one_rna']['reason'] == 'possible_target_fusion_one_rna_witness'
+    assert decisions['one_rna']['rna_witnesses'] == 1
+    assert decisions['junction_only']['rna_witnesses'] == 0
+    assert decisions['closest_fusion_only']['reason'] == 'closest_informative_donors_support_fusion'
+    assert decisions['close_donor_rna']['reason'] == 'closest_donor_fusion_supported_by_rna'
+    assert decisions['one_collinear_pair']['reason'] == 'insufficient_collinear_donor_species'
+    assert decisions['one_sister_branch']['reason'] == 'split_support_on_one_sister_branch'
+
+    new_ids = {model['gene_id'] for row in published_splits for model in row['models']}
+    for view in ('analysis_cds', 'species_cds'):
+        published = {gene: value for gene, _, value in fasta_records(effective / view / (target + '.fa'))}
+        assert set(published) == new_ids | {target + '_' + locus for locus in set(cases) - by_source.keys()}
+        for locus, split in by_source.items():
+            assert tuple(published[model['gene_id']] for model in split['models']) == desired[locus]
+    gff = (effective / 'species_gff' / (target + '.gff3')).read_text()
+    for model, native_label in zip(accepted['models'], ('first', 'second'), strict=True):
+        gene = model['gene_id']
+        transcript = gene + '.t1'
+        assert f'ID={transcript};Parent={gene};' in gff
+        assert f'oriongeno_native_transcripts=native_recover_{native_label}.t' in gff
+        assert f'Parent={transcript};gene_id={gene}' in gff
+    assert 'Parent=recover;' not in gff
+    archived = (effective / 'source_annotation' / (target + '.gff3')).read_text()
+    assert archived == sources[0]['gff'].read_text()
+    review = import_module('plot_gene_model_refinement').collect(output)
+    assert review['fused_model_splits'] == published_splits
+    assert review['species'][target]['fused_models_split'] == 3
+
+
+def test_native_terminal_repairs_and_complete_fragment_merges_use_distinct_evidence(tmp_path):
+    target, *donors = ['Species_target', 'Species_donor1', 'Species_donor2']
+    extensions = ('partial', 'complete_without_rna', 'complete_with_rna', 'donors_lack_extension')
+    merges = ('joined_with_rna', 'joined_one_read', 'joined_competing_rna', 'joined_without_rna')
+    sources, native_gff, rna, expected = [], ['##gff-version 3\n'], [], {}
+    for name in (target, *donors):
+        genome, gff, fasta = [], ['##gff-version 3\n'], []
+        for i, locus in enumerate(extensions):
+            sequence = coding(510 + i, residues=300)
+            cut = 180
+            sequence = sequence[:cut] + ('ATG' if locus.startswith('complete') else 'GAT') + sequence[cut + 3:]
+            dna, blocks = spliced_gene(sequence)
+            short = [[blocks[0][0] + cut, blocks[0][1], 0], *blocks[1:]]
+            models = [(locus, short, sequence[cut:])] if name == target or locus == 'donors_lack_extension' else [
+                (locus, blocks, sequence)]
+            genome.append(f'>{locus}\n{dna}\n')
+            for gene, cds, bases in models:
+                gff.append(annotation(locus, gene, gene + '.t', cds))
+                fasta.append(f'>{gene}.t\n{bases}\n')
+            if name == target:
+                native_gff.append(annotation(locus, 'native_' + locus, 'native_' + locus + '.t', blocks))
+                expected[locus] = sequence
+                if locus == 'complete_with_rna':
+                    rna.append((locus, blocks, 2, 'extended_rna'))
+        for i, locus in enumerate(merges):
+            first, second = coding(380 + i, residues=220), coding(480 + i, residues=130)
+            head, tail = first[:-9], first[-9:]
+            intron = 'GT' + 'AC' * 16 + 'AG'
+            dna = 'AC' * 30 + head + intron + tail + intron + second + 'AC' * 30
+            a = [60, 60 + len(head), 0]
+            b = [a[1] + len(intron), a[1] + len(intron) + len(tail), 0]
+            c = [b[1] + len(intron), b[1] + len(intron) + len(second), 0]
+            alternative, joined = [a, b], [a, c]
+            genome.append(f'>{locus}\n{dna}\n')
+            models = ([(locus + '_a', alternative, first), (locus + '_b', [c], second)]
+                      if name == target else [(locus, joined, head + second)])
+            for gene, cds, bases in models:
+                gff.append(annotation(locus, gene, gene + '.t', cds))
+                fasta.append(f'>{gene}.t\n{bases}\n')
+            if name == target:
+                native_gff.append(annotation(locus, 'native_' + locus, 'native_' + locus + '.t', joined))
+                expected[locus] = head + second
+                if locus != 'joined_without_rna':
+                    rna.append((locus, joined, 1 if locus == 'joined_one_read' else 2, 'joined_rna'))
+                if locus == 'joined_competing_rna':
+                    rna.append((locus, alternative, 2, 'separate_rna'))
+        paths = {role: tmp_path / f'{name}.{role}' for role in ('genome', 'gff', 'cds')}
+        for role, lines in (('genome', genome), ('gff', gff), ('cds', fasta)):
+            paths[role].write_text(''.join(lines))
+        sources.append({'species': name, 'genetic_code': 1, **paths})
+    inputs, edges, rna_path = (tmp_path / f'{label}.tsv' for label in ('inputs', 'edges', 'rna'))
+    write_tsv(inputs, list(sources[0]), sources)
+    write_tsv(edges, ['species_a', 'gene_a', 'species_b', 'gene_b', 'weight'], [])
+    write_tsv(rna_path, ['species', 'seqid', 'strand', 'cds_blocks', 'count', 'transcript_id'], [
+        {'species': target, 'seqid': locus, 'strand': '+', 'cds_blocks': json.dumps([v[:2] for v in blocks]),
+         'count': count, 'transcript_id': transcript} for locus, blocks, count, transcript in rna])
+    native, _, _ = native_candidate_table(tmp_path, target, sources[0]['genome'],
+                                           ''.join(native_gff), engine='oriongeno')
+    output = tmp_path / 'refinement'
+    cli('plan', '--inputs', inputs, '--edges', edges, '--rna', rna_path, '--oriongeno-inputs', native, '--output', output)
+    cli('run', '--output', output, '--cpus', 2)
+    cli('qc', '--output', output)
+    effective = output / 'effective'
+    repairs = {row['owner_overlap'][0]['gene_id']: row for row in json.loads(
+        (effective / 'model_repairs.json').read_text())}
+    assert set(repairs) == {'partial', 'complete_with_rna'}
+    assert repairs['partial']['basis'] == 'oriongeno_partial_cds_extension'
+    assert repairs['complete_with_rna']['whole_cds_rna_witnesses'] == 2
+    merge, = json.loads((effective / 'split_model_merges.json').read_text())
+    assert merge['basis'] == 'oriongeno_cross_fragment_homology_and_target_rna'
+    assert merge['whole_cds_rna_witnesses'] == 2
+    assert merge['replaced_gene_ids'] == [target + '_joined_with_rna_' + label for label in ('a', 'b')]
+    seqs = {name: sequence for name, _, sequence in fasta_records(effective / 'analysis_cds' / (target + '.fa'))}
+    for locus in repairs:
+        assert seqs[target + '_' + locus] == expected[locus]
+    assert seqs[merge['gene_id']] == expected['joined_with_rna']
+    assert all(target + '_' + locus + suffix in seqs for locus in merges[1:] for suffix in ('_a', '_b'))
+    assert all(seqs[target + '_' + locus] == expected[locus][180:]
+               for locus in ('complete_without_rna', 'donors_lack_extension'))
 
 
 def test_annevo_exon_candidates_pass_real_refinement_finalization_and_source_fences(tmp_path):

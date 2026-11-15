@@ -462,7 +462,7 @@ Notable defaults:
 - duplicated BUSCOs are excluded from each species by default;
   [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-parameters.md#busco-duplicate-representatives-for-species-trees)
   selects one complete copy and saves candidate decisions in
-  `species_tree/busco_summary_table/busco_copy_selection.tsv`,
+  `species_tree/busco_summary_table/busco_copy_selection.tsv.gz`,
 - species-tree rooting is configured locally in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - `run_plot_species_trees=1` plots whichever concatenated/ASTRAL candidate trees
   are available and independently builds the selected-tree BUSCO summary plot

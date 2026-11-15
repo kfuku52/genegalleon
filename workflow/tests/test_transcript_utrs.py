@@ -1,4 +1,5 @@
 """Selected CDSs stay fixed while transcript ends supply projected UTRs."""
+import gzip
 import importlib
 import json
 import os
@@ -353,7 +354,7 @@ def test_whole_cohort_finalization_preserves_cds_and_binds_utrs(tmp_path, explic
         assert Path(row['cds']).read_bytes() == before[name]
         for role in ('species_cds', 'species_protein', 'analysis_cds'):
             assert (result/role/(name+'.fa')).read_bytes() == (baseline/role/(name+'.fa')).read_bytes()
-        audit = json.loads((result/'utr_audit'/(name+'.json')).read_text())[0]
+        audit = json.loads(gzip.decompress((result/'utr_audit'/(name+'.json.gz')).read_bytes()))[0]
         assert audit['utr5']['source'] == 'existing' and audit['utr5']['length'] == 10
         assert audit['utr3']['source'] == 'oriongeno' and audit['utr3']['length'] == 13
         assert utrs.load_models(result/'species_gff'/(name+'.gff3'))['t']['exons'] == [[0, 35]]

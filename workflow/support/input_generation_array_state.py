@@ -1,6 +1,7 @@
 """Immutable array plans and verified, atomic per-worker completion receipts."""
 import argparse
 import csv
+import gzip
 import hashlib
 import io
 import json
@@ -10,8 +11,10 @@ import tempfile
 from pathlib import Path
 
 if __package__:
+    from .filesystem_io import gzip_text_writer
     from .performance_metrics import count
 else:
+    from filesystem_io import gzip_text_writer
     from performance_metrics import count
 
 
@@ -95,10 +98,11 @@ def _write_json_stream(handle, value):
     handle.write("\n")
 
 
-def _same_text(left, right):
+def _same_text(left, right, compressed=False):
     # read_text previously accepted equivalent CRLF/CR input. Compare decoded
     # universal-newline text in bounded blocks to preserve that contract.
-    with Path(left).open() as a, Path(right).open() as b:
+    opener = gzip.open if compressed else open
+    with opener(left, 'rt', encoding='utf-8') as a, opener(right, 'rt', encoding='utf-8') as b:
         while True:
             first, second = a.read(1024 * 1024), b.read(1024 * 1024)
             if first != second:
@@ -109,17 +113,22 @@ def _same_text(left, right):
 
 def atomic_json(path, value, immutable=False):
     path = Path(path)
+    compressed = path.suffix == '.gz'
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as handle:
             temporary = Path(handle.name)
-            _write_json_stream(handle, value)
+            if compressed:
+                with gzip_text_writer(temporary) as gzip_handle:
+                    _write_json_stream(gzip_handle, value)
+            else:
+                _write_json_stream(handle, value)
         if immutable:
             try:
                 os.link(temporary, path)
             except FileExistsError:
-                if not _same_text(path, temporary):
+                if not _same_text(path, temporary, compressed=compressed):
                     raise ValueError("Plan already exists with different inputs; use a new output workspace: " + str(path)) from None
         else:
             os.replace(temporary, path)

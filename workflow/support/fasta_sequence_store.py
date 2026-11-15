@@ -36,10 +36,10 @@ class SequenceStoreError(RuntimeError):
     pass
 
 
-def open_text(path: Path) -> TextIO:
+def open_text(path: Path, *, newline=None) -> TextIO:
     if path.name.lower().endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8")
-    return path.open("r", encoding="utf-8")
+        return gzip.open(path, "rt", encoding="utf-8", newline=newline)
+    return path.open("r", encoding="utf-8", newline=newline)
 
 
 def fasta_records(path: Path, *, identifiers=None) -> Iterator[tuple[str, str, str]]:

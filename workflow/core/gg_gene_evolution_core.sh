@@ -1869,9 +1869,8 @@ file_og_gene_pgls_plot="${dir_output_active}/pgls_gene_tree_plot/${og_id}_gene_P
 file_og_species_nwkit_pgls="${dir_output_active}/pgls_species_nwkit/${og_id}_species_nwkit.pgls.tsv"
 file_og_pgls_comparison="${dir_output_active}/pgls_comparison/${og_id}_pgls.comparison.tsv"
 file_og_pgls_method_status="${dir_output_active}/pgls_method_status/${og_id}_pgls.method-status.tsv"
-file_og_pgls_method_audit="${dir_output_active}/pgls_method_audit/${og_id}_pgls.method-audit.jsonl"
+file_og_expression_trait_audit="${dir_output_active}/expression_trait_audit/${og_id}_expression_trait_audit.zip"
 file_og_species_expression_summary="${dir_output_active}/pgls_species_expression_summary/${og_id}_species_expression.tsv"
-file_og_species_expression_audit="${dir_output_active}/pgls_species_expression_audit/${og_id}_species_expression.audit.tsv"
 file_og_species_response_tip_summary="${dir_output_active}/pgls_species_response_tip_summary/${og_id}_response-tip-summary.tsv"
 file_og_species_response_sampling_covariance="${dir_output_active}/pgls_species_response_sampling_covariance/${og_id}_response-sampling-covariance.tsv"
 file_og_species_predictor_tip_summary="${dir_output_active}/pgls_species_predictor_tip_summary/${og_id}_predictor-tip-summary.tsv"
@@ -1888,7 +1887,6 @@ file_og_rsc_predictor_tip_summary="${dir_output_active}/rsc_predictor_tip_summar
 file_og_rsc_random_effects="${dir_output_active}/rsc_random_effects/${og_id}_rsc.random-effects.tsv"
 file_og_rsc_sensitivity="${dir_output_active}/rsc_sensitivity/${og_id}_rsc.sensitivity.tsv"
 file_og_rsc_trait_origins="${dir_output_active}/rsc_trait_origins/${og_id}_rsc.trait-origins.tsv"
-file_og_rsc_audit="${dir_output_active}/rsc_audit/${og_id}_rsc.audit.jsonl"
 file_og_rsc_log="${dir_output_active}/rsc_log/${og_id}_rsc.log"
 file_og_expression_trait_pgls_log="${dir_output_active}/pgls_log/${og_id}_expression_trait_pgls.log"
 file_og_expression_trait_pgls_provenance="${dir_output_active}/artifact_provenance/${og_id}.expression_trait_pgls.json"
@@ -4808,9 +4806,8 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_species_nwkit_pgls}"
     "${file_og_pgls_comparison}"
     "${file_og_pgls_method_status}"
-    "${file_og_pgls_method_audit}"
+    "${file_og_expression_trait_audit}"
     "${file_og_species_expression_summary}"
-    "${file_og_species_expression_audit}"
     "${file_og_species_response_tip_summary}"
     "${file_og_species_response_sampling_covariance}"
     "${file_og_species_predictor_tip_summary}"
@@ -4827,7 +4824,6 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_rsc_random_effects}"
     "${file_og_rsc_sensitivity}"
     "${file_og_rsc_trait_origins}"
-    "${file_og_rsc_audit}"
     "${file_og_rsc_log}"
     "${file_og_expression_trait_pgls_log}"
   )
@@ -5469,14 +5465,11 @@ rsc_provenance_args=(
   --output "random_effects=${file_og_rsc_random_effects}"
   --output "sensitivity=${file_og_rsc_sensitivity}"
   --output "trait_origins=${file_og_rsc_trait_origins}"
-  --output "audit=${file_og_rsc_audit}"
   --output "log=${file_og_rsc_log}"
   --output "species_nwkit=${file_og_species_nwkit_pgls}"
   --output "comparison=${file_og_pgls_comparison}"
   --output "method_status=${file_og_pgls_method_status}"
-  --output "method_audit=${file_og_pgls_method_audit}"
   --output "species_expression_summary=${file_og_species_expression_summary}"
-  --output "species_expression_audit=${file_og_species_expression_audit}"
   --output "species_response_tip_summary=${file_og_species_response_tip_summary}"
   --output "species_response_sampling_covariance=${file_og_species_response_sampling_covariance}"
   --output "species_predictor_tip_summary=${file_og_species_predictor_tip_summary}"
@@ -5560,10 +5553,27 @@ if [[ -s "${file_og_expression}" && -n "${species_label_map_tsv}" ]]; then
 fi
 gg_artifact_add_input_if_present rsc_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
 rsc_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
-gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_provenance_args[@]}" || exit $?
+rsc_audit_output="diagnostic_archive=${file_og_expression_trait_audit}"
+legacy_rsc_audit="${dir_output_active}/rsc_audit/${og_id}_rsc.audit.jsonl"
+if [[ ! -e "${file_og_expression_trait_audit}" && -e "${legacy_rsc_audit}" ]]; then
+  # Provenance compares output lists in declaration order.
+  rsc_check_args=()
+  for rsc_contract_arg in "${rsc_provenance_args[@]}"; do
+    rsc_check_args+=("${rsc_contract_arg}")
+    case "${rsc_contract_arg}" in
+      trait_origins=*) rsc_check_args+=(--output "audit=${legacy_rsc_audit}") ;;
+      method_status=*) rsc_check_args+=(--output "method_audit=${dir_output_active}/pgls_method_audit/${og_id}_pgls.method-audit.jsonl") ;;
+      species_expression_summary=*) rsc_check_args+=(--output "species_expression_audit=${dir_output_active}/pgls_species_expression_audit/${og_id}_species_expression.audit.tsv") ;;
+    esac
+  done
+else
+  rsc_check_args=("${rsc_provenance_args[@]}" --output "${rsc_audit_output}")
+fi
+gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_check_args[@]}" || exit $?
 if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
   rsc_work_dir="${og_id}.rsc"
+  expression_trait_audit_tmp="${og_id}.expression_trait_audit.zip"
   rsc_prepared_expression="${rsc_work_dir}/expression.tsv"
   rsc_prepared_traits="${rsc_work_dir}/species_traits.tsv"
   rsc_analysis_plan="${rsc_work_dir}/analysis_plan.tsv"
@@ -5933,7 +5943,14 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}" \
     2>&1 | tee -a "${pgls_log_tmp}"
 
+  python "${gg_support_dir}/diagnostic_archive.py" pack \
+    --root "${rsc_work_dir}" --destination "${expression_trait_audit_tmp}" \
+    --member "${rsc_combined_audit##*/}" \
+    --member "${pgls_method_audit_tmp##*/}" \
+    --member "${species_expression_audit_tmp##*/}" || exit $?
+
   mv_out_bundle \
+    "${expression_trait_audit_tmp}" "${file_og_expression_trait_audit}" \
     "${rsc_combined_status}" "${file_og_rsc_status}" \
     "${rsc_combined_prefix}.regression.tsv" "${file_og_rsc_regression}" \
     "${rsc_combined_prefix}.reconciliation.tsv" "${file_og_rsc_reconciliation}" \
@@ -5946,22 +5963,20 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
     "${rsc_combined_prefix}.random-effects.tsv" "${file_og_rsc_random_effects}" \
     "${rsc_combined_prefix}.sensitivity.tsv" "${file_og_rsc_sensitivity}" \
     "${rsc_combined_prefix}.trait-origins.tsv" "${file_og_rsc_trait_origins}" \
-    "${rsc_combined_audit}" "${file_og_rsc_audit}" \
     "${rsc_log_tmp}" "${file_og_rsc_log}" \
     "${species_nwkit_tmp}" "${file_og_species_nwkit_pgls}" \
     "${pgls_comparison_tmp}" "${file_og_pgls_comparison}" \
     "${pgls_method_status_tmp}" "${file_og_pgls_method_status}" \
-    "${pgls_method_audit_tmp}" "${file_og_pgls_method_audit}" \
     "${species_expression_summary_tmp}" "${file_og_species_expression_summary}" \
-    "${species_expression_audit_tmp}" "${file_og_species_expression_audit}" \
     "${species_response_tip_summary_tmp}" "${file_og_species_response_tip_summary}" \
     "${species_response_sampling_covariance_tmp}" "${file_og_species_response_sampling_covariance}" \
     "${species_predictor_tip_summary_tmp}" "${file_og_species_predictor_tip_summary}" \
     "${species_predictor_sampling_covariance_tmp}" "${file_og_species_predictor_sampling_covariance}" \
-    "${pgls_log_tmp}" "${file_og_expression_trait_pgls_log}"
+    "${pgls_log_tmp}" "${file_og_expression_trait_pgls_log}" || exit $?
   nwkit_version_text=$(nwkit --version 2>&1 | tail -n 1 || true)
   gg_artifact_record \
     "${rsc_provenance_args[@]}" \
+    --output "${rsc_audit_output}" \
     --diagnostic "nwkit_version=${nwkit_version_text:-unknown}"
   rm -rf -- "${rsc_work_dir}"
 else
@@ -6377,21 +6392,20 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
       echo "CSUBST scan inference records are missing. Rebuild the runtime with current CSUBST and rerun scan." >&2
       exit 1
     fi
-    mkdir -p "${csubst_scan_dir}/inputs"
-    cp "${csubst_input_base}.fasta" "${csubst_scan_dir}/inputs/alignment.fasta"
-    cp "${csubst_input_base}.nwk" "${csubst_scan_dir}/inputs/rooted_tree.nwk"
-    cp foreground.tsv "${csubst_scan_dir}/inputs/foreground.tsv"
-    # Preserve the complete run before moving tables or removing scratch files.
-    # This includes empty scans, diagnostic definitions and the disabled-calibration record.
-    python -m zipfile -c "${og_id}.csubst_scan_audit.zip" "${csubst_scan_dir}" || exit $?
-    python "${gg_support_dir}/atomic_zip_publish.py" \
-      --source "${og_id}.csubst_scan_audit.zip" \
-      --destination "${file_og_csubst_scan_audit}" \
-      --expected-prefix "${csubst_scan_dir}" \
-      --remove-source
+    # The two public tables are already kept with their own provenance.
+    python "${gg_support_dir}/diagnostic_archive.py" pack \
+      --root "${csubst_scan_dir}" \
+      --input inputs/alignment.fasta "${csubst_input_base}.fasta" \
+      --input inputs/rooted_tree.nwk "${csubst_input_base}.nwk" \
+      --input inputs/foreground.tsv foreground.tsv \
+      --external csubst_scan.tsv "${file_og_csubst_scan#"${dir_output_active}"/}" \
+      --external csubst_scan_units.tsv "${file_og_csubst_scan_units#"${dir_output_active}"/}" \
+      --destination "${og_id}.csubst_scan_audit.zip" || exit $?
     echo "CSUBST scan was successful."
-    mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"
-    mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"
+    mv_out_bundle \
+      "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}" \
+      "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}" \
+      "${og_id}.csubst_scan_audit.zip" "${file_og_csubst_scan_audit}" || exit $?
     shopt -s nullglob
     csubst_scan_foreground_branch_files=("${csubst_scan_dir}"/csubst_foreground_branch*.txt)
     shopt -u nullglob

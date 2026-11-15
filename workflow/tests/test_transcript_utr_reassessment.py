@@ -1,4 +1,5 @@
 """UTR-only publications bind consumed inputs and retain all coding rows."""
+import gzip
 import hashlib
 import json
 import sys
@@ -49,7 +50,7 @@ def test_reassessment_corrects_coge_without_modifying_source_or_coding_rows(comp
     for role, old_role in [('species_gff', 'species_gff'), ('full_annotation', 'full_annotation'), ('analysis_gff', 'analysis_gff')]:
         assert reassess._coding_rows((result/role/'S.gff3').read_text()) == reassess._coding_rows((source/'effective'/old_role/'S.gff3').read_text())
     assert (result / 'receipt.json').is_file()
-    audit = json.loads((result / 'utr_audit/S.json').read_text())
+    audit = json.loads(gzip.decompress((result / 'utr_audit/S.json.gz').read_bytes()))
     assert audit[0]['final_gene_id'] == 'g' and audit[0]['final_exported']
 
 
@@ -124,7 +125,7 @@ def test_reassessment_binds_native_prediction_and_target_assembly(completed, inv
         assert not (output/'effective/receipt.json').exists()
     else:
         result = reassess.reproject(source, output, expected)
-        audit = json.loads((result/'utr_audit/S.json').read_text())[0]
+        audit = json.loads(gzip.decompress((result/'utr_audit/S.json.gz').read_bytes()))[0]
         assert audit['utr5']['source'] == audit['utr3']['source'] == 'oriongeno'
         assert audit['utr5']['length'] == 20 and audit['utr3']['length'] == 150
 
@@ -151,7 +152,7 @@ def test_reassessment_does_not_reuse_previous_projected_utr_as_independent_donor
     frozen['files'] = {name: sha(view/name) for name in frozen['files']}
     (view/'receipt.json').write_text(json.dumps(frozen))
     result = reassess.reproject(source, output, sha(view/'receipt.json'))
-    audit = json.loads((result/'utr_audit/S.json').read_text())[0]
+    audit = json.loads(gzip.decompress((result/'utr_audit/S.json.gz').read_bytes()))[0]
     assert audit['utr3']['source'] == 'existing' and audit['utr3']['length'] == 70
     assert audit['utr5']['length'] == 0
     full = reassess.utrs.load_models(result/'full_annotation/S.gff3')['t']

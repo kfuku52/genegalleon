@@ -1,4 +1,5 @@
 """Extract complete, stranded coding-path witnesses from genome-aligned RNA BAMs."""
+import contextlib
 import hashlib
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
@@ -107,9 +108,9 @@ def overlapping_windows(paths):
             yield seqid, window, end
 
 
-def bam_witnesses(bam, genome, windows):
-    """Find the first complete spanning read per candidate with one fetch per window."""
-    witnesses, inferred = {}, {}
+def bam_witnesses(bam, genome, windows, limit):
+    """Find up to limit distinct complete spanning reads per candidate."""
+    witnesses, inferred = defaultdict(dict), {}
     for seqid, models, window_end in windows:
         starts = [model[0] for model in models]
         min_span = min(end - start for start, end, _, _ in models)
@@ -128,7 +129,9 @@ def bam_witnesses(bam, genome, windows):
             declared = read.get_tag('XS') if read.has_tag('XS') else None
             for i in range(first, last):
                 start, end, path, genomic = models[i]
-                if end > read_end or path in witnesses or coding_blocks(read, start, end) != genomic:
+                seen = witnesses.get(path, {})
+                if (end > read_end or len(seen) >= limit or not read.query_name or read.query_name in seen
+                        or coding_blocks(read, start, end) != genomic):
                     continue
                 if declared in ('+', '-'):
                     observed = declared
@@ -137,15 +140,16 @@ def bam_witnesses(bam, genome, windows):
                         inferred[path] = splice_strand(genome, seqid, genomic)
                     observed = inferred[path]
                 if observed == path[1]:
-                    witnesses[path] = read.query_name
-                    remaining -= 1
+                    witnesses[path][read.query_name] = None
+                    if len(witnesses[path]) == limit:
+                        remaining -= 1
             if not remaining:
                 break
     return witnesses
 
 
-def evidence_rows(species, genome_path, entries, candidates, scratch):
-    """Each reported path is spanned by one primary read on the same strand."""
+def evidence_rows(species, genome_path, entries, candidates, scratch, *, limit=1, genome=None):
+    """Each evidence row represents one complete primary read on the same strand."""
     if not entries:
         return []
     paths = {(c['seqid'], c['strand'], tuple(tuple(b[:2]) for b in c.get('blocks', c.get('cds', ()))))
@@ -155,21 +159,26 @@ def evidence_rows(species, genome_path, entries, candidates, scratch):
     windows = list(overlapping_windows(paths))
     names = Counter(Path(item['bam']).name for item in entries)
     results = defaultdict(list)
-    with indexed_genome(genome_path) as genome:
+    with (indexed_genome(genome_path) if genome is None else contextlib.nullcontext(genome)) as genome:
         checked = {}
         for i, item in enumerate(entries):
             index = item['index']
             if not index:
                 index = str(scratch / f'rna_{i}.csi')
-                pysam.index('-c', '-o', index, item['bam'])
+                if not Path(index).exists():
+                    pysam.index('-c', '-o', index, item['bam'])
             name = Path(item['bam']).name
             if names[name] > 1:
                 name = item['bam']
             with pysam.AlignmentFile(item['bam'], 'rb', index_filename=index) as bam:
                 verified_reference(bam, genome, checked)
-                for path, read in bam_witnesses(bam, genome, windows).items():
+                for path, reads in bam_witnesses(bam, genome, windows, limit).items():
                     seqid, strand, blocks = path
-                    results[path].append({'species': species, 'seqid': seqid, 'strand': strand,
-                                          'cds_blocks': [list(b) for b in blocks],
-                                          'transcript_id': name + ':' + read, 'count': 1})
+                    for read in reads:
+                        row = {'species': species, 'seqid': seqid, 'strand': strand,
+                               'cds_blocks': [list(b) for b in blocks],
+                               'transcript_id': name + ':' + read, 'count': 1}
+                        if limit > 1:
+                            row['read_name'] = read
+                        results[path].append(row)
     return [row for path in sorted(results) for row in results[path]]

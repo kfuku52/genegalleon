@@ -1952,6 +1952,14 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
 def _publish_audit(args, memo, progress, rows, inventory_digest):
     progress.phase("report", len(rows))
     rows.sort(key=lambda row: (row["family_id"], row["step"], row["status"]))
+    report_rows = rows
+    if getattr(args, "report_detail", "full") == "exceptions":
+        counts = Counter(row["step"] for row in rows if row["status"] == "current")
+        report_rows = [
+            {"family_id": "-", "step": step, "status": "current", "reason": f"count={count}", "manifest": ""}
+            for step, count in sorted(counts.items())
+        ]
+        report_rows.extend(row for row in rows if row["status"] != "current")
     args.output_tsv.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output_tsv.with_name(f".{args.output_tsv.name}.tmp-{os.getpid()}")
     try:
@@ -1963,7 +1971,7 @@ def _publish_audit(args, memo, progress, rows, inventory_digest):
                 lineterminator="\n",
             )
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(report_rows)
         os.replace(temporary, args.output_tsv)
     finally:
         temporary.unlink(missing_ok=True)
@@ -2092,6 +2100,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--logical-root", required=True, type=Path)
     audit_parser.add_argument("--workspace-root", required=True, type=Path)
     audit_parser.add_argument("--output-tsv", required=True, type=Path)
+    audit_parser.add_argument("--report-detail", choices=("full", "exceptions"), default="full",
+                              help="Write each result, or aggregate current checks by step and retain exception details")
     audit_parser.add_argument("--mode", choices=("orthogroup", "query2family"), required=True)
     audit_parser.add_argument("--query-dir", type=Path)
     audit_parser.add_argument(

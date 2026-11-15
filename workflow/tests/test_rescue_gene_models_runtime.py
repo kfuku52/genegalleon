@@ -355,8 +355,13 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models,
         assert list(iter_partial_models(b)) == json.loads((a / "partial_models.json").read_text())
         assert list(iter_revision_models(b)) == json.loads((a / "revision_candidates.json").read_text())
         assert (b / "model_store/manifest.json").is_file()
+        details = compact.parent / (name + '_diagnostics')
+        cli("export-diagnostics", "--output", compact, "--task-index", str(names.index(name) + 1),
+            "--destination", details)
         for filename in ("quality_flags.tsv", "audit.tsv"):
-            assert (a / filename).read_bytes() == (b / filename).read_bytes()
+            assert not (b / filename).exists()
+            assert (a / filename).read_text() == (details / filename).read_text()
+        assert 'status_counts' in json.loads((b / "diagnostics.json").read_text())
         assert not any((b / filename).exists() for filename in (
             "models.json", "partial_models.json", "revision_candidates.json", "regions.fa", "queries.fa",
             "genome.gff", "unresolved.fa", "unresolved.unique.fa", "genome.covered.unique.fa"))
@@ -569,7 +574,8 @@ def test_split_miniprot_retries_only_postprocessing(hidden_models, monkeypatch, 
     from workflow.support.rescue_model_store import iter_models
 
     fixture, names, sequences = hidden_models
-    baseline, _, _ = make_plan(hidden_models, model_storage=storage, retain_search_inputs=storage == "legacy")
+    baseline, _, _ = make_plan(hidden_models, model_storage=storage, retain_search_inputs=storage == "legacy",
+                               extra_args=("--diagnostics", "legacy"))
     plan = rescue.load(baseline)
     name, donor = names[:2]
     plan["donors"][name] = [donor]
@@ -622,6 +628,8 @@ def test_split_miniprot_retries_only_postprocessing(hidden_models, monkeypatch, 
     for filename in ("audit.tsv", "quality_flags.tsv", "genome.unique.gff", "model_repair_candidates.json"):
         assert (actual / filename).read_bytes() == (expected / filename).read_bytes()
     assert list(iter_models(actual)) == list(iter_models(expected))
+    assert (actual / "genome.unique.gff").samefile(checkpoint / "genome.unique.gff")
+    assert (actual / "candidates.json").samefile(checkpoint / "candidates.json")
     assert json.loads((actual / "miniprot_checkpoint.json").read_text()) == {
         "receipt_sha256": hashlib.sha256(receipt).hexdigest()
     }
