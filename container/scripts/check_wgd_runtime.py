@@ -7,6 +7,7 @@ import inspect
 import json
 import subprocess
 import tempfile
+from importlib.metadata import version
 from pathlib import Path
 
 
@@ -15,13 +16,15 @@ def main():
     from kffractbias.selfevidence import write_self_evidence
     from kffractbias.selfscan import align_self, scan_self
 
+    version("locuskit")
+    subprocess.run(["locuskit", "fractbias", "version"], check=True, stdout=subprocess.DEVNULL)
     for module in ("ksrate", "ksrate_cli", "ksrate_model", "wgd_count", "wgd_count_cli",
                    "wgd_count_fit", "wgd_count_model", "wgd_tree", "wgd_tree_cli", "wgd_tree_model"):
         importlib.import_module("nwkit." + module)
     if "sequence_type" not in inspect.signature(align_self).parameters:
-        raise ValueError("kfFractBias lacks protein self-alignment support.")
+        raise ValueError("locuskit lacks protein self-alignment support.")
     if not {"screening", "allow_empty"}.issubset(inspect.signature(scan_self).parameters):
-        raise ValueError("kfFractBias lacks explicit unquota/empty self evidence.")
+        raise ValueError("locuskit lacks explicit unquota/empty self evidence.")
     with tempfile.TemporaryDirectory(prefix="gg-wgd-contract-") as temporary:
         root = Path(temporary)
         gff = root / "loci.gff3"
@@ -29,7 +32,7 @@ def main():
                        "chr1\tt\tgene\t11\t19\t.\t+\t.\tID=intervening\n"
                        "chr1\tt\tmRNA\t21\t29\t.\t+\t.\tID=t2;Parent=g2\n")
         if [gene.gene_id for gene in annotation_locus_order(gff, feature="mRNA", attribute="ID")] != ["g1", "intervening", "g2"]:
-            raise ValueError("kfFractBias lost unsequenced annotation loci.")
+            raise ValueError("locuskit lost unsequenced annotation loci.")
         genes = tuple(Gene(chrom, 0, 10, name) for chrom, name in (("chr1", "a"), ("chr2", "b")))
         for name in ("self.self.anchors", "self.self.lifted.anchors"):
             (root / name).write_text("###\na\tb\t10\n")
@@ -37,9 +40,9 @@ def main():
         with paths["depth"].open() as handle:
             depths = list(csv.DictReader(handle, delimiter="\t"))
         if [int(row["block_arm_depth"]) for row in depths] != [1, 1]:
-            raise ValueError("kfFractBias raw block-arm coverage is incompatible.")
+            raise ValueError("locuskit raw block-arm coverage is incompatible.")
         if json.loads(paths["summary"].read_text())["gene_span_coverage"] != 1:
-            raise ValueError("kfFractBias raw coverage summary is incompatible.")
+            raise ValueError("locuskit raw coverage summary is incompatible.")
     for command in ("ksrate", "wgd-count", "wgd-tree"):
         subprocess.run(["nwkit", command, "--help"], check=True, stdout=subprocess.DEVNULL)
     print("Native WGD imports, CLI commands, full locus ordering and raw self evidence verified.")

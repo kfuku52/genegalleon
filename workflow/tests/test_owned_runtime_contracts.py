@@ -16,7 +16,7 @@ EXPECTED_SOURCES = {
     "paml",
     "iqtree",
     "ASTER",
-    "kfFractBias",
+    "locuskit",
     "kftools",
     "rkftools",
     "fastk",

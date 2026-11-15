@@ -198,16 +198,16 @@ RUN --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact 
  --mount=from=nwkit-build,source=/opt/conda,target=/opt/conda,rw \
  bash /opt/pg/scripts/build_iqtree_artifact.sh worker /opt/pg/artifact /tmp/nwkit-artifact
 
-FROM source-builder AS kffractbias-build
+FROM source-builder AS locuskit-build
 
-ARG KFFRACTBIAS_REPO_URL="https://github.com/kfuku52/kfFractBias.git"
-ARG KFFRACTBIAS_REPO_REF=""
-ARG KFFRACTBIAS_REPO_SHA=""
+ARG LOCUSKIT_REPO_URL="https://github.com/kfuku52/locuskit.git"
+ARG LOCUSKIT_REPO_REF=""
+ARG LOCUSKIT_REPO_SHA=""
 
 RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
- && bash /opt/pg/scripts/build_source_artifact.sh python kfFractBias \
-      "${KFFRACTBIAS_REPO_URL}" \
-      "${KFFRACTBIAS_REPO_SHA:-${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}}" \
+ && bash /opt/pg/scripts/build_source_artifact.sh python locuskit \
+      "${LOCUSKIT_REPO_URL}" \
+      "${LOCUSKIT_REPO_SHA:-${LOCUSKIT_REPO_REF:-${GG_SOURCE_LOCUSKIT_REPO_REF}}}" \
       /opt/pg/artifact
 
 FROM source-builder AS kftools-build
@@ -341,7 +341,7 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml \
  --mount=from=iqtree-worker-build,source=/opt/pg/artifact,target=/tmp/artifacts/iqtree \
  --mount=from=aster-build,source=/opt/pg/artifact,target=/tmp/artifacts/ASTER \
- --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
+ --mount=from=locuskit-build,source=/opt/pg/artifact,target=/tmp/artifacts/locuskit \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \
  --mount=from=fastk-build,source=/opt/pg/artifact,target=/tmp/artifacts/fastk \

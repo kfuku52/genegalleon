@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Delegate profiles to kfFractBias and compare paired, disjoint reference blocks."""
+"""Delegate profiles to LOCUSKIT and compare paired, disjoint reference blocks."""
 from __future__ import annotations
 
 import argparse

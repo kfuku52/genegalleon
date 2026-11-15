@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate per-species kfFractBias self-synteny retention outputs."""
+"""Aggregate per-species LOCUSKIT self-synteny retention outputs."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def _window_statistics(path: Path) -> tuple[int, str, str, str, str]:
             "retention_percent",
         }
         if reader.fieldnames is None or not required <= set(reader.fieldnames):
-            raise ValueError(f"Invalid kfFractBias windows table: {path}")
+            raise ValueError(f"Invalid LOCUSKIT windows table: {path}")
         for row in reader:
             try:
                 retention = float(row["retention_percent"])
@@ -184,7 +184,7 @@ def _plot(path_pdf: Path, path_png: Path, rows: list[dict[str, str | int]]) -> N
     axis.invert_yaxis()
     axis.set_xlim(0, 100)
     axis.set_xlabel("Mean best interchromosomal retention per target window (%)")
-    axis.set_title("kfFractBias self-synteny retention summary")
+    axis.set_title("LOCUSKIT self-synteny retention summary")
     axis.grid(axis="x", alpha=0.25)
     figure.tight_layout()
     path_pdf.parent.mkdir(parents=True, exist_ok=True)

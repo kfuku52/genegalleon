@@ -184,9 +184,9 @@ run_build() {
     --build-arg PAML_REPO_SHA="${PAML_REPO_SHA}" \
     --build-arg IQTREE_REPO_SHA="${IQTREE_REPO_SHA}" \
     --build-arg ASTER_REPO_SHA="${ASTER_REPO_SHA}" \
-    --build-arg KFFRACTBIAS_REPO_URL="${KFFRACTBIAS_REPO_URL}" \
-    --build-arg KFFRACTBIAS_REPO_REF="${KFFRACTBIAS_REPO_REF}" \
-    --build-arg KFFRACTBIAS_REPO_SHA="${KFFRACTBIAS_REPO_SHA}" \
+    --build-arg LOCUSKIT_REPO_URL="${LOCUSKIT_REPO_URL}" \
+    --build-arg LOCUSKIT_REPO_REF="${LOCUSKIT_REPO_REF}" \
+    --build-arg LOCUSKIT_REPO_SHA="${LOCUSKIT_REPO_SHA}" \
     --build-arg KFTOOLS_REPO_URL="${KFTOOLS_REPO_URL}" \
     --build-arg RKFTOOLS_REPO_URL="${RKFTOOLS_REPO_URL}" \
     --build-arg KFTOOLS_REPO_REF="${KFTOOLS_REPO_REF}" \

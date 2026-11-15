@@ -17,7 +17,7 @@ base	generax
 base	iqtree3
 base	nwkit-iqtree-worker
 base	kallisto
-base	kffractbias
+base	locuskit
 base	lastal
 base	lastdb
 base	mafft

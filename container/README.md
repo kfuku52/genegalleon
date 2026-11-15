@@ -14,7 +14,7 @@ From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
 - The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
-  `kfuku52/kfFractBias`, `kfuku52/kftools`, `kfuku52/rkftools`).
+  `kfuku52/locuskit`, `kfuku52/kftools`, `kfuku52/rkftools`).
   Standard builds follow the moving branches in `source_branches.env` for every
   one of these repositories. Build wrappers resolve those branches once at the
   start of a build, in parallel, so all target architectures use the same snapshot. Explicit
@@ -284,7 +284,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   for Pfam, UniProt and JASPAR cache locations.
 - NWKIT handles gene-tree D/L rooting and reconciliation; NOTUNG is not installed.
 - `BUSCO`, `paml` and official `iqtree3` are fetched from the current tips of their configured branches by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfFractBias`, `kftools`, and `rkftools`
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `locuskit`, `kftools`, and `rkftools`
   install from the moving branches in `source_branches.env` by default.
 - `BioPP/testnh` and `CAFE5` archives are checksum-verified during build.
 

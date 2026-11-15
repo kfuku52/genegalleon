@@ -17,7 +17,7 @@ base	iqtree3
 base	nwkit-iqtree-worker
 base	jellyfish
 base	kallisto
-base	kffractbias
+base	locuskit
 base	lastal
 base	lastdb
 base	mafft

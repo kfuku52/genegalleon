@@ -196,7 +196,7 @@ def package_source_hashes(name):
 
 def identities():
     versions = {name: importlib.metadata.version(name) for name in
-                ("nwkit", "kfFractBias", "jcvi", "biopython", "pysam", "numpy", "natsort", "more-itertools")}
+                ("nwkit", "locuskit", "jcvi", "biopython", "pysam", "numpy", "natsort", "more-itertools")}
     versions["python"] = sys.version
     for tool, arg in (("miniprot", "--version"), ("diamond", "version"), ("lastal", "--version"), ("lastdb", "--version")):
         versions[tool] = subprocess.check_output([tool, arg], text=True).strip()
@@ -207,7 +207,7 @@ def identities():
     versions["source_hashes"] = {name: digest(importlib.util.find_spec(name).origin) for name in modules}
     attribute_syntax = sys.modules[validate_gff.__module__]
     versions["source_hashes"][attribute_syntax.__name__] = digest(attribute_syntax.__file__)
-    for package in ("kffractbias", "jcvi"):
+    for package in ("locuskit", "kffractbias", "jcvi"):
         versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
     versions["annevo_candidate_implementation"] = digest(Path(__file__).with_name("annevo_gene_models.py"))
@@ -803,9 +803,9 @@ def comparison_cache_key(root, plan, job, prepared_snapshot=None):
         prepared_snapshot.check_job(job)
     names = sorted({job["a"], job["b"]})
     tools = plan["request"]["tools"]
-    owners = ("kfFractBias", "jcvi", "biopython", "numpy", "natsort", "more-itertools", "python",
+    owners = ("locuskit", "jcvi", "biopython", "numpy", "natsort", "more-itertools", "python",
               "diamond", "diamond_sha256", "lastal", "lastal_sha256", "lastdb", "lastdb_sha256")
-    modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("kffractbias.", "jcvi."))}
+    modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("locuskit.", "kffractbias.", "jcvi."))}
     algorithm = "\n".join(inspect.getsource(f) for f in (build_comparison, align_self, parse_anchors, run))
     return {"schema": 1, "job": {k: job[k] for k in ("a", "b", "kind")},
             "inputs": {n: {ext: (prepared_snapshot.file_digest(n, "genes." + ext) if prepared_snapshot

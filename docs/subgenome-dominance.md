@@ -29,7 +29,7 @@ Input tables:
 | expression | gene_id, sample columns | Raw, finite, nonnegative TPM or FPKM for the mapped representative transcript. Do not use OG sums, log-transformed values, counts without effective-length correction, or inconsistent annotations. |
 | samples | column, tissue, biological_id | Columns must match the expression table. Technical replicates sharing a tissue/biological_id are averaged. Tissue-specific biological IDs are required. |
 
-Native kfFractBias `*.genes.tsv` is an intermediate, not a callable-opportunity
+Native LOCUSKIT `*.genes.tsv` is an intermediate, not a callable-opportunity
 table: zero outside the expected collinear interval is not evidence of loss.
 Define matched ancestral intervals independently; exclude assembly gaps and
 unresolved annotation/alignability. Compare the same reference loci on both

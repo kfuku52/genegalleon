@@ -195,6 +195,7 @@ def owned_identity():
     import kffractbias.io
     import kffractbias.selfevidence
     import kffractbias.selfscan
+    import locuskit
     import nwkit
     import nwkit.ksrate
     import nwkit.ksrate_cli
@@ -212,7 +213,7 @@ def owned_identity():
                nwkit.wgd_count_fit, nwkit.wgd_count_model, nwkit.wgd_tree, nwkit.wgd_tree_cli, nwkit.wgd_tree_model)
     files = [Path(module.__file__).resolve() for module in modules]
     # Shared parsers/tree utilities also affect branch IDs and scientific fits.
-    for root in (Path(nwkit.__file__).parent, Path(kffractbias.io.__file__).parent):
+    for root in (Path(nwkit.__file__).parent, Path(locuskit.__file__).parent, Path(kffractbias.io.__file__).parent):
         files.extend(root.rglob("*.py"))
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
               Path(__file__).with_name("wgd_alignment_reuse.py").resolve(),
@@ -234,7 +235,7 @@ def owned_identity():
               Path(__file__).with_name("wgd_terminal_ks.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
-    return {"nwkit": nwkit.__version__, "ds": ds,
+    return {"nwkit": nwkit.__version__, "locuskit": locuskit.__version__, "ds": ds,
             "source_hashes": {str(path): digest(path) for path in files},
             "last_version": subprocess.check_output(["lastal", "--version"], text=True).strip()}
 

@@ -1893,7 +1893,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         "busco",
         "paml",
         "iqtree",
-        "kffractbias",
+        "locuskit",
         "kftools",
         "rkftools",
     )
@@ -1911,7 +1911,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         ("BUSCO_REPO_SHA", "busco_repo_sha"),
         ("PAML_REPO_SHA", "paml_repo_sha"),
         ("IQTREE_REPO_SHA", "iqtree_repo_sha"),
-        ("KFFRACTBIAS_REPO_SHA", "kffractbias_repo_sha"),
+        ("LOCUSKIT_REPO_SHA", "locuskit_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
     ):

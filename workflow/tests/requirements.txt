@@ -9,7 +9,7 @@ pysam
 cdskit @ git+https://github.com/kfuku52/cdskit.git@master
 csubst @ git+https://github.com/kfuku52/csubst.git@master
 nwkit @ git+https://github.com/kfuku52/nwkit.git@master
-kffractbias @ git+https://github.com/kfuku52/kfFractBias.git@master
+locuskit @ git+https://github.com/kfuku52/locuskit.git@main
 ete4
 sqlalchemy
 tenacity

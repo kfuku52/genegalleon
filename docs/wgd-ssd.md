@@ -2,14 +2,14 @@
 
 This experimental analysis infers species-branch candidates from gene counts;
 known WGD events are not required inputs. It combines native NWKIT DL+genome
-multiplication inference, kfFractBias unquota self-synteny, CDSKIT YN00 dS,
+multiplication inference, LOCUSKIT unquota self-synteny, CDSKIT YN00 dS,
 and NWKIT multiple-outgroup Ks correction. DupGen_finder, Whale, and ksrates
 are not runtime dependencies.
 
 ## Inputs and Execution
 
 Use an updated GeneGalleon runtime containing the new `nwkit wgd-count`,
-`nwkit ksrate`, and kfFractBias raw self-evidence commands. Local development
+`nwkit ksrate`, and LOCUSKIT raw self-evidence commands. Local development
 validation can mount the owned source repositories read-only using
 `GENEGALLEON_DOCKER_EXTRA_BINDS` and set `PYTHONPATH`; this does not update an
 existing image or establish SIF compatibility.

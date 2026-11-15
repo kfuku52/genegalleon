@@ -33,7 +33,7 @@ def fixture(tmp_path, count=3):
             hashes[str(path)] = rescue.digest(path)
     jobs = [dict(a=names[0], b=name, kind='pair', index=index, id=f'comparison_{index:06d}')
             for index, name in enumerate(names[1:], 1)]
-    owners = ('kfFractBias', 'jcvi', 'biopython', 'numpy', 'natsort', 'more-itertools', 'python',
+    owners = ('locuskit', 'jcvi', 'biopython', 'numpy', 'natsort', 'more-itertools', 'python',
               'diamond', 'diamond_sha256', 'lastal', 'lastal_sha256', 'lastdb', 'lastdb_sha256')
     plan = {'request': {'sources': sources, 'files': hashes,
                         'parameters': dict(cscore=.7, min_anchors=3, distance=20, diagonal_bound=4),

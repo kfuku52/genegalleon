@@ -95,7 +95,7 @@ def source_file(workspace, explicit, directory, species, suffixes):
 def tool_identity():
     import kffractbias.io
 
-    versions = {name: importlib.metadata.version(name) for name in ("jcvi", "kfFractBias", "biopython")}
+    versions = {name: importlib.metadata.version(name) for name in ("jcvi", "locuskit", "biopython")}
     versions["annotation_source_sha256"] = digest(kffractbias.io.__file__)
     versions["diamond"] = subprocess.check_output(["diamond", "version"], text=True).strip()
     return versions

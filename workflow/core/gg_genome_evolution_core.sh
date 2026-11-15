@@ -5834,7 +5834,7 @@ fi
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}" || exit 1
 
-task="Summarizing kfFractBias self-synteny retention across species"
+task="Summarizing LOCUSKIT self-synteny retention across species"
 if [[ ${run_self_fractionation_bias} -eq 1 ]]; then
   if [[ ! -s "${self_fractionation_bias_table}" ]]; then
     echo "Self-fractionation configuration table not found or empty: ${self_fractionation_bias_table}" >&2

@@ -189,7 +189,7 @@ subgenome_exact_max_states=262144 # Maximum integer-DP states or entries per mee
 subgenome_seed=1 # Reproducible random seed for subgenome statistics.
 subgenome_plot_config="" # Optional JSON styling and multi-species display filters; see docs/subgenome-dominance.md.
 synteny_plot_only=0 # Verify and reuse completed synteny analysis, then regenerate changed plots.
-run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
+run_self_fractionation_bias=0 # Incorporate completed mode=self LOCUSKIT array results by validating and building a multi-species summary.
 run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
 run_busco_dupaware_mafft=0 # Align duplicate-aware BUSCO ortholog FASTA files with MAFFT.
 run_busco_dupaware_trimal=0 # Trim duplicate-aware BUSCO ortholog alignments.

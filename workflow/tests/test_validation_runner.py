@@ -303,26 +303,26 @@ def test_wheel_inputs_resolve_only_the_temporary_build_and_install_offline(tmp_p
     source = "b" * 40
     nwkit_source = "c" * 40
     cdskit_source = "d" * 40
-    kffractbias_source = "e" * 40
-    prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, kffractbias_source)
+    locuskit_source = "e" * 40
+    prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, locuskit_source)
     assert requirements.read_bytes() == before
     build = (tmp_path / "build-requirements.txt").read_text()
     install = (tmp_path / "install-requirements.txt").read_text()
     assert f"csubst.git@{source}" in build
     assert f"nwkit.git@{nwkit_source}" in build
     assert f"cdskit.git@{cdskit_source}" in build
-    assert f"kfFractBias.git@{kffractbias_source}" in build
+    assert f"locuskit.git@{locuskit_source}" in build
     assert "cdskit" in install.splitlines()
     assert "nwkit" in install.splitlines()
     assert "git+" not in install
     assert "csubst" in install.splitlines()
-    assert "kffractbias" in install.splitlines()
+    assert "locuskit" in install.splitlines()
     assert json.loads((tmp_path / "source-identity.json").read_text())["csubst_sha"] == source
     assert json.loads((tmp_path / "source-identity.json").read_text())["nwkit_sha"] == nwkit_source
-    assert json.loads((tmp_path / "source-identity.json").read_text())["kffractbias_sha"] == kffractbias_source
+    assert json.loads((tmp_path / "source-identity.json").read_text())["locuskit_sha"] == locuskit_source
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source, cdskit_source, kffractbias_source)
+        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source, cdskit_source, locuskit_source)
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, source, "master", cdskit_source, kffractbias_source)
+        prepare_test_wheels.prepare(tmp_path, source, "master", cdskit_source, locuskit_source)
     with pytest.raises(ValueError, match="resolved"):
         prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, "master")

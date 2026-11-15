@@ -234,7 +234,7 @@ GeneGalleon entrypoints and core bootstraps now do this automatically for wrappe
 The validation wrappers instead set `PYTHONDONTWRITEBYTECODE=1`, so their
 imports do not write bytecode into the mounted checkout.
 
-CI resolves the moving `cdskit`, `csubst`, `nwkit` and `kfFractBias` branches once
+CI resolves the moving `cdskit`, `csubst`, `nwkit` and `LOCUSKIT` branches once
 for its Python wheel preparation job. Fast and integration lanes install the shared artifact with
 `--no-index`; they do not rebuild the same VCS dependency independently. The
 wheel cache includes the resolved source, Python/platform identity, requirements,
@@ -293,7 +293,7 @@ files, extra runtime scenarios, integration environment, and all required R
 commands. `run_checks.py` executes this same list for `dev`, Docker image
 publication, release SIFs, and the CI SIF job. `dev check full` runs all Python
 tests and every declared R check; `dev check r` runs the complete R list.
-`dev check runtime` also enables the real kfFractBias JCVI/LAST integrations.
+`dev check runtime` also enables the real LOCUSKIT JCVI/LAST integrations.
 Required Python checks fail the validation if they are skipped unexpectedly.
 Strict validation enables `GG_TEST_CSUBST_3DI=1`, so `dev check full` actually
 runs the two real-predictor checks instead of failing on their opt-in skips.

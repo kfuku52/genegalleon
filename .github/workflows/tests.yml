@@ -156,16 +156,16 @@ jobs:
           nwkit_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/nwkit.git "${GG_SOURCE_NWKIT_REPO_REF}")"
           [[ "${nwkit_sha}" =~ ^[0-9a-f]{40}$ ]]
           echo "nwkit_sha=${nwkit_sha}" >> "${GITHUB_OUTPUT}"
-          kffractbias_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/kfFractBias.git "${GG_SOURCE_KFFRACTBIAS_REPO_REF}")"
-          [[ "${kffractbias_sha}" =~ ^[0-9a-f]{40}$ ]]
-          echo "kffractbias_sha=${kffractbias_sha}" >> "${GITHUB_OUTPUT}"
+          locuskit_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/locuskit.git "${GG_SOURCE_LOCUSKIT_REPO_REF}")"
+          [[ "${locuskit_sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "locuskit_sha=${locuskit_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore test wheels by resolved source and constraints
         id: wheels-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gg-test-wheels
-          key: test-wheels-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('workflow/tests/requirements.txt', 'workflow/tests/requirements.lock.txt', 'workflow/tests/prepare_test_wheels.py') }}-${{ steps.source.outputs.csubst_sha }}-${{ steps.source.outputs.nwkit_sha }}-${{ steps.source.outputs.cdskit_sha }}-${{ steps.source.outputs.kffractbias_sha }}
+          key: test-wheels-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('workflow/tests/requirements.txt', 'workflow/tests/requirements.lock.txt', 'workflow/tests/prepare_test_wheels.py') }}-${{ steps.source.outputs.csubst_sha }}-${{ steps.source.outputs.nwkit_sha }}-${{ steps.source.outputs.cdskit_sha }}-${{ steps.source.outputs.locuskit_sha }}
 
       - name: Build missing test wheels
         if: steps.wheels-cache.outputs.cache-hit != 'true'
@@ -174,11 +174,11 @@ jobs:
           CDSKIT_SHA: ${{ steps.source.outputs.cdskit_sha }}
           CSUBST_SHA: ${{ steps.source.outputs.csubst_sha }}
           NWKIT_SHA: ${{ steps.source.outputs.nwkit_sha }}
-          KFFRACTBIAS_SHA: ${{ steps.source.outputs.kffractbias_sha }}
+          LOCUSKIT_SHA: ${{ steps.source.outputs.locuskit_sha }}
         run: |
           set -euo pipefail
           python workflow/tests/prepare_test_wheels.py \
-            --directory "${RUNNER_TEMP}/gg-test-wheels" --csubst-sha "${CSUBST_SHA}" --nwkit-sha "${NWKIT_SHA}" --cdskit-sha "${CDSKIT_SHA}" --kffractbias-sha "${KFFRACTBIAS_SHA}"
+            --directory "${RUNNER_TEMP}/gg-test-wheels" --csubst-sha "${CSUBST_SHA}" --nwkit-sha "${NWKIT_SHA}" --cdskit-sha "${CDSKIT_SHA}" --locuskit-sha "${LOCUSKIT_SHA}"
           python -m pip wheel \
             --constraint workflow/tests/requirements.lock.txt \
             --requirement "${RUNNER_TEMP}/gg-test-wheels/build-requirements.txt" \

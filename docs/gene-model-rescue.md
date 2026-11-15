@@ -253,7 +253,7 @@ selection. Changed inputs/settings/tools require a new output directory.
 ## Candidate and model evidence
 
 Pair comparisons use JCVI/DIAMOND; self comparisons use JCVI/LAST alignment and
-raw `kffractbias.selfscan`, with no quota screening. Self alignment removes
+the LOCUSKIT self-scan with no quota screening. Self alignment removes
 same-ID hits, preserves high-identity paralogs and disables tandem collapsing.
 Pair alignment also disables tandem collapsing. The selfscan dependency uses
 four anchors and chaining distance 20; `--min-anchors` and `--distance` tune
@@ -674,7 +674,7 @@ Completed comparisons additionally use a shared content cache, defaulting to
 Cache keys bind both BED/protein files, species/direction, pair/self mode,
 comparison settings, comparison implementation and relevant upstream sources
 and binaries, including both `lastdb` and `lastal`. The complete JCVI and
-kfFractBias Python implementation and compiled extensions are hashed, so an
+LOCUSKIT Python implementation and compiled extensions are hashed, so an
 editable support-module change invalidates reuse even without a version bump.
 Python and the numerical/sorting dependency versions also form part of the key.
 Plan IDs, reference-selection changes and unrelated rescue

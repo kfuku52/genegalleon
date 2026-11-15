@@ -398,7 +398,7 @@ alongside exact representative-map selection. Runtime registration retains all
 upstream checks. Refinement imports the native synteny reader through rescue,
 so its contract tests now run in the container runtime lane. Its CLI help check
 also runs there, with real dependencies and an empty temporary working directory;
-it is excluded from the fast environment that does not install kfFractBias.
+it is excluded from the fast environment that does not install LOCUSKIT.
 
 All checks below used the same fresh immutable Docker image documented above.
 These are separate runs; their overlapping counts must not be added.
