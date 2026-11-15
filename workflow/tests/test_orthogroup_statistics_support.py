@@ -297,6 +297,27 @@ def test_rejects_partially_labelled_support_tree():
         mod.map_internal_support_by_split(rooted, partially_labelled, support_max=100)
 
 
+def test_branch_statistics_keep_available_iqtree_support(tmp_path, monkeypatch):
+    import pandas as pd
+
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    genes = {letter: f"Genus_species_{letter}" for letter in "abcdef"}
+    a, b, c, d, e, f = genes.values()
+    rooted = tmp_path / "rooted.nwk"
+    rooted.write_text(f"((({a},{b})AB,({c},{d})CD)ABCD,({e},{f})EF)Root;\n")
+    iqtree = tmp_path / "iqtree.nwk"
+    iqtree.write_text(f"(({a},{b})0,({c},{d}),({e},{f})97);\n")
+    monkeypatch.setattr(sys, "argv", [str(MODULE_PATH), "--rooted_tree", str(rooted), "--unrooted_tree", str(iqtree)])
+
+    mod.main()
+
+    branches = pd.read_csv("orthogroup.branch.tsv", sep="\t")
+    supports = branches.set_index("node_name")["support_unrooted"].dropna().to_dict()
+    assert supports == {"AB": 0.0, "ABCD": 97.0, "EF": 97.0}
+    assert branches["support_generax_ufboot"].isna().all()
+
+
 def test_explicit_support_mapping_rejects_fully_unlabelled_internal_splits():
     mod = load_module()
     rooted = add_branch_ids(mod.new_tree("(((a,b),(c,d)),(e,f));", format=1))

@@ -6616,6 +6616,7 @@ summary_provenance_args=(
   --output "stat_tree=${file_og_stat_tree}"
   --optional-output "stat_species_branch=${file_og_stat_species_branch}"
   --optional-output "reconciliation_events=${file_og_reconciliation_events}"
+  --input "orthogroup_statistics_script=${gg_support_dir}/orthogroup_statistics.py"
   --input "species_branch_statistics_script=${gg_support_dir}/species_branch_statistics.py"
   --input "reconciliation_parser_script=${gg_support_dir}/reconciliation_database.py"
   --parameter "species_branch_statistics_contract=species_reconciliation_v1"
