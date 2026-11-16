@@ -8,11 +8,11 @@ import pytest
 CORE = Path(__file__).resolve().parents[1] / "core/gg_gene_evolution_core.sh"
 PARAMETERS = {
     "synteny_search_window": "20",
-    "treevis_sequence_similarity": "1",
+    "treevis_sequence_similarity": "0",
     "treevis_sequence_similarity_width_mm": "15",
     "treevis_cis_similarity": "1",
     "treevis_cis_similarity_width_mm": "15",
-    "treevis_synteny_similarity": "1",
+    "treevis_synteny_similarity": "0",
     "treevis_synteny_similarity_width_mm": "15",
 }
 
@@ -23,8 +23,8 @@ def test_legacy_plot_configuration_initializes_before_analysis(tmp_path, custom)
     env.update(GG_CORE_SOURCE_ONLY="1", GG_TASK_CPUS="1", GG_MEM_TOTAL_GB="2",
                gg_workspace_dir=str(tmp_path / "workspace"),
                gg_support_dir=str(CORE.parent.parent / "support"))
-    expected = {key: ("0" if "width" not in key and key != "synteny_search_window" else "7")
-                for key in PARAMETERS} if custom else PARAMETERS
+    expected = {key: ("1" if default == "0" else "0" if default == "1" else "7")
+                for key, default in PARAMETERS.items()} if custom else PARAMETERS
     if custom:
         env.update(expected)
     # Source the actual core rather than a duplicated configuration fragment.

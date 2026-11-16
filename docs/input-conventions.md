@@ -17,7 +17,7 @@ preserves the default exclusion of duplicated species/marker cells. Opt-in
 `"best-score"` with `strictly_single_copy_only=0` retains one candidate per
 species/marker, ranked by BUSCO HMM score, aligned length, then gene ID. The
 original proteins and BUSCO tables remain unchanged; all candidates and the
-selection are recorded in `output/species_tree/busco_representative_selection.tsv`
+selection are recorded in `output/species_tree/busco_representative_selection.tsv.gz`
 and bound to the extraction provenance. This can recover marker coverage for
 duplicated assemblies, but HMM ranking does not establish orthology or distinguish
 alleles from paralogs. Review duplication patterns and tree sensitivity before
@@ -1370,6 +1370,13 @@ Latest template distribution:
   through an exact sequence ID, strand, and CDS interval match against the paired
   GFF. This recovers anonymous pseudogene CDS without editing source headers.
   Conflicting or inexact matches remain mapping failures,
+- For `Arabidopsis_thaliana` TAIR12 GFF input, `safe` and `strict` GFF repair
+  use the AGI locus ID for declared genes with a `TAIR12_`-prefixed AGI ID.
+  The formatter applies the same mapping to the GFF feature IDs and their
+  references and to the paired CDS grouping. For example, the GFF gene becomes
+  `AT1G68290` and the CDS becomes `Arabidopsis_thaliana_AT1G68290`. Original
+  identifiers remain in the GFF aliases and repair audit. Target ID collisions
+  stop formatting,
 - can optionally generate `workspace/input/species_trait/species_trait.tsv`
   from configured trait databases. See [public plant trait sources](public-plant-traits.md)
   for BROT, CPT, AlgaeTraits and BIEN acquisition and source-specific limits.

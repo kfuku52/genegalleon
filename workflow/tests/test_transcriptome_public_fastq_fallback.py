@@ -916,15 +916,21 @@ def test_drifted_bound_fastq_and_manifest_are_preserved_for_recovery(monkeypatch
     assert (output_dir / "getfastq_completion.json.pre_integrity_recovery").is_file()
 
 
-def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped):
     metadata_path = tmp_path / "metadata.tsv"
     output_dir = tmp_path / "getfastq"
     run_dir = output_dir / "RUN1"
     run_dir.mkdir(parents=True)
     _metadata(metadata_path, ["RUN1"])
     fastq_path = run_dir / "RUN1.amalgkit.fastq.gz"
-    with gzip.open(fastq_path, "wb") as handle:
-        handle.write(b"@read\nACGT\n+\n!!!!\n")
+    if wrapped:
+        fastq_path.write_bytes(
+            gzip.compress(b"@read\r\nAC\r\nGT\r\n+\r\n!!\r\n")
+            + gzip.compress(b"!!\r\n") + b"\0\0"
+        )
+    else:
+        fastq_path.write_bytes(gzip.compress(b"@read\nACGT\n+\n!!!!\n"))
     stale_path = output_dir / "STALE" / "STALE.amalgkit.fastq.gz"
     stale_path.parent.mkdir()
     with gzip.open(stale_path, "wb") as handle:
@@ -978,6 +984,26 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path):
     ).is_file()
     validated = _run_manifest_validator(metadata_path, output_dir)
     assert validated.returncode == 0, validated.stderr
+
+
+def test_fastq_proof_rejects_same_byte_replacement_during_validation(tmp_path, monkeypatch):
+    from workflow.support import fastq_proof
+
+    path = tmp_path / "original.fastq.gz"
+    replacement = tmp_path / "replacement.fastq.gz"
+    payload = gzip.compress(b"@read\nACGT\n+\n!!!!\n")
+    path.write_bytes(payload)
+    replacement.write_bytes(payload)
+    parse = fastq_proof._complete_fastq
+
+    def replace_after_parsing(handle):
+        complete = parse(handle)
+        replacement.replace(path)
+        return complete
+
+    monkeypatch.setattr(fastq_proof, "_complete_fastq", replace_after_parsing)
+    with pytest.raises(fastq_proof.FastqChanged):
+        fastq_proof.proof_fastq(path)
 
 
 def test_amalgkit_manifest_rejects_nonfinite_quant_statistics(tmp_path):

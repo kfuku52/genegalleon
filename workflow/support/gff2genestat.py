@@ -1555,18 +1555,17 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
 
 
 def validate_cds_lengths(traits, records):
-    lengths = {}
-    sequences = {}
+    nucleotide_pattern = re.compile(r"[ACGTRYSWKMBDHVN?]+")
+    lengths_and_tails = {}
     for identifier, _header, sequence in records:
         sequence = sequence.upper()
-        if not sequence or re.search(r"[^ACGTRYSWKMBDHVN?]", sequence):
+        if not nucleotide_pattern.fullmatch(sequence):
             raise ValueError(f"CDS length validation requires ungapped nucleotide FASTA: {identifier}")
-        lengths[identifier] = len(sequence)
-        sequences[identifier] = sequence
+        lengths_and_tails[identifier] = len(sequence), sequence[-2:]
     mismatches = []
     for row in traits.itertuples(index=False):
         expected = int(row.feature_size)
-        observed = lengths[row.gene_id]
+        observed, tail = lengths_and_tails[row.gene_id]
         if expected == observed:
             continue
         if cds_length_is_compatible_with_partial(row, observed):
@@ -1577,7 +1576,7 @@ def validate_cds_lengths(traits, records):
         padding = (-expected) % 3
         if (getattr(row, "splice_mode", "") == "pseudogene" and padding
                 and observed == expected + padding
-                and sequences[row.gene_id][expected:] == "N" * padding):
+                and tail.endswith("N" * padding)):
             continue
         mismatches.append(f"{row.gene_id} (GFF={expected}, CDS={observed})")
     if mismatches:

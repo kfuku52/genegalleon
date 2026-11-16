@@ -244,12 +244,12 @@ Notable defaults:
 
 Runs fully local pairwise fractionation-bias and within-genome self-synteny
 retention analyses with
-[`kfFractBias`](https://github.com/kfuku52/kfFractBias). Each scheduler array
+[`LOCUSKIT`](https://github.com/kfuku52/locuskit). Each scheduler array
 task selects one data row from
 `workspace/input/fractionation_bias_pairs.tsv`, resolves that row's target and
 query files from `workspace/input/species_cds` and
-`workspace/input/species_gff`. Rows with `mode=compare` run `kffractbias
-compare`; rows with `mode=self` run `kffractbias selfcompare`. The analysis
+`workspace/input/species_gff`. Rows with `mode=compare` run `locuskit fractbias
+compare`; rows with `mode=self` run `locuskit fractbias selfcompare`. The analysis
 uses local JCVI MCscan, LAST (or BLAST), and QUOTA-ALIGN; it does not contact
 CoGe or another analysis service at runtime.
 
@@ -462,7 +462,7 @@ Notable defaults:
 - duplicated BUSCOs are excluded from each species by default;
   [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-parameters.md#busco-duplicate-representatives-for-species-trees)
   selects one complete copy and saves candidate decisions in
-  `species_tree/busco_summary_table/busco_copy_selection.tsv`,
+  `species_tree/busco_summary_table/busco_copy_selection.tsv.gz`,
 - species-tree rooting is configured locally in `workflow/gg_genome_evolution_entrypoint.sh` via `species_tree_rooting`,
 - `run_plot_species_trees=1` plots whichever concatenated/ASTRAL candidate trees
   are available and independently builds the selected-tree BUSCO summary plot
@@ -866,9 +866,9 @@ For dated-tree plots, root selection, and the copy-number regression model, see
 
 ### Reference-based fractionation reports
 
-Set `kffractbias_report_config` in `gg_fractionation_bias_entrypoint.sh` to a JSON file and run task 1 once. Pairwise/self mode remains unchanged when unset. The report delegates numerical aggregation and plotting to `kffractbias report` through its Python API. It requires the copy-aware report API in the current kfFractBias development version; rebuild the runtime after updating the dependency.
+Set `kffractbias_report_config` in `gg_fractionation_bias_entrypoint.sh` to a JSON file and run task 1 once. Pairwise/self mode remains unchanged when unset. The report delegates numerical aggregation and plotting to `locuskit fractbias report` through its Python API. It requires the copy-aware report API in the current LOCUSKIT development version; rebuild the runtime after updating the dependency.
 
-The JSON requires `manifest` (relative to the JSON file) and accepts `prefix`, `window_size`, `step_size`, `denominator`, `comparison_scope`, `minimum_callable_fraction`, `minimum_anchors`, `trim`, `raw`, `target_seqids`, and an inline `plot_config` object. Omit `plot_config` for tables only. Results are in `workspace/output/kffractbias_reports/`. See the [kfFractBias comparison format](https://github.com/kfuku52/kfFractBias/blob/master/docs/comparison.md) for assignment, missingness, fragment and plotting contracts. Copy labels are local and must be supplied independently of the outcome.
+The JSON requires `manifest` (relative to the JSON file) and accepts `prefix`, `window_size`, `step_size`, `denominator`, `comparison_scope`, `minimum_callable_fraction`, `minimum_anchors`, `trim`, `raw`, `target_seqids`, and an inline `plot_config` object. Omit `plot_config` for tables only. Results are in `workspace/output/kffractbias_reports/`. See the [LOCUSKIT comparison format](https://github.com/kfuku52/locuskit/blob/main/docs/comparison.md) for assignment, missingness, fragment and plotting contracts. Copy labels are local and must be supplied independently of the outcome.
 
 Set `comparison_scope` to `pairwise` to aggregate each reference/query pair independently. With `raw: true` and `denominator: "syntenic"`, each pair selects its own detected reference genes before building complete windows. Adding another species cannot change existing pairs. Scope defaults to `shared` for compatibility. Pairwise reports use schema 2, per-analysis counts, and `callable_genes` rather than common-mask columns; see the owning dependency's format guide. Coloured raw tracks use each local copy independently and break when native evidence segments change. A missing syntelog is a detection result, not a demonstrated ancestral loss.
 
@@ -887,6 +887,6 @@ unmasked counting; `all_profiles_scale: "raw"` independently controls the
 all-reference figure's displayed total. The latter defaults to `normalised`
 for compatibility. Report window size, pair-specific denominator and total
 normalisation in the manuscript caption. These settings require the updated
-kfFractBias plotting API; rebuild the runtime after updating that dependency.
+LOCUSKIT plotting API; rebuild the runtime after updating that dependency.
 
 Optional `statistics` keys are `block_size` (100), `replicates` (2000), `permutations` (100000), and `seed` (1). Statistics use paired differences in fractions of expected copies at shared callable reference loci, with disjoint, chromosome-local reference-rank blocks, cluster bootstrap confidence intervals, block sign flips and BH correction across every species pair in the report. Overlapping plotting windows are never treated as independent observations. `.contrasts.json` records the table/configuration hashes and sampling parameters. Inference is conditional on the annotation, alignments and callable subset; it does not establish ancestral gene loss. Statistics require `comparison_scope: "shared"`, masked profiles and at least two species. A pairwise report with `statistics` is rejected before creating outputs. Sensitivity to window size, block size, denominator and reference must be assessed for scientific use.

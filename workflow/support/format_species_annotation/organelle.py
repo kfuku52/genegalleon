@@ -144,8 +144,9 @@ def gff_organelle_aliases(path, seqids=None):
 def gff_data_line_is_organelle(line, seqids):
     if not seqids:
         return False
-    parts = str(line).rstrip("\n\r").split("\t")
-    return len(parts) >= 9 and str(parts[0] or "").strip() in seqids
+    text = str(line)
+    seqid_end = text.find("\t")
+    return seqid_end >= 0 and text[:seqid_end].strip() in seqids and text.count("\t") >= 8
 
 
 def iter_non_organelle_gff_lines(path, seqids=None, *, attribute_changes=None):
@@ -156,11 +157,13 @@ def iter_non_organelle_gff_lines(path, seqids=None, *, attribute_changes=None):
             if raw_line.startswith("##FASTA"):
                 break
             line = apply_common_replacements(raw_line)
-            if not gff_data_line_is_organelle(line, excluded):
-                if attribute_changes is not None or raw_line.rstrip("\r\n").endswith("\t"):
-                    raw_line = normalise_line(raw_line, path, line_number,
-                                              attribute_changes if attribute_changes is not None else [])
-                yield apply_common_replacements(raw_line)
+            if gff_data_line_is_organelle(line, excluded):
+                continue
+            if attribute_changes is not None or raw_line.rstrip("\r\n").endswith("\t"):
+                repaired = normalise_line(raw_line, path, line_number,
+                                          attribute_changes if attribute_changes is not None else [])
+                line = apply_common_replacements(repaired)
+            yield line
 
 
 def count_organelle_gff_features(path, seqids=None):

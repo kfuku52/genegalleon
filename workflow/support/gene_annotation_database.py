@@ -40,12 +40,11 @@ def reconciled_gene_catalogue(database):
     query = "SELECT gene_id,species,orthogroup FROM reconciliation_gene"
     if database.execute("SELECT 1 FROM sqlite_master WHERE name='species_reconciliation_gene'").fetchone():
         query += " UNION SELECT gene_id,species,orthogroup FROM species_reconciliation_gene"
-    result, identities = {}, {}
+    result = {}
     for gene, species, family in database.execute(query):
-        if gene in identities and identities[gene] != (species, family):
+        identity = species, family
+        if result.setdefault(gene, identity) != identity:
             raise ValueError("Reconciliation methods disagree on gene identity: " + gene)
-        identities[gene] = (species, family)
-        result[species, gene] = family
     return result
 
 
@@ -138,29 +137,33 @@ def preflight_annotations(source_db, config, sources, guards):
             "SELECT descendant_taxa FROM reconciliation_species_branch WHERE terminal=1")}
     if config.get("require_complete_genes", True) and {v["species"] for v in sources} != expected_species:
         raise ValueError("Complete annotation requires the exact DB species set")
-    covered = set()
+    covered = Counter()
     for source in sources:
+        species = source["species"]
         guards[source["path"]] = identity(source["path"])
         header, product, go = source_header(source)
         ids, accepted, statuses = set(), set(), Counter()
+        matched = 0
         for row in source_rows(source, header):
             gene = row["gene_id"]
-            if not gene or gene != gene.strip() or gene in ids or ("species" in row and row["species"] != source["species"]):
+            if not gene or gene != gene.strip() or gene in ids or ("species" in row and row["species"] != species):
                 raise ValueError("Empty/ambiguous/duplicate gene ID or conflicting annotation species")
             ids.add(gene)
-            key = source["species"], gene
-            if key in expected:
-                if row["orthogroup"] != expected[key]:
+            assignment = expected.get(gene)
+            if assignment is not None and assignment[0] == species:
+                if row["orthogroup"] != assignment[1]:
                     raise ValueError("Annotation family disagrees with exact reconciliation membership: " + gene)
-                covered.add(key)
+                matched += 1
             status = validate_qc_row(row, product, go)
             statuses[status] += 1
             if status == "accepted":
                 accepted.add(gene)
         check_cds_scope(source, ids, accepted, statuses)
-    missing = Counter(species for species, _ in expected.keys() - covered)
-    if config.get("require_complete_genes", True) and missing:
-        raise ValueError(f"Annotations omit {sum(missing.values())} exact reconciliation genes; by species: {canonical(dict(missing))}")
+        covered[species] = matched
+    if config.get("require_complete_genes", True):
+        missing = Counter(species for species, _ in expected.values()) - covered
+        if missing:
+            raise ValueError(f"Annotations omit {sum(missing.values())} exact reconciliation genes; by species: {canonical(dict(missing))}")
 
 
 def source_header(source):
@@ -262,7 +265,7 @@ def import_annotations(database, config, sources, guards):
     # Only immutable parsed tuples are cached, within this import. Large fields
     # bypass the cache; both entry count and admitted key size remain bounded.
     parse_go = lru_cache(maxsize=256)(_parse_go_values)
-    covered, total, terms, source_counts, qc_counts = set(), 0, 0, {}, Counter()
+    covered, total, terms, source_counts, qc_counts = 0, 0, 0, {}, Counter()
     for source_id, (source, (header, product, go)) in enumerate(zip(sources, headers, strict=True), 1):
         species = source["species"]
         database.execute("INSERT INTO gene_annotation_source VALUES (?,?,?,?,?,?,?,?)",
@@ -274,17 +277,17 @@ def import_annotations(database, config, sources, guards):
             gene, family = row["gene_id"], row["orthogroup"]
             if not gene or gene != gene.strip() or ("species" in row and row["species"] != species):
                 raise ValueError("Empty/ambiguous gene ID or conflicting annotation species")
-            key = species, gene
             source_ids.add(gene)
             status = validate_qc_row(row, product, go)
             source_statuses[status] += 1
             qc_counts[status] += 1
             if status == "accepted":
                 accepted_ids.add(gene)
-            if key in expected:
-                if expected[key] != family:
+            assignment = expected.get(gene)
+            if assignment is not None and assignment[0] == species:
+                if assignment[1] != family:
                     raise ValueError("Annotation family disagrees with exact reconciliation membership: " + gene)
-                covered.add(key)
+                covered += 1
             batch.append((species, gene, family if family in families else None, family, source_id,
                           *map(row.get, columns)))
             batch_bytes += sum(map(len, row.values()))
@@ -305,7 +308,8 @@ def import_annotations(database, config, sources, guards):
         source_counts[species] = count
         check_cds_scope(source, source_ids, accepted_ids, source_statuses)
         total += count
-    missing = len(expected.keys() - covered)
+    # The annotation primary key rejects repeated matches before publishing.
+    missing = len(expected) - covered
     if config.get("require_complete_genes", True) and missing:
         raise ValueError(f"Annotations omit {missing} exact reconciliation genes")
     database.execute("CREATE INDEX gene_annotation_family ON gene_annotation(orthogroup,species)")

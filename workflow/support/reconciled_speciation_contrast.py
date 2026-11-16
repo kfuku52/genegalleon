@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 import re
@@ -28,7 +29,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from association_statistics import association_rows as _association_results
 from species_trait_contract import (
     metadata_path,
-    select_species_traits,
+    select_species_traits_from_payload,
     trait_output_transaction,
     write_derived_contract,
 )
@@ -261,8 +262,9 @@ STAT_TREE_RESULT_COLUMNS = (
 
 
 
-def _read_header(path: Path) -> list[str]:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+def _read_header(path: Path, *, payload: bytes | None = None) -> list[str]:
+    source = path.open("rb") if payload is None else io.BytesIO(payload)
+    with io.TextIOWrapper(source, encoding="utf-8-sig", newline="") as handle:
         header = next(csv.reader(handle, delimiter="\t"), None)
     if not header:
         raise ValueError(f"TSV input has no header: {path}")
@@ -694,12 +696,10 @@ def _prepare_expression(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
 
 
 def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dict[str, object]]:
-    traits = read_tsv(args.species_traits)
-    leaf_column = traits.columns[0]
-    traits[leaf_column] = traits[leaf_column].astype(str).str.strip()
-    if (traits[leaf_column] == "").any():
-        raise ValueError("Species-trait input contains an empty species identifier")
-
+    source = args.species_traits
+    payload = source.read_bytes()
+    header = _read_header(source, payload=payload)
+    leaf_column = header[0]
     identifier_columns = [
         value
         for value in (
@@ -729,8 +729,18 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
         )
     metadata_columns = set(identifier_columns + auxiliary_columns)
     for column in metadata_columns:
-        if column not in traits.columns:
+        if column not in header:
             raise ValueError(f"Predictor metadata column is absent from species traits: {column}")
+    available = [column for column in header[1:] if column not in metadata_columns]
+    _parse_csv_names(args.predictors, available, "--predictors")
+    traits, input_contract = select_species_traits_from_payload(
+        source, payload, args.predictors, auxiliary=tuple(metadata_columns), allow_empty=True,
+    )
+    if traits.empty:
+        raise ValueError(f"TSV input has no data rows: {source}")
+    traits[leaf_column] = traits[leaf_column].astype(str).str.strip()
+    if (traits[leaf_column] == "").any():
+        raise ValueError("Species-trait input contains an empty species identifier")
     for column in identifier_columns:
         missing_ids = traits[column].map(_is_missing)
         if missing_ids.any():
@@ -749,12 +759,6 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
             and traits.duplicated(subset=[*observation_key, args.predictor_technical_id], keep=False).any()
         ):
             raise ValueError("Predictor technical IDs must be unique within each species/biological observation")
-    available = [column for column in traits.columns[1:] if column not in metadata_columns]
-    predictors = _parse_csv_names(args.predictors, available, "--predictors")
-    traits, input_contract = select_species_traits(
-        args.species_traits, args.predictors, auxiliary=tuple(metadata_columns), allow_empty=True,
-    )
-    traits[leaf_column] = traits[leaf_column].astype(str).str.strip()
     predictors = input_contract["selected"]
     _validate_generated_trait_names(predictors, "Predictor")
 

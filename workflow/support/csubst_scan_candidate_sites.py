@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import zipfile
+from bisect import bisect_left
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from functools import lru_cache
@@ -547,9 +548,15 @@ def load_threshold_candidates(
     selected = frame.loc[keep, :].copy()
     selected[probability_column] = qvalues.loc[keep].astype(float)
     selected["support_unit_count"] = support.loc[keep].astype(int)
-    selected["codon_site_alignment"] = [
-        integer_value(value, "codon_site_alignment", minimum=1) for value in selected["codon_site_alignment"]
-    ]
+    # Release the full source view before ranking and constructing candidate IDs.
+    del frame, raw_probability, qvalues, support, lineage
+    sites = selected["codon_site_alignment"]
+    # Native positive integers within the exact float range pass integer_value.
+    if sites.empty or sites.dtype != np.dtype("int64") or sites.min() < 1 or sites.max() > 2**53:
+        selected["codon_site_alignment"] = [
+            integer_value(value, "codon_site_alignment", minimum=1) for value in sites
+        ]
+    del sites
     canonical_branch_ids = []
     for row_index, value in selected["support_branch_ids"].items():
         try:
@@ -1253,17 +1260,11 @@ def archive_matches_source(
     skipped_manifest_member = f"{archive_path.stem}/skipped_candidates.tsv"
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
+            files, _directories = validated_members(archive, archive_path, archive_path.stem)
             if archive.testzip() is not None:
                 return False
-            member_names = set(archive.namelist())
+            member_names = {info.filename for info in files}
             root_prefix = f"{archive_path.stem}/"
-            if any(
-                not name.startswith(root_prefix)
-                or ".." in PurePosixPath(name).parts
-                or PurePosixPath(name).is_absolute()
-                for name in member_names
-            ):
-                return False
             required_top_level = {
                 metadata_member,
                 candidate_manifest_member,
@@ -1375,17 +1376,21 @@ def archive_matches_source(
                 expected_skipped = expected_skipped_candidates.loc[:, SKIPPED_CANDIDATE_COLUMNS].fillna("").astype(str)
                 if skipped_manifest.to_dict(orient="records") != expected_skipped.to_dict(orient="records"):
                     return False
-            for _, candidate in candidate_manifest.iterrows():
-                for column in ("candidate_tsv", "focused_tree_site_pdf", "report_pdf"):
-                    if root_prefix + candidate[column] not in member_names:
-                        return False
-                csubst_prefix = root_prefix + candidate["csubst_sites_dir"].rstrip("/") + "/"
-                output_manifests = [
-                    name
-                    for name in member_names
-                    if name.startswith(csubst_prefix) and name.endswith("/csubst.outputs.tsv")
-                ]
-                if len(output_manifests) != 1 or not archive_site_outputs_are_complete(archive, output_manifests[0]):
+            output_manifests = sorted(name for name in member_names if name.endswith("/csubst.outputs.tsv"))
+            paths = ["candidate_tsv", "focused_tree_site_pdf", "report_pdf", "csubst_sites_dir"]
+            for candidate_tsv, focused_pdf, report_pdf, site_dir in candidate_manifest[paths].itertuples(
+                index=False, name=None
+            ):
+                if any(root_prefix + name not in member_names for name in (candidate_tsv, focused_pdf, report_pdf)):
+                    return False
+                csubst_prefix = root_prefix + site_dir.rstrip("/") + "/"
+                # All names under the prefix are consecutive in sorted order.
+                index = bisect_left(output_manifests, csubst_prefix)
+                if index == len(output_manifests) or not output_manifests[index].startswith(csubst_prefix):
+                    return False
+                if index + 1 < len(output_manifests) and output_manifests[index + 1].startswith(csubst_prefix):
+                    return False
+                if not archive_site_outputs_are_complete(archive, output_manifests[index]):
                     return False
         # Tool, runtime, container, and GeneGalleon versions are diagnostic
         # provenance only. Cache invalidation is driven by source content,

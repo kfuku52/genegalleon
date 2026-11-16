@@ -100,7 +100,7 @@ def test_exact_selected_paths_map_through_real_kffractbias_and_official_cli(tmp_
         assert set(receipt["identity"]["runtime"]) == {"python", "numpy", "pandas"}
         assert digest(Path(source["gff"])) == originals[selected["species"]]
     target, query = result
-    validation = subprocess.run(["kffractbias", "validate", "--target-cds", target["cds"], "--target-gff", target["gff"],
+    validation = subprocess.run(["locuskit", "fractbias", "validate", "--target-cds", target["cds"], "--target-gff", target["gff"],
                                  "--query-cds", query["cds"], "--query-gff", query["gff"],
                                  "--target-feature", "gene", "--target-attribute", "ID",
                                  "--query-feature", "gene", "--query-attribute", "ID", "--pairwise"],

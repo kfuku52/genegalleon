@@ -11,15 +11,18 @@ import hashlib
 import json
 import shutil
 import time
-from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from itertools import chain
 from pathlib import Path
 
 try:
     import rescue_model_store as store
     from rescue_model_store_patch import patch_model_store
+    from stage_output_hashes import hash_paths
 except ImportError:
     from . import rescue_model_store as store
     from .rescue_model_store_patch import patch_model_store
+    from .stage_output_hashes import hash_paths
 
 POST = frozenset({'overlap_existing_annotation', 'competing_new_models',
                   'ambiguous_coding_path_representative', 'ambiguous_annevo_coding_path_representative',
@@ -62,7 +65,7 @@ FUNCTIONS = {
 ALLOWED_TOOL_CHANGES = frozenset({'implementation', 'model_store_implementation', 'resolve_coding_paths_implementation',
                                 'annevo_candidate_implementation', 'state_implementation',
                                 'comparison_copy_proof_implementation', 'output_hashes_implementation',
-                                'admission_replay_implementation', 'admission_patch_implementation'})
+                                'admission_replay_implementation', 'admission_patch_implementation', 'model_protein_correspondence'})
 
 
 def _r():
@@ -249,17 +252,30 @@ def prepare(root, plan, cpus):
         inputs.check()
         r.require_same_key(old_hash, r.plan_digest(previous, prior))
         r.require_same_key(new_hash, r.plan_digest(root, plan))
-    for name in plan['species']:
-        r.verify_sources(plan, [name], ['fasta', 'gff', 'genome'], verification=inputs)
-        old_key, new_key = {'plan': old_hash, 'species': name}, {'plan': new_hash, 'species': name}
-        def build(tmp, name=name, old_key=old_key):
-            r.copy_verified_comparison(previous / 'prepared' / name, tmp, old_key, cpus)
-        r.stage(root, Path('prepared') / name, new_key, build, guard, hash_workers=cpus)
-    for job in plan['synteny_jobs']:
-        old_key, new_key = r.comparison_key(previous, job), r.comparison_key(root, job)
-        def build(tmp, job=job, old_key=old_key):
-            r.copy_verified_comparison(previous / 'synteny' / job['id'], tmp, old_key, cpus)
-        r.stage(root, Path('synteny') / job['id'], new_key, build, guard, hash_workers=cpus)
+
+    names = sorted({name for target in plan['species'] for name in (target, *plan['donors'][target])})
+    # Finish collecting source proofs before workers start checking them.
+    r.verify_sources(plan, names, ['fasta', 'gff', 'genome'], verification=inputs)
+    workers = min(cpus, 4, max(1, len(names), len(plan['synteny_jobs'])))
+    copy_workers = cpus // workers
+
+    def import_stage(relative, old_key, new_key):
+        def build(tmp):
+            r.copy_verified_comparison(previous / relative, tmp, old_key, copy_workers)
+        r.stage(root, relative, new_key, build, guard, hash_workers=copy_workers, publication_guard=guard)
+
+    def import_species(name):
+        import_stage(Path('prepared') / name, {'plan': old_hash, 'species': name}, {'plan': new_hash, 'species': name})
+
+    def import_comparison(job):
+        import_stage(Path('synteny') / job['id'], r.comparison_key(previous, job), r.comparison_key(root, job))
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # Each comparison key requires both prepared stages to be complete.
+        for _ in executor.map(import_species, names):
+            pass
+        for _ in executor.map(import_comparison, plan['synteny_jobs']):
+            pass
 
 
 def eligible(context):
@@ -267,9 +283,10 @@ def eligible(context):
 
 
 def reset_admission(model):
-    result = copy.deepcopy({key: value for key, value in model.items() if key not in MUTABLE})
-    result['problems'] = sorted(set(result.get('problems', ())) - POST)
-    return result
+    """Clear the derived decisions from one privately decoded replay record."""
+    for key in MUTABLE & model.keys():
+        del model[key]
+    model['problems'] = sorted(set(model.get('problems', ())) - POST)
 
 
 def read_retained(root, plan, name, previous_worker, receipt_sha, batch, history):
@@ -304,22 +321,39 @@ def read_retained(root, plan, name, previous_worker, receipt_sha, batch, history
     return retained
 
 
+def _diagnostics():
+    try:
+        import rescue_diagnostics
+    except ImportError:
+        from . import rescue_diagnostics
+    return rescue_diagnostics
+
+
 def _rewrite_table(source, destination, updates, appended, make_row, count, *, allow_tail=False):
     import csv
-    with source.open(newline='') as inp, destination.open('x', newline='') as out:
-        reader, writer = csv.reader(inp, delimiter='\t'), csv.writer(out, delimiter='\t', lineterminator='\n')
-        writer.writerow(next(reader))
+    diagnostic = _diagnostics()
+    with diagnostic.text_open(source, 'r') as inp, diagnostic.text_open(destination, 'x') as out:
+        writer = csv.writer(out, delimiter='\t', lineterminator='\n')
+        writer.writerow(next(csv.reader(inp, delimiter='\t')))
+        field_limit = csv.field_size_limit()
         total = 0
         inserted = False
-        for ordinal, row in enumerate(reader):
+        for ordinal, line in enumerate(inp):
             if ordinal == count:
                 writer.writerows(make_row(m) for m in appended)
                 inserted = True
-            if ordinal in updates:
-                if row[0] != updates[ordinal]['query']:
-                    raise ValueError('Admission audit order changed')
-                row = make_row(updates[ordinal])
-            writer.writerow(row)
+            # Unchanged unquoted records already use the writer's encoding.
+            # The CSV reader still handles quoted multiline fields, changed
+            # ordinals and records that could exceed its field-size limit.
+            if ordinal in updates or '"' in line or len(line) > field_limit:
+                row = next(csv.reader(chain((line,), inp), delimiter='\t'))
+                if ordinal in updates:
+                    if row[0] != updates[ordinal]['query']:
+                        raise ValueError('Admission audit order changed')
+                    row = make_row(updates[ordinal])
+                writer.writerow(row)
+            else:
+                out.write(line if line.endswith('\n') and not line.endswith('\r\n') else line.rstrip('\r\n') + '\n')
             total += 1
         if total < count or (not allow_tail and total != count):
             raise ValueError('Admission audit/model count differs')
@@ -327,7 +361,7 @@ def _rewrite_table(source, destination, updates, appended, make_row, count, *, a
             writer.writerows(make_row(m) for m in appended)
 
 
-def rescue(root, plan, name, cpus):
+def rescue(root, plan, name, cpus, *, dependencies):
     r = _r()
     from gene_model_catalog import indexed_genome
     from input_generation_array_state import FreshDigestBatch
@@ -342,33 +376,52 @@ def rescue(root, plan, name, cpus):
     r.require_same_key(old_receipt['key'], r.rescue_key(previous, prior, name))
     raw_key = store.frozen_model_store_key(old_worker)
     batch = FreshDigestBatch()
+    source_proof = FreshDigestBatch()
     expected = {str(old_worker / member): sha for member, sha in old_receipt['files'].items()}
     expected[str(old_worker / 'receipt.json')] = frozen['receipt_sha256']
     expected.update(plan['request']['admission_cache']['contract']['source_files'])
-    key = r.rescue_key(root, plan, name)
-    def guard():
+    def current_key():
+        return r.rescue_key(root, plan, name, dependency_snapshot=dependencies)
+
+    key = current_key()
+    expected[str(previous / 'plan.json')] = plan['request']['admission_cache']['plan_sha256']
+    expected[str(root / 'plan.json')] = key['plan']
+
+    def publication_guard():
         batch.check()
-        r.require_same_key(key, r.rescue_key(root, plan, name))
+        dependencies.check_all()
+        source_proof.check()
+
+    def guard():
+        publication_guard()
+        r.require_same_key(key, current_key())
         store._check_key(old_worker, raw_key, 'models')
-        r.verify_sources(plan, [name], ['genome', 'fasta', 'gff'])
+        r.verify_sources(plan, [name], ['genome', 'fasta', 'gff'], verification=source_proof)
+
     def build(tmp):
         started = time.perf_counter()
         if batch.read(expected) != expected:
             raise ValueError('Admission worker is incomplete or corrupted')
         history = []
         retained = read_retained(root, plan, name, old_worker, frozen['receipt_sha256'], batch, history)
-        counts = Counter()
-        def select(context):
-            counts['raw_records'] += 1
-            return eligible(context)
-        selected = dict(store.iter_model_items(old_worker, context_filter=select, frozen_key=raw_key, verification=batch))
+        manifest, manifest_sha = store._manifest(old_worker / 'model_store')
+        r.require_same_key(raw_key['manifest_sha256'], manifest_sha)
+        counts = {'raw_records': manifest['counts']['models']}
+        current = dict(store.iter_model_items(old_worker, context_filter=eligible, frozen_key=raw_key,
+                                              verification=batch, scan_workers=min(cpus, 8)))
         for ordinal, primary in store._iter(old_worker, 'accepted', verification=batch, with_ordinals=True):
-            if ordinal not in selected or store._json(selected[ordinal]) != store._json(primary):
+            if ordinal not in current or store._json(current[ordinal]) != store._json(primary):
                 raise ValueError('Prior primary is not an eligible, identical raw candidate')
-        fingerprints = {i: hashlib.sha256(store._json(m)).digest() for i, m in selected.items()}
-        partials = {i: copy.deepcopy(m.get('partial_evidence')) for i, m in selected.items()}
-        current = {i: reset_admission(m) for i, m in selected.items()}
-        selected.clear()
+        fingerprints = {i: hashlib.sha256(store._json(m)).digest() for i, m in current.items()}
+        partials = {i: copy.deepcopy(m.get('partial_evidence')) for i, m in current.items()}
+        # Each decoded row is independent. Its fingerprint and partial
+        # evidence above preserve the pre-admission values for comparison.
+        diagnostic = _diagnostics()
+        summary = (json.loads((old_worker / diagnostic.SUMMARY).read_text())
+                   if diagnostic.SUMMARY in old_receipt['files'] else None)
+        prior_diagnostics = diagnostic.summarize(current.values()) if summary is not None else None
+        for model in current.values():
+            reset_admission(model)
         if any(m.get('evidence', {}).get(engine) and not plan['request'].get(engine)
                for m in current.values() for engine in ('annevo', 'oriongeno')):
             raise ValueError('Native evidence is not enabled by its frozen producer plan')
@@ -376,11 +429,12 @@ def rescue(root, plan, name, cpus):
         counts['unchanged_strict_rejections'] = counts['raw_records'] - len(current)
         with r.open_text(Path(source['gff'])) as handle:
             existing = r.original_ownership(handle, r.attributes)
+        ownership = r.OwnershipIndex(existing)
         proteins = {donor: {i: s for i, _, s in r.fasta_records(root / 'prepared' / donor / 'genes.pep')}
                     for donor in [name, *plan['donors'][name]]}
         native_audit = None
         with indexed_genome(source['genome']) as genome:
-            extra, historical = r.revalidate_retained_coding_paths(retained, list(current.values()), genome,
+            extra, historical = r.revalidate_retained_coding_paths(retained, current.values(), genome,
                                                                   source['genetic_code'], params, proteins, name)
             models = [*current.values(), *extra]
             for model in models:
@@ -388,11 +442,11 @@ def rescue(root, plan, name, cpus):
             if plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension':
                 import rescue_native_genomewide_reuse
                 additions, native_audit = rescue_native_genomewide_reuse.fresh_candidates(
-                    root, plan, name, proteins, genome, r.OwnershipIndex(existing), params, tmp, cpus, models)
+                    root, plan, name, proteins, genome, ownership, params, tmp, cpus, models)
                 extra.extend(additions)
                 models.extend(additions)
             placement = r.reassess_unanchored_models(models, params['unanchored_min_species'],
-                                                     ownership=r.OwnershipIndex(existing))
+                                                     ownership=ownership)
             r.consolidate(models, existing, name, plan.get('nearest_references', {}).get(name, ()),
                           retained_paths=retained)
             for model in models:
@@ -401,6 +455,18 @@ def rescue(root, plan, name, cpus):
                     if fresh['problems'] or fresh['cds'] != model['cds'] or fresh['sequence'] != model['sequence']:
                         raise ValueError('Admitted historical CDS failed fresh genomic QC')
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
+            r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
+                models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
+            search_archive = old_worker / 'model_repair_search'
+            targeted = []
+            if any(member.startswith('model_repair_search/') for member in old_receipt['files']):
+                targets = [*r.verify_model_repair_targets(plan).get(name, []),
+                           *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
+                targeted = r.replay_model_repair_search(search_archive, targets, ownership, proteins,
+                                                        genome, source['genetic_code'], params)
+            r.atomic_json(tmp / 'model_repair_candidates.json',
+                          r.model_repair_candidates(chain(models, targeted), ownership, name, source['gff']))
+            r.verify_model_repair_targets(plan)
         if native_audit is not None:
             import rescue_native_genomewide
             rescue_native_genomewide.finish_audit(native_audit, models)
@@ -417,32 +483,45 @@ def rescue(root, plan, name, cpus):
         changed = {i: m for i, m in current.items() if hashlib.sha256(store._json(m)).digest() != fingerprints[i]}
         manifest = patch_model_store(old_worker, tmp, changed, appended=extra,
                                      revisions=revisions.values(), frozen_key=raw_key,
-                                     append_partial_evidence=native_audit is not None)
+                                     append_partial_evidence=native_audit is not None,
+                                     publication_workers=min(cpus, 4))
         # Copy every other receipt member without truncating a shared inode.
-        mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
+        mutable = {'audit.tsv', 'quality_flags.tsv', 'audit.tsv.gz', 'quality_flags.tsv.gz',
+                   diagnostic.SUMMARY, 'search_inputs.json', 'placement_audit.json',
+                   'split_model_candidates.json', 'model_repair_candidates.json',
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
         if native_audit is not None:
             mutable.add('oriongeno_genomewide.json')
-        for member in old_receipt['files']:
-            if member.startswith('model_store/') or member in mutable:
-                continue
-            source_path, target = store._member(old_worker, member), tmp / member
+        sidecars = (store._member(old_worker, member) for member in old_receipt['files']
+                    if not member.startswith('model_store/') and member not in mutable)
+
+        def copy_sidecar(source_path):
+            member = source_path.relative_to(old_worker).as_posix()
+            target = tmp / member
             target.parent.mkdir(parents=True, exist_ok=True)
             with source_path.open('rb') as inp, target.open('xb') as out:
                 shutil.copyfileobj(inp, out)
-            if r.digest(target) != old_receipt['files'][member]:
+            actual = r.digest(target)
+            if actual != old_receipt['files'][member]:
                 raise ValueError('Admission sidecar changed during copying')
-        def audit(m):
-            return (m['query'], m['evidence']['query'], m['status'], ','.join(m['problems']),
-                    m['coverage'], m['identity'], m.get('model_id', ''))
-        def quality(m):
-            q = m['quality_evidence']
-            return (m['query'], m.get('model_id', ''), m['status'], q['start_codon'],
-                    q['terminal_alignment']['n_aligned'], q['terminal_alignment']['c_aligned'],
-                    ','.join(q['donor_species']), ','.join(q['flags']), q['query_alignment']['aligned_query_fraction'],
-                    q['query_alignment']['internal_unaligned_query_fraction'])
-        _rewrite_table(old_worker / 'audit.tsv', tmp / 'audit.tsv', current, extra, audit, counts['raw_records'], allow_tail=True)
-        _rewrite_table(old_worker / 'quality_flags.tsv', tmp / 'quality_flags.tsv', current, extra, quality, counts['raw_records'])
+            return actual
+
+        hash_paths(old_worker, sidecars, workers=min(cpus, 4), hash_function=copy_sidecar)
+
+        if summary is not None:
+            changed_diagnostics = diagnostic.summarize(chain(current.values(), extra))
+            r.atomic_json(tmp / diagnostic.SUMMARY,
+                          diagnostic.replace_counts(summary, prior_diagnostics, changed_diagnostics))
+        else:
+            audit_path = diagnostic.legacy_table(old_worker, 'audit.tsv')
+            quality_path = diagnostic.legacy_table(old_worker, 'quality_flags.tsv')
+            if (audit_path is None or quality_path is None
+                    or not {audit_path.name, quality_path.name} <= old_receipt['files'].keys()):
+                raise ValueError('Admission producer lacks diagnostics covered by its receipt')
+            _rewrite_table(audit_path, tmp / audit_path.name, current, extra, diagnostic.audit_row,
+                           counts['raw_records'], allow_tail=True)
+            _rewrite_table(quality_path, tmp / quality_path.name, current, extra, diagnostic.quality_row,
+                           counts['raw_records'])
         if 'search_inputs.json' in old_receipt['files']:
             search = json.loads((old_worker / 'search_inputs.json').read_text())
         elif counts['raw_records'] == 0:
@@ -463,4 +542,5 @@ def rescue(root, plan, name, cpus):
                       'counts': dict(counts), 'changed_records': len(changed), 'appended_records': len(extra),
                       'published_counts': manifest['counts'], 'full_stream_verified': True,
                       'admitted_cds_freshly_validated': True, 'wall_seconds': time.perf_counter() - started})
-    return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus)
+    return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus,
+                   publication_guard=publication_guard)

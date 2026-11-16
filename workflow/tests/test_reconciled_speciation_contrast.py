@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas
 import pytest
@@ -59,6 +61,39 @@ def test_trait_selection_keeps_sorted_duplicate_diagnostics(selection):
     assert mod._parse_csv_names('z, a', ('a', 'z'), '--traits') == ['z', 'a']
     with pytest.raises(ValueError, match='not present in the input: z, a'):
         mod._parse_csv_names('z, a', ('other',), '--traits')
+
+
+def test_predictor_selection_uses_the_same_table_as_replicate_validation(tmp_path, monkeypatch):
+    mod = load_module()
+    path = tmp_path / "traits.tsv"
+    original = (b"species\tsize\tbio\ttech\n"
+                b"Genus_a\t1\tsample\ttech1\nGenus_a\t2\tsample\ttech2\n"
+                b"Genus_b\t3\tsample\ttech1\nGenus_b\t4\tsample\ttech2\n")
+    replacement = original.replace(b"2\tsample\ttech2", b"2\tsample\ttech1")
+    path.write_bytes(original)
+    read_csv = pandas.read_csv
+    reads = 0
+
+    def replace_after_first_parse(*args, **kwargs):
+        nonlocal reads
+        frame = read_csv(*args, **kwargs)
+        reads += 1
+        if reads == 1:
+            path.write_bytes(replacement)
+        return frame
+
+    monkeypatch.setattr(pandas, "read_csv", replace_after_first_parse)
+    args = SimpleNamespace(
+        species_traits=path, predictors="size", predictor_biological_id="bio",
+        predictor_technical_id="tech", predictor_batch="", predictor_standard_error_columns="",
+        predictor_sample_size_columns="", predictor_within_variance="pooled",
+        categorical_predictors="", ordered_predictors="", factor_reference="",
+    )
+    frame, metadata = mod._prepare_predictors(args)
+
+    assert reads == 1 and path.read_bytes() == replacement
+    assert frame["tech"].tolist() == ["tech1", "tech2", "tech1", "tech2"]
+    assert metadata["input_contract"]["table_sha256"] == hashlib.sha256(original).hexdigest()
 
 
 def test_prepare_converts_wide_expression_replicates_without_false_pairing(tmp_path: Path):

@@ -209,6 +209,7 @@ DUP_CONF_FIELDS = [
     "dup_conf_score_threshold", "branch_ufboot", "branch_ufboot_source",
 ]
 QUERY_DUP_CONF_FIELDS = [field.replace("reference_", "anchor_", 1) for field in DUP_CONF_FIELDS]
+TERMINAL_LOSS_FIELDS = ["family_id", "species", "anchor_cds_fasta_id"]
 COLUMN_FIELDS = [
     "column_order",
     "family_id",
@@ -426,6 +427,8 @@ def build_arg_parser():
                         help="0 disables extra candidates; positive values flag cross-species D-MRCA pairs with Jaccard score <= threshold")
     parser.add_argument("--out_dup_conf", metavar="TSV", default="",
                         help="Pairwise provenance for weak-duplication candidates")
+    parser.add_argument("--out_terminal_losses", metavar="TSV", default="",
+                        help="Anchor-linked terminal losses from stored GeneRax XML; requires --species_tree")
     return parser
 
 
@@ -751,19 +754,25 @@ class ManifestOutputStore:
 
     def __init__(self, records):
         self.records = {row["family_id"]: row for row in records}
-        self.stores = {row["source_dir"]: GeneFamilyOutputStore(row["source_dir"])
-                       for row in records}
+        source_dirs = dict.fromkeys(row["source_dir"] for row in records)
+        self.stores = {directory: GeneFamilyOutputStore(directory) for directory in source_dirs}
 
     def _resolve(self, name):
-        for family_id in sorted(self.records, key=len, reverse=True):
-            if name.startswith(family_id + "_"):
-                row = self.records[family_id]
-                return self.stores[row["source_dir"]], row["source_family_id"] + name[len(family_id):]
+        boundary = name.rfind("_")
+        while boundary >= 0:
+            row = self.records.get(name[:boundary])
+            if row is not None:
+                return self.stores[row["source_dir"]], row["source_family_id"] + name[boundary:]
+            boundary = name.rfind("_", 0, boundary)
         raise ValueError(f"No manifest source for artifact: {name}")
 
     def artifact(self, subdir, name):
         store, original = self._resolve(name)
         return store.artifact(subdir, original)
+
+    def source_artifact(self, subdir, name):
+        store, original = self._resolve(name)
+        return store.source_artifact(subdir, original)
 
     def open_binary(self, subdir, name):
         store, original = self._resolve(name)
@@ -899,7 +908,7 @@ def read_stat_branch(store, family_id):
 
 def _read_stat_branch(store, family_id):
     name = f"{family_id}{STAT_BRANCH_SUFFIX}"
-    artifact = store.artifact("stat_branch", name)
+    artifact = store.source_artifact("stat_branch", name)
     inputs = _FAMILY_INPUTS.get()
     if inputs is not None:
         inputs.observe(artifact)
@@ -919,7 +928,7 @@ def read_family_synteny(store, family_id):
     """
 
     name = f"{family_id}{SYNTENY_SUFFIX}"
-    artifact = store.artifact("synteny", name)
+    artifact = store.source_artifact("synteny", name)
     if artifact is not None:
         observe_summary_input(artifact.live_path or artifact.zip_path)
     if artifact is None or not artifact.size:
@@ -1100,7 +1109,7 @@ def _read_family_cds_fasta_ids(store, family_id):
                       for suffix in (".fa.gz", ".fasta.gz", ".fasta", ".fa"))
     observed_ids = None
     for directory, name in candidates:
-        artifact = store.artifact(directory, name)
+        artifact = store.source_artifact(directory, name)
         if artifact is not None and artifact.size:
             inputs = _FAMILY_INPUTS.get()
             if inputs is not None:
@@ -2023,6 +2032,54 @@ def collect_reference_ufboot_evidence(
     return evidence_rows
 
 
+def _iter_ortholog_anchor_matches(by_id, children, root, query_tip_by_id, ordered_query_ids):
+    from nwkit.parent_index import traversal_order
+
+    # In preorder, every subtree covers a contiguous slice of the anchors.
+    order = traversal_order(children, root)
+    anchor_tips = set(query_tip_by_id.values())
+    anchor_start, anchor_stop = {}, {}
+    cursor = 0
+    for node in order:
+        anchor_start[node] = cursor
+        cursor += node in anchor_tips
+    for node in reversed(order):
+        node_children = children.get(node, ())
+        anchor_stop[node] = (anchor_stop[node_children[-1]] if node_children
+                             else anchor_start[node] + (node in anchor_tips))
+
+    # Only speciation parents add matches. Each child inherits the slices
+    # outside its subtree, sharing the previous slices with its descendants.
+    outside = {root: None}
+    for node in order:
+        speciation = str(by_id[node].get("so_event") or "") == "S"
+        inherited = outside[node]
+        for child in children.get(node, ()):
+            outside[child] = inherited
+            if speciation and (anchor_start[node] < anchor_start[child] or anchor_stop[child] < anchor_stop[node]):
+                outside[child] = (anchor_start[node], anchor_start[child], anchor_stop[child], anchor_stop[node], inherited)
+
+    # Keep the saved row order for grouping and the preorder anchor order
+    # inside each group, regardless of the order of the original queries.
+    for node, row in by_id.items():
+        if str(row.get("so_event") or "") != "L":
+            continue
+        species = str(row.get("spnode_coverage") or "").strip()
+        if not species:
+            continue
+        slices = [(anchor_start[node], anchor_start[node] + 1)] if node in anchor_tips else []
+        outside_slices = outside[node]
+        while outside_slices is not None:
+            left_start, left_stop, right_start, right_stop, outside_slices = outside_slices
+            if left_start < left_stop:
+                slices.append((left_start, left_stop))
+            if right_start < right_stop:
+                slices.append((right_start, right_stop))
+        if slices:
+            matches = tuple(ordered_query_ids[i] for start, stop in sorted(slices) for i in range(start, stop))
+            yield species, matches, str(row.get("node_name") or node)
+
+
 def _collect_family_orthologs_for_anchors(
     rows,
     cds_fasta_ids,
@@ -2084,22 +2141,11 @@ def _collect_family_orthologs_for_anchors(
         family_order=family_order,
     )
 
-    ancestor_by_node = ancestor_index(by_id)
     grouped = defaultdict(list)
-    for branch_id, row in by_id.items():
-        if str(row.get("so_event") or "") != "L":
-            continue
-        species = str(row.get("spnode_coverage") or "").strip()
-        if not species:
-            continue
-        query_set = []
-        for query_id in ordered_query_ids:
-            query_tip = query_tip_by_id[query_id]
-            ancestor = mrca_node(ancestor_by_node, branch_id, query_tip)
-            if branch_id == query_tip or str(by_id[ancestor].get("so_event") or "") == "S":
-                query_set.append(query_id)
-        if query_set:
-            grouped[(species, tuple(query_set))].append(str(row.get("node_name") or branch_id))
+    for species, query_set, gene in _iter_ortholog_anchor_matches(
+        by_id, children, root, query_tip_by_id, ordered_query_ids
+    ):
+        grouped[(species, query_set)].append(gene)
 
     glyphs = []
     for (species, query_set), gene_ids in grouped.items():
@@ -2637,15 +2683,55 @@ def query_evidence_for_output(rows):
     return output
 
 
+def read_family_reconciliation(store, family_id):
+    name = f"{family_id}_generax.xml"
+    artifact = store.source_artifact("generax_xml", name)
+    if artifact is None:
+        return None
+    from nwkit.recphyloxml_records import read_event_records
+
+    _FAMILY_INPUTS.get().observe(artifact)
+    with store.open_binary("generax_xml", name) as handle:
+        try:
+            return read_event_records(handle.read().decode("utf-8"))
+        except ValueError as exc:
+            raise ValueError(f"Invalid GeneRax XML for {family_id}: {exc}") from exc
+
+
 class FamilyEvidence:
     """Finish all evidence while one family's input context is still live."""
 
-    def __init__(self, threshold, require_one_branch_per_glyph):
+    def __init__(self, threshold, require_one_branch_per_glyph, loss_species):
         self.threshold = threshold
         self.require_one_branch_per_glyph = require_one_branch_per_glyph
+        self.loss_species = loss_species
+        self.terminal_losses = []
         self.duplications, self.synteny, self.ufboot = [], [], []
 
+    def collect_terminal_losses(self, store, columns):
+        if __package__:
+            from .query_ortholog_losses import terminal_loss_links
+        else:
+            from query_ortholog_losses import terminal_loss_links
+
+        family_id = columns[0]["family_id"]
+        inputs = _FAMILY_INPUTS.get()
+        reconciliation = inputs.get("generax_xml", lambda: read_family_reconciliation(store, family_id))
+        if reconciliation is None:
+            return
+        species_taxa, records = reconciliation
+        anchors = {row["cds_fasta_id"]: normalize_species_label(row.get("anchor_species", row["reference_species"]))
+                   for row in columns}
+        plotted_tips = {tip: normalize_species_label(tip) for tip, taxa in species_taxa.items()
+                        if len(taxa) == 1 and normalize_species_label(tip) in self.loss_species}
+        links = terminal_loss_links(species_taxa, records, anchors, plotted_tips, normalize_species_label)
+        for species, anchor in sorted(links):
+            self.terminal_losses.append(dict(family_id=family_id, species=plotted_tips[species],
+                                             anchor_cds_fasta_id=anchor))
+
     def process(self, store, columns, glyphs, tree_nodes):
+        if self.loss_species is not None and columns:
+            self.collect_terminal_losses(store, columns)
         assign_lanes(glyphs)
         glyphs.sort(key=lambda row: (str(row['species']), int(row['start_order']),
                                      int(row['end_order']), str(row['relation'])))
@@ -2678,7 +2764,8 @@ def run_many(jobs):
 
     outputs, inputs = [], []
     for args in jobs:
-        roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf']
+        roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf',
+                 'out_terminal_losses']
         if getattr(args, 'basis', 'reference_species') == 'query_gene':
             roles += ['out_query_map', 'out_selection', 'out_long', 'out_overlap']
         for name in roles:
@@ -2710,16 +2797,22 @@ def run_many(jobs):
 
         # Keep both observations live until every staged table is complete.
         # Exiting them verifies the sources before the transaction publishes.
-        with read_only_observation(), species_inputs():
+        with read_only_observation(), species_inputs(), contextlib.ExitStack() as snapshots:
             messages = [None] * len(jobs)
             pending = {}
+            stores = set()
 
             def advance(index, iterator):
                 try:
-                    pending[index] = next(iterator)
+                    store, family_id = next(iterator)
                 except StopIteration as completed:
                     messages[index] = completed.value
                     pending.pop(index, None)
+                else:
+                    if type(store) is GeneFamilyOutputStore and store not in stores:
+                        snapshots.enter_context(store.read_snapshot())
+                        stores.add(store)
+                    pending[index] = store, family_id
 
             iterators = [_iter_run(args, write) for args in jobs]
             for index, iterator in enumerate(iterators):
@@ -2748,7 +2841,13 @@ def _iter_run(args, write):
     manifest_path = getattr(args, "family_manifest", "")
     manifest_records = read_family_manifest(manifest_path) if manifest_path else None
     basis = getattr(args, "basis", "reference_species")
-    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species')
+    loss_output = getattr(args, "out_terminal_losses", "")
+    loss_species = None
+    if loss_output:
+        if not args.species_tree:
+            raise ValueError("--out_terminal_losses requires --species_tree")
+        loss_species = {normalize_species_label(tip.name) for tip in read_species_tree(args.species_tree).get_terminals()}
+    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species', loss_species)
     if basis == "reference_species":
         if manifest_records or getattr(args, "query_selection", "all") != "all":
             raise ValueError("Family manifests and query selection require --basis=query_gene")
@@ -2769,6 +2868,8 @@ def _iter_run(args, write):
         write(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
         if getattr(args, "out_dup_conf", ""):
             write(args.out_dup_conf, DUP_CONF_FIELDS, dup_evidence)
+        if loss_output:
+            write(loss_output, TERMINAL_LOSS_FIELDS, evidence.terminal_losses)
         return (
             "Reference-species ortholog summary: "
             f"reference_species={normalize_species_label(args.reference_species)}, "
@@ -2818,6 +2919,8 @@ def _iter_run(args, write):
         query_evidence_for_output(ufboot_evidence),
     )
     write(out_query_map, QUERY_MAP_FIELDS, query_map)
+    if loss_output:
+        write(loss_output, TERMINAL_LOSS_FIELDS, evidence.terminal_losses)
     if getattr(args, "out_dup_conf", ""):
         write(args.out_dup_conf, QUERY_DUP_CONF_FIELDS, query_evidence_for_output(dup_evidence))
     if selection_output:

@@ -3,13 +3,15 @@
 Refinement retains full-byte-first input proofs only inside its explicit CLI
 invocation. The first use of each input scope reads and checks its frozen SHA-256.
 Later stage guards retain the ordinary names selection: global request files and
-the requested species' FASTA, GFF and genome. Library calls outside that command
-scope continue to perform fresh full-byte verification.
+the requested species' FASTA, GFF and genome or assembly CDS and transcript-to-gene
+mapping. Library calls outside that command scope continue to perform fresh
+full-byte verification.
 
 Small plan JSON is read every time. Its whole value, original generation and
-pathname must match the first frozen copy. Implementation, runtime dependency
-and predictor identities are still checked ordinarily on each load. Input and
-plan changes are sticky failures, including same-byte atomic replacements;
+pathname must match the first frozen copy. Implementation and runtime dependencies are checked on each load. Predictor
+binaries are hashed once per command. Later checks verify the same file
+generation before reuse and publication. Input, predictor and plan changes
+are sticky failures, including same-byte atomic replacements;
 restoring an observed generation does not refresh a proof within that command.
 
 The existing preparation proof fences exact resolved targets, file identities,
@@ -20,9 +22,16 @@ after its original proof and each new alias pathname have been fenced.
 Input proofs are checked again after output hashing and before publication, and
 all used scopes are checked before successful command exit. No proof persists
 to a later CLI, and dependency receipt/content verification remains independent.
-This changes neither scientific admission nor output keys except the normal
-implementation fingerprint. Existing frozen plans require their original
-implementation; validation of a changed implementation uses a fresh plan.
+When a refinement stage reuses a completed publication, its first receipt
+and member check also establishes the proof for downstream stages in that
+command. A later guard checks the same generation. A fresh CLI verifies all
+required bytes again. Initially missing or invalid outputs can be rebuilt
+under the stage lock.
+
+These proofs preserve scientific admission. Assembly-only final selection
+also binds the initial selection receipt because an empty genomic overlay
+reuses that selection. Existing frozen plans require their original
+implementation. Validation of a changed implementation uses a fresh plan.
 
 Rescue finalization also shares its existing receipt proof with preparation
 checks nested inside comparison-key construction. See

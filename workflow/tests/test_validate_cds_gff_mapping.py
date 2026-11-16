@@ -582,3 +582,40 @@ def test_species_summary_selects_exact_gff_instead_of_rediscovery(tmp_path):
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+
+
+def test_mapping_task_keeps_the_selected_summary_row_after_replacement(tmp_path, monkeypatch):
+    mod = load_module()
+    cds_dir, gff_dir, genome_dir = (tmp_path / name for name in ("cds", "gff", "genome"))
+    for directory in (cds_dir, gff_dir, genome_dir):
+        directory.mkdir()
+    cds = cds_dir / "Test_species.fa"
+    gff = gff_dir / "Test_species.gff"
+    genome = genome_dir / "original.fa"
+    for path in (cds, gff, genome):
+        path.touch()
+    summary = tmp_path / "species.tsv"
+    original = ("species_prefix\tcds_output_path\tgff_output_path\tgenome_output_path\tsource_marker\n"
+                f"Test_species\t{cds}\t{gff}\t{genome}\toriginal\n")
+    summary.write_text(original)
+    read_pairs = mod.read_species_summary_pairs
+    observed = []
+
+    def replace_after_read(path):
+        result = read_pairs(path)
+        path.write_text(original.replace("original", "replacement"))
+        return result
+
+    def capture(tasks, *_args, **_kwargs):
+        observed.extend(tasks)
+        return [], tasks
+
+    monkeypatch.setattr(mod, "read_species_summary_pairs", replace_after_read)
+    monkeypatch.setattr(mod, "partition", capture)
+    monkeypatch.setattr(mod, "run_validation_tasks", lambda **_kwargs: [])
+    assert mod.main(["--species-cds-dir", str(cds_dir), "--species-gff-dir", str(gff_dir),
+                     "--species-genome-dir", str(genome_dir), "--species-summary", str(summary),
+                     "--nthreads", "1"]) == 0
+    assert len(observed) == 1
+    assert observed[0]["genome_file"] == genome
+    assert observed[0]["summary_row"]["source_marker"] == "original"

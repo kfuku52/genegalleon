@@ -123,11 +123,12 @@ IMAGE=ghcr.io/<your-org>/genegalleon TAG=dev MODE=push ./container/buildx.sh
 
 By default, upstream source installs follow the moving branches in
 `container/source_branches.env` (`amalgkit`, `cdskit`, `csubst`, `nwkit`,
-`BUSCO`, `paml`, `iqtree3`, `kfFractBias`, `kftools`, `rkftools`). The wrapper resolves
+`BUSCO`, `paml`, `iqtree3`, `LOCUSKIT`, `kftools`, `rkftools`). The wrapper resolves
 each branch once, concurrently, at build start so all architectures use one internally
 consistent snapshot, without writing those commits back as repository
 defaults. Downloaded `BioPP/testnh` and `CAFE5` tarballs are still verified by
-SHA-256.
+SHA-256. The LOCUSKIT wheel provides the FractBias Python modules and the
+`locuskit fractbias` command.
 
 Docker builds each moving source in an independent stage and transfers only
 its wheel, R package, or binary into the shared runtime. The separate IQ-TREE

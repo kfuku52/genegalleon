@@ -67,7 +67,7 @@ def _write_self_genome(directory: Path, species: str) -> None:
 )
 @pytest.mark.parametrize("external_scratch", [False, True])
 def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path, external_scratch: bool) -> None:
-    assert shutil.which("kffractbias"), "kffractbias must be installed in the GeneGalleon runtime"
+    assert shutil.which("locuskit"), "locuskit must be installed in the GeneGalleon runtime"
     workspace = tmp_path / "workspace"
     input_dir = workspace / "input"
     _write_genome(input_dir, "Target_species", "t", ("target_chr",))
@@ -189,7 +189,7 @@ def test_self_mode_is_array_executed_and_genome_evolution_aggregated() -> None:
     assert "selfcompare" in fractionation_core
     assert 'dir_result="${gg_workspace_output_dir}/genome_evolution/self_fractionation_bias/${analysis_id}"' in fractionation_core
     assert "run_self_fractionation_bias=0" in genome_evolution_entrypoint
-    assert 'task="Summarizing kfFractBias self-synteny retention across species"' in genome_evolution_core
+    assert 'task="Summarizing LOCUSKIT self-synteny retention across species"' in genome_evolution_core
     assert 'python "${gg_support_dir}/summarize_self_fractionation_bias.py"' in genome_evolution_core
 
 
@@ -198,7 +198,7 @@ def test_self_mode_is_array_executed_and_genome_evolution_aggregated() -> None:
     reason="set KFFRACTBIAS_RUN_INTEGRATION=1 to run the JCVI/LAST workflow integration",
 )
 def test_fractionation_bias_core_runs_self_mode_into_genome_evolution(tmp_path: Path) -> None:
-    assert shutil.which("kffractbias"), "kffractbias must be installed in the GeneGalleon runtime"
+    assert shutil.which("locuskit"), "locuskit must be installed in the GeneGalleon runtime"
     workspace = tmp_path / "workspace"
     input_dir = workspace / "input"
     _write_self_genome(input_dir, "Self_species")

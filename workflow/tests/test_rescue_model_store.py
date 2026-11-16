@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,112 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     second = next(iterator)
     assert second == model(1)
     assert list(iterator) == []
+
+
+def test_parallel_model_store_hashes_preserve_manifest_and_verify_copies(tmp_path, monkeypatch):
+    records = [model(i, "accepted" if i % 2 else "proposal") for i in range(16)]
+    source, manifest = published(tmp_path, records)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    @contextmanager
+    def separate_scratch(_):
+        yield scratch
+
+    monkeypatch.setattr(store, "scratch_build_directory", separate_scratch)
+    destination = tmp_path / "parallel"
+    result = store.write_model_store(destination, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert result == manifest
+    assert (destination / "model_store/manifest.json").read_bytes() == (source / "model_store/manifest.json").read_bytes()
+
+    real_copy = store.shutil.copyfile
+
+    def corrupt_copy(origin, target):
+        real_copy(origin, target)
+        if target.name == "bodies.sqlite":
+            target.write_bytes(b"corrupt")
+
+    for path in scratch.iterdir():
+        path.unlink()
+    monkeypatch.setattr(store.shutil, "copyfile", corrupt_copy)
+    failed = tmp_path / "corrupt"
+    with pytest.raises(OSError, match="Copied model-store member differs: bodies.sqlite"):
+        store.write_model_store(failed, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert not (failed / "model_store").exists()
+
+    def fail_sync(path):
+        if path.name == "manifest.json":
+            raise OSError("failed to sync manifest")
+
+    for path in scratch.iterdir():
+        path.unlink()
+    monkeypatch.setattr(store.shutil, "copyfile", real_copy)
+    monkeypatch.setattr(store, "_sync_file", fail_sync)
+    failed = tmp_path / "unsynced"
+    with pytest.raises(OSError, match="failed to sync manifest"):
+        store.write_model_store(failed, records, shard_bytes=900, codec="gzip", publication_workers=4)
+    assert not (failed / "model_store").exists()
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'zstd'])
+def test_stored_body_with_matching_prefix_is_rejected(tmp_path, codec):
+    if codec == 'zstd':
+        pytest.importorskip('zstandard')
+    body = b'expected body'
+    sha = hashlib.sha256(body).hexdigest()
+    with closing(store._database(tmp_path / 'bodies.sqlite')) as database:
+        database.execute('INSERT INTO bodies VALUES (?,?)', (sha, store._compress(body + b'extra', codec, 1)))
+        with pytest.raises(ValueError, match='Model-store body hash collision'):
+            store._insert_body(database, body, 1, codec, packed_sha=sha)
+
+
+@pytest.mark.parametrize('frames', ['sized', 'unsized', 'concatenated'])
+def test_zstd_model_store_frame_fast_path_preserves_streamed_bytes_and_bound(monkeypatch, frames):
+    zstd = pytest.importorskip('zstandard')
+    data = b'bounded record'
+    first = zstd.ZstdCompressor(write_content_size=frames != 'unsized').compress(data)
+    encoded = first + zstd.ZstdCompressor().compress(b'another record') if frames == 'concatenated' else first
+    with closing(zstd.ZstdDecompressor().stream_reader(encoded)) as reader:
+        expected = reader.read(store.MAX_RECORD_BYTES + 1)
+    assert store._decompress(encoded, 'zstd') == expected
+    monkeypatch.setattr(store, 'MAX_RECORD_BYTES', len(data) - 1)
+    with pytest.raises(ValueError, match='Model-store record exceeds bounded buffer'):
+        store._decompress(encoded, 'zstd')
+
+
+def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_path, monkeypatch):
+    records = [model(0, 'accepted'), model(1), model(2)]
+    before, expected = published(tmp_path / 'direct', records, revisions=records)
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+
+    @contextmanager
+    def scratch_directory(staging):
+        assert not any(staging.iterdir())
+        with store.tempfile.TemporaryDirectory(dir=scratch) as directory:
+            yield Path(directory)
+
+    monkeypatch.setattr(store, 'scratch_build_directory', scratch_directory)
+    after, actual = published(tmp_path / 'local', records, revisions=records)
+    assert actual == expected
+    assert (after / 'receipt.json').read_bytes() == (before / 'receipt.json').read_bytes()
+    assert list(store.iter_models(after)) == records
+    assert list(store.iter_revision_models(after)) == records
+
+    copy = store.shutil.copyfile
+
+    def corrupt_copy(source, destination):
+        assert scratch in source.parents
+        copy(source, destination)
+        with destination.open('ab') as handle:
+            handle.write(b'damage')
+
+    monkeypatch.setattr(store.shutil, 'copyfile', corrupt_copy)
+    failed = tmp_path / 'failed'
+    with pytest.raises(OSError, match='Copied model-store member differs'):
+        store.write_model_store(failed, records, codec='gzip')
+    assert not any(failed.iterdir())
+    assert not any(scratch.iterdir())
 
 
 @pytest.mark.parametrize('scope', ['models', 'accepted', 'partial', 'revision'])
@@ -274,16 +381,18 @@ def test_partial_scope_excludes_unrelated_shards_and_preserves_explicit_order(tm
     assert list(store.iter_partial_models(directory, frozen_key=key)) == [records[2], records[0], records[2]]
 
 
-def test_partial_sparse_repeated_reordered_records_keep_full_qc_and_independence(tmp_path):
+@pytest.mark.parametrize("ordinals", [(12, 2, 2, 7, 0, 12), (2, 2, 2, 7, 12, 12)])
+def test_partial_sparse_repeated_records_keep_full_qc_and_independence(tmp_path, ordinals):
     records = [model(i, "accepted_alternative_path" if i == 2 else "proposal") for i in range(13)]
     for i, record in enumerate(records):
         record["problems"] = ["missing_stop", "internal_stop"] if i % 3 == 0 else []
         record["unknown"]["lineage"] = {"source_rescue": [i, "植物🙂"]}
-    partial = [records[i] for i in (12, 2, 2, 7, 0, 12)]
+    partial = [records[i] for i in ordinals]
     directory = tmp_path / "worker"
     manifest = store.write_model_store(directory, records, partial_models=partial,
                                        shard_bytes=5500, codec="gzip")
     assert len(manifest["shards"]) > 1
+    assert manifest["partial_ordered"] == (list(ordinals) == sorted(ordinals))
     receipt(directory)
     restored = list(store.iter_partial_models(directory))
     assert json.dumps(restored, ensure_ascii=False) == json.dumps(partial, ensure_ascii=False)
@@ -639,6 +748,15 @@ def test_directory_export_source_generation_change_discards_partial_output(tmp_p
         original(source, destination, directory=True)
     assert not destination.exists()
     assert not list(tmp_path.glob(".model-export-*"))
+
+
+def test_manifest_rejects_duplicate_shard_with_matching_ordinals(tmp_path):
+    directory, manifest = published(tmp_path, [model(0), model(1)])
+    manifest["shards"][1]["path"] = manifest["shards"][0]["path"]
+    (directory / "model_store/manifest.json").write_text(json.dumps(manifest))
+    receipt(directory)
+    with pytest.raises(ValueError, match="Malformed model-store shard index"):
+        store.frozen_model_store_key(directory)
 
 
 @pytest.mark.parametrize("change", ["schema", "codec", "count", "scope", "unsafe_shard"])

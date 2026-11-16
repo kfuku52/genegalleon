@@ -97,7 +97,7 @@ def test_short_read_classification_retains_triplet_singleton(tmp_path):
 @pytest.mark.parametrize("method,protocol", [("rnaspades", "same"), ("rnaspades", "mixed"),
                                               ("trinity", "same")])
 @pytest.mark.parametrize("sample", [False, True])
-@pytest.mark.parametrize("run_count", [1, 10])
+@pytest.mark.parametrize("run_count", [1, 16])
 def test_assembly_passes_companion_with_both_mates(tmp_path, method, protocol, sample, run_count):
     reads = tmp_path / "reads"
     reads.mkdir()
@@ -131,7 +131,7 @@ def test_assembly_passes_companion_with_both_mates(tmp_path, method, protocol, s
     script = (
         'set -eo pipefail\nsource "${1%/core/*}/support/gg_util.sh"\n'
         'GG_CORE_SOURCE_ONLY=1 source "$1"\n'
-        'dir_amalgkit_getfastq_sp="$2"\ndir_tmp="$PWD"\n'
+        'dir_amalgkit_getfastq_sp="$2"\ndir_tmp="$PWD"\ngg_support_dir="${1%/core/*}/support"\n'
         f'effective_assembly_method={method}\nprotocol_rna_seq={protocol}\n'
         f'max_assembly_input_fastq_size={6 if sample else 1000}\n'
         'assembly_cpus=1\nassembly_mem_gb=1\nbflyHeapSpaceMax=1\n'
@@ -145,14 +145,22 @@ def test_assembly_passes_companion_with_both_mates(tmp_path, method, protocol, s
     )
     assert result.returncode == 0, result.stdout + result.stderr
     args = (tmp_path / "args.bin").read_bytes().decode().strip("\0").split("\0")
-    selected_runs = min(run_count, 9) if method == "rnaspades" and protocol == "mixed" else run_count
-    if method == "rnaspades":
-        flags = args[::2]
-        for index in range(selected_runs):
-            library = index + 1 if protocol == "mixed" else 1
-            assert f"--pe{library}-1" in flags
-            assert f"--pe{library}-2" in flags
-            assert f"--pe{library}-s" in flags
+    selected_runs = run_count
+    if method == "rnaspades" and protocol == "mixed":
+        assert args[0] == "--dataset"
+        libraries = json.loads(Path(args[1]).read_text())
+        assert len(libraries) == run_count
+        paths = []
+        for library in libraries:
+            assert library["type"] == "paired-end"
+            first, = library["left reads"]
+            second, = library["right reads"]
+            companion, = library["single reads"]
+            assert Path(first).name.replace("_1.amalgkit", "_2.amalgkit") == Path(second).name
+            assert Path(first).name.replace("_1.amalgkit", ".amalgkit") == Path(companion).name
+            paths.extend((first, second, companion))
+    elif method == "rnaspades":
+        assert set(args[::2]) == {"--pe1-1", "--pe1-2", "--pe1-s"}
         paths = args[1::2]
     else:
         paths = args[args.index("--left") + 1].split(",") + args[args.index("--right") + 1].split(",")

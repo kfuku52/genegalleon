@@ -1,6 +1,7 @@
 """Protein admission and historical-result reuse with synthetic BUSCO outputs."""
 import ast
 import copy
+import gzip
 import hashlib
 import json
 import os
@@ -133,8 +134,19 @@ def test_genetic_code_ambiguity_and_duplicate_identifiers_are_not_guessed(tmp_pa
         busco.protein_genetic_code(27)
 
 
-def test_native_admitted_view_uses_completed_publications_and_rejects_tampering(tmp_path):
+@pytest.mark.parametrize('legacy', [False, True])
+def test_native_admitted_view_uses_completed_publications_and_rejects_tampering(tmp_path, legacy):
     root = completed(tmp_path)
+    if legacy:
+        effective = root / "effective"
+        receipt_path = effective / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        old_name, current_name = "translation_admission.tsv", "translation_admission.tsv.gz"
+        (effective / old_name).write_bytes(gzip.decompress((effective / current_name).read_bytes()))
+        (effective / current_name).unlink()
+        del receipt["files"][current_name]
+        receipt["files"][old_name] = sha(effective / old_name)
+        receipt_path.write_text(json.dumps(receipt))
     pairs = busco.input_pairs(root)
     codes = busco.read_genetic_codes(pairs, root)
     destination = tmp_path / "admitted"

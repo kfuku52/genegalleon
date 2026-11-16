@@ -1,4 +1,5 @@
 """Selected CDSs stay fixed while transcript ends supply projected UTRs."""
+import gzip
 import importlib
 import json
 import os
@@ -221,14 +222,18 @@ def test_shared_full_intron_chain_remains_ambiguous():
 
 
 def test_unmapped_native_diagnostics_distinguish_absence_from_opposite_strand():
-    selected = utrs.read_models(model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
-                                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
+    selected = (model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
+                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
     native = utrs.read_models(model('n', 'ng', cds=((100, 200),), exons=((100, 200),), strand='-'))
-    _, reasons = utrs.native_correspondence(selected, native)
-    assert reasons['a']['status'] == 'opposite_strand_coding_overlap'
-    assert reasons['b']['status'] == 'no_coding_overlap'
-    _, reasons = utrs.native_correspondence(selected, {})
-    assert reasons['a']['status'] == 'no_native_prediction_on_contig'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    assert audit[0]['native_correspondence']['status'] == 'opposite_strand_coding_overlap'
+    assert audit[1]['native_correspondence']['status'] == 'no_coding_overlap'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', {})
+    assert audit[0]['native_status'] == 'no_unique_coding_overlap'
+    assert audit[0]['native_correspondence']['status'] == 'no_native_prediction_on_contig'
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S')
+    assert audit[0]['native_status'] == 'missing_prediction'
+    assert audit[0]['native_correspondence'] == {'status': 'missing_prediction', 'candidates': []}
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
@@ -349,7 +354,7 @@ def test_whole_cohort_finalization_preserves_cds_and_binds_utrs(tmp_path, explic
         assert Path(row['cds']).read_bytes() == before[name]
         for role in ('species_cds', 'species_protein', 'analysis_cds'):
             assert (result/role/(name+'.fa')).read_bytes() == (baseline/role/(name+'.fa')).read_bytes()
-        audit = json.loads((result/'utr_audit'/(name+'.json')).read_text())[0]
+        audit = json.loads(gzip.decompress((result/'utr_audit'/(name+'.json.gz')).read_bytes()))[0]
         assert audit['utr5']['source'] == 'existing' and audit['utr5']['length'] == 10
         assert audit['utr3']['source'] == 'oriongeno' and audit['utr3']['length'] == 13
         assert utrs.load_models(result/'species_gff'/(name+'.gff3'))['t']['exons'] == [[0, 35]]

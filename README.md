@@ -9,7 +9,7 @@ It provides scheduler-ready staged pipelines for:
 - CDS/genome annotation with selectable [OrionGeno / ANNEVO prediction](docs/oriongeno-genome-annotation.md) and contamination filtering,
 - optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md) and
   [existing-model refinement and conserved isoform selection](docs/gene-model-refinement.md),
-- local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,
+- local pairwise fractionation-bias and within-genome self-synteny retention analysis with LOCUSKIT,
 - [pairwise genome synteny](docs/pairwise-synteny.md), including multi-species ribbon diagrams
   and combined pairwise dS dotplots with one colour scale,
 - [reference-based fractionation reports](docs/main-stages-and-what-they-do.md#reference-based-fractionation-reports)

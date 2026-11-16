@@ -252,8 +252,8 @@ def main():
     print("{} MUL trees were found.".format(out.shape[0]))
 
     print("Adding the original file names of gene trees")
-    with open(args.sorted_gene_tree_file_names) as handle:
-        gtname = pandas.DataFrame({"file_name": handle.read().splitlines()})
+    with open(args.sorted_gene_tree_file_names, encoding="utf-8") as handle:
+        gtname = pandas.DataFrame({"file_name": [line.removesuffix("\n") for line in handle]})
     if len(gtname) != len(gt_txts):
         raise ValueError("Gene-tree filenames and input trees have different lengths.")
     gtname["gene_tree"] = "GT-" + pandas.Series([str(i + 1) for i in range(gtname.shape[0])])

@@ -2,15 +2,19 @@
 
 import argparse
 import csv
+import hashlib
+import io
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from pathlib import Path
 
 import format_species_inputs as fsi
-from input_generation_array_state import digest, load_plan, receipt_path, verify_receipt
+from format_species_summary import parse_species_summary_rows
+from input_generation_array_state import parse_plan, read_verified_receipt
 
 
 def build_arg_parser():
@@ -54,6 +58,13 @@ def read_task_stats(path):
         return json.load(handle)
 
 
+def read_payload(path):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("Expected a regular shard file: " + str(path))
+        return handle.read()
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -87,35 +98,57 @@ def main():
             )
         )
 
+    receipt_files, stats_payloads, summary_rows = {}, {}, {}
+
+    def bound_payload(path, label):
+        index = int(path.name.split(".", 1)[0])
+        if index not in receipt_files:
+            parser.error(label + " index is outside the immutable task plan")
+        expected = receipt_files[index].get(str(path.resolve()))
+        if expected is None:
+            parser.error(label + " is not bound to the worker completion receipt: " + str(path))
+        payload = read_payload(path)
+        if hashlib.sha256(payload).hexdigest() != expected:
+            parser.error(label + " changed after worker completion verification: " + str(path))
+        return payload
+
+    def task_stats(path, label):
+        if args.task_plan:
+            return json.loads(bound_payload(path, label).decode("utf-8"))
+        return read_task_stats(path)
+
     if args.task_plan:
-        plan = load_plan(args.task_plan)
+        plan_payload = read_payload(args.task_plan)
+        plan = parse_plan(plan_payload.decode("utf-8"))
         indices = range(1, plan["task_count"] + 1)
-        plan_sha256 = digest(args.task_plan)
-        if any(not verify_receipt(args.task_plan, index, plan_sha256) for index in indices):
-            parser.error("Missing, stale, or changed worker completion receipts")
+        plan_sha256 = hashlib.sha256(plan_payload).hexdigest()
+        for index in indices:
+            receipt = read_verified_receipt(args.task_plan, index, plan_sha256)
+            if receipt is None:
+                parser.error("Missing, stale, or changed worker completion receipts")
+            receipt_files[index] = receipt["files"]
         expected_stats = {str(index) + ".json" for index in indices}
         expected_summaries = {str(index) + ".tsv" for index in indices}
         if {path.name for path in stats_paths} != expected_stats or {path.name for path in shard_paths} != expected_summaries:
             parser.error("Shard identities do not match the immutable task plan")
-        for qc_path in mapping_qc_paths + ownership_qc_paths:
-            label = "Mapping QC" if qc_path in mapping_qc_paths else "Source ownership QC"
-            index = int(qc_path.name.split(".", 1)[0])
-            if index not in indices:
-                parser.error(label + " index is outside the immutable task plan")
-            receipt = json.loads(receipt_path(args.task_plan, index).read_text())
-            if str(qc_path.resolve()) not in receipt.get("files", {}):
-                parser.error(label + " is not bound to the worker completion receipt")
         for index, task in enumerate(plan["tasks"], start=1):
-            stats = read_task_stats(task_stats_dir / (str(index) + ".json"))
-            rows = fsi.read_species_summary_rows(species_summary_shard_dir / (str(index) + ".tsv"))
+            stats_path = task_stats_dir / (str(index) + ".json")
+            summary_path = species_summary_shard_dir / (str(index) + ".tsv")
+            stats = task_stats(stats_path, "Task stats")
+            payload = bound_payload(summary_path, "Species summary")
+            rows = parse_species_summary_rows(io.StringIO(payload.decode("utf-8"), newline=""))
             if stats.get("species_prefix") != task["species_prefix"] or len(rows) != 1 or next(iter(rows.values()))["species_prefix"] != task["species_prefix"]:
                 parser.error("Species identity mismatch in task " + str(index))
+            stats_payloads[stats_path] = stats
+            summary_rows[summary_path] = rows
+    else:
+        stats_payloads = {path: read_task_stats(path) for path in stats_paths}
     merged_rows = {} if args.task_plan else fsi.retain_existing_species_summary_rows(
         fsi.read_species_summary_rows(species_summary_output)
     )
     shard_row_count = 0
     for shard_path in shard_paths:
-        shard_rows = fsi.read_species_summary_rows(shard_path)
+        shard_rows = summary_rows[shard_path] if args.task_plan else fsi.read_species_summary_rows(shard_path)
         shard_row_count += len(shard_rows)
         merged_rows.update(shard_rows)
 
@@ -143,21 +176,24 @@ def main():
     for qc_path in ownership_qc_paths:
         index = qc_path.name.split(".", 1)[0]
         stats_path = task_stats_dir / (index + ".json")
-        if not stats_path.is_file():
+        if stats_path not in stats_payloads:
             parser.error("Source ownership QC has no matching task stats")
-        species = read_task_stats(stats_path).get("species_prefix")
-        ownership = read_task_stats(qc_path).get("source_gene_validation")
+        species = stats_payloads[stats_path].get("species_prefix")
+        ownership = task_stats(qc_path, "Source ownership QC").get("source_gene_validation")
         if not species or not isinstance(ownership, dict) or set(ownership) != {species}:
             parser.error("Source ownership QC species does not match its task")
         source_gene_validation.update(ownership)
 
+    qc_by_index = {}
     for qc_path in mapping_qc_paths:
-        qc = read_task_stats(qc_path)
+        qc = task_stats(qc_path, "Mapping QC")
+        if args.mapping_qc_output:
+            qc_by_index[int(qc_path.name.split(".", 1)[0])] = qc
         phase_conflicts_total += int(qc.get("phase_conflicts_total", 0) or 0)
         utr_conflicts_total += int(qc.get("utr_conflicts_total", 0) or 0)
 
     for stats_path in stats_paths:
-        payload = read_task_stats(stats_path)
+        payload = stats_payloads[stats_path]
         species_processed += int(payload.get("species_processed", 0) or 0)
         num_species_cds_files += int(payload.get("num_species_cds_files", 0) or 0)
         num_species_gff_files += int(payload.get("num_species_gff_files", 0) or 0)
@@ -181,12 +217,22 @@ def main():
         if cds_first_sequence_name == "":
             cds_first_sequence_name = str(payload.get("cds_first_sequence_name", "") or "")
 
+    resolved_rows = []
+    if args.task_plan and args.resolved_manifest_output and any("manifest_row" in task for task in plan["tasks"]):
+        for index, task in enumerate(plan["tasks"], start=1):
+            source = Path(args.task_plan + ".tasks") / (str(index) + ".resolved.tsv")
+            payload = bound_payload(source, "Resolved manifest")
+            with io.StringIO(payload.decode("utf-8"), newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            if len(rows) != 1 or rows[0]["species_key"] != task["species_key"]:
+                parser.error("Resolved manifest identity mismatch in task " + str(index))
+            resolved_rows.extend(rows)
+
     if args.mapping_qc_output:
         qc_rows = []
-        qc_by_index = {int(path.name.split(".", 1)[0]): read_task_stats(path) for path in mapping_qc_paths}
         for stats_path in sorted(stats_paths, key=lambda path: int(path.stem)):
             index = int(stats_path.stem)
-            species = str(read_task_stats(stats_path).get("species_prefix") or "").strip()
+            species = str(stats_payloads[stats_path].get("species_prefix") or "").strip()
             if not species:
                 parser.error("Task stats is missing species_prefix for mapping QC")
             qc = qc_by_index.get(index)
@@ -247,15 +293,7 @@ def main():
             sort_keys=True,
         )
 
-    if args.task_plan and args.resolved_manifest_output and any("manifest_row" in task for task in plan["tasks"]):
-        resolved_rows = []
-        for index, task in enumerate(plan["tasks"], start=1):
-            source = Path(args.task_plan + ".tasks") / (str(index) + ".resolved.tsv")
-            with open(source, newline="") as handle:
-                rows = list(csv.DictReader(handle, delimiter="\t"))
-            if len(rows) != 1 or rows[0]["species_key"] != task["species_key"]:
-                parser.error("Resolved manifest identity mismatch in task " + str(index))
-            resolved_rows.extend(rows)
+    if resolved_rows:
         target = Path(args.resolved_manifest_output)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False, newline="") as handle:

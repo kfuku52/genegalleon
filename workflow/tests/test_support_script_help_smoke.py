@@ -12,11 +12,12 @@ SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
 # Library modules have no CLI: running them with --help only repeats imports.
 # Keep process-level checks for actual entrypoints, where parser construction
 # can fail before any functional test reaches the command.
-# These commands require kftools or kfFractBias, absent from the fast lane.
+# These commands require kftools or LOCUSKIT, absent from the fast lane.
 # Their dedicated runtime tests cover behavior and CLI construction; do not
 # fake the imports just to make --help succeed.
 RUNTIME_HELP_SCRIPTS = {"iqtree2mapnh.py", "orthogroup_statistics.py", "pairwise_synteny.py",
-                        "rescue_gene_models.py", "rescue_model_evidence.py", "gene_model_refinement.py", "wgd_ssd.py"}
+                        "rescue_gene_models.py", "rescue_model_evidence.py", "gene_model_refinement.py", "wgd_ssd.py",
+                        "wgd_synteny_plan.py"}
 # test_busco_support_imports.py already runs this exact CLI help command in a
 # fresh process and additionally rejects imports of the optional toolchain.
 COVERED_HELP_SCRIPTS = {"busco_guide_tree.py"}

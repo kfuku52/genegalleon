@@ -113,11 +113,14 @@ flowchart LR
    and independent protein similarity agree. Predictions must have the correct
    locus/strand, canonical splice sites, consistent phases, genomic start/stop,
    sufficient protein coverage/identity and no frameshift, internal stop or
-   assembly ambiguity. Overlap with another locus remains a proposal. Split or
-   merged genes are not applied automatically.
+   assembly ambiguity. Overlap with another locus remains a proposal. Explicitly
+   reviewed merges of consecutive fragments can be published through the split-model interface.
 4. **Effective inputs:** retain original transcripts in `full_annotation`, add
    accepted paths with stable assembly/coordinate/phase/CDS-derived IDs, and
    publish a selected GFF with the exact transcript behind every representative.
+   The self-contained genome copy preserves the supplied gzip bytes. Consumers
+   use the genome path in `effective/inputs.tsv` and expand it in scratch when
+   their tools need an uncompressed FASTA.
    Selected transcripts receive [longest projected UTRs](oriongeno-genome-annotation.md#longest-projected-utr-per-side) from existing annotation and optional OrionGeno predictions; original exon/UTR metadata stays archived. CDSs of
    unresolved biological negatives remain unchanged; unusable translations are
    excluded from the analysis protein FASTA with an explicit admission audit.
@@ -209,6 +212,66 @@ Verified native ANNEVO GFF/receipts can supplement these candidates with
 Donor support is measured independently and all existing adoption gates remain;
 see [connection, provenance and masking comparison](annevo-model-improvement.md).
 
+## Use the same fixed donors for rescue and refinement
+
+Use one frozen donor-only rescue plan for the cohort and a separate rescue
+and refinement output directory per target. The panel specifies exact CDS,
+GFF, genome, BUSCO and genetic code inputs. See
+[preparing a fixed rescue donor panel](gene-model-rescue.md#fixed-donor-panel).
+
+For a genomic target, complete rescue with `--donor-plan /path/to/panel`
+first. Refinement takes the same donors and the verified target-to-donor
+synteny comparisons from the rescue publication. The target never serves as
+its own donor, even when it is a member of the panel.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output /path/to/targets/Genus_species/rescue \
+  --output /path/to/targets/Genus_species/refinement
+python workflow/support/gene_model_refinement.py run \
+  --output /path/to/targets/Genus_species/refinement --cpus 4
+```
+
+For a target that has assembled transcripts only, use the same panel and
+select its isoform FASTA from the standard assembly directory. A one-species
+`--transcriptome-inputs` manifest from `prepare-transcriptome` also works.
+DIAMOND compares the target to the fixed donor proteins using the same
+reciprocal-match and ambiguity rules as the existing sequence-only mode.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --donor-plan /path/to/panel --target Genus_species \
+  --transcriptome-assembly-dir /path/to/transcriptome_assembly \
+  --output /path/to/targets/Genus_species/refinement
+```
+
+Run it with the same `run` and `qc` commands as for a genomic target. Both routes
+publish selected CDS/protein inputs in `effective/sequence/inputs.tsv`; only
+genomic targets also publish `effective/inputs.tsv` with GFF and genome. For
+a genomic target with RNA evidence, the existing `--rna-bam-dir` or `--rna`
+interface accepts whole coding paths aligned to that genome. The sequence-only
+FASTA route does not turn assembly contigs into genomic coordinates.
+
+The donor representative stays fixed to the source baseline. Other annotated
+donor isoforms remain available to nominate local genomic predictions. The
+usual independent support and adoption checks still run on the target.
+Donor catalogs, DIAMOND databases, protein comparisons and identical local
+miniprot searches are cached by inputs and tool identity under
+`gene_model_refinement_donor_cache/` next to the panel. Keep the panel, caches
+and completed target directories available when adding targets. A new
+target does not invalidate existing results. A revised target or panel
+requires a new output directory; unchanged donor artifacts can still be reused.
+When targets have separate parent directories, set
+`GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE` (CLI `--comparison-cache` on
+`run`) to one shared directory to reuse matching genomic comparisons across
+revisions as well.
+
+The input-generation entrypoint accepts
+`GG_INPUT_GENE_MODEL_RESCUE_DONOR_PLAN=/path/to/panel` and, when discovering
+an assembly-only target, `GG_INPUT_GENE_MODEL_REFINEMENT_TARGET=Genus_species`.
+Use a separate workspace or explicit per-target output paths; a fixed-panel
+refinement publication contains one target.
+
 ## Run from input generation
 
 Set `run_gene_model_refinement=1` in
@@ -246,10 +309,15 @@ Important settings:
 | `gene_model_refinement_mode` | `conservative` | `off` skips prediction; `audit` retains prediction proposals; `conservative` accepts only supported predictions. |
 | `gene_model_refinement_dir` | blank | `output/input_generation/gene_model_refinement`. Use a new directory for changed inputs/settings/implementation. |
 | `gene_model_refinement_inputs` | blank | Optional original species CDS/GFF/genome TSV, paired with `gene_model_refinement_edges`. |
+| `gene_model_refinement_transcriptome_inputs` | blank | Assembly coding isoforms and their gene assignments, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
+| `gene_model_refinement_rna_bam_dir` | `auto` | Discover RNA BAMs under the workspace input directory, or use the configured directory. Blank disables discovery. |
+| `gene_model_refinement_assembly_dir` | `auto` | Discover standard transcriptome assembly output. Blank disables discovery. |
+| `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
+| `gene_model_refinement_model_repairs` | blank | Reviewed single-locus candidates from a completed rescue publication. |
 | `gene_model_refinement_min_margin` | `0.10` | Experimental score margin for adoption. |
-| `gene_model_refinement_min_support` | `2` | Independent donor species for acceptance/adoption. |
+| `gene_model_refinement_min_support` | `2` | Independent donor species for cross-species acceptance/adoption. |
 | `gene_model_refinement_candidate_limit` | `32` | Exceeding the selection limit abstains; prediction does not silently truncate alternatives. |
 | `gene_model_refinement_padding` | `2000` | Local window padding in bp. |
 
@@ -259,6 +327,209 @@ requires reciprocal protein coverage ≥0.75 and aligned identity ≥0.35, as we
 as its margin and donor gates. These distinct comparisons are not accuracy
 estimates. The new output namespace does not replace rescue
 outputs or install files into curated `workspace/input`.
+
+### Automatic OrionGeno CDS extensions
+
+In conservative mode, a native OrionGeno CDS can extend a single unambiguous
+source model when the two paths belong to the same locus. The extension must
+add at least 90 coding bases and 20% of the source CDS length, retain at least
+90% of the source CDS in frame, and produce a genomic ORF with validated start,
+stop, phases and splice sites. For a partial source CDS, it must preserve any
+validated source terminus. When neither source terminus is known, at least
+95% of the source CDS must remain in frame.
+
+At least two external donor species (or the configured minimum, if greater)
+must support both the retained and added portions of the OrionGeno CDS.
+When the source already encodes a complete ORF, the new path also requires
+at least two distinct, whole-CDS target RNA witnesses. Whole-CDS RNA support
+for the original candidate or a competing qualifying repair holds the
+extension. Accepted extensions preserve the locus ID and appear in
+`effective/model_repairs.json`.
+
+### Automatic split-model merges
+
+In conservative mode, refinement adopts a unique split-model candidate when
+two or more external donor species support the same complete genomic CDS.
+Each fragment must be usable, and the candidate must preserve at least
+two-thirds of each incomplete fragment in frame. If one source model has a
+complete ORF, the merged CDS must preserve it in full and extend it in frame.
+For the external-donor route with a complete source ORF, a frozen OrionGeno
+transcript must match every CDS boundary and phase. The source fragments must
+align to ordered, disjoint regions of each supporting donor protein.
+
+A second route uses a complete, independently annotated copy at a different
+locus in the same genome. It applies to two single-exon source models when the
+upstream model lacks a stop codon and the downstream model has a complete ORF.
+One complete genomic CDS must contain both originals in frame. The intervening
+segment must encode at least eight amino acids and align contiguously with its
+flanks to the reference copy, with at least 75% identity in the intervening
+segment. The whole alignment requires 90% coverage of each protein and 80%
+identity, as well as the configured homology checks. This route uses a
+within-species comparison and a conserved coding bridge as evidence.
+
+Refinement also searches native OrionGeno paths that span adjacent source CDSs,
+including loci absent from the rescue split publication. A path must preserve at
+least two-thirds of each usable source CDS in frame. It can recover missing
+coding regions beyond those CDSs when a single protein per supporting donor
+species aligns across at least 90% of the length of both proteins with at least
+50% identity. At least 80% of the projected codons from each source fragment
+must align to a donor residue. The configured coverage minimum also applies to
+the proportion of paired residues across the two proteins. The configured
+homology and independent-species minimums also apply. This search
+uses the frozen rescue donor panel or the original proteins of the input
+genomes when running refinement directly.
+
+For a completed rescue, refinement uses the verified `native_split_candidates`
+publication when the annotation, OrionGeno input and homology settings match.
+The rescue `split-candidates` command can recreate that publication from
+existing rescue outputs.
+
+The genomic ownership, splice and ORF checks apply to all routes. A native
+OrionGeno path bridging two or more complete source ORFs requires at least
+80% in-frame retention of every fragment, full cross-fragment protein support
+from at least two external donor species, and at least two distinct
+whole-CDS RNA witnesses from the target species. A whole-CDS RNA witness for
+any original complete path holds the candidate. Competing paths and protected
+annotations remain unresolved. Target RNA checks query shortlisted paths in
+indexed BAMs or use the supplied whole-CDS RNA table.
+
+`effective/split_model_merges.json` records the adoption basis and the matching
+OrionGeno transcripts or source reference locus. RNA-supported merges also
+record the whole-CDS witness count.
+
+### Automatic resolution of fused gene models
+
+With native OrionGeno predictions in conservative mode, refinement can replace
+one selected original CDS with two independently supported genes. Each
+non-overlapping prediction must have a complete ORF of at least 100 amino acids, preserve at least 80% of
+its own coding bases in frame in the source CDS, and explain at least 10% of the
+source CDS. Together the predictions must explain at least 85% of the original
+CDS in frame, with one original splice junction that connects the two regions.
+The automatic route requires a single original model without protected
+annotation.
+
+For each replacement, its best qualifying protein hit in each donor must have at
+least 45% identity, 65% coverage on both proteins and 60% of the longer protein
+paired to a residue. In at least two donor species (or the configured
+independent-species minimum, if greater), the hits must be to distinct genes on
+the same chromosome and strand, in the same transcriptional order, within 10 kb.
+The eligible donors must occupy at least two different sister branches along
+the target lineage. At the nearest ancestor with informative donors, at least
+one donor must support the split. A source-like full-length donor annotation
+is recorded as opposing evidence. Donors with both architectures do not count
+towards split support. A nearest donor whose fusion model is supported by at
+least two matching whole-CDS RNA witnesses in `--rna` holds the candidate for
+review. A qualifying lower-scoring isoform of the same donor locus can
+also supply this RNA evidence. RNA from a different paralog cannot veto
+the split through the representative donor hit.
+
+Refinement shares one DIAMOND search per target species across native
+merges, terminal extensions and splits. Each decision reads only its own
+query hits. Splits that overlap another proposed edit are still held for
+review.
+
+Refinement reuses the rescue guide tree. A guide generated by BUSCO/RapidNJ
+is midpoint-rooted for this comparison. For a direct-input run, supply a
+rooted Newick with `--species-tree`; `gg_input_generation` forwards the
+configured `taxonomy_species_tree` for direct genomic inputs. A run lacking a
+species tree reports candidates for review. Competing splits or model edits
+also leave the locus unresolved.
+
+If target RNA is available, refinement checks only fusion candidates that pass
+the comparative screen. RNA BAM queries require a primary, strand-matched
+read spanning the intact CDS, including its fusion splice. Duplicate read
+names across BAMs count once. The same path can be supplied via `--rna` with
+counts from independent molecules. One whole-CDS witness holds the split for
+review and two or more support retaining the fused model. A missing RNA input
+or zero validated witnesses contributes no evidence to the decision.
+
+The representative CDS, protein, and GFF views publish the two new genes.
+`effective/fused_model_split_decisions.json` records split and fusion support,
+the nearest informative donors, and the decision for each tested candidate.
+`effective/fused_model_splits.json` gives the accepted IDs, source splice
+coordinates (zero-based, half-open), OrionGeno transcripts, and CDS hashes.
+Source views retain the input annotation. The check reuses rescue protein and
+coordinate inputs without rerunning whole-genome Miniprot.
+
+### Reviewed split-model merges
+
+Review `rescued/<species>/split_model_candidates.json` from a completed rescue
+run with split-model support, including donor support and alternative candidate
+paths for the same fragments. Each candidate links two or more consecutive
+fragments through one complete donor-supported genomic CDS. Rescue can search
+incomplete and copy-ambiguous matches through its bounded whole-genome fallback.
+Candidate placement flags and competing structures warrant review before
+changing the locus count.
+
+Make a tab-separated file with columns `species` and `candidate_id`, with one
+row for each approved candidate. Use a fresh refinement output directory and
+set `gene_model_refinement_split_model_merges` to that file and
+`gene_model_refinement_rescue_dir` to the completed rescue directory. The CLI
+equivalent is:
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output RESCUE_DIR --output REFINEMENT_DIR \
+  --mode conservative --split-model-merges reviewed_merges.tsv
+python workflow/support/gene_model_refinement.py run --output REFINEMENT_DIR
+```
+
+Refinement freezes the review table and rescue candidate publication. It
+rejects duplicate approvals, shared source genes and paths whose ownership or
+genomic CDS fails revalidation. The approved model replaces all its fragments in
+the representative CDS, protein, transcript, GFF and analysis views. The
+original models remain in the source and full annotation views.
+`effective/split_model_merges.json` records all original owners and their
+retired representative IDs. Use `effective/inputs.tsv` for downstream analysis.
+
+### Automatic single-locus model repairs
+
+In conservative mode, refinement reads the verified rescue publication and
+selects a unique genomic coding path when two or more independently anchored
+reference species support it and the path passes current homology, ownership,
+splice and ORF checks. For an intact source CDS, the path must preserve all
+existing coding bases and their reading frame while extending the CDS. For a
+partial source, it must preserve at least two-thirds of the coding bases in
+frame and keep an annotated start or stop at its original coordinate.
+When syntenic anchors are unavailable, rescue can use unambiguous reciprocal
+protein matches. In that case the adopted path must retain all the original
+coding bases and their reading frame while extending the CDS. Refinement keeps
+competing supported paths unresolved.
+
+Refinement also corrects conflicting numeric CDS phases when one source
+transcript has the same complete CDS in the supplied FASTA and the genome.
+It preserves that transcript ID and CDS coordinates. Automatic changes are
+recorded with their evidence in `effective/model_repairs.json`. The standard
+rescue and conservative refinement commands use this behavior without target
+or approval tables.
+
+### Reviewed single-locus model repairs
+
+Rescue writes `rescued/<species>/model_repair_candidates.json`. Coding-path
+candidates cover a single existing coding locus and may extend a CDS terminus
+or change its exon boundaries. Phase-only candidates have identical coding
+coordinates and conflicting numeric source phases. The publication includes
+donor coverage and identity, placement flags, CDS blocks and a CDS checksum.
+
+Put the reviewed `species` and `candidate_id` pairs in a TSV. Use
+`gene_model_refinement_model_repairs` with a completed
+`gene_model_refinement_rescue_dir`, or plan with the CLI.
+
+```bash
+python workflow/support/gene_model_refinement.py plan \
+  --rescue-output RESCUE_DIR --output REFINEMENT_DIR \
+  --mode conservative --model-repairs reviewed_repairs.tsv
+python workflow/support/gene_model_refinement.py run --output REFINEMENT_DIR
+```
+
+Refinement rechecks genomic ownership, splice sites, phases, translation and
+the CDS checksum. Coding-path repairs require at least two independent donor
+species that meet the refinement homology thresholds, or more if configured
+by `gene_model_refinement_min_support`. Phase-only repairs require one
+independent donor and an exact match to the supplied CDS. Coding-path repairs
+retain the gene ID and add a transcript. Phase-only repairs also retain the
+source transcript ID. The source inputs are archived and
+`effective/model_repairs.json` records the adopted paths.
 
 Slurm submission uses the existing array helper:
 
@@ -324,11 +595,101 @@ RNA evidence columns are `species`, `seqid`, `strand`, `cds_blocks`,
 `transcript_id`, `count`. `cds_blocks` is a JSON list of zero-based, half-open
 coding intervals in transcript order. The entire coding path must agree with
 one target transcript. A collection of individually supported junctions does not
-establish co-occurrence and must not be entered as a complete RNA path. This
-release consumes reviewed paths, rather than inferring them from BAM files.
-Exact matching paths support both existing annotated candidates and new
-predictions. Paths are indexed once for matching; partial paths and separately
+establish co-occurrence. The same full-path requirement applies to RNA BAMs. Place genome-aligned RNA BAMs in
+`workspace/input/refinement_rna_bam/` for input generation, or use
+`--rna-bam-dir` with the standalone CLI. Use `<species>.bam`,
+`<species>.<sample>.bam` or `<species>/<sample>.bam`. The workflow verifies
+the BAM reference dictionary and available sequence checksums, and generates
+an index in its own output if needed. A primary alignment with MAPQ at least
+20 must cover every coding block and match the strand and complete splice
+chain. Splice junctions must be encoded as CIGAR `N`. A strand-valued XS tag
+or the unambiguous splice orientation establishes the
+strand. Evidence records identify the BAM and supporting read. Exact matching
+paths from either input route support both existing annotated candidates and
+new predictions. Paths are indexed once for matching; partial paths and separately
 supported junctions do not strengthen a full transcript choice.
+
+## Transcriptome assembly inputs
+
+Input generation automatically discovers species without genomic inputs in
+`workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms/`.
+It prepares all CDS isoforms and their gene assignments from standard Trinity,
+rnaSPAdes or RNA-Bloom2 outputs, using the corresponding Corset clusters for
+RNA-Bloom2. The standalone CLI accepts `--transcriptome-assembly-dir` pointing
+to the parent `transcriptome_assembly` directory. An explicit
+`--transcriptome-inputs` manifest can still be supplied.
+
+Without an explicit `--edges` table, DIAMOND compares baseline proteins for
+species pairs that include a transcriptome. An inferred edge requires a
+reciprocal best match with at least 80% coverage in each protein and the
+configured minimum identity. The best hit must pass those thresholds after
+ranking all reported matches. A second distinct hit within 5% of the best
+score leaves the pair unresolved, even if that rival has lower coverage. The result supplies
+sequence-only evidence for representative selection. Genomic prediction
+uses the existing synteny correspondence.
+
+Refinement can select existing coding isoforms in a cohort of transcriptome
+assemblies, genome annotations, or both. For assembled cDNA, run this inside the
+GeneGalleon runtime with the original `*_isoform.fa.gz` file.
+
+```bash
+python workflow/support/gene_model_refinement.py prepare-transcriptome \
+  --assembly Genus_species_isoform.fa.gz --species Genus_species \
+  --assembler trinity --output assembly_candidates --cpus 4
+```
+
+Use `--assembler rnaspades` for rnaSPAdes or `--assembler rna-bloom2` with the
+matching `--corset-clusters` TSV for RNA-Bloom2. Use `--gene-map` in place of
+`--assembler` for explicit assignments. The command extracts one CDS per
+transcript with CDSKIT, preserving transcript IDs and identical CDSs belonging
+to distinct transcripts or genes. It also writes a gene-level
+`Genus_species_initial_longestCDS.fa` for initial orthology inference.
+
+The resulting `assembly_candidates/inputs.tsv` has `species`, `cds`,
+`transcript_gene_map` and optional `genetic_code` (default 1) columns. You can
+also supply an existing per-transcript CDS FASTA and a `transcript_id`, `gene_id`
+mapping TSV directly. Every FASTA ID must have exactly one mapping. Use the
+`GENUS_SPECIES_GENEID` format for gene IDs. The optional `baseline` column can
+mark one existing representative per gene with `1`. Otherwise the longest input
+CDS, with ties broken by transcript ID, supplies the baseline. When combining
+manifests, resolve paths relative to the combined TSV or use absolute paths.
+
+To use curated gene-level ortholog correspondences, provide a frozen
+`edges.tsv`. Use columns `species_a`,
+`gene_a`, `species_b`, `gene_b` and optional `weight`, `evidence`, `ambiguous`.
+Mark unresolved copy assignments as `ambiguous`. An orthogroup can contain
+multiple copies, so its membership alone is insufficient to establish edges.
+
+```bash
+python workflow/support/gene_model_refinement.py plan --output mixed_refinement \
+  --transcriptome-inputs assembly_candidates/inputs.tsv \
+  --inputs genomic_sources.tsv --edges edges.tsv --mode off
+python workflow/support/gene_model_refinement.py run --output mixed_refinement --cpus 4
+python workflow/support/gene_model_refinement.py qc --output mixed_refinement
+```
+
+Omit `--inputs` for a transcriptome-only run. To reuse a frozen rescue plan for
+the genome species, use `--rescue-output` in place of `--inputs`. Refinement
+then combines rescue synteny edges with the supplied ortholog correspondences.
+The input-generation entrypoint accepts the same settings through
+`GG_INPUT_GENE_MODEL_REFINEMENT_TRANSCRIPTOME_INPUTS` and
+`GG_INPUT_GENE_MODEL_REFINEMENT_EDGES`, with `GG_INPUT_GENE_MODEL_REFINEMENT_INPUTS`
+or `GG_INPUT_GENE_MODEL_REFINEMENT_RESCUE_DIR` for a mixed cohort.
+
+Pairs involving an assembly use protein identity and reciprocal coverage, with
+internal-gap safeguards and no splice-junction score. Changing an assembly
+representative requires a positive conservation gain, sufficient independent
+donor support, and the score margin. Unresolved copies and weak comparisons
+keep their initial representative. Genome-based prediction and structural
+outputs use genome-annotated species.
+
+The complete cohort's paired FASTAs are in `effective/sequence/species_cds` and
+`effective/sequence/species_protein`, with their genetic codes and manifest in
+`effective/sequence/`. Use those sequence directories for sequence-based
+analyses. `effective/sequence/representative_map.tsv` records the source
+transcript, the initial transcript for assembly species, selection status and
+admission to the FASTAs. The usual `effective/inputs.tsv` covers the subset with
+genome and GFF inputs.
 
 ## Review figures
 
@@ -599,15 +960,20 @@ The existing BUSCO comparison and Swiss-Prot diagnostic interfaces remain availa
 `effective/inputs.tsv` binds paths, hashes and genetic codes for:
 
 - `species_cds`, `species_protein`, `species_gff`, `species_genome`;
-- `analysis_cds`, `analysis_gff`, `coding_admission.tsv`: admitted coding paths
+- `analysis_cds`, `analysis_gff`, `coding_admission.tsv.gz`: admitted coding paths
   with known first-phase bases and terminal incomplete codon bases removed;
   CDS coordinates and phases agree with the analysis sequence and protein;
 - `representative_map.tsv`, with one explicit locus-to-transcript choice;
 - `species_genetic_code.tsv`;
-- `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv`;
-- `species_transcript`, `utr_audit`, and `utr_summary.tsv` for projected representative UTRs;
+- `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv.gz`;
+- `species_transcript`, `utr_audit/SPECIES.json.gz`, and `utr_summary.tsv` for projected representative UTRs;
 - exact supplied CDS files in `source_cds`, decoded original GFF in
   `source_annotation`, `effective_exclusions.tsv`, `gene_bounds_changes.json`.
+
+Admission and per-species UTR diagnostics use streaming gzip compression. The
+decompressed TSV and JSON schemas stay the same. BUSCO protein preparation,
+refinement review, and UTR reassessment also read receipted plain-text outputs
+from previous runs.
 
 Inspect `predictions/SPECIES/predictions.json` for accepted/proposed candidates,
 reasons, donor support and `homology_only_predicted` versus `rna_path_supported`.
@@ -722,6 +1088,17 @@ cache, staging uses local temporary storage. Prediction nomination precedes
 indexing. Zero-window refinement skips staging; zero-candidate rescue still
 streams contig lengths to validate annotation bounds. Final effective bundles
 retain their self-contained genome copies.
+
+Set `TMPDIR` to writable node-local storage visible inside the container to
+build the rescue model store and both refinement SQLite indexes there. When
+temporary storage and the output are on different filesystems, the workflow
+copies the completed files to the output stage, verifies their SHA-256, and
+publishes them using the existing stage checks. A single filesystem uses direct
+staging. Size temporary storage for the largest model store or locus index per
+concurrent task.
+The final index copies the verified initial SQLite index and applies the
+accepted predictions to that copy. This reuses the original catalog import
+and preserves the initial index for restart and inspection.
 
 ## Three-stage BUSCO
 

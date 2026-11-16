@@ -390,9 +390,12 @@ def test_nig_data1_on_system_filesystem_is_rejected(tmp_path):
                    f'gg_tmp_validate_nig_data1 "{tmp_path}"', env)
     assert result.returncode != 0
     assert 'operating-system filesystem' in result.stderr
-    result = shell('stat() { if [[ "$3" == / ]]; then echo 1; else echo 2; fi; }; '
+    result = shell('stat() { if [[ "$3" == / ]]; then echo 1; else echo 2; fi; }; findmnt() { echo xfs; }; '
                    f'gg_tmp_validate_nig_data1 "{tmp_path}"', env)
     assert result.returncode == 0, result.stderr
+    assert 'filesystem=xfs' in result.stderr
+    assert 'writable=true' in result.stderr
+    assert 'available_bytes=' in result.stderr
 
 
 def test_auto_does_not_classify_arbitrary_m_hostname_as_nig(tmp_path):

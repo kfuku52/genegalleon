@@ -39,6 +39,22 @@ stopifnot(identical(add_synteny_similarity_column(g,args,f),g))
 unlink(f)
 cat('Synteny similarity values, missing data, window and geometry passed.\n')
 
+# Multiple groups can contribute to the same pair. Compare the triangular
+# positions to the pair-by-pair definition, including empty observed tips.
+groups <- list(c('A','001','B'), c('A','1','B'), character(), c('001','NA'),
+               character(), c('A','NA'), c('Z'), character())
+observed <- c(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, TRUE)
+expected <- apply(utils::combn(seq_along(groups), 2), 2L, function(pair) {
+    if (!all(observed[pair])) return(NA_real_)
+    a <- groups[[pair[1L]]]
+    b <- groups[[pair[2L]]]
+    total <- length(union(a,b))
+    if (!total) return(NA_real_)
+    length(intersect(a,b)) / total
+})
+jaccard <- getFromNamespace('treevis_jaccard', 'genegalleon.treevis')
+stopifnot(identical(jaccard(groups, observed), expected, num.eq=FALSE))
+
 # Run the workflow's actual PDF driver; fixed column adds exactly 15 mm.
 test_file=sub('^--file=','',grep('^--file=',commandArgs(),value=TRUE)[1])
 repo=normalizePath(file.path(dirname(test_file),'..','..'))

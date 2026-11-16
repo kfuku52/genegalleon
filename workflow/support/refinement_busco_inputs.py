@@ -18,10 +18,12 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
-    from fasta_sequence_store import exclusive_lock, fasta_records
+    from fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from filesystem_io import receipted_compressed_member
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, safe_component
 except ImportError:
-    from .fasta_sequence_store import exclusive_lock, fasta_records
+    from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from .filesystem_io import receipted_compressed_member
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, safe_component
 
 ADMITTED_PROTEIN_POLICY = {
@@ -63,7 +65,7 @@ class _Snapshots:
         self.batch.check()
         return json.loads(raw)
 
-    def publication(self, directory, plan_sha, members):
+    def publication(self, directory, plan_sha, members, *, compressed_members=()):
         directory = Path(directory)
         receipt_path = directory / "receipt.json"
         receipt = self.json(receipt_path)
@@ -71,6 +73,7 @@ class _Snapshots:
                 or not isinstance(receipt.get("files"), dict)):
             raise ValueError("Protein evidence belongs to another refinement plan: " + str(directory))
         paths = [receipt_path]
+        members = [*members, *(receipted_compressed_member(receipt['files'], name) for name in compressed_members)]
         for member in members:
             expected = receipt["files"].get(member)
             if not isinstance(expected, str):
@@ -212,12 +215,12 @@ def _source_view(source, output, code, native=None):
     return records, excluded, included, {}
 
 
-def _admission_index(effective, destination, species, frozen):
+def _admission_index(admission_path, destination, species, frozen):
     """One global TSV pass; use disk storage rather than cohort-sized rows."""
     connection = sqlite3.connect(destination)
     try:
         connection.execute('CREATE TABLE admission (species TEXT, gene_id TEXT, record TEXT, PRIMARY KEY(species,gene_id))')
-        with connection, (effective / "translation_admission.tsv").open(newline="") as handle:
+        with connection, open_text(admission_path, newline='') as handle:
             for record in csv.DictReader(handle, delimiter="\t"):
                 if record["species"] not in species:
                     continue
@@ -234,7 +237,7 @@ def _admission_index(effective, destination, species, frozen):
     return destination
 
 
-def _selected_view(species, source, output, effective, row, code, frozen, admission_database):
+def _selected_view(species, source, output, admission_path, row, code, frozen, admission_database):
     proteins = dict((identifier, protein) for identifier, _header, protein in _records(row["protein"]))
     admission = {}
     connection = sqlite3.connect(Path(admission_database).resolve().as_uri() + '?mode=ro', uri=True)
@@ -274,7 +277,7 @@ def _selected_view(species, source, output, effective, row, code, frozen, admiss
     return records, excluded, len(proteins), {
         "annotation_excluded_records": [record for identifier, record in admission.items() if identifier not in seen],
         "effective_protein_sha256": row["protein_sha256"],
-        "translation_admission_sha256": frozen.hashes[str(effective / "translation_admission.tsv")],
+        "translation_admission_sha256": frozen.hashes[str(admission_path)],
     }
 
 
@@ -293,10 +296,13 @@ def prepare_admitted_protein_inputs(pairs, root, destination, genetic_codes):
     effective = root / "effective"
     analysed = [name for name in names if name in sources]
     effective_rows = {}
+    admission_path = None
     if analysed:
-        effective_members = ["inputs.tsv", "translation_admission.tsv"]
+        effective_members = ["inputs.tsv"]
         effective_members += ["species_protein/" + name + ".fa" for name in analysed]
-        _receipt, _paths = frozen.publication(effective, plan_sha, effective_members)
+        receipt, _paths = frozen.publication(effective, plan_sha, effective_members,
+                                               compressed_members=("translation_admission.tsv",))
+        admission_path = effective / receipted_compressed_member(receipt['files'], "translation_admission.tsv")
         with (effective / "inputs.tsv").open(newline="") as handle:
             for row in csv.DictReader(handle, delimiter="\t"):
                 if row["species"] in effective_rows:
@@ -341,7 +347,7 @@ def prepare_admitted_protein_inputs(pairs, root, destination, genetic_codes):
                         or Path(row["protein"]).resolve() != effective / "species_protein" / (name + ".fa")):
                     raise ValueError("After protein inputs differ from effective publication: " + name)
                 frozen.bind(row["protein"], row["protein_sha256"])
-                paths += [effective / member for member in ("receipt.json", "inputs.tsv", "translation_admission.tsv")]
+                paths += [effective / "receipt.json", effective / "inputs.tsv", admission_path]
                 paths.append(Path(row["protein"]))
                 selected = row
             work.append((name, phase, source_path, source_sha, code, native, selected, paths))
@@ -388,7 +394,7 @@ def prepare_admitted_protein_inputs(pairs, root, destination, genetic_codes):
         temporary = Path(tempfile.mkdtemp(prefix=".admitted-proteins-", dir=destination.parent))
         try:
             manifest = {}
-            admission_database = (_admission_index(effective, temporary / '.translation_admission.sqlite3',
+            admission_database = (_admission_index(admission_path, temporary / '.translation_admission.sqlite3',
                                                    set(analysed), frozen) if analysed else None)
             current_name, native_records = None, None
             for name, phase, source_path, source_sha, code, native, selected, paths in work:
@@ -403,7 +409,7 @@ def prepare_admitted_protein_inputs(pairs, root, destination, genetic_codes):
                 folder.mkdir(exist_ok=True)
                 protein, audit_path = folder / (phase + ".faa"), folder / (phase + ".admission.json")
                 records, excluded, included, extras = (
-                    _selected_view(name, source_path, protein, effective, selected, code, frozen, admission_database)
+                    _selected_view(name, source_path, protein, admission_path, selected, code, frozen, admission_database)
                     if selected is not None
                     else _source_view(source_path, protein, code, native_records))
                 audit = {"schema": 1, "status": "translated", "policy": ADMITTED_PROTEIN_POLICY,

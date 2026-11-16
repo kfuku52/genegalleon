@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas
 import pytest
 
+from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
 from workflow.tests.test_presence_absence_inputs import saved_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +49,8 @@ def test_empty_outputs_auto_width_label_map_and_focus_rows(tmp_path):
     assert width == pytest.approx((4.8 + 70 * 0.14) * 72, abs=0.02)
     text = svg.read_text()
     assert display_name in text
+    assert ">Gene family</text>" in text
+    assert ">Ortholog</text>" not in text
     assert ">family_0</text>" not in text
     label_boxes = [(float(y), float(length)) for y, length in re.findall(
         r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'", text)]
@@ -69,11 +72,116 @@ def test_empty_svg_and_both_empty_outputs_do_not_write_sentinel_file(tmp_path):
     assert not (tmp_path / "1").exists()
 
 
+def test_taxonomy_splits_disjoint_runs_and_distinguishes_missing_ranks(tmp_path):
+    tree = tmp_path / "species.nwk"
+    tree.write_text("(Species_one:1,Species_two:1,Species_three:1,Species_four:1);\n")
+    table = tmp_path / "long.tsv"
+    pandas.DataFrame([
+        dict(species=f"Species_{key}", species_display=f"Species {key}", query="family",
+             query_order=1, presence=1, copy_number=1, status="complete")
+        for key in ("one", "two", "three", "four")
+    ]).to_csv(table, sep="\t", index=False)
+    lineage = tmp_path / "lineage.tsv"
+    lineage.write_text(
+        "species\tlineage_index\ttaxid\tname\trank\n"
+        "Species one\t1\t1\tRoot\tno rank\n"
+        "Species one\t2\t11\tChosen group\tclade\n"
+        "Species one\t3\t111\tShared phylum\tphylum\n"
+        "Species_two\t1\t1\tRoot\tno rank\n"
+        "Species_three\t1\t1\tRoot\tno rank\n"
+        "Species_three\t2\t11\tChosen group\tclade\n"
+        "Species_three\t3\t111\tShared phylum\tphylum\n"
+    )
+    svg = tmp_path / "summary.svg"
+    run_r([f"--species_tree={tree}", f"--long_table={table}", f"--taxonomy_lineage={lineage}",
+           "--taxonomy_groups=1,11", "--taxonomy_ranks=class,phylum", "--width=auto", f"--out_svg={svg}"], tmp_path)
+    root = ET.parse(svg).getroot()
+    text_nodes = [element for element in root.iter() if element.tag.endswith("}text")]
+    labels = [element.text for element in text_nodes]
+    assert labels.count("Chosen group") == 2
+    assert labels.count("Shared phylum") == 2
+    assert labels.count("Unresolved") == 3
+    assert "Root" in labels and "No phylum" in labels
+    assert "NCBI group" in labels and "No class" in labels
+    assert labels.index("Class") < labels.index("Phylum")
+    phylum_x = float(next(element for element in text_nodes if element.text == "Phylum").attrib["x"])
+    phylum_bands = sorted(
+        (float(rect["y"]), float(rect["y"]) + float(rect["height"]))
+        for rect in (element.attrib for element in root.iter() if element.tag.endswith("}rect"))
+        if "x" in rect and abs(float(rect["x"]) + float(rect["width"]) / 2 - phylum_x) < 0.1
+    )
+    assert len(phylum_bands) == 4
+    assert all(bottom < next_top for (_, bottom), (next_top, _) in zip(phylum_bands[:-1], phylum_bands[1:], strict=True))
+
+
+@pytest.mark.parametrize("group_arg, upper_heading", [("", "Phylum"), ("11", "NCBI group")])
+def test_taxonomy_auto_uses_full_tree_and_prefers_shared_taxa(tmp_path, group_arg, upper_heading):
+    species = [f"Species_{number}" for number in range(6)]
+    tree = tmp_path / "species.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in species) + ");\n")
+    lineage = tmp_path / "lineage.tsv"
+    lineage.write_text("species\tlineage_index\ttaxid\tname\trank\n" + "".join(
+        f"{name}\t1\t11\tShared phylum\tphylum\n"
+        f"{name}\t2\t{21 + index // 3}\tClass {index // 3 + 1}\tclass\n"
+        f"{name}\t3\t{31 + index}\tOrder {index + 1}\torder\n"
+        for index, name in enumerate(species)
+    ))
+    table = tmp_path / "long.tsv"
+    pandas.DataFrame([
+        dict(species=name, species_display=name, query="family",
+             query_order=1, presence=1, copy_number=1, status="complete")
+        for name in species[:3]
+    ]).to_csv(table, sep="\t", index=False)
+    svg = tmp_path / "summary.svg"
+    run_r([f"--species_tree={tree}", f"--long_table={table}", f"--taxonomy_lineage={lineage}",
+           f"--taxonomy_groups={group_arg}", f"--out_svg={svg}"], tmp_path)
+    text = svg.read_text()
+    assert f">{upper_heading}</text>" in text and ">Shared phylum</text>" in text
+    assert ">Class</text>" in text and ">Class 1</text>" in text
+    assert text.index(f">{upper_heading}</text>") < text.index(">Class</text>")
+    if group_arg:
+        assert ">Phylum</text>" not in text
+    assert ">Order</text>" not in text
+    assert ">Class 2</text>" not in text
+
+
+def test_taxonomy_dense_family_matrix_leaves_room_for_singleton_labels(tmp_path):
+    args = summary_fixture(tmp_path)
+    lineage = tmp_path / "lineage.tsv"
+    lineage.write_text("species\tlineage_index\ttaxid\tname\trank\n"
+                       "Species_one\t1\t11\tLong first phylum\tphylum\n"
+                       "Species_two\t1\t22\tLong second phylum\tphylum\n")
+    svg = tmp_path / "summary.svg"
+    run_r([*args, f"--taxonomy_lineage={lineage}", f"--out_svg={svg}"], tmp_path)
+    root = ET.parse(svg).getroot()
+    for label in ("Long first phylum", "Long second phylum"):
+        node = next(element for element in root.iter() if element.text == label)
+        x, y = float(node.attrib["x"]), float(node.attrib["y"])
+        rect = next(element.attrib for element in root.iter() if element.tag.endswith("}rect")
+                    and "x" in element.attrib
+                    and abs(float(element.attrib["x"]) + float(element.attrib["width"]) / 2 - x) < 0.1
+                    and float(element.attrib["y"]) < y < float(element.attrib["y"]) + float(element.attrib["height"]))
+        assert float(rect["height"]) >= 8
+        assert float(node.attrib["textLength"].removesuffix("px")) < float(rect["width"])
+
+
+def test_taxonomy_rejects_colliding_species_spellings(tmp_path):
+    args = summary_fixture(tmp_path)
+    lineage = tmp_path / "lineage.tsv"
+    lineage.write_text("species\tlineage_index\ttaxid\tname\trank\n"
+                       "Species_one\t1\t11\tPhylum A\tphylum\n"
+                       "Species one\t2\t22\tFamily B\tfamily\n")
+    with pytest.raises(subprocess.CalledProcessError, match="returned non-zero") as result:
+        run_r([*args, f"--taxonomy_lineage={lineage}", f"--out_pdf={tmp_path / 'summary.pdf'}"], tmp_path)
+    assert "multiple spellings for the same species key" in result.value.stderr
+    assert not (tmp_path / "summary.pdf").exists()
+
+
 @pytest.mark.parametrize("source", ["query2family", "orthogroup"])
 @pytest.mark.parametrize("cutoff", [0, 1])
 def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, source, cutoff):
     assert shutil.which("Rscript"), "Run this test in a GeneGalleon container"
-    _store, manifest = saved_manifest(tmp_path)
+    store, manifest = saved_manifest(tmp_path)
     tree = tmp_path / "species.nwk"
     tree.write_text("((Anchor_one:1,Anchor_two:1):1,Missing_species:2);\n")
     workspace = tmp_path / "workspace"
@@ -89,6 +197,42 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
                presence_absence_dup_conf_score_threshold=str(cutoff),
                presence_absence_focus_species="Anchor_one", presence_absence_plot_width="auto",
                presence_absence_legend_columns="3" if source == "orthogroup" else "auto")
+    annotate_loss = source == "query2family" and cutoff == 0
+    if annotate_loss:
+        (tmp_path / "losses.tsv").write_text(
+            "family_id\tspecies\tanchor_cds_fasta_id\nCombined\tMissing_species\tAnchor_one_a\n"
+        )
+        env["presence_absence_loss_table"] = "losses.tsv"
+    if source == "orthogroup":
+        def clade(name, event="", species="", children=""):
+            events = f'<eventsRec><{event} speciesLocation="{species}"/></eventsRec>' if event else ""
+            return f"<clade><name>{name}</name>{events}{children}</clade>"
+
+        species = clade("root", children=clade("Missing_species") + clade(
+            "inner", children=clade("Anchor_one") + clade("Anchor_two")))
+        gene = clade("dup", "duplication", "root", clade(
+            "owner", "speciation", "root", clade("loss", "loss", "Missing_species") + clade(
+                "a", "speciation", "inner", clade("Anchor_one_a", "leaf", "Anchor_one")
+                + clade("Anchor_two_a", "leaf", "Anchor_two"))) + clade(
+            "b", "speciation", "inner", clade("Anchor_one_b", "leaf", "Anchor_one")
+            + clade("Anchor_two_b", "leaf", "Anchor_two")))
+        (store / "generax_xml").mkdir()
+        (store / "generax_xml/OG1_generax.xml").write_text(
+            f"<recPhylo><spTree><phylogeny>{species}</phylogeny></spTree>"
+            f"<recGeneTree><phylogeny>{gene}</phylogeny></recGeneTree></recPhylo>"
+        )
+        query_dir = tmp_path / "queries"
+        query_dir.mkdir()
+        (query_dir / "OG1").write_text(">near\nAA\n")
+        for subdir, suffix in (("stat_tree", "_stat.tree.tsv"), ("tree_plot", "_tree_plot.pdf")):
+            folder = store / subdir
+            folder.mkdir()
+            (folder / f"OG1{suffix}").write_text("fixture\n")
+        families, from_name = family_context("query2family", query_dir=query_dir)
+        archive_completed_outputs(store, "query2family", families, from_name)
+        assert not (store / "generax_xml").exists()
+        if cutoff:
+            env["presence_absence_mark_terminal_losses"] = "0"
     result = subprocess.run(["bash", str(ROOT / "workflow/core/gg_gene_summary_core.sh")],
                             env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -111,6 +255,17 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
     assert "Skipping gene-family presence/absence summary because no" not in result.stdout
     svg_path = Path(str(prefix) + ".svg")
     text = svg_path.read_text()
+    if annotate_loss or (source == "orthogroup" and cutoff == 0):
+        assert text.count(">0†</text>") == 2  # Matrix and legend.
+    else:
+        assert "†" not in text
+    auto_table = Path(str(prefix) + ".terminal_losses.tsv")
+    if source == "orthogroup" and cutoff == 0:
+        assert auto_table.read_text().splitlines()[1:] == ["Combined\tMissing_species\tAnchor_one_a"]
+    elif source == "query2family" and cutoff:
+        assert len(auto_table.read_text().splitlines()) == 1  # Missing XML.
+    else:
+        assert not auto_table.exists()
     label_boxes = [(float(y), float(length)) for y, length in re.findall(
         r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'", text)]
     svg = ET.parse(svg_path).getroot()
@@ -225,13 +380,26 @@ def test_gene_summary_batches_live_views_in_the_core(tmp_path, basis):
                presence_absence_species_tree_support='', presence_absence_busco_table='',
                presence_absence_ortholog_basis=basis, presence_absence_include_incomplete='1',
                GG_COMMON_REFERENCE_SPECIES='Reference_species')
+    if basis == 'both':
+        lineage = workspace / 'output/species_taxonomy/species_lineage.tsv'
+        lineage.parent.mkdir()
+        lineage.write_text("species\tlineage_index\ttaxid\tname\trank\n"
+                           "Reference_species\t1\t11\tReference phylum\tphylum\n")
+        env.update(presence_absence_taxonomy='auto', presence_absence_taxonomy_groups='11',
+                   presence_absence_taxonomy_ranks='class,phylum')
     result = subprocess.run(['bash', str(ROOT / 'workflow/core/gg_gene_summary_core.sh')],
                             env=env, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output / 'query2family_presence_absence.svg').is_file()
+    if basis == 'both':
+        text = (output / 'query2family_presence_absence.svg').read_text()
+        assert text.count('>Reference phylum</text>') == 2 and '>Class</text>' in text
     for selected in (('reference_gene', 'query_gene') if basis == 'both' else
                      ('reference_gene',) if basis == 'reference_species' else ('query_gene',)):
         prefix = output / f'query2family_{selected}_orthologs'
         assert Path(str(prefix) + '.pdf').read_bytes().startswith(b'%PDF')
         assert len(pandas.read_csv(str(prefix) + '.columns.tsv', sep='\t')) == 2
+        if basis == 'both':
+            text = Path(str(prefix) + '.svg').read_text()
+            assert text.count('>Reference phylum</text>') == 2 and '>Class</text>' in text
     assert not list(output.glob('.gg-presence-*'))

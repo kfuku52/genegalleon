@@ -24,6 +24,7 @@ from kffractbias.io import Gene, annotation_to_genes, natural_key, select_isofor
 try:
     from busco_reference_quality import safe_token
     from fasta_sequence_store import fasta_records
+    from filesystem_io import gzip_text_writer
     from input_generation_array_state import FreshDigestBatch
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from pairwise_synteny_karyotype import chromosome_colors
@@ -38,6 +39,7 @@ try:
 except ImportError:  # package imports in tests
     from .busco_reference_quality import safe_token
     from .fasta_sequence_store import fasta_records
+    from .filesystem_io import gzip_text_writer
     from .input_generation_array_state import FreshDigestBatch
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from .pairwise_synteny_karyotype import chromosome_colors
@@ -69,7 +71,9 @@ def write_json(path, payload):
 
 
 def write_tsv(path, columns, rows):
-    with Path(path).open("w", newline="", encoding="utf-8") as handle:
+    path = Path(path)
+    opener = gzip_text_writer(path) if path.suffix == '.gz' else path.open('w', newline='', encoding='utf-8')
+    with opener as handle:
         writer = csv.writer(handle, delimiter="\t")
         writer.writerow(columns)
         writer.writerows(rows)
@@ -95,7 +99,7 @@ def source_file(workspace, explicit, directory, species, suffixes):
 def tool_identity():
     import kffractbias.io
 
-    versions = {name: importlib.metadata.version(name) for name in ("jcvi", "kfFractBias", "biopython")}
+    versions = {name: importlib.metadata.version(name) for name in ("jcvi", "locuskit", "biopython")}
     versions["annotation_source_sha256"] = digest(kffractbias.io.__file__)
     versions["diamond"] = subprocess.check_output(["diamond", "version"], text=True).strip()
     return versions

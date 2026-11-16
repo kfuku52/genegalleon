@@ -69,7 +69,7 @@ def read_required_columns(path):
     else:
         raise ValueError("Required column 'evalue' (or 'min_evalue') is missing.")
 
-    df = pandas.read_csv(path, sep="\t", usecols=usecols)
+    df = pandas.read_csv(path, sep="\t", usecols=usecols, converters={"sacc": lambda value: value or None})
     return df, evalue_source
 
 
@@ -84,12 +84,13 @@ def main():
 
     df["qjointcov"] = pandas.to_numeric(df["qjointcov"], errors="coerce")
     if evalue_source == "min_evalue":
-        df["evalue_sort"] = pandas.to_numeric(df["min_evalue"], errors="coerce")
+        df["evalue_sort"] = pandas.to_numeric(df.pop("min_evalue"), errors="coerce")
     else:
-        df["evalue_sort"] = df["evalue"].map(parse_min_evalue)
+        df = df.rename(columns={"evalue": "evalue_sort"})
 
     # Downstream filtering is by qjointcov threshold, so rows below this can be removed early.
-    df = df.loc[df["qjointcov"] >= args.min_query_blast_coverage, ["sacc", "qjointcov", "evalue_sort"]]
+    df = df.loc[df["sacc"].notna() & (df["qjointcov"] >= args.min_query_blast_coverage),
+                ["sacc", "qjointcov", "evalue_sort"]]
     if df.empty:
         gene_ids = pandas.Series(dtype=object)
         gene_ids.to_csv(args.outfile, sep="\t", header=False, index=False)
@@ -101,12 +102,20 @@ def main():
 
     # Choose the best hit per gene_id without globally sorting all rows:
     # 1) max qjointcov per sacc, 2) min evalue among ties.
-    max_qjointcov = df.groupby("sacc", sort=False)["qjointcov"].transform("max")
-    candidates = df.loc[df["qjointcov"].eq(max_qjointcov), ["sacc", "qjointcov", "evalue_sort"]]
-    evalue_rank = candidates["evalue_sort"].fillna(numpy.inf)
-    min_evalue_rank = evalue_rank.groupby(candidates["sacc"], sort=False).transform("min")
-    df2 = candidates.loc[evalue_rank.eq(min_evalue_rank), ["sacc", "evalue_sort", "qjointcov"]]
-    df2 = df2.drop_duplicates(subset=["sacc"], keep="first").reset_index(drop=True)
+    coverage_groups = df.groupby("sacc", sort=False)["qjointcov"]
+    unique_subjects = coverage_groups.ngroups == len(df)
+    candidates = df
+    if not unique_subjects:
+        max_qjointcov = coverage_groups.transform("max")
+        candidates = df.loc[df["qjointcov"].eq(max_qjointcov)]
+    del coverage_groups, df
+    if evalue_source == "evalue":
+        candidates = candidates.assign(evalue_sort=candidates["evalue_sort"].map(parse_min_evalue))
+    if not unique_subjects:
+        evalue_rank = candidates["evalue_sort"].fillna(numpy.inf)
+        min_evalue_rank = evalue_rank.groupby(candidates["sacc"], sort=False).transform("min")
+        candidates = candidates.loc[evalue_rank.eq(min_evalue_rank)].drop_duplicates(subset=["sacc"], keep="first")
+    df2 = candidates.loc[:, ["sacc", "evalue_sort", "qjointcov"]]
 
     df2 = df2.sort_values(
         by=["qjointcov", "evalue_sort"],

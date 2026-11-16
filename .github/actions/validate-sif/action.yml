@@ -109,6 +109,46 @@ runs:
           echo "published_tag=latest"
         } >> "${GITHUB_OUTPUT}"
 
+    # Check the SIF engine before transferring or building a large image.
+    - name: Install Singularity runtime
+      id: runtime
+      shell: bash
+      env:
+        SINGULARITY_CE_VERSION: "4.5.0"
+        SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y ca-certificates curl
+        deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
+        deb_path="${RUNNER_TEMP}/${deb_name}"
+        curl \
+          --fail \
+          --location \
+          --proto '=https' \
+          --retry 5 \
+          --retry-all-errors \
+          --show-error \
+          --silent \
+          --tlsv1.2 \
+          --output "${deb_path}" \
+          "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
+        printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
+          | sha256sum --check --strict
+        sudo apt-get install -y "${deb_path}"
+        if ! command -v singularity >/dev/null 2>&1; then
+          echo "SingularityCE installation did not provide the singularity command."
+          exit 1
+        fi
+        installed_version="$(singularity version)"
+        expected_version="${SINGULARITY_CE_VERSION}-noble"
+        if [[ "${installed_version}" != "${expected_version}" ]]; then
+          echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
+          exit 1
+        fi
+        echo "SingularityCE ${installed_version}"
+        echo "engine=singularity" >> "${GITHUB_OUTPUT}"
+
     - name: Restore exact validation SIF
       id: sif-cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -247,45 +287,6 @@ runs:
           exit 1
         fi
         free -h
-
-    - name: Install Singularity runtime
-      id: runtime
-      shell: bash
-      env:
-        SINGULARITY_CE_VERSION: "4.5.0"
-        SINGULARITY_CE_DEB_SHA256: "85e6f7af5e7aad5b1bf28183ce333998bd37eb8f4769af352c47a5153f3373fb"
-      run: |
-        set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y ca-certificates curl
-        deb_name="singularity-ce_${SINGULARITY_CE_VERSION}-noble_amd64.deb"
-        deb_path="${RUNNER_TEMP}/${deb_name}"
-        curl \
-          --fail \
-          --location \
-          --proto '=https' \
-          --retry 5 \
-          --retry-all-errors \
-          --show-error \
-          --silent \
-          --tlsv1.2 \
-          --output "${deb_path}" \
-          "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_CE_VERSION}/${deb_name}"
-        printf '%s  %s\n' "${SINGULARITY_CE_DEB_SHA256}" "${deb_path}" \
-          | sha256sum --check --strict
-        sudo apt-get install -y "${deb_path}"
-        if ! command -v singularity >/dev/null 2>&1; then
-          echo "SingularityCE installation did not provide the singularity command."
-          exit 1
-        fi
-        installed_version="$(singularity version)"
-        expected_version="${SINGULARITY_CE_VERSION}-noble"
-        if [[ "${installed_version}" != "${expected_version}" ]]; then
-          echo "Expected SingularityCE ${expected_version}, found ${installed_version}."
-          exit 1
-        fi
-        echo "SingularityCE ${installed_version}"
-        echo "engine=singularity" >> "${GITHUB_OUTPUT}"
 
     - name: Build validation SIF from current image
       if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'

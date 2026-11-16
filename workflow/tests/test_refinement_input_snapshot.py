@@ -346,7 +346,7 @@ def test_names_selection_preserves_global_files_and_omits_other_species(tmp_path
         refinement.load(root)
 
 
-def test_runtime_identity_checks_stay_ordinary_every_load(tmp_path, monkeypatch):
+def test_runtime_checks_revalidate_implementation_and_hash_predictor_once(tmp_path, monkeypatch):
     root, value, _rows = real_plan(tmp_path)
     tool = tmp_path / 'miniprot'
     tool.write_bytes(b'fixture tool identity\n')
@@ -361,18 +361,18 @@ def test_runtime_identity_checks_stay_ordinary_every_load(tmp_path, monkeypatch)
             return original()
 
         monkeypatch.setattr(refinement, name, counted)
-    original_digest = refinement.digest
+    original_digest = state.digest
 
     def counted_digest(path):
         if Path(path) == tool:
             measured['tool_reads'] += 1
         return original_digest(path)
 
-    monkeypatch.setattr(refinement, 'digest', counted_digest)
+    monkeypatch.setattr(state, 'digest', counted_digest)
     with refinement.invocation_context():
         for _ in range(4):
             refinement.load(root)
-    assert measured == {'implementation': 4, 'dependency_identities': 4, 'tool_reads': 4}
+    assert measured == {'implementation': 4, 'dependency_identities': 4, 'tool_reads': 1}
 
 
 @pytest.mark.parametrize('change', ['input', 'plan'])
@@ -453,3 +453,31 @@ def test_completed_refinement_real_cli_resume_preserves_all_output_and_receipt_b
     assert before == {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in root.rglob('*') if p.is_file()}
     refinement.verify_inputs(root / 'effective/inputs.tsv')
+
+
+def test_predictor_hashes_once_and_rejects_replacement(tmp_path, monkeypatch):
+    root, value, _ = proof_fixture(tmp_path)
+    path = tmp_path / 'miniprot'
+    path.write_bytes(b'predictor')
+    value['request'].update(schema=refinement.SCHEMA, implementation=refinement.implementation(),
+                            dependencies=refinement.dependency_identities(),
+                            miniprot={'path': str(path), 'sha256': state.digest(path)})
+    state.atomic_json(root / 'plan.json', value)
+    original, reads = state.digest, Counter()
+
+    def counted(member):
+        reads[Path(member)] += 1
+        return original(member)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    with pytest.raises(snapshots.InputChanged, match='previously changed'):
+        with refinement.invocation_context():
+            for _ in range(5):
+                assert refinement.load(root) == value
+            assert reads[path] == 1
+            mutate(path, 'replace')
+            with pytest.raises(snapshots.InputChanged, match='Frozen refinement input or plan changed'):
+                refinement.load(root)
+    with refinement.invocation_context():
+        assert refinement.load(root) == value
+    assert reads[path] == 2

@@ -1,5 +1,6 @@
 """Lossless admission updates, immutable source proof and sparse decoding."""
 import copy
+import gzip
 import json
 import os
 import weakref
@@ -9,6 +10,10 @@ import pytest
 from workflow.support import rescue_model_store as store
 from workflow.support.rescue_model_store_patch import patch_model_store
 from workflow.tests.test_rescue_model_store import model, published, receipt
+
+
+def clean_context(context):
+    return not context['problems']
 
 
 def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, monkeypatch):
@@ -39,7 +44,28 @@ def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, mon
 
 
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
-def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp_path, codec):
+def test_parallel_patch_matches_serial_across_changed_shards(tmp_path, codec):
+    records = [model(i) for i in range(12)]
+    source, before = published(tmp_path, records, codec=codec)
+    assert len(before['shards']) >= 8
+    changes = {i: {**row, 'new_admission_metadata': {'index': i}} for i, row in enumerate(records)}
+    serial, parallel = tmp_path / 'serial', tmp_path / 'parallel'
+    expected = patch_model_store(source, serial, changes)
+    assert patch_model_store(source, parallel, changes, publication_workers=4) == expected
+    receipt(parallel)
+    assert list(store.iter_models(parallel)) == list(changes.values())
+
+    broken = {**changes, 9: {**changes[9], 'sequence': 'ATGCCCTAA'}}
+    failed = tmp_path / 'failed'
+    with pytest.raises(ValueError, match='predictor/DNA'):
+        patch_model_store(source, failed, broken, publication_workers=4)
+    assert not (failed / 'model_store').exists()
+    assert not list(failed.glob('.model-patch-*'))
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'auto'])
+@pytest.mark.parametrize('workers', [1, 4])
+def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp_path, codec, workers):
     records = [model(0, 'accepted'), model(1), model(2, 'accepted'), model(3)]
     source, before = published(tmp_path, records, partial=[records[3], records[1], records[3]], codec=codec)
     original = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
@@ -48,7 +74,8 @@ def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp
     appended = {**model(4, 'accepted'), 'sequence': 'ATGAAATAA', 'cds': [[6, 15, 0]]}
     revisions = [{**model(2), 'support': [{'new': 'proof'}]}]
     output = tmp_path / 'result'
-    result = patch_model_store(source, output, changes, appended=[appended], revisions=revisions)
+    result = patch_model_store(source, output, changes, appended=[appended], revisions=revisions,
+                               publication_workers=workers)
     receipt(output)
     expected = [changes.get(i, m) for i, m in enumerate(records)] + [appended]
     assert json.dumps(list(store.iter_models(output)), ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
@@ -86,8 +113,9 @@ def test_patch_rejects_corrupted_source_members(tmp_path, fault):
     assert not (tmp_path / 'output/model_store').exists()
 
 
-def test_context_selection_keeps_original_ordinals_without_decoding_rejections(tmp_path, monkeypatch):
-    rows = [model(i) for i in range(10)]
+@pytest.mark.parametrize('workers', [1, 4, 8])
+def test_context_selection_keeps_original_ordinals_without_decoding_rejections(tmp_path, monkeypatch, workers):
+    rows = [model(i) for i in range(18)]
     for i, m in enumerate(rows):
         m['problems'] = [] if i in {2, 7} else ['internal_stop']
     source, _ = published(tmp_path, rows)
@@ -96,7 +124,7 @@ def test_context_selection_keeps_original_ordinals_without_decoding_rejections(t
         calls.append(envelope['ordinal'])
         return unpack(envelope, *args, **kwargs)
     monkeypatch.setattr(store, '_unpack', record)
-    assert list(store.iter_model_items(source, context_filter=lambda c: not c['problems'])) == [(2, rows[2]), (7, rows[7])]
+    assert list(store.iter_model_items(source, context_filter=clean_context, scan_workers=workers)) == [(2, rows[2]), (7, rows[7])]
     assert calls == [2, 7]
 
 
@@ -109,14 +137,25 @@ def test_context_selection_finishes_generation_fence_after_last_match(tmp_path):
         list(iterator)
 
 
-def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeypatch):
+def test_parallel_context_selection_checks_rejected_shards(tmp_path):
+    rows = [{**model(i), 'problems': [] if i == 0 else ['internal_stop']} for i in range(10)]
+    source, manifest = published(tmp_path, rows)
+    shard = source / 'model_store' / manifest['shards'][-1]['path']
+    with shard.open('ab') as stream:
+        stream.write(gzip.compress(b''))
+    with pytest.raises(ValueError, match='shard checksum changed'):
+        list(store.iter_model_items(source, context_filter=clean_context, scan_workers=4))
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeypatch, workers):
     source, _ = published(tmp_path, [model(0), model(1)])
     from workflow.support import rescue_model_store_patch as patch
     original, changed = patch._copy, False
     def replace(*args):
         nonlocal changed
         original(*args)
-        if not changed:
+        if not changed and args[0].name.startswith('models-000000.'):
             changed = True
             path = source / 'model_store/bodies.sqlite'
             replacement = source / 'new-body'
@@ -124,7 +163,7 @@ def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeyp
             replacement.replace(path)
     monkeypatch.setattr(patch, '_copy', replace)
     with pytest.raises(ValueError, match='changed'):
-        patch_model_store(source, tmp_path / 'output', {})
+        patch_model_store(source, tmp_path / 'output', {}, publication_workers=workers)
     assert not (tmp_path / 'output/model_store').exists()
 
 

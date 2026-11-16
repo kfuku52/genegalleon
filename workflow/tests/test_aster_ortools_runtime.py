@@ -45,7 +45,7 @@ def test_aster_and_ortools_scip_load_in_the_same_runtime():
         pytest.fail(
             "OR-Tools failed to import beside ASTER. Check for the ASTER 1.25 "
             "build-0 loader hook conflict before changing GeneGalleon or "
-            f"kfFractBias dependencies: {BIOCONDA_FIX_URL}\n{exc}",
+            f"LOCUSKIT dependencies: {BIOCONDA_FIX_URL}\n{exc}",
             pytrace=False,
         )
 

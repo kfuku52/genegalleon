@@ -28,6 +28,42 @@ wgd_species_tree="${wgd_species_tree:-}"
 wgd_counts_file="${wgd_counts_file:-}"
 wgd_members_file="${wgd_members_file:-}"
 wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
+wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
+wgd_count_bootstrap_checkpoint="${wgd_count_bootstrap_checkpoint:-}"
+wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
+wgd_count_background_adequacy_draws="${wgd_count_background_adequacy_draws:-0}"
+wgd_count_detection_tsv="${wgd_count_detection_tsv:-}"
+wgd_count_rate_groups_tsv="${wgd_count_rate_groups_tsv:-}"
+wgd_count_fixed_events_tsv="${wgd_count_fixed_events_tsv:-}"
+wgd_count_overlay_table="${wgd_count_overlay_table:-}"
+wgd_count_overlay_model="${wgd_count_overlay_model:-}"
+wgd_count_event_fractions="${wgd_count_event_fractions:-}"
+wgd_count_family_gamma_shape="${wgd_count_family_gamma_shape:-}"
+wgd_alpha="${wgd_alpha:-0.05}"
+wgd_gene_trees_file="${wgd_gene_trees_file:-}"
+wgd_duplication_taxon_holdout="${wgd_duplication_taxon_holdout:-0}"
+wgd_duplication_coverage_audit="${wgd_duplication_coverage_audit:-0}"
+wgd_duplication_root_audit="${wgd_duplication_root_audit:-0}"
+wgd_duplication_copy_split_audit="${wgd_duplication_copy_split_audit:-0}"
+wgd_duplication_family_panels="${wgd_duplication_family_panels:-0}"
+wgd_cross_synteny_file="${wgd_cross_synteny_file:-}"
+wgd_cross_orientation_audit="${wgd_cross_orientation_audit:-0}"
+wgd_cross_two_region_holdout="${wgd_cross_two_region_holdout:-0}"
+wgd_cross_window_offset="${wgd_cross_window_offset:-0}"
+wgd_cross_require_unique_phase="${wgd_cross_require_unique_phase:-0}"
+wgd_cross_require_both_orientations="${wgd_cross_require_both_orientations:-0}"
+wgd_cross_ks_cds_file="${wgd_cross_ks_cds_file:-}"
+wgd_cross_ks_reuse_summary="${wgd_cross_ks_reuse_summary:-}"
+wgd_max_ks_quartets="${wgd_max_ks_quartets:-0}"
+wgd_max_ks_outgroup_families="${wgd_max_ks_outgroup_families:-0}"
+wgd_max_terminal_ks_families="${wgd_max_terminal_ks_families:-0}"
+wgd_ks_component_holdout="${wgd_ks_component_holdout:-0}"
+wgd_ks_sister_panels="${wgd_ks_sister_panels:-0}"
+wgd_ks_rooted_copies="${wgd_ks_rooted_copies:-0}"
+wgd_cross_ks_method="${wgd_cross_ks_method:-yn00}"
+wgd_cross_tree_support_file="${wgd_cross_tree_support_file:-}"
+wgd_min_cross_windows="${wgd_min_cross_windows:-3}"
+wgd_min_duplication_score="${wgd_min_duplication_score:-0.01}"
 wgd_ks_bootstrap="${wgd_ks_bootstrap:-199}"
 wgd_seed="${wgd_seed:-1}"
 wgd_max_pairs="${wgd_max_pairs:-5000}"
@@ -371,19 +407,54 @@ run_subgenome_dominance_stage() (
   echo "Subgenome outputs: ${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
 )
 run_wgd_ssd_stage() (
-  local scratch_root work_dir plan_file argument needs_update
-  local -a contract_args=()
+  local scratch_root work_dir plan_file argument needs_update prior_summary
+  local -a contract_args=() reuse_args=()
+  local -a numeric_env=(env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1)
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" wgd_ssd || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/wgd_ssd") || exit 1
   ensure_dir "${scratch_root}"
   work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
   plan_file="${work_dir}/plan.json"
-  python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
+  while IFS= read -r prior_summary; do
+    if [[ -n ${prior_summary} ]]; then reuse_args+=(--cross-ks-reuse-summary "${prior_summary}"); fi
+  done <<< "${wgd_cross_ks_reuse_summary}"
+  if [[ -z ${reuse_args[0]:-} ]]; then reuse_args=(--cross-ks-reuse-summary ""); fi
+  "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
     --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
     --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
+    --gene-trees "${wgd_gene_trees_file}" --min-duplication-score "${wgd_min_duplication_score}" \
+    --duplication-taxon-holdout "${wgd_duplication_taxon_holdout}" \
+    --duplication-coverage-audit "${wgd_duplication_coverage_audit}" \
+    --duplication-root-audit "${wgd_duplication_root_audit}" \
+    --duplication-copy-split-audit "${wgd_duplication_copy_split_audit}" \
+    --duplication-family-panels "${wgd_duplication_family_panels}" \
+    --cross-synteny "${wgd_cross_synteny_file}" --min-cross-windows "${wgd_min_cross_windows}" \
+    --cross-orientation-audit "${wgd_cross_orientation_audit}" \
+    --cross-two-region-holdout "${wgd_cross_two_region_holdout}" \
+    --cross-window-offset "${wgd_cross_window_offset}" \
+    --cross-require-unique-phase "${wgd_cross_require_unique_phase}" \
+    --cross-require-both-orientations "${wgd_cross_require_both_orientations}" \
+    --cross-ks-cds "${wgd_cross_ks_cds_file}" \
+    "${reuse_args[@]}" \
+    --max-ks-quartets "${wgd_max_ks_quartets}" \
+    --max-ks-outgroup-families "${wgd_max_ks_outgroup_families}" \
+    --max-terminal-ks-families "${wgd_max_terminal_ks_families}" \
+    --ks-component-holdout "${wgd_ks_component_holdout}" \
+    --ks-sister-panels "${wgd_ks_sister_panels}" \
+    --ks-rooted-copies "${wgd_ks_rooted_copies}" \
+    --cross-ks-method "${wgd_cross_ks_method}" \
+    --cross-tree-support "${wgd_cross_tree_support_file}" \
     --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
-    --count-bootstrap "${wgd_count_bootstrap}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --count-bootstrap-workers "${wgd_count_bootstrap_workers}" \
+    --count-bootstrap-checkpoint "${wgd_count_bootstrap_checkpoint}" \
+    --count-scan-workers "${wgd_count_scan_workers}" \
+    --count-background-adequacy-draws "${wgd_count_background_adequacy_draws}" \
+    --count-detection-tsv "${wgd_count_detection_tsv}" --count-rate-groups-tsv "${wgd_count_rate_groups_tsv}" \
+    --count-fixed-events-tsv "${wgd_count_fixed_events_tsv}" \
+    --count-overlay-table "${wgd_count_overlay_table}" --count-overlay-model "${wgd_count_overlay_model}" \
+    --count-event-fractions "${wgd_count_event_fractions}" --count-family-gamma-shape "${wgd_count_family_gamma_shape}" \
     --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
     --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
     --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \
@@ -395,9 +466,8 @@ run_wgd_ssd_stage() (
   gg_artifact_prepare_stage needs_update run_wgd_ssd "${contract_args[@]}" || exit $?
   if [[ ${needs_update} -eq 1 ]]; then
     gg_step_start "Native WGD candidates and duplication-origin evidence"
-    env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-      python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
-    python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
+    "${numeric_env[@]}" python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
     mv_out_bundle "${work_dir}/results" "${gg_workspace_output_dir}/genome_evolution/wgd_ssd"
     gg_artifact_record "${contract_args[@]}"
   else
@@ -2737,7 +2807,8 @@ fi
 # Output files
 # Species tree
 file_species_busco_summary_table="${dir_species_tree}/busco_summary_table/busco_summary.tsv"
-file_species_busco_copy_selection="${dir_species_tree}/busco_summary_table/busco_copy_selection.tsv"
+file_species_busco_copy_selection="${dir_species_tree}/busco_summary_table/busco_copy_selection.tsv.gz"
+file_species_busco_representative_selection="${dir_species_tree}/busco_representative_selection.tsv.gz"
 file_astral_tree_dna_q1="${dir_astral_dna}/single_copy.astral.dna.q1.nwk"     # Quartet supports for the main topology; The lengths of terminal branches are not computed.
 file_astral_tree_dna="${dir_astral_dna}/single_copy.astral.dna.optimized.nwk" # ASTRAL topology with branch lengths optimized by IQ-TREE.
 file_astral_log_dna="${dir_astral_dna}/single_copy.astral.dna.log"
@@ -3312,9 +3383,12 @@ extract_species_tree_fasta_provenance_args+=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "sequence_label=${species_tree_sequence_label}"
 )
+busco_selection_output_label=""
+busco_selection_output_path=""
 if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
+  busco_selection_output_label="copy_selection"
+  busco_selection_output_path="${file_species_busco_copy_selection}"
   extract_species_tree_fasta_provenance_args+=(
-    --output "copy_selection=${file_species_busco_copy_selection}"
     --parameter "duplicate_policy=${species_tree_busco_duplicate_policy}"
     --input "busco_full_directory=${dir_species_busco_full}"
     --input "species_sequences=$(effective_species_input_source_dir_path)"
@@ -3325,20 +3399,27 @@ if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
     gg_artifact_add_input_if_present extract_species_tree_fasta_provenance_args "species_genetic_codes" "${file_species_genetic_code}"
   fi
 elif [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
-  extract_species_tree_fasta_provenance_args+=(
-    --input "busco_full_tables=${dir_species_busco_full}"
-    --output "representative_selection=${dir_species_tree}/busco_representative_selection.tsv"
-  )
+  busco_selection_output_label="representative_selection"
+  busco_selection_output_path="${file_species_busco_representative_selection}"
+  extract_species_tree_fasta_provenance_args+=(--input "busco_full_tables=${dir_species_busco_full}")
 fi
-gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
+extract_species_tree_fasta_check_args=("${extract_species_tree_fasta_provenance_args[@]}")
+if [[ -n "${busco_selection_output_path}" ]]; then
+  busco_selection_check_path="${busco_selection_output_path}"
+  if [[ ! -e "${busco_selection_check_path}" && -f "${busco_selection_check_path%.gz}" ]]; then
+    busco_selection_check_path="${busco_selection_check_path%.gz}"
+  fi
+  extract_species_tree_fasta_check_args+=(--output "${busco_selection_output_label}=${busco_selection_check_path}")
+  extract_species_tree_fasta_provenance_args+=(--output "${busco_selection_output_label}=${busco_selection_output_path}")
+fi
+gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_check_args[@]}" || exit $?
 if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
   prepare_species_tree_input_dir
   gg_step_start "${task}"
 
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   busco_batch_raw_dir="${dir_tmp}/species_tree_busco_batch_raw"
-  busco_batch_report="${dir_tmp}/species_tree_busco_batch.tsv"
-  busco_copy_selection_report="${dir_tmp}/species_tree_busco_copy_selection.tsv"
+  busco_copy_selection_report="${dir_tmp}/species_tree_busco_copy_selection.tsv.gz"
   busco_batch_final_dir="${dir_tmp}/species_tree_busco_batch_final"
   rm -rf -- "${busco_batch_raw_dir}"
   ensure_dir "${busco_batch_raw_dir}"
@@ -3349,11 +3430,12 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     --fasta-list "species_tree_input_fasta_list.txt"
     --output-dir "${busco_batch_raw_dir}"
     --suffix ".raw.fa"
-    --report "${busco_batch_report}"
     --mode single-copy
     --duplicate-policy "${species_tree_busco_duplicate_policy}"
-    --selection-report "${busco_copy_selection_report}"
   )
+  if [[ -n "${busco_selection_output_path}" ]]; then
+    busco_batch_args+=(--selection-report "${busco_copy_selection_report}")
+  fi
   if [[ "${species_tree_busco_duplicate_policy}" == "best_score" ]]; then
     busco_fasta_species_map="${dir_tmp}/species_tree_busco_fasta_species.tsv"
     printf 'species\tfasta\n' > "${busco_fasta_species_map}"
@@ -3413,14 +3495,16 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     busco_id=$(basename "${busco_batch_raw_file}" .raw.fa)
     mv_out "${busco_batch_final_dir}/${busco_id}${single_copy_fasta_suffix}" "${dir_single_copy_fasta}/${busco_id}${single_copy_fasta_suffix}"
   done
-  if [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
-    mv_out "${busco_copy_selection_report}" "${dir_species_tree}/busco_representative_selection.tsv"
-  else
-    mv_out "${busco_copy_selection_report}" "${file_species_busco_copy_selection}"
+  if [[ -n "${busco_selection_output_path}" ]]; then
+    mv_out "${busco_copy_selection_report}" "${busco_selection_output_path}"
   fi
+  for previous_busco_selection in "${file_species_busco_copy_selection}" "${file_species_busco_representative_selection}"; do
+    if [[ "${previous_busco_selection}" != "${busco_selection_output_path}" ]]; then
+      rm -f -- "${previous_busco_selection}"
+    fi
+  done
   rm -rf -- "${busco_batch_raw_dir}"
   rm -rf -- "${busco_batch_final_dir}"
-  rm -f -- "${busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${extract_species_tree_fasta_provenance_args[@]}"
 else
@@ -5764,7 +5848,7 @@ fi
 ensure_dir "${dir_tmp}"
 cd "${dir_tmp}" || exit 1
 
-task="Summarizing kfFractBias self-synteny retention across species"
+task="Summarizing LOCUSKIT self-synteny retention across species"
 if [[ ${run_self_fractionation_bias} -eq 1 ]]; then
   if [[ ! -s "${self_fractionation_bias_table}" ]]; then
     echo "Self-fractionation configuration table not found or empty: ${self_fractionation_bias_table}" >&2
@@ -5836,7 +5920,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   ensure_dir "${dir_busco_fasta}"
   gg_find_fasta_files "${species_tree_input_dir}" 1 > species_tree_input_fasta_list.txt
   genome_busco_batch_raw_dir="${dir_tmp}/genome_busco_batch_raw"
-  genome_busco_batch_report="${dir_tmp}/genome_busco_batch.tsv"
   rm -rf -- "${genome_busco_batch_raw_dir}"
   ensure_dir "${genome_busco_batch_raw_dir}"
   python "${gg_support_dir}/batch_extract_busco_fasta.py" \
@@ -5844,7 +5927,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
     --fasta-list "species_tree_input_fasta_list.txt" \
     --output-dir "${genome_busco_batch_raw_dir}" \
     --suffix ".raw.fa" \
-    --report "${genome_busco_batch_report}" \
     --mode duplicate-aware
 
   finalize_genome_busco_fasta() {
@@ -5869,7 +5951,6 @@ if [[ ${busco_extract_needs_update} -eq 1 && ${run_busco_dupaware_extract_fasta}
   done
   wait_for_background_jobs
   rm -rf -- "${genome_busco_batch_raw_dir}"
-  rm -f -- "${genome_busco_batch_report}"
   rm -f -- species_tree_input_fasta_list.txt
   gg_artifact_record "${busco_extract_provenance_args[@]}"
 else

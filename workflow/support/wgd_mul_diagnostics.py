@@ -22,13 +22,16 @@ def join_nodes(tree, species, rows, model, reconciliation, origins, family_id):
             or model.get("node_diagnostics", {}).get("schema") != "nwkit-mul-node-assignments-v1"):
         raise ValueError("Unsupported MUL node diagnostic model")
     best = model.get("best_hypotheses", [])
-    if not best or len(best) != len(set(best)) or any(type(c) is not int or c < 0 for c in best):
+    best_ids = set(best or ())
+    if not best or len(best) != len(best_ids) or any(type(c) is not int or c < 0 for c in best):
         raise ValueError("Invalid tied-best MUL candidates")
     score_rows = {r["mul.tree"]: r for r in model["scores"]}
-    if len(score_rows) != len(model["scores"]) or not set(best).issubset(score_rows):
+    if len(score_rows) != len(model["scores"]) or not best_ids.issubset(score_rows):
         raise ValueError("Incomplete MUL candidate scores")
-    if (any(type(r["score"]) is not int or r["score"] < 0 for r in score_rows.values())
-            or set(best) != {c for c, r in score_rows.items() if r["score"] == min(x["score"] for x in score_rows.values())}):
+    if any(type(r["score"]) is not int or r["score"] < 0 for r in score_rows.values()):
+        raise ValueError("MUL tied-best candidates do not match minimum scores")
+    minimum_score = min(r["score"] for r in score_rows.values())
+    if best_ids != {c for c, r in score_rows.items() if r["score"] == minimum_score}:
         raise ValueError("MUL tied-best candidates do not match minimum scores")
     gene_id, species_id = rooted_topology_id(tree), rooted_topology_id(species)
     clades = CladeIndex(tree)
@@ -46,16 +49,18 @@ def join_nodes(tree, species, rows, model, reconciliation, origins, family_id):
         c: list(read_tree(score_rows[c]["labeled.tree"], "auto", True, quiet=True).traverse("preorder"))
         for c in best
     }
-    groups, limits, states = defaultdict(dict), {}, defaultdict(list)
+    target_labels = {}
+    node_fields = set(NODE_FIELDS)
+    groups, limits, states = defaultdict(dict), {}, defaultdict(set)
     for row in rows:
-        if not set(NODE_FIELDS).issubset(row):
+        if not node_fields.issubset(row):
             raise ValueError("Incomplete MUL node diagnostic columns")
         if (row["gene_topology_id"] != gene_id or row["species_topology_id"] != species_id
                 or row["gene.tree"] != "1"):
             raise ValueError("MUL diagnostic tree identity mismatch")
         candidate, mapping = int(row["mul.tree"]), int(row["mapping.id"])
         clade = row["gene_clade_id"]
-        if candidate not in best or mapping < 1 or clade not in by_clade:
+        if candidate not in best_ids or mapping < 1 or clade not in by_clade:
             raise ValueError("Unknown MUL candidate, mapping or gene node")
         score = score_rows[candidate]
         if any(row[k] != str(score[k]) for k in ("h1.node", "h2.node", "hypothesis.kind")):
@@ -76,10 +81,14 @@ def join_nodes(tree, species, rows, model, reconciliation, origins, family_id):
         target = candidate_nodes[candidate][mul_node]
         tips = json.loads(row["mul_descendant_tips"])
         mapped_species = json.loads(row["mapped_species"])
-        expected_tips = sorted(target.leaf_names())
-        expected_species = sorted({t if t in allowed_species else t[:-1] for t in expected_tips})
+        target_key = candidate, mul_node
+        if target_key not in target_labels:
+            expected_tips = sorted(target.leaf_names())
+            expected_species = {t if t in allowed_species else t[:-1] for t in expected_tips}
+            target_labels[target_key] = (expected_tips, sorted(expected_species), expected_species <= allowed_species)
+        expected_tips, expected_species, valid_species = target_labels[target_key]
         if (tips != expected_tips or mapped_species != expected_species
-                or not set(expected_species).issubset(allowed_species) or row["mul_label"] != target.name):
+                or not valid_species or row["mul_label"] != target.name):
             raise ValueError("MUL mapped clade metadata mismatch")
         if node.is_leaf and (events[clade]["mapping_status"] != "mapped"
                              or mapped_species != [events[clade]["species_name"]]):
@@ -90,20 +99,22 @@ def join_nodes(tree, species, rows, model, reconciliation, origins, family_id):
                 or (node.is_leaf and (duplication or edge_losses))
                 or (node is not tree and root_losses) or int(row["total.score"]) != score["score"]):
             raise ValueError("Invalid MUL assignment score")
-        state = (tuple(tips), tuple(mapped_species), duplication, edge_losses, root_losses)
         groups[key][clade] = (index, duplication + edge_losses + root_losses, mul_node)
-        states[clade].append(state)
+        if not node.is_leaf:
+            states[clade].add((tuple(tips), tuple(mapped_species), duplication, edge_losses, root_losses))
     for candidate in best:
         count = limits.get(candidate, 0)
-        if not count or {k[1] for k in groups if k[0] == candidate} != set(range(1, count + 1)):
+        mapping_ids = [mapping for c, mapping in groups if c == candidate]
+        if not count or len(mapping_ids) != count or max(mapping_ids) != count:
             raise ValueError("Incomplete optimal MUL mappings")
     for (candidate, _), assignments in groups.items():
         if (set(assignments) != set(by_clade)
                 or {p[0] for p in assignments.values()} != set(range(len(nodes)))
                 or sum(p[1] for p in assignments.values()) != score_rows[candidate]["score"]):
             raise ValueError("Incomplete or inconsistent MUL node assignment")
+    clade_order = sorted(by_clade)
     for candidate in best:
-        signatures = [tuple(v[2] for _, v in sorted(assignments.items()))
+        signatures = [tuple(assignments[clade][2] for clade in clade_order)
                       for (c, _), assignments in groups.items() if c == candidate]
         if len(signatures) != len(set(signatures)):
             raise ValueError("Repeated optimal MUL assignment")
@@ -112,7 +123,7 @@ def join_nodes(tree, species, rows, model, reconciliation, origins, family_id):
         if node.is_leaf:
             continue
         clade = clades.clade_id_for_node(node)
-        options = sorted(set(states[clade]))
+        options = sorted(states[clade])
         duplication_options = {s[2] for s in options}
         status = "consistent" if len(options) == 1 else "ambiguous"
         dl_duplication = "all" if duplication_options == {1} else "none" if duplication_options == {0} else "ambiguous"

@@ -17,7 +17,7 @@ PROGRAM_SHA_VARS = (
     "PAML_REPO_SHA",
     "IQTREE_REPO_SHA",
     "ASTER_REPO_SHA",
-    "KFFRACTBIAS_REPO_SHA",
+    "LOCUSKIT_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
     "FASTK_REPO_SHA",
@@ -223,7 +223,7 @@ def test_native_apptainer_build_records_source_revisions():
         "paml",
         "iqtree",
         "ASTER",
-        "kfFractBias",
+        "locuskit",
         "kftools",
         "rkftools",
     ):

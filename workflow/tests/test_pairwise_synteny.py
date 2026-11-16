@@ -982,6 +982,22 @@ def homoeolog_anchor_fixture(tmp_path, counts):
     return genomes, path
 
 
+def test_dotplot_2x2_sort_reconsiders_available_queries_after_a_tile_is_used(tmp_path):
+    selected = [["t1", "t2", "t3", "t4"], ["q1", "q2", "q3", "q4"]]
+    counts = {(target, query): 10 for target in ("t1", "t2") for query in ("q1", "q2")}
+    counts.update({(target, query): 8 for target in ("t3", "t4") for query in ("q1", "q2")})
+    counts.update({(target, query): 2 for target in ("t3", "t4") for query in ("q3", "q4")})
+    genomes, path = homoeolog_anchor_fixture(tmp_path, counts)
+
+    ordered, metadata = dotplot.homoeolog_order(selected, genomes, path)
+
+    assert ordered == selected
+    assert [(group["target"], group["query"], group["anchor_counts_2x2"]) for group in metadata["groups"]] == [
+        (["t1", "t2"], ["q1", "q2"], [10] * 4),
+        (["t3", "t4"], ["q3", "q4"], [2] * 4),
+    ]
+
+
 @pytest.mark.parametrize("selected,expected", [
     ([["t1", "t1", "t2"], ["q1", "q2"]], [["t1", "t1", "t2"], ["q1", "q2"]]),
     ([["t1", "t2", "t1", "t3"], ["q1", "q2"]], [["t2", "t1", "t3"], ["q1", "q2"]]),

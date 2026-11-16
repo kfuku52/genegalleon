@@ -910,7 +910,8 @@ def test_missing_manifest_still_requests_run_when_declared_output_is_missing(tmp
     assert not manifest.exists()
 
 
-def test_audit_reports_legacy_untracked_output_without_failing(tmp_path):
+@pytest.mark.parametrize('detail', ['full', 'exceptions'])
+def test_audit_reports_legacy_untracked_output_without_failing(tmp_path, detail):
     workspace = tmp_path / "workspace"
     logical_root = workspace / "output" / "orthogroup"
     input_path = logical_root / "rooted_tree" / "OG0001_root.nwk"
@@ -937,11 +938,18 @@ def test_audit_reports_legacy_untracked_output_without_failing(tmp_path):
         report,
         "--mode",
         "orthogroup",
+        "--report-detail",
+        detail,
     )
     assert audited.returncode == 0, audited.stderr
     frame = pd.read_csv(report, sep="\t", keep_default_na=False)
     legacy = frame.loc[frame["status"] == "legacy_untracked", :]
     assert legacy[["family_id", "step"]].to_dict(orient="records") == [{"family_id": "OG0002", "step": "csubst_scan"}]
+    current = frame.loc[frame["status"] == "current", :]
+    assert len(current) == 1
+    assert current.iloc[0]["family_id"] == ("OG0001" if detail == "full" else "-")
+    if detail == "exceptions":
+        assert current.iloc[0]["reason"] == "count=1"
 
 
 def test_audit_infers_raw_query2family_ids_from_query_directory(tmp_path):

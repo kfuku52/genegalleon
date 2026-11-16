@@ -39,7 +39,7 @@ from .reference import genome_reference_index, gff_reference_mapping, normalize_
 from .source_identity import coding_coordinate_audit, locus_identity_audit, source_annotation_path, task_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 23
+GFF_REPAIR_VERSION = 24
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))

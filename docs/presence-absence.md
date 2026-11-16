@@ -4,6 +4,11 @@ Run the `gg_gene_summary` stage to reuse existing reconciled family trees, CDS
 FASTA files (or protein FASTA files for protein-mode families) and optional local-synteny tables. No sequence search or phylogeny
 reconstruction is required. See [stage outputs and defaults](main-stages-and-what-they-do.md#gg_gene_summary_entrypointsh).
 
+The presence/absence heatmap counts any family-tree tip assigned to a species.
+Its **Gene family** legend describes detection at that level. The separate
+ortholog plots use the relationship between each candidate and a reference or
+query gene on the annotated family tree.
+
 The default remains `presence_absence_ortholog_basis=reference_species`, with
 all original queries retained when the query-gene basis is selected. Species
 and gene identifiers in scientific tables are never changed by display labels.
@@ -128,6 +133,7 @@ presence_absence_query_label="label"  # Default: id.
 presence_absence_focus_species="Species_one,Species_two"
 presence_absence_legend_columns="auto"  # auto, 1, 2, or 3.
 presence_absence_label_map="/path/to/display_labels.tsv"
+presence_absence_glyph_height="fill"  # Default: fill. Use compact for uniform lane heights.
 ```
 
 Auto width reserves at least 0.14 inches per column plus tree/label space on
@@ -145,9 +151,91 @@ column	Species_one_gene_123	HOG0000100: gene 123
 ```
 
 The plotting helper also accepts these as `--width=auto`, `--label_map=PATH`,
-`--focus_species=Species_one,Species_two`, and `--legend_columns=auto`. Empty
+`--focus_species=Species_one,Species_two`, `--legend_columns=auto`, and
+`--glyph_height=fill`. Empty
 `--out_pdf=` / `--out_svg=` explicitly disable that format; omitted output
 options also leave that format disabled.
+
+### NCBI taxonomy bands
+
+```bash
+presence_absence_taxonomy="auto"  # Default: off. A path to a lineage TSV also works.
+presence_absence_taxonomy_ranks="auto"  # Or choose columns in order, e.g. "phylum,class".
+presence_absence_taxonomy_groups="33208,4751,33090,33630,33634"
+```
+
+`auto` reads `output/species_taxonomy/species_lineage.tsv` from the current
+workspace. Generate it with `run_species_taxonomy=1` or use a saved TSV with
+`species`, `lineage_index`, `taxid`, `name`, and `rank` columns. The lineage
+index increases from the root toward the tip. The plot reads this file locally.
+
+With taxonomy enabled, the default rank mode `auto` displays an upper NCBI
+rank on the left and a more detailed rank on the right. It chooses the detailed
+rank from domain through genus using all tips of the species tree. It prefers
+ranks covering at least half the resolved tips and having two or more taxa
+that each contain multiple tips.
+Among those ranks, it favors the one that groups the most tips into taxa of
+two or more species outside the largest taxon. Ties favor coverage, the total
+number of tips in multi-species taxa, then a broader rank. When no rank meets
+the initial criteria, it favors coverage, then the total number of tips in
+multi-species taxa. On a tie, it prefers a more specific shared rank. It uses
+phylum if the tree has no major rank assignments.
+
+The upper column uses the nearest broader major rank covering at least half
+the resolved tips, or the nearest broader major rank with any assignments.
+If none is available, the plot shows the detailed rank alone. In auto mode,
+`presence_absence_taxonomy_groups` replaces the upper-rank column with the
+specified NCBI groups.
+
+Set `presence_absence_taxonomy_ranks="phylum,class"` to draw both bands in
+that order. Each band displays the deepest ancestor with the requested rank.
+Optional ancestor TaxIDs add an NCBI group band using the deepest matching
+ancestor. The example selects Metazoa, Fungi, Viridiplantae, Alveolata, and
+Stramenopiles. A resolved lineage outside the selected groups reads “Other”.
+Missing ranks read “No phylum”, “No class”, etc., and tips without a lineage
+read “Unresolved”.
+
+Colors are shared across plots using the same lineage file and groups. Bands
+follow the plotted species-tree order and repeat the label if a taxon appears
+in separate stretches of rows. `presence_absence_plot_width="auto"` adds space
+for the bands. Automatic height reserves room for labels in single-species
+bands. An explicit page size must leave enough room for readable labels.
+For direct rendering of saved tables, use
+`--taxonomy_lineage=PATH` with optional `--taxonomy_ranks=phylum,class` and
+`--taxonomy_groups=ID,ID,...`.
+
+In ortholog plots, `fill` divides the full species row height among the
+lanes in each family. A one-lane family fills the row, even when an adjacent
+family uses multiple lanes. Copy-number text keeps its size and stays centred
+in each glyph. Synteny and topology evidence move with their glyphs.
+
+## Annotate inferred terminal losses
+
+By default, both ortholog views read saved GeneRax recPhyloXML, including
+ZIP-backed results and saved-family sources. A terminal loss is linked to an
+anchor in its surviving sister lineage or across an ancestral speciation when
+the anchor and loss map to opposite sides of that split. The plot uses the
+selected anchors and species. Families without XML contribute no markers.
+The summary saves the links in the corresponding `.terminal_losses.tsv` file.
+
+Set `presence_absence_mark_terminal_losses=0` to disable these annotations.
+For query-gene plots, `presence_absence_loss_table` overrides automatic links
+with a curated TSV. For standalone rendering, pass either table to
+`--loss_table=PATH`.
+
+```tsv
+family_id	species	anchor_cds_fasta_id
+enzyme_family	Species_one	Species_two_gene_123
+```
+
+Use the species-tree tip ID and the exact family and anchor IDs from the
+plot's `.columns.tsv`. Unknown species or anchors are errors. Repeated rows
+add a single mark. A dagger beside a copy number marks an inferred loss
+alongside the displayed copies. A `0†` marks an inferred loss with no displayed
+copy for the anchor. If another glyph spans that cell, the plot puts the
+`0†` in a strip at the bottom of the same species row. A dagger can apply to
+a shared glyph spanning multiple anchors. It marks one or more inferred
+lineage extinctions, while the number continues to count displayed copies.
 
 ## Interpret duplication bars
 
@@ -248,9 +336,10 @@ original D nodes, and with displayed-descendant provenance also checks that the
 gene/anchor pair lies in opposite child subtrees, even without a UFBoot table.
 Ortholog plots size each species row independently by its maximum displayed
 lane count, reserving space for 8-point copy-number text and any evidence bands.
-Sparse families are centered within the row. The species tree follows those
-row positions, while column labels and legends retain compact spacing in
-physical units. A dense row does not stretch the other rows or the whole plot.
+In `compact` mode, sparse families are centered within the row. The species
+tree follows those row positions, while column labels and legends retain
+compact spacing in physical units. A dense row does not stretch the other
+rows or the whole plot.
 Automatic height follows the total space required by the rows and labels.
 An explicit height below the required minimum is rejected with that minimum.
 

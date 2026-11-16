@@ -205,6 +205,7 @@ def test_transcriptome_entrypoint_exposes_amalgkit_rrna_resource_limits():
     config_vars = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
 
     assert 'amalgkit_rrna_filter="no"' in entrypoint
+    assert 'amalgkit_rrna_filter="${amalgkit_rrna_filter:-no}"' in core
     assert 'amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"' in entrypoint
     assert 'amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"' in entrypoint
     assert 'amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"' in entrypoint
@@ -503,7 +504,7 @@ def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
         in text
     )
     assert (
-        'native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1'
+        'native_fastq_listing=$(discover_verified_native_fastq_files "${dir_species_fastq}") || exit 1'
         in text
     )
     assert 'mapfile -t files_fastq <<< "${native_fastq_listing}"' in text
@@ -565,7 +566,6 @@ def test_transcriptome_core_uses_type_f_for_fastq_find_patterns():
     expected_tokens = [
         'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_2.amalgkit.fastq.gz"',
         'find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz"',
@@ -579,7 +579,6 @@ def test_transcriptome_core_uses_type_f_for_fastq_find_patterns():
     banned_tokens = [
         'find "${dir_amalgkit_getfastq_sp}" -name "*_2.amalgkit.fastq.gz"',
         'find "${dir_amalgkit_getfastq_sp}" -name "*.amalgkit.fastq.gz"',
-        'find "${dir_amalgkit_getfastq_sp}" -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*_1.amalgkit.fastq.gz"',
         'find "${selected_fastq_dir}" -name "*_2.amalgkit.fastq.gz"',

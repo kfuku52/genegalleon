@@ -61,6 +61,25 @@ def test_same_receipt_and_output_bytes_with_one_fresh_read_per_command(tmp_path,
                       for p in directory.rglob('*') if p.is_file()}
 
 
+def test_stage_reuse_shares_full_verification_with_consumers(tmp_path, monkeypatch):
+    directory, key, receipts = publication(tmp_path)
+    measured = metrics(monkeypatch)
+    with snapshots.ReceiptSnapshot(rescue.verified) as proof:
+        assert proof.verify_reusable(directory, key)
+        reads = dict(measured)
+        assert reads['sha256_reads'] == len(json.loads((directory / 'receipt.json').read_text())['files']) + 1
+        proof.verify(receipts)
+        assert proof.verify_reusable(directory, key)
+        assert dict(measured) == reads
+    with pytest.raises(snapshots.ReceiptChanged):
+        with snapshots.ReceiptSnapshot(rescue.verified) as proof:
+            assert proof.verify_reusable(directory, key)
+            (directory / 'models.json').unlink()
+            proof.verify_reusable(directory, key)
+    with snapshots.ReceiptSnapshot(rescue.verified) as fresh:
+        assert not fresh.verify_reusable(directory, key)
+
+
 @pytest.mark.parametrize('target', ['member', 'receipt'])
 @pytest.mark.parametrize('mutation', ['rewrite', 'replace', 'remove', 'permission', 'symlink'])
 def test_verified_generation_cannot_refresh(tmp_path, target, mutation):
@@ -326,6 +345,39 @@ def test_whole_refinement_completed_resume_keeps_every_output_and_receipt_byte(t
     assert expected == {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                         for path in root.rglob('*') if path.is_file()}
     refinement.verify_inputs(root / 'effective/inputs.tsv')
+
+
+def test_genomic_qc_hashes_effective_once_and_fences_changes(tmp_path, monkeypatch):
+    fixtures = import_module('test_gene_model_refinement')
+    inputs, edges, _rows = fixtures.tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    effective = refinement.finalize(root, value)
+    target = effective / 'species_cds/Species_target.fa'
+    original, reads = state.digest, Counter()
+
+    def track(path):
+        reads[Path(path)] += 1
+        return original(path)
+
+    monkeypatch.setattr(state, 'digest', track)
+    monkeypatch.setattr(rescue, 'digest', track)
+    proof = state.FreshDigestBatch()
+    assert all(refinement.inspect_stages(root, value, 2, effective_verification=proof).values())
+    assert reads[target] == 1
+
+    verify_inputs = refinement.verify_inputs
+
+    def change(*args, **kwargs):
+        result = verify_inputs(*args, **kwargs)
+        replacement = target.with_suffix('.replacement')
+        replacement.write_bytes(target.read_bytes())
+        replacement.replace(target)
+        return result
+
+    monkeypatch.setattr(refinement, 'verify_inputs', change)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        refinement.inspect_stages(root, value, 2, effective_verification=state.FreshDigestBatch())
 
 
 def correspondence_fixture(tmp_path, edges, *, legacy=False, projection=None):

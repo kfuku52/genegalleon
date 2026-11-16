@@ -15,17 +15,26 @@ gg_tmp_is_nig() {
 
 gg_tmp_validate_nig_data1() {
   local root=${1:-/data1}
-  [[ -d "${root}" && -w "${root}" && -x "${root}" ]] || {
-    echo "NIG auto scratch requires an existing writable /data1; select workspace explicitly to use it." >&2
-    return 1
-  }
-  local scratch_device system_device
-  scratch_device=$(stat -c %d "${root}") || return 1
-  system_device=$(stat -c %d /) || return 1
-  [[ "${scratch_device}" != "${system_device}" ]] || {
-    echo "NIG auto scratch refuses /data1 on the operating-system filesystem." >&2
-    return 1
-  }
+  local writable=false scratch_device system_device filesystem available reason=""
+  if [[ -d "${root}" && ! -L "${root}" && -w "${root}" && -x "${root}" ]]; then
+    writable=true
+  fi
+  scratch_device=$(stat -c %d "${root}" 2>/dev/null) || scratch_device=unknown
+  system_device=$(stat -c %d / 2>/dev/null) || system_device=unknown
+  filesystem=$(findmnt -n -o FSTYPE -T "${root}" 2>/dev/null) || filesystem=unknown
+  available=$(df -B1 --output=avail "${root}" 2>/dev/null | awk 'NR==2 {print $1}') || available=unknown
+  if [[ "${writable}" == false ]]; then
+    reason="NIG auto scratch requires an existing writable /data1; select workspace explicitly to use it."
+  elif [[ "${scratch_device}" == "${system_device}" ]]; then
+    reason="NIG auto scratch refuses /data1 on the operating-system filesystem."
+  elif [[ "${scratch_device}" == unknown || "${system_device}" == unknown ||
+          ( "${filesystem}" != xfs && "${filesystem}" != ext4 ) ]]; then
+    reason="NIG auto scratch requires a verified local XFS or ext4 filesystem."
+  fi
+  printf 'NIG scratch node=%s path=%s filesystem=%s available_bytes=%s writable=%s device=%s system_device=%s status=%s\n' \
+    "${SLURMD_NODENAME:-${HOSTNAME:-unknown}}" "${root}" "${filesystem}" "${available:-unknown}" \
+    "${writable}" "${scratch_device}" "${system_device}" "${reason:-qualified}" >&2
+  [[ -z "${reason}" ]]
 }
 
 gg_resolve_tmp_root() {

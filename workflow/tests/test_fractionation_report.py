@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -35,6 +36,36 @@ def test_shared_missingness_and_schema():
     rows[-1]['common_callable'] = '0'
     with pytest.raises(ValueError, match='mask'):
         paired_contrasts(rows, replicates=100, permutations=100)
+
+
+def test_report_uses_the_profile_bytes_bound_by_its_digest(tmp_path, monkeypatch):
+    from kffractbias import comparison
+
+    profiles = loci()
+    fields = tuple(profiles[0])
+    text = '\t'.join(fields) + '\n' + ''.join('\t'.join(row[field] for field in fields) + '\n' for row in profiles)
+    verified = tmp_path / 'comparison.loci.tsv'
+    replacement = tmp_path / 'other.tsv'
+    verified.write_text(text)
+    replacement.write_text(text.replace('\t1\t2\t2\n', '\t1\t1\t2\n'))
+    digest = hashlib.sha256(verified.read_bytes()).hexdigest()
+    config = tmp_path / 'report.json'
+    config.write_text(json.dumps(dict(manifest='input.tsv',
+        statistics=dict(block_size=3, replicates=100, permutations=100))))
+    monkeypatch.setattr(comparison, 'comparison_report', lambda *args, **kwargs: {'output_sha256': {'loci': digest}})
+
+    open_path = Path.open
+
+    def substitute_text_read(path, mode='r', *args, **kwargs):
+        if path == verified and mode == 'r':
+            path = replacement
+        return open_path(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', substitute_text_read)
+    run(config, tmp_path)
+    report = json.loads((tmp_path / 'comparison.contrasts.json').read_text())
+    assert report['loci_sha256'] == digest
+    assert report['contrasts'][0]['effect'] == pytest.approx(.6)
 
 
 def test_report_config_rejects_unknown_keys_before_outputs(tmp_path):

@@ -57,7 +57,10 @@ def csubst_site_archive_is_complete(path):
         with zipfile.ZipFile(path, "r") as archive:
             if archive.comment != CSUBST_SITE_ARCHIVE_COMMENT:
                 return False
-            if not any(not info.is_dir() for info in archive.infolist()):
+            members = archive.infolist()
+            if not any(not info.is_dir() for info in members):
+                return False
+            if len({info.filename for info in members}) != len(members):
                 return False
             return archive.testzip() is None
     except (OSError, RuntimeError, zipfile.BadZipFile):

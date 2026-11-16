@@ -61,6 +61,8 @@ def native_environment(manifest, *, generate):
                GG_TRANSCRIPTOME_REPRESENTATIVE_INPUTS='', GG_COMMON_REPRESENTATIVE_INPUTS='',
                GG_TRANSCRIPTOME_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'],
                GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'])
+    if manifest['input_mode'] == INPUT_MODE and manifest.get('site_profile') == 'nig':
+        env['GG_SITE_PROFILE'] = 'nig'
     if manifest['input_mode'] == ASSEMBLY_MODE:
         env['GG_COMMON_TMP_ROOT'] = manifest.get('tmp_root', 'auto')
         env['GG_SITE_PROFILE'] = manifest.get('site_profile', '')
@@ -210,8 +212,16 @@ def inspect_cache(value):
                'validate_amalgkit_getfastq_completion_manifest_index "$1" "$2" yes', 'cache-check',
                str(cache / 'getfastq_completion.json'), value['path'], str(Path(__file__).resolve().parents[1] / 'core/gg_transcriptome_generation_core.sh')]
     checked = subprocess.run(command, check=True, capture_output=True, text=True)
-    if json.loads(checked.stdout) != expected['content_stat_fingerprint']:
-        raise ValueError('Prepared cache files changed after the verified handoff')
+    current = json.loads(checked.stdout)
+    if current != expected['content_stat_fingerprint']:
+        if [item[:1] + item[2:] for item in current] != [
+            item[:1] + item[2:] for item in expected['content_stat_fingerprint']
+        ]:
+            raise ValueError('Prepared cache files changed after the verified handoff')
+        # Lustre device numbers can vary between login and compute nodes.
+        command[2] = command[2].replace('validate_amalgkit_getfastq_completion_manifest_index "$1" "$2" yes',
+                                        'validate_amalgkit_getfastq_completion_manifest "$1" "$2"')
+        subprocess.run(command, check=True, capture_output=True, text=True)
     result['prepared_cache'] = expected
     return result
 

@@ -5,6 +5,8 @@ import math
 import os
 import textwrap
 from collections import Counter, defaultdict
+from functools import lru_cache
+from itertools import repeat
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy
@@ -1043,37 +1045,38 @@ def plot_taxonomy_flow(
         blank_pdf(out_pdf, "HGT Taxonomy Flow", "No HGT candidate genes were found.")
         return
 
-    plot_df = gene_df.copy()
-    preferred_rank_normalized = str(preferred_rank).strip().lower()
-    precomputed_phylum_columns = {"recipient_phylum", "donor_phylum"}.issubset(plot_df.columns)
-    precomputed_phylum_values = pandas.DataFrame(index=plot_df.index)
-    if precomputed_phylum_columns:
-        for column in ["recipient_phylum", "donor_phylum"]:
-            precomputed_phylum_values[column] = plot_df[column].map(
-                lambda value: "" if pandas.isna(value) else str(value).strip()
-            )
-    use_precomputed_phylum = (
-        preferred_rank_normalized == "phylum"
-        and precomputed_phylum_columns
-        and (
-            precomputed_phylum_values["recipient_phylum"].ne("").any()
-            or precomputed_phylum_values["donor_phylum"].ne("").any()
-        )
-    )
-    if use_precomputed_phylum:
-        plot_df["recipient_label"] = precomputed_phylum_values["recipient_phylum"]
-        plot_df["besthit_label"] = precomputed_phylum_values["donor_phylum"]
+    preferred_rank = str(preferred_rank).strip().lower()
+    phylum_columns = {"recipient_phylum": "recipient_label", "donor_phylum": "besthit_label"}
+    precomputed = None
+    if preferred_rank == "phylum" and phylum_columns.keys() <= set(gene_df.columns):
+        labels = pandas.DataFrame({
+            label: gene_df[column].map(lambda value: "" if pandas.isna(value) else str(value).strip())
+            for column, label in phylum_columns.items()
+        })
+        if labels.ne("").any().any():
+            precomputed = labels
+    if precomputed is not None:
+        plot_df = precomputed
     else:
-        plot_df["recipient_label"] = plot_df.apply(
-            lambda row: resolve_rank_label(row.get("gene_taxon", ""), numpy.nan, resolver, preferred_rank),
-            axis=1,
-        )
-        plot_df["besthit_label"] = plot_df.apply(
-            lambda row: resolve_rank_label(
-                row.get("besthit_organism", ""), row.get("besthit_taxid", numpy.nan), resolver, preferred_rank
-            ),
-            axis=1,
-        )
+        # Repeated taxon observations use the same taxonomy snapshot and rank
+        # for this plot. Bound the cache even for a high-cardinality input.
+        @lru_cache(maxsize=4096)
+        def cached_label(name, taxid):
+            return resolve_rank_label(name, taxid, resolver, preferred_rank)
+
+        def label(name, taxid=None):
+            return cached_label("" if pandas.isna(name) else str(name), None if pandas.isna(taxid) else taxid)
+
+        plot_df = pandas.DataFrame({
+            "recipient_label": [label(name) for name in gene_df.get("gene_taxon", repeat(None, len(gene_df)))],
+            "besthit_label": [
+                label(name, taxid) for name, taxid in zip(
+                    gene_df.get("besthit_organism", repeat(None, len(gene_df))),
+                    gene_df.get("besthit_taxid", repeat(None, len(gene_df))),
+                    strict=True,
+                )
+            ],
+        })
     plot_df["recipient_label"] = plot_df["recipient_label"].replace("", FLOW_FALLBACK_LABEL).fillna(FLOW_FALLBACK_LABEL)
     plot_df["besthit_label"] = plot_df["besthit_label"].replace("", FLOW_FALLBACK_LABEL).fillna(FLOW_FALLBACK_LABEL)
 

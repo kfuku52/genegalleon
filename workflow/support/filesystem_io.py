@@ -1,7 +1,35 @@
 """Small filesystem primitives shared by otherwise independent publication protocols."""
 
+import gzip
+import io
 import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def gzip_text_writer(path):
+    with Path(path).open('wb') as raw, gzip.GzipFile(
+            fileobj=raw, filename='', mode='wb', compresslevel=1, mtime=0) as compressed:
+        with io.TextIOWrapper(compressed, encoding='utf-8', newline='') as text:
+            yield text
+
+
+def receipted_compressed_member(files, name):
+    compressed = name + '.gz'
+    return compressed if compressed in files else name
+
+
+@contextmanager
+def scratch_build_directory(staging: Path):
+    """Build on temporary storage when it is on a different filesystem."""
+    scratch = Path(tempfile.gettempdir())
+    if scratch.stat().st_dev == staging.stat().st_dev:
+        yield staging
+        return
+    with tempfile.TemporaryDirectory(prefix="gg-build-", dir=scratch) as directory:
+        yield Path(directory)
 
 
 def fsync_directory(path: Path) -> None:

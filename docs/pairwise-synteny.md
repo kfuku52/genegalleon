@@ -125,7 +125,7 @@ GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_SORT=both_length \
 ```
 
 FASTA IDs match GFF attributes exactly or after removal of the exact species
-prefix. Ambiguous matches fail. The annotation mapper bundled in kfFractBias
+prefix. Ambiguous matches fail. The annotation mapper bundled in LOCUSKIT
 resolves known gene loci; the longest available protein/CDS per locus is selected,
 with identifier ordering breaking length ties. Unknown locus relationships are
 reported in the summary instead of being guessed. All original FASTA IDs,

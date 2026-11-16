@@ -462,11 +462,43 @@ gg_sge_requested_mem_per_slot_gb() {
 	gg_sge_memory_value_to_gb "${requested_value}" "${2:-1}" "${3:-ceil}"
 }
 
+# Slurm's allocated TRES is job-wide; it is a node budget only for one node.
+gg_slurm_single_node_allocated_mem_gb() {
+	local job_id=${1:-}
+	[[ "${job_id}" =~ ^[1-9][0-9]*$ ]] && command -v scontrol >/dev/null 2>&1 || return 1
+	local job
+	job=$(LC_ALL=C scontrol --oneliner show job "${job_id}" 2>/dev/null) || return 1
+	LC_ALL=C awk -v job_id="${job_id}" '
+		NF {
+			if (++records != 1 || $1 != "JobId=" job_id) exit 1
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^NumNodes=/) { nodes = substr($i, 10); node_fields++ }
+				if ($i ~ /^AllocTRES=/) {
+					tres_fields++
+					count = split(substr($i, 11), tres, ",")
+					for (j = 1; j <= count; j++)
+						if (tres[j] ~ /^mem=/) { mem = substr(tres[j], 5); mem_fields++ }
+				}
+			}
+		}
+		END {
+			if (records != 1 || nodes != "1" || node_fields != 1 || tres_fields != 1 ||
+				mem_fields != 1 || mem !~ /^[0-9]+([.][0-9]+)?[MGT]$/) exit 1
+			unit = substr(mem, length(mem))
+			gb = int((mem + 0) * (unit == "M" ? 1/1024 : (unit == "T" ? 1024 : 1)))
+			if (gb < 1) exit 1
+			print gb
+		}
+	' <<< "${job}"
+}
+
 gg_normalize_scheduler_env() {
 	local echo_header='gg_normalize_scheduler_env: '
 	local scheduler_kind
 	local pbs_slots=""
 	local explicit_memory_per_cpu="${GG_MEM_PER_CPU_GB:-${MEM_PER_SLOT:-}}"
+	local explicit_memory_total="${GG_MEM_TOTAL_GB:-${MEM_PER_HOST:-}}"
+	local slurm_allocated_mem_gb=""
 	scheduler_kind=$(gg_detect_scheduler_kind)
 	GG_SCHEDULER_KIND=${scheduler_kind}
 	echo ${echo_header}'Scheduler metadata is normalized to GG_* variables.'
@@ -546,7 +578,11 @@ gg_normalize_scheduler_env() {
 		echo ${echo_header}'GG_MEM_PER_CPU_GB='"${MEM_PER_SLOT}"' (from legacy MEM_PER_SLOT)'
 		GG_MEM_PER_CPU_GB=${MEM_PER_SLOT}
 	fi
-	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
+	if [[ "${scheduler_kind}" == slurm && -z "${explicit_memory_total}" && -z "${explicit_memory_per_cpu}" &&
+		! "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ && ! "${SLURM_MEM_PER_CPU:-}" =~ ^[1-9][0-9]*$ ]]; then
+		slurm_allocated_mem_gb=$(gg_slurm_single_node_allocated_mem_gb "${SLURM_JOB_ID:-}" || true)
+	fi
+	if [[ "${scheduler_kind}" != slurm && -z "${GG_MEM_PER_CPU_GB:-}" ]] && type qstat >/dev/null 2>&1; then
 		if [[ -z "${GG_MEM_TOTAL_GB:-${MEM_PER_HOST:-}}" ]]; then
 			# Convert only after multiplying the exact per-slot request. Rounding
 			# each slot up to GiB first can substantially exceed the allocation.
@@ -559,11 +595,13 @@ gg_normalize_scheduler_env() {
 	fi
 	if [[ -z "${GG_MEM_PER_CPU_GB:-}" ]]; then
 		echo ${echo_header}'${GG_MEM_PER_CPU_GB} is undefined.'
-		if [[ -n "${SLURM_MEM_PER_CPU:-}" ]]; then
+		if [[ "${SLURM_MEM_PER_CPU:-}" =~ ^[1-9][0-9]*$ ]]; then
 			echo ${echo_header}'GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))'
 			GG_MEM_PER_CPU_GB=$((${SLURM_MEM_PER_CPU}/1024))
 		elif [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
 			GG_MEM_PER_CPU_GB=$((SLURM_MEM_PER_NODE / 1024 / GG_TASK_CPUS))
+		elif [[ -n "${slurm_allocated_mem_gb}" ]]; then
+			GG_MEM_PER_CPU_GB=$((slurm_allocated_mem_gb / GG_TASK_CPUS))
 		else
 			echo ${echo_header}'No scheduler memory-per-CPU metadata was detected. GG_MEM_PER_CPU_GB=3'
 			GG_MEM_PER_CPU_GB=3
@@ -573,14 +611,26 @@ gg_normalize_scheduler_env() {
 		echo ${echo_header}'GG_MEM_TOTAL_GB='"${MEM_PER_HOST}"' (from legacy MEM_PER_HOST)'
 		GG_MEM_TOTAL_GB=${MEM_PER_HOST}
 	fi
-	if [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
+	if [[ -n "${explicit_memory_total}" ]]; then
+		# A repeated normalization must not reclassify a prior estimate as explicit.
+		GG_MEM_TOTAL_SOURCE=${GG_MEM_TOTAL_SOURCE:-explicit}
+	elif [[ -z "${GG_MEM_TOTAL_GB:-}" ]]; then
 		if [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_NODE:-}" =~ ^[1-9][0-9]*$ ]]; then
 			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_NODE / 1024))
+			GG_MEM_TOTAL_SOURCE=slurm-env
 		elif [[ -z "${explicit_memory_per_cpu}" && "${SLURM_MEM_PER_CPU:-}" =~ ^[1-9][0-9]*$ ]]; then
 			GG_MEM_TOTAL_GB=$((SLURM_MEM_PER_CPU * GG_TASK_CPUS / 1024))
+			GG_MEM_TOTAL_SOURCE=slurm-env
+		elif [[ -n "${slurm_allocated_mem_gb}" ]]; then
+			GG_MEM_TOTAL_GB=${slurm_allocated_mem_gb}
+			GG_MEM_TOTAL_SOURCE=slurm-alloc-tres
 		else
 			GG_MEM_TOTAL_GB=$((${GG_MEM_PER_CPU_GB}*${GG_TASK_CPUS}))
+			GG_MEM_TOTAL_SOURCE=estimated
+			[[ -z "${explicit_memory_per_cpu}" ]] || GG_MEM_TOTAL_SOURCE=explicit
 		fi
+	else
+		GG_MEM_TOTAL_SOURCE=uge
 	fi
 	gg_normalize_memory_budget
 	gg_sync_legacy_scheduler_aliases
@@ -589,11 +639,11 @@ gg_normalize_scheduler_env() {
 	echo ${echo_header}"GG_ARRAY_JOB_ID=${GG_ARRAY_JOB_ID}"
 	echo ${echo_header}"GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID}"
 	echo ${echo_header}"GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB}"
-	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB}"
+	echo ${echo_header}"GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB} (source=${GG_MEM_TOTAL_SOURCE})"
 	echo ${echo_header}"GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB}"
 	echo ${echo_header}"GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB}"
 	echo ""
-	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT GG_ARRAY_JOB_ID
+	export GG_SCHEDULER_KIND GG_ARRAY_TASK_COUNT GG_ARRAY_JOB_ID GG_MEM_TOTAL_SOURCE
 }
 
 variable_SGEnizer() {
@@ -687,6 +737,8 @@ set_singularityenv() {
 	export APPTAINERENV_GG_MEM_PER_CPU_GB=${GG_MEM_PER_CPU_GB:-3}
 	export SINGULARITYENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
 	export APPTAINERENV_GG_MEM_TOTAL_GB=${GG_MEM_TOTAL_GB:-3}
+	export SINGULARITYENV_GG_MEM_TOTAL_SOURCE=${GG_MEM_TOTAL_SOURCE:-unknown}
+	export APPTAINERENV_GG_MEM_TOTAL_SOURCE=${GG_MEM_TOTAL_SOURCE:-unknown}
 	export SINGULARITYENV_GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-0}
 	export APPTAINERENV_GG_MEM_TOOL_RESERVE_GB=${GG_MEM_TOOL_RESERVE_GB:-0}
 	export SINGULARITYENV_GG_MEM_TOOL_GB=${GG_MEM_TOOL_GB:-${GG_MEM_TOTAL_GB:-3}}

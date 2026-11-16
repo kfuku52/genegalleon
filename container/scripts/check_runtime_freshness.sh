@@ -194,7 +194,7 @@ sha_variables=(
   PAML_REPO_SHA
   IQTREE_REPO_SHA
   ASTER_REPO_SHA
-  KFFRACTBIAS_REPO_SHA
+  LOCUSKIT_REPO_SHA
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
   FASTK_REPO_SHA
@@ -218,8 +218,8 @@ resolution_variables=(
   PAML_REPO_REF
   IQTREE_REPO_REF
   ASTER_REPO_REF
-  KFFRACTBIAS_REPO_URL
-  KFFRACTBIAS_REPO_REF
+  LOCUSKIT_REPO_URL
+  LOCUSKIT_REPO_REF
   KFTOOLS_REPO_URL
   KFTOOLS_REPO_REF
   RKFTOOLS_REPO_URL
@@ -311,7 +311,7 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       paml) variable=PAML_REPO_SHA ;;
       iqtree) variable=IQTREE_REPO_SHA ;;
       ASTER) variable=ASTER_REPO_SHA ;;
-      kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
+      locuskit) variable=LOCUSKIT_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;
       fastk) variable=FASTK_REPO_SHA ;;

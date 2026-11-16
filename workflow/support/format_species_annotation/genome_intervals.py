@@ -85,7 +85,11 @@ class GenomeIntervals:
                 header, length, cursor = text, 0, 0
                 token, aliases, _declared = genome_header_aliases(header)
                 aliases |= {name.removeprefix("lcl|") for name in aliases}
-                selected = merged_intervals(span for name in aliases for span in requested.get(name, ()))
+                matching_regions = [requested[name] for name in aliases if name in requested]
+                if len(matching_regions) == 1:
+                    selected = matching_regions[0]
+                else:
+                    selected = merged_intervals(span for regions in matching_regions for span in regions)
                 self.regions[token] = []
                 self.starts[token] = []
             elif text:

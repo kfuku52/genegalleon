@@ -17,9 +17,9 @@ from collections import defaultdict
 from pathlib import Path
 
 if __package__:
-    from .gene_model_selection import locus_can_vote, prepare_correspondence, select_representatives
+    from .gene_model_selection import isolated_selection, locus_can_vote, prepare_correspondence, select_representatives
 else:
-    from gene_model_selection import locus_can_vote, prepare_correspondence, select_representatives
+    from gene_model_selection import isolated_selection, locus_can_vote, prepare_correspondence, select_representatives
 
 SCHEMA_VERSION = 1
 
@@ -171,13 +171,14 @@ def iter_locus_keys(db, species=None):
             yield row[0], row[1]
 
 
-def iter_loci(db, species=None):
+def iter_loci(db, species=None, *, include=None):
     """Yield one decoded locus at a time in stable species/gene order."""
     with _connection(db) as connection:
-        cursor = connection.execute("SELECT json FROM loci ORDER BY species,gene_id") if species is None else connection.execute(
-            "SELECT json FROM loci WHERE species=? ORDER BY gene_id", (species,))
-        for row in cursor:
-            yield json.loads(row[0])
+        cursor = connection.execute("SELECT species,gene_id,json FROM loci ORDER BY species,gene_id") if species is None else connection.execute(
+            "SELECT species,gene_id,json FROM loci WHERE species=? ORDER BY gene_id", (species,))
+        for name, gene, payload in cursor:
+            if include is None or include((name, gene)):
+                yield json.loads(payload)
 
 
 def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
@@ -192,20 +193,27 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
     if max_component_loci < 1:
         raise ValueError("max_component_loci must be positive")
     with _connection(db) as connection:
-        parent = {node: node for node in iter_locus_keys(connection)}
+        locus_keys = set(iter_locus_keys(connection))
+        edge_rows = list(edges)
+        endpoints = {(str(edge['species_' + side]), str(edge['gene_' + side]))
+                     for edge in edge_rows for side in ('a', 'b')}
+        candidate_limit = selectionkwargs.get('candidate_limit', 32)
+        policy = selectionkwargs.get('policy', 'conserved')
         nonvoting, coordinate_ambiguity = set(), set()
-        locus = None
         # Admission is streamed before component formation.  An excluded
         # coding locus must not bridge otherwise independent components or
         # push a valid component over its size cap.  Keep only key/boolean
         # metadata from this pass, never the decoded sequences.
-        for locus in iter_loci(connection):
-            node = str(locus["species"]), str(locus["gene_id"])
-            if not locus_can_vote(locus, selectionkwargs.get("candidate_limit", 32)):
-                nonvoting.add(node)
-            if locus.get("ambiguous_coordinates", False):
-                coordinate_ambiguity.add(node)
-        del locus
+        if endpoints:
+            for locus in iter_loci(connection, include=endpoints.__contains__):
+                node = str(locus["species"]), str(locus["gene_id"])
+                if not locus_can_vote(locus, candidate_limit):
+                    nonvoting.add(node)
+                if locus.get("ambiguous_coordinates", False):
+                    coordinate_ambiguity.add(node)
+            locus = None
+
+        parent = {}
 
         def find(node):
             while parent[node] != node:
@@ -213,13 +221,16 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                 node = parent[node]
             return node
 
-        edge_rows = list(edges)
-        prepared = prepare_correspondence(parent, edge_rows, coordinate_ambiguity=coordinate_ambiguity,
+        prepared = prepare_correspondence(locus_keys, edge_rows, coordinate_ambiguity=coordinate_ambiguity,
                                           nonvoting=nonvoting)
+        locus_count = len(locus_keys)
+        del locus_keys
         voting_edges = [{"species_a": a[0], "gene_a": a[1], "species_b": b[0], "gene_b": b[1], "weight": weight}
                         for (a, b), weight in sorted(prepared["edge_by_pair"].items())]
         for edge in voting_edges:
             a, b = (edge["species_a"], edge["gene_a"]), (edge["species_b"], edge["gene_b"])
+            parent.setdefault(a, a)
+            parent.setdefault(b, b)
             root_a, root_b = find(a), find(b)
             if root_a != root_b:
                 parent[max(root_a, root_b)] = min(root_a, root_b)
@@ -228,15 +239,11 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
             components[find(node)].append(node)
         for edge in voting_edges:
             component_edges[find((str(edge["species_a"]), str(edge["gene_a"])))].append(edge)
-        result = None
-        total_metrics = defaultdict(int)
+        result = select_representatives([], [], **selectionkwargs)
+        total_metrics = defaultdict(int, result["metrics"])
         peak_loaded_loci = limited_components = 0
 
         def merge(part):
-            nonlocal result
-            if result is None:
-                result = {key: value for key, value in part.items() if key not in {"metrics", "selections", "scores", "audit", "omitted_edges"}}
-                result.update(selections=[], scores=[], audit=[], omitted_edges=[])
             for key in ("selections", "scores", "audit", "omitted_edges"):
                 result[key].extend(part.get(key, []))
             for key, value in part["metrics"].items():
@@ -246,8 +253,6 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                     total_metrics[key] += value
 
         for root, keys in sorted(components.items()):
-            if len(keys) == 1:
-                continue
             if len(keys) > max_component_loci:
                 limited_components += 1
                 for species, gene_id in keys:
@@ -272,27 +277,25 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
             merge(part)
             del catalogs
         # Most loci have no voting neighbors. Stream their records through one
-        # cursor instead of doing one indexed query and NFS read-lock cycle per
-        # gene. Each locus still uses the unchanged single-locus selection path.
-        for locus in iter_loci(connection):
+        # cursor and compute the same isolated decision without building a graph.
+        def isolated(node):
+            return node not in parent
+
+        for locus in iter_loci(connection, include=isolated):
             node = str(locus["species"]), str(locus["gene_id"])
-            if len(components[find(node)]) != 1:
-                continue
-            part = select_representatives([{"schema": 1, "species": node[0], "loci": [locus]}], [],
-                                          _copy_ambiguity={node} & prepared["ambiguity"],
-                                          **selectionkwargs)
-            merge(part)
+            decision, ambiguous = isolated_selection(locus, node, policy, candidate_limit, node in prepared["ambiguity"])
+            result["selections"].append(decision)
+            total_metrics["loci"] += 1
+            if policy == "conserved":
+                total_metrics["ambiguous_loci"] += ambiguous
             peak_loaded_loci = max(peak_loaded_loci, 1)
-        if result is None:
-            result = select_representatives([], [], **selectionkwargs)
-            total_metrics.update(result["metrics"])
         result["selections"].sort(key=lambda row: (row["species"], row["gene_id"]))
-        result["omitted_edges"] = prepared["omitted_edges"] if selectionkwargs.get("policy", "conserved") == "conserved" else []
+        result["omitted_edges"] = prepared["omitted_edges"] if policy == "conserved" else []
         result["scores"].sort(key=lambda row: (row["species"], row["gene_id"], row["candidate_id"]))
         result["audit"].sort(key=lambda row: row["loci"])
         result["omitted_edges"].sort(key=lambda row: (row["a"], row["b"]))
-        total_metrics["components"] = len(components)
-        total_metrics.update(store_loci=len(parent), graph_edges=len(edge_rows),
+        total_metrics["components"] = len(components) + locus_count - len(parent)
+        total_metrics.update(store_loci=locus_count, graph_edges=len(edge_rows),
                              max_component_loci=max_component_loci, peak_loaded_loci=peak_loaded_loci,
                              limited_components=limited_components)
         result["metrics"] = dict(total_metrics)

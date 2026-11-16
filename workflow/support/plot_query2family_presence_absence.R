@@ -24,6 +24,7 @@ gg_read_shared_input <- if (exists(".gg_presence_read", inherits = FALSE)) .gg_p
 
 source(file.path(script_dir, "species_label_utils.r"), local = TRUE)
 source(file.path(script_dir, "tree_topology_helpers.R"), local = TRUE)
+source(file.path(script_dir, "presence_absence_taxonomy.R"), local = TRUE)
 
 font_size_pt <- 8
 font_size_mm <- font_size_pt * 0.352777778
@@ -70,9 +71,11 @@ validate_evidence_glyph_ids <- function(evidence, glyphs, label, weak_pairs) {
     stop(label, " candidate relations disagree with the ortholog glyphs")
   }
   if ("gene_ids" %in% names(glyphs)) {
-    for (i in seq_len(nrow(evidence))) {
-      genes <- strsplit(as.character(glyphs$gene_ids[indices[i]]), ";", fixed = TRUE)[[1]]
-      if (!evidence$candidate_cds_fasta_id[i] %in% genes) {
+    candidates_by_glyph <- split(evidence$candidate_cds_fasta_id, indices)
+    glyph_indices <- as.integer(names(candidates_by_glyph))
+    genes_by_glyph <- strsplit(as.character(glyphs$gene_ids[glyph_indices]), ";", fixed = TRUE)
+    for (i in seq_along(candidates_by_glyph)) {
+      if (!all(candidates_by_glyph[[i]] %in% genes_by_glyph[[i]])) {
         stop(label, " candidate gene IDs disagree with the ortholog glyphs")
       }
     }
@@ -246,14 +249,15 @@ displayed_duplication_nodes <- function(nodes, glyphs, visible_species) {
 }
 
 text_width_inches <- function(labels, size = font_size_pt) {
+  labels <- as.character(labels)
+  if (!length(labels)) return(stats::setNames(numeric(), labels))
   # A null device avoids persistent graphics files during font-metric measurement.
   grDevices::pdf(NULL, family = "Helvetica")
   on.exit(grDevices::dev.off())
-  vapply(as.character(labels), function(label) {
-    grid::convertWidth(grid::grobWidth(grid::textGrob(
-      label, gp = grid::gpar(fontsize = size)
-    )), "inches", valueOnly = TRUE) * 1.15
-  }, numeric(1))
+  grid::pushViewport(grid::viewport(gp = grid::gpar(fontsize = size)))
+  distinct <- unique(labels)
+  widths <- grid::convertWidth(grid::stringWidth(distinct), "inches", valueOnly = TRUE)
+  stats::setNames(widths[match(labels, distinct)] * 1.15, labels)
 }
 
 has_nonempty_file <- function(file_path) {
@@ -803,6 +807,7 @@ ortholog_tree_path <- get_arg(args, "ortholog_tree_table")
 ortholog_synteny_path <- get_arg(args, "ortholog_synteny_table")
 ortholog_ufboot_path <- get_arg(args, "ortholog_ufboot_table")
 ortholog_dup_conf_path <- get_arg(args, "ortholog_dup_conf_table")
+loss_table_path <- get_arg(args, "loss_table")
 ortholog_basis <- tolower(get_arg(args, "ortholog_basis", "reference_species"))
 reference_species <- get_arg(args, "reference_species")
 out_pdf <- get_arg(args, "out_pdf")
@@ -812,6 +817,22 @@ tree_scale_mode <- get_arg(args, "tree_scale", "bar")
 plot_width_arg <- get_arg(args, "width", "7.2")
 plot_width <- if (identical(plot_width_arg, "auto")) 7.2 else as.numeric(plot_width_arg)
 label_map <- read_label_map(get_arg(args, "label_map"))
+taxonomy_lineage_path <- get_arg(args, "taxonomy_lineage")
+taxonomy_groups_arg <- get_arg(args, "taxonomy_groups")
+taxonomy_ranks_arg <- get_arg(args, "taxonomy_ranks", "auto")
+if (nzchar(taxonomy_lineage_path)) {
+  if (!has_nonempty_file(taxonomy_lineage_path) || dir.exists(taxonomy_lineage_path)) {
+    stop("Cannot read taxonomy lineage TSV: ", taxonomy_lineage_path)
+  }
+  output_paths <- c(out_pdf, out_svg)
+  output_paths <- output_paths[nzchar(output_paths)]
+  if (normalizePath(taxonomy_lineage_path) %in% normalizePath(output_paths, mustWork = FALSE)) {
+    stop("Plot output replaces the taxonomy lineage TSV: ", taxonomy_lineage_path)
+  }
+  taxonomy_lineage <- gg_read_shared_input(taxonomy_lineage_path, "taxonomy_lineage", read_presence_taxonomy_lineage)
+} else if (nzchar(taxonomy_groups_arg) || !identical(taxonomy_ranks_arg, "auto")) {
+  stop("--taxonomy_groups and explicit --taxonomy_ranks require --taxonomy_lineage")
+}
 focus_species <- gg_species_label_from_text(trimws(strsplit(get_arg(args, "focus_species"), ",", fixed = TRUE)[[1]]))
 focus_species <- focus_species[nzchar(focus_species)]
 legend_columns_arg <- get_arg(args, "legend_columns", "auto")
@@ -819,6 +840,10 @@ if (!legend_columns_arg %in% c("auto", "1", "2", "3")) {
   stop("--legend_columns must be auto, 1, 2, or 3")
 }
 plot_height_arg <- get_arg(args, "height", "auto")
+glyph_height <- get_arg(args, "glyph_height", "fill")
+if (!glyph_height %in% c("compact", "fill")) {
+  stop("--glyph_height must be compact or fill")
+}
 evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))
 dup_conf_threshold <- suppressWarnings(as.numeric(get_arg(args, "dup_conf_score_threshold", "0")))
 if (length(dup_conf_threshold) != 1 || !is.finite(dup_conf_threshold) || dup_conf_threshold < 0 || dup_conf_threshold > 1) {
@@ -829,6 +854,9 @@ if (!ortholog_basis %in% c("reference_species", "query_gene")) {
   stop("--ortholog_basis must be reference_species or query_gene: ", ortholog_basis)
 }
 query_ortholog_mode <- identical(ortholog_basis, "query_gene")
+if (nzchar(loss_table_path) && !glyph_mode) {
+  stop("--loss_table requires ortholog columns and glyphs")
+}
 reference_species_display <- ""
 ortholog_scope_label <- ""
 ortholog_specific_label <- "reference-gene-specific"
@@ -2018,7 +2046,25 @@ if (root_stem_needed) {
 }
 label_right <- tree_right + max(4.0, max_label_width * 0.33)
 species_label_matrix_gap <- 0.18
-heatmap_left <- label_right + species_label_matrix_gap
+taxonomy_tracks <- list()
+taxonomy_widths <- numeric()
+taxonomy_font_pt <- font_size_pt * 0.82
+if (nzchar(taxonomy_lineage_path)) {
+  taxonomy_tracks <- presence_taxonomy_tracks(taxonomy_lineage, taxonomy_groups_arg, taxonomy_ranks_arg,
+                                              tip_levels, tree_for_plot$tip.label)
+  taxonomy_labels <- unique(c(names(taxonomy_tracks), unlist(lapply(taxonomy_tracks, "[[", "label"), use.names = FALSE)))
+  taxonomy_label_inches <- text_width_inches(taxonomy_labels, taxonomy_font_pt)
+  taxonomy_inches <- vapply(names(taxonomy_tracks), function(heading) {
+    max(taxonomy_label_inches[c(heading, taxonomy_tracks[[heading]]$label)]) + 0.16
+  }, numeric(1))
+  if (identical(plot_width_arg, "auto")) plot_width <- plot_width + sum(taxonomy_inches)
+  remaining_inches <- plot_width - sum(taxonomy_inches) - 6 / 72
+  if (remaining_inches <= 0) stop("Plot width is too small for taxonomy columns; use --width=auto or increase --width")
+  base_width <- label_right + species_label_matrix_gap + length(query_levels) * heatmap_cell_pitch +
+    if (nrow(busco_df) > 0) 5.35 else 0.55
+  taxonomy_widths <- taxonomy_inches * base_width / remaining_inches
+}
+heatmap_left <- label_right + species_label_matrix_gap + sum(taxonomy_widths)
 heatmap_right <- heatmap_left + length(query_levels) * heatmap_cell_pitch
 busco_left <- heatmap_right + ifelse(nrow(busco_df) > 0, 0.95, 0.15)
 busco_width <- ifelse(nrow(busco_df) > 0, 3.6, 0)
@@ -2123,6 +2169,60 @@ if (glyph_mode && nrow(ortholog_glyphs) > 0) {
   if (identical(evidence_layout, "rail")) {
     glyph_rect_df$x <- glyph_rect_df$x - evidence_rail_width / 2
   }
+}
+
+loss_label_df <- data.frame()
+has_loss_markers <- FALSE
+if (nzchar(loss_table_path)) {
+  loss_fields <- c("family_id", "species", "anchor_cds_fasta_id")
+  loss_table <- utils::read.delim(loss_table_path, colClasses = "character",
+                                 na.strings = character(), check.names = FALSE,
+                                 quote = "", comment.char = "", fill = FALSE)
+  if (!all(loss_fields %in% names(loss_table)) || anyDuplicated(names(loss_table))) {
+    stop("--loss_table requires unique headers including: ", paste(loss_fields, collapse = ", "))
+  }
+  loss_table <- unique(loss_table[loss_fields])
+  if (anyNA(loss_table) || any(!nzchar(as.matrix(loss_table)))) {
+    stop("--loss_table identifiers must be non-empty")
+  }
+  if (any(!loss_table$species %in% tip_levels)) {
+    stop("--loss_table contains a species absent from the plot")
+  }
+  column_keys <- paste(ortholog_columns$family_id, ortholog_columns$cds_fasta_id, sep = "\t")
+  loss_keys <- paste(loss_table$family_id, loss_table$anchor_cds_fasta_id, sep = "\t")
+  loss_columns <- match(loss_keys, column_keys)
+  if (anyNA(loss_columns) || any(loss_keys %in% column_keys[duplicated(column_keys)])) {
+    stop("--loss_table anchors must resolve to one displayed column per family")
+  }
+  has_loss_markers <- nrow(loss_table) > 0
+  marked_glyphs <- rep(FALSE, nrow(glyph_rect_df))
+  loss_has_glyph <- loss_overlaps_glyph <- rep(FALSE, nrow(loss_table))
+  glyph_anchors <- strsplit(as.character(glyph_rect_df$reference_cds_fasta_ids), ";", fixed = TRUE)
+  glyph_rows <- split(seq_len(nrow(glyph_rect_df)),
+                      paste(glyph_rect_df$species, glyph_rect_df$family_id, sep = "\t"))
+  loss_rows <- paste(loss_table$species, loss_table$family_id, sep = "\t")
+  for (i in seq_len(nrow(loss_table))) {
+    rows <- glyph_rows[[loss_rows[i]]]
+    column <- ortholog_columns$column_order[loss_columns[i]]
+    matches <- rows[vapply(glyph_anchors[rows], function(ids) {
+      loss_table$anchor_cds_fasta_id[i] %in% ids
+    }, logical(1))]
+    if (length(matches) > 0) {
+      strict <- matches[glyph_rect_df$relation[matches] != "weak_duplication"]
+      marked_glyphs[if (length(strict) > 0) strict else matches] <- TRUE
+      loss_has_glyph[i] <- TRUE
+    } else {
+      loss_overlaps_glyph[i] <- any(glyph_rect_df$start_order[rows] <= column &
+                                     glyph_rect_df$end_order[rows] >= column)
+    }
+  }
+  glyph_rect_df$copy_label[marked_glyphs] <- paste0(glyph_rect_df$copy_label[marked_glyphs], "\u2020")
+  empty <- !loss_has_glyph
+  loss_label_df <- data.frame(
+    species = loss_table$species[empty],
+    x = heatmap_left + (ortholog_columns$column_order[loss_columns[empty]] - 0.5) * heatmap_cell_pitch,
+    overlaps_glyph = loss_overlaps_glyph[empty]
+  )
 }
 
 evidence_group_fields <- c(
@@ -2894,6 +2994,16 @@ if (glyph_mode) {
     ),
     stringsAsFactors = FALSE
   )
+  legend_df$symbol <- ""
+  if (has_loss_markers) {
+    legend_df <- rbind(legend_df, data.frame(
+      label = c("Inferred terminal loss, no copy shown", "Inferred terminal loss with copies shown"),
+      fill = NA_character_,
+      x = heatmap_left + 0.05,
+      y = y_legend,
+      symbol = c("0\u2020", "n\u2020")
+    ))
+  }
   legend_cell_width <- 1.10 + max(text_width_inches(legend_df$label)) * layout_data_units_per_inch
   legend_columns <- if (identical(legend_columns_arg, "auto")) {
     max(1, min(3, floor((heatmap_right - heatmap_left) / legend_cell_width)))
@@ -2913,10 +3023,11 @@ if (glyph_mode) {
   legend_df <- data.frame(
     label = c("undetected", "detected"),
     fill = unname(ortholog_colors[c("undetected", "detected")]),
-    x = heatmap_left + c(2.95, 7.35),
+    x = heatmap_left + c(4.30, 8.70),
     stringsAsFactors = FALSE
   )
 }
+presence_legend_title <- "Gene family"
 ortholog_legend_bottom <- if (glyph_mode && nrow(legend_df) > 0) {
   min(legend_df$y - pmax(0, legend_line_counts - 1) * 0.375)
 } else {
@@ -3131,7 +3242,7 @@ if (nrow(legend_df) > 0) {
     max(nchar(lines, type = "width"))
   }, integer(1))
   ortholog_legend_right <- max(
-    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, "Ortholog"), type = "width") * 0.33,
+    heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, presence_legend_title), type = "width") * 0.33,
     legend_df$x + 0.62 + legend_label_width * 0.33
   )
   x_max <- max(x_max, ortholog_legend_right + 0.15)
@@ -3246,8 +3357,19 @@ if (glyph_mode) {
     observed_lanes <- tapply(glyph_rect_df$lane_count, as.character(glyph_rect_df$species), max)
     row_lanes[names(observed_lanes)] <- observed_lanes
   }
-  row_heights <- row_lanes * compact_lane_height + row_padding
-  row_centers <- cumsum(row_heights) - row_heights / 2
+  # An undetected anchor can fall inside the span of a non-contiguous glyph.
+  # Reserve a strip inside that species row, below its copy-number glyphs.
+  overlapping_species <- if (nrow(loss_label_df) > 0) {
+    loss_label_df$species[loss_label_df$overlaps_glyph]
+  } else {
+    character()
+  }
+  loss_strip_height <- stats::setNames(
+    ifelse(names(row_lanes) %in% overlapping_species, text_height * 1.35, 0),
+    names(row_lanes)
+  )
+  row_heights <- row_lanes * compact_lane_height + loss_strip_height
+  row_centers <- cumsum(row_heights + row_padding) - (row_heights + row_padding) / 2
   node_y <- stats::setNames(rep(NA_real_, nrow(plot_data)), as.character(plot_data$node))
   node_y[as.character(ordered_tips$node)] <- row_centers
   postorder_edges <- ape::reorder.phylo(tree_for_plot, "postorder")$edge
@@ -3257,7 +3379,8 @@ if (glyph_mode) {
   }
   plot_data$y <- unname(node_y[as.character(plot_data$node)])
   tip_y_by_species <- stats::setNames(unname(node_y[as.character(tip_df$node)]), as.character(tip_df$label))
-  row_half_height_by_species <- (row_lanes * compact_lane_height - 0.03) / 2
+  row_half_height_by_species <- (row_heights - 0.03) / 2
+  glyph_y_by_species <- tip_y_by_species + loss_strip_height[names(tip_y_by_species)] / 2
   y_values <- unname(tip_y_by_species[tip_levels])
   row_y_min <- min(y_values)
   row_y_max <- max(y_values)
@@ -3278,17 +3401,21 @@ if (glyph_mode) {
     assign(table_name, table)
   }
 
-  # Every glyph lane has the same readable height. Sparse families remain
-  # centered within a taller species row; evidence follows its own glyph.
+  # Pack evidence and copy numbers with the glyph they describe.
   pack_glyph_geometry <- function(table, index_field, count_field) {
     if (nrow(table) == 0) return(table)
     index <- as.numeric(table[[index_field]])
     count <- as.numeric(table[[count_field]])
     old_lane_height <- 2 * heatmap_cell_half / count
     old_center <- table$y - heatmap_cell_half + (index - 0.5) * old_lane_height
-    new_y <- unname(tip_y_by_species[as.character(table$species)])
-    new_center <- new_y + (index - (count + 1) / 2) * compact_lane_height
-    scale <- (compact_lane_height - 0.03) / (old_lane_height - 0.03)
+    new_y <- unname(glyph_y_by_species[as.character(table$species)])
+    new_lane_height <- if (identical(glyph_height, "fill")) {
+      compact_lane_height * unname(row_lanes[as.character(table$species)]) / count
+    } else {
+      compact_lane_height
+    }
+    new_center <- new_y + (index - (count + 1) / 2) * new_lane_height
+    scale <- (new_lane_height - 0.03) / (old_lane_height - 0.03)
     for (field in intersect(c("ymin", "ymax", "text_y", "evidence_ymin", "evidence_ymax",
                               "status_y", "status_yend", "marker_y"), names(table))) {
       table[[field]] <- new_center + (table[[field]] - old_center) * scale
@@ -3302,6 +3429,13 @@ if (glyph_mode) {
   }
   matrix_bottom <- min(tip_y_by_species - row_half_height_by_species[names(tip_y_by_species)])
   matrix_top <- max(tip_y_by_species + row_half_height_by_species[names(tip_y_by_species)])
+  if (nrow(loss_label_df) > 0) {
+    loss_label_df$y <- unname(glyph_y_by_species[loss_label_df$species])
+    overlap <- loss_label_df$overlaps_glyph
+    strip_species <- loss_label_df$species[overlap]
+    loss_label_df$y[overlap] <- unname(tip_y_by_species[strip_species] -
+      row_half_height_by_species[strip_species] + loss_strip_height[strip_species] / 2)
+  }
   if (nrow(family_boundary_df) > 0) {
     family_boundary_df$ymin <- min(heatmap_df$ymin)
     family_boundary_df$ymax <- max(heatmap_df$ymax)
@@ -3377,7 +3511,65 @@ if (nrow(query_tree_title_df) > 0) {
   y_max <- max(y_max, max(query_tree_title_df$title_y + final_title_depth) + 0.20)
 }
 
+if (length(taxonomy_tracks)) {
+  track_lefts <- label_right + species_label_matrix_gap + cumsum(taxonomy_widths) - taxonomy_widths
+  # Match the rendered matrix rows. The focus outline is taller than a tile
+  # in the family view and would make adjacent taxonomy bands overlap.
+  taxonomy_row_half_height <- if (glyph_mode) row_half_height_by_species else {
+    stats::setNames(rep(heatmap_cell_half, length(tip_y_by_species)), names(tip_y_by_species))
+  }
+  taxonomy_rects <- do.call(rbind, lapply(seq_along(taxonomy_tracks), function(index) {
+    blocks <- presence_taxonomy_blocks(taxonomy_tracks[[index]], tip_y_by_species, taxonomy_row_half_height)
+    blocks$xmin <- track_lefts[index]
+    blocks$xmax <- track_lefts[index] + taxonomy_widths[index]
+    blocks
+  }))
+  heading_height <- taxonomy_font_pt / 72 * final_data_units_per_inch
+  headings <- data.frame(
+    x = track_lefts + taxonomy_widths / 2, y = max(taxonomy_rects$ymax) + 0.8 * heading_height,
+    label = names(taxonomy_tracks)
+  )
+  y_max <- max(y_max, headings$y + heading_height)
+  if (identical(plot_height_arg, "auto")) {
+    # Short singleton bands in dense family matrices still need one line of text.
+    x_inches_per_unit <- (plot_width - 6 / 72) / (x_max - x_min)
+    min_band_height <- min(taxonomy_rects$ymax - taxonomy_rects$ymin)
+    layout_y_ratio <- max(layout_y_ratio, (taxonomy_font_pt + 1.5) / (72 * min_band_height * x_inches_per_unit))
+  }
+}
+
+required_plot_height <- plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min)
+plot_height <- if (identical(plot_height_arg, "auto")) max(2.8, required_plot_height) else as.numeric(plot_height_arg)
+if (!is.finite(plot_height) || plot_height <= 0) {
+  stop("Invalid --height: ", plot_height_arg)
+}
+if (nrow(glyph_rect_df) > 0 && plot_height < required_plot_height) {
+  stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
+       format(required_plot_height, digits = 4), " inches")
+}
+
 combined <- ggplot()
+if (length(taxonomy_tracks)) {
+  # coord_fixed fits the panel to both page dimensions, after plot margins.
+  x_inches_per_unit <- min((plot_width - 6 / 72) / (x_max - x_min),
+                           (plot_height - 6 / 72) / (layout_y_ratio * (y_max - y_min)))
+  label_width <- (taxonomy_rects$xmax - taxonomy_rects$xmin) * x_inches_per_unit - 2 / 72
+  label_height <- (taxonomy_rects$ymax - taxonomy_rects$ymin) * x_inches_per_unit * layout_y_ratio * 72 - 1.5
+  label_pt <- pmin(taxonomy_font_pt,
+                   taxonomy_font_pt * label_width / taxonomy_label_inches[taxonomy_rects$label], label_height)
+  heading_pt <- pmin(taxonomy_font_pt, taxonomy_font_pt *
+    (taxonomy_widths * x_inches_per_unit - 2 / 72) / taxonomy_label_inches[headings$label])
+  if (any(c(label_pt, heading_pt) < 4)) {
+    stop("Plot dimensions are too small for taxonomy labels; use --width=auto and --height=auto or increase the page size")
+  }
+  combined <- combined +
+    geom_rect(data = taxonomy_rects, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = fill),
+              color = "white", linewidth = 0.16) +
+    geom_text(data = taxonomy_rects, aes(x = (xmin + xmax) / 2, y = (ymin + ymax) / 2, label = label),
+              size = label_pt * font_size_mm / font_size_pt, color = "black") +
+    geom_text(data = headings, aes(x = x, y = y, label = label),
+              size = heading_pt * font_size_mm / font_size_pt, color = "black", fontface = "bold")
+}
 if (length(focus_species) > 0) {
   focus_y <- unname(tip_y_by_species[focus_species])
   focus_half_height <- unname(row_half_height_by_species[focus_species])
@@ -3550,6 +3742,11 @@ if (identical(evidence_layout, "glyph") && nrow(ufboot_marker_df) > 0) {
 # Keep copy-number labels above every evidence representation. In particular,
 # edge bands occupy part of the presence/absence cell and must never obscure
 # the primary numeric value.
+if (nrow(loss_label_df) > 0) {
+  combined <- combined +
+    geom_text(data = loss_label_df, aes(x = x, y = y), label = "0\u2020",
+              size = font_size_mm, fontface = "bold", color = "#8c2d04")
+}
 if (nrow(glyph_rect_df) > 0) {
   combined <- combined +
     geom_text(
@@ -3661,13 +3858,20 @@ if (nrow(busco_rect_df) > 0) {
 }
 
 if (glyph_mode) {
+  loss_key <- legend_df[legend_df$symbol != "", , drop = FALSE]
+  glyph_key <- legend_df[legend_df$symbol == "", , drop = FALSE]
   combined <- combined +
     annotate("text", x = heatmap_left, y = y_legend + 0.75 * legend_y_scale, label = ortholog_scope_label, hjust = 0, size = font_size_mm, color = "black") +
-    geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18 * legend_y_scale, ymax = y + 0.18 * legend_y_scale, fill = fill), color = "#808080", linewidth = 0.14) +
+    geom_rect(data = glyph_key, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18 * legend_y_scale, ymax = y + 0.18 * legend_y_scale, fill = fill), color = "#808080", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
+  if (nrow(loss_key) > 0) {
+    combined <- combined +
+      geom_text(data = loss_key, aes(x = x + 0.18, y = y, label = symbol),
+                size = font_size_mm, color = "#8c2d04")
+  }
 } else if (value_mode == "presence") {
   combined <- combined +
-    annotate("text", x = heatmap_left + 0.05, y = y_legend, label = "Ortholog", hjust = 0, size = font_size_mm, color = "black") +
+    annotate("text", x = heatmap_left + 0.05, y = y_legend, label = presence_legend_title, hjust = 0, size = font_size_mm, color = "black") +
     geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y_legend - 0.18, ymax = y_legend + 0.18, fill = fill), color = "black", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y_legend, label = label), hjust = 0, size = font_size_mm, color = "black")
 }
@@ -3821,21 +4025,6 @@ if (nrow(busco_legend_df) > 0) {
     annotate("text", x = busco_left, y = y_legend + 0.75 * legend_y_scale, label = "BUSCO", hjust = 0, size = font_size_mm, color = "black") +
     geom_rect(data = busco_legend_df, aes(xmin = x, xmax = x + 0.32, ymin = y - 0.16 * legend_y_scale, ymax = y + 0.16 * legend_y_scale, fill = fill), color = "white", linewidth = 0.14) +
     geom_text(data = busco_legend_df, aes(x = x + 0.42, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
-}
-
-required_plot_height <- plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min)
-automatic_plot_height <- max(2.8, required_plot_height)
-plot_height <- if (identical(plot_height_arg, "auto")) {
-  automatic_plot_height
-} else {
-  as.numeric(plot_height_arg)
-}
-if (!is.finite(plot_height) || plot_height <= 0) {
-  stop("Invalid --height: ", plot_height_arg)
-}
-if (nrow(glyph_rect_df) > 0 && plot_height < required_plot_height) {
-  stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
-       format(required_plot_height, digits = 4), " inches")
 }
 
 if (nzchar(out_pdf)) {

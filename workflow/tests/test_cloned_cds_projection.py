@@ -101,6 +101,24 @@ def test_different_clones_for_one_gene_require_priority_and_publish_one_model(tm
     assert audit['skipped'][0]['status'] == 'same_gene_lower_priority'
 
 
+@pytest.mark.parametrize(('source_gene_ids', 'message'), [
+    (['outside', 'wrong_contig'], 'different contig/strand'),
+    (['outside'], 'truncates source coding evidence'),
+    (['absent'], 'source gene is absent'),
+])
+def test_indexed_projections_validate_named_genes_outside_overlap(source_gene_ids, message):
+    from cloned_cds_projection import _validate_source_owners
+
+    genes = {
+        'wrong_contig': dict(seqid='chr2', strand='+', start=100, end=130),
+        'outside': dict(seqid='chr1', strand='+', start=0, end=30),
+    }
+    coding = {'wrong_contig': [(100, 130)], 'outside': [(0, 30)]}
+    target = dict(seqid='chr1', strand='+', cds=[[100, 130, 0]], source_gene_ids=source_gene_ids)
+    with pytest.raises(ValueError, match=message):
+        _validate_source_owners({f'clone{i}': target for i in range(8)}, genes, coding)
+
+
 def test_new_locus_is_explicit_and_does_not_remove_neighbouring_genes(tmp_path):
     task, sequence, paths, row, target = projected_fixture(tmp_path / 'inputs')
     text = paths['gff'].read_text().splitlines()

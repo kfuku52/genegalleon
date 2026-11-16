@@ -1,13 +1,16 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, call
 
 import prepare_test_wheels
 import pytest
 import run_checks
+import subprocess_helpers
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -239,8 +242,8 @@ def test_invalid_shard_cannot_silently_run_partial_validation(tmp_path, shard):
 
 
 @pytest.mark.parametrize("workers", [None, "2"])
-@pytest.mark.parametrize("behavior", ["skip", "skip_collection", "check_environment"])
-def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path, workers, behavior):
+@pytest.mark.parametrize("behavior", ["skip", "skip_collection", "check_environment", "failure"])
+def test_strict_runtime_reports_outcomes_and_enables_required_integrations(tmp_path, workers, behavior):
     test_dir = tmp_path / "workflow/tests"
     test_dir.mkdir(parents=True)
     for name in ("conftest.py", "validation_manifest.json"):
@@ -248,6 +251,7 @@ def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path
     body = {
         "skip": 'import pytest\ndef test_runtime(): pytest.skip("missing required executable")\n',
         "skip_collection": 'import pytest\npytest.skip("missing dependency", allow_module_level=True)\n',
+        "failure": 'def test_runtime(): assert False\n',
         "check_environment": 'import os\ndef test_runtime(): assert os.environ["KFFRACTBIAS_RUN_INTEGRATION"] == "1"; assert os.environ["GG_TEST_CSUBST_3DI"] == "1"\n',
     }[behavior]
     (test_dir / "test_required.py").write_text(body)
@@ -262,9 +266,35 @@ def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
     if behavior == "check_environment":
         assert result.returncode == 0, result.stdout + result.stderr
+    elif behavior == "failure":
+        assert result.returncode == 1, result.stdout + result.stderr
+        line = "[validation] test failed (call) workflow/tests/test_required.py::test_runtime"
+        assert result.stdout.splitlines().count(line) == 1
+        assert result.stdout.index(line) < result.stdout.index("short test summary info")
     else:
         assert result.returncode != 0
         assert "Required runtime checks were skipped" in result.stdout
+
+
+def test_workflow_command_timeout_signals_group_and_keeps_original_diagnostics(tmp_path, monkeypatch):
+    command = ["bash", "fixture.sh"]
+    timeout = subprocess.TimeoutExpired(command, 90, output=b"running\n", stderr=b"diagnostic\n")
+    child = MagicMock()
+    child.pid = 12345
+    child.__enter__.return_value = child
+    child.communicate.side_effect = [timeout, subprocess.TimeoutExpired(command, 2)]
+    popen = MagicMock(return_value=child)
+    killpg = MagicMock()
+    monkeypatch.setattr(subprocess_helpers.subprocess, "Popen", popen)
+    monkeypatch.setattr(subprocess_helpers.os, "killpg", killpg)
+
+    with pytest.raises(subprocess.TimeoutExpired) as failure:
+        subprocess_helpers.run_workflow_command(command, cwd=tmp_path, env={}, timeout=90)
+
+    assert failure.value is timeout
+    assert popen.call_args.kwargs["start_new_session"] is True
+    assert child.communicate.call_args_list == [call(timeout=90), call(timeout=2)]
+    assert killpg.call_args_list == [call(child.pid, signal.SIGTERM), call(child.pid, signal.SIGKILL)]
 
 
 def test_wheel_inputs_resolve_only_the_temporary_build_and_install_offline(tmp_path):
@@ -273,26 +303,26 @@ def test_wheel_inputs_resolve_only_the_temporary_build_and_install_offline(tmp_p
     source = "b" * 40
     nwkit_source = "c" * 40
     cdskit_source = "d" * 40
-    kffractbias_source = "e" * 40
-    prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, kffractbias_source)
+    locuskit_source = "e" * 40
+    prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, locuskit_source)
     assert requirements.read_bytes() == before
     build = (tmp_path / "build-requirements.txt").read_text()
     install = (tmp_path / "install-requirements.txt").read_text()
     assert f"csubst.git@{source}" in build
     assert f"nwkit.git@{nwkit_source}" in build
     assert f"cdskit.git@{cdskit_source}" in build
-    assert f"kfFractBias.git@{kffractbias_source}" in build
+    assert f"locuskit.git@{locuskit_source}" in build
     assert "cdskit" in install.splitlines()
     assert "nwkit" in install.splitlines()
     assert "git+" not in install
     assert "csubst" in install.splitlines()
-    assert "kffractbias" in install.splitlines()
+    assert "locuskit" in install.splitlines()
     assert json.loads((tmp_path / "source-identity.json").read_text())["csubst_sha"] == source
     assert json.loads((tmp_path / "source-identity.json").read_text())["nwkit_sha"] == nwkit_source
-    assert json.loads((tmp_path / "source-identity.json").read_text())["kffractbias_sha"] == kffractbias_source
+    assert json.loads((tmp_path / "source-identity.json").read_text())["locuskit_sha"] == locuskit_source
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source, cdskit_source, kffractbias_source)
+        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source, cdskit_source, locuskit_source)
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, source, "master", cdskit_source, kffractbias_source)
+        prepare_test_wheels.prepare(tmp_path, source, "master", cdskit_source, locuskit_source)
     with pytest.raises(ValueError, match="resolved"):
         prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source, "master")

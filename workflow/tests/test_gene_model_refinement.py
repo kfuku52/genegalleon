@@ -9,6 +9,8 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
+from functools import wraps
 from importlib import import_module
 from pathlib import Path
 
@@ -49,6 +51,103 @@ def tiny_inputs(tmp_path):
              for i, j in ((0, 1), (0, 2), (1, 2))]
     write_tsv(edges, list(links[0]), links)
     return inputs, edges, rows
+
+
+def test_sequence_only_pair_has_no_splice_junction_term():
+    protein = 'MAEDEKMF'
+    split = {'protein': protein, 'blocks': [[0, 12, 0], [24, 36, 0]]}
+    single = {'protein': protein, 'blocks': [[0, 24, 0]]}
+    assembly = {'protein': protein, 'blocks': [], 'sequence_only': True}
+    assert refinement.pair_score(single, split).score == 0.85
+    for known in (single, split):
+        score = refinement.pair_score(assembly, known)
+        assert (score.score, score.junction_similarity) == (1.0, 0.0)
+
+
+def test_parallel_refinement_nominations_preserve_edge_order():
+    known = {'protein': 'MAEDEKMF', 'blocks': [[0, 24, 0]],
+             'quality': {'valid_orf': True, 'usable': True}}
+    new = {**known, 'protein': 'W' * 18}
+    donor_paths = ([known], [known, new], [])
+    inputs = [(edge, ([known], 0, donor_paths[edge % 3]) if edge % 3 != 2 else None)
+              for edge in range(521)]
+    expected = [(edge, [1] if edge % 3 == 1 else []) for edge, _ in inputs]
+    assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 1)) == expected
+    assert list(refinement._ordered_nominations(iter(inputs), refinement.DEFAULTS, 2)) == expected
+
+
+def test_parallel_flanked_scores_keep_block_order():
+    left = {'protein': 'M' * 12, 'blocks': [[0, 36, 0]]}
+    right = {'protein': 'W' * 12, 'blocks': [[0, 36, 0]]}
+    rows = [(i, None if i % 3 == 0 else (left, left if i % 3 == 1 else right)) for i in range(521)]
+    one = list(refinement._ordered_scores(iter(rows), refinement.pair_score, (), 1))
+    two = list(refinement._ordered_scores(iter(rows), refinement.pair_score, (), 2))
+    assert one == two
+    assert [i for i, _ in two] == list(range(len(rows)))
+    assert two[0][1] is None
+    assert two[1][1].identity == 1
+    assert two[2][1].identity == 0
+
+
+def test_parallel_cold_catalog_cli_preserves_restart_and_qc(tmp_path, monkeypatch):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    rows.extend({**rows[0], 'species': f'Species_donor{i}'} for i in range(3, 8))
+    write_tsv(inputs, list(rows[0]), rows)
+    root = tmp_path / 'parallel'
+    refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    monkeypatch.setenv('GG_MEM_TOOL_GB', '36')
+
+    def run(command):
+        return subprocess.check_output([sys.executable, '-B', refinement.__file__, command,
+                                        '--output', str(root), '--cpus', '8'], text=True)
+
+    assert run('catalog').count('Completed catalog/') == len(rows)
+    receipts = {path: path.read_bytes() for path in root.glob('catalog/*/receipt.json')}
+    assert len(receipts) == len(rows)
+    assert run('catalog').count('Reused catalog/') == len(rows)
+    assert receipts == {path: path.read_bytes() for path in receipts}
+    run('run')
+    assert all(json.loads(run('qc'))['stages'].values())
+
+
+def test_initial_assembly_cds_preserves_baselines_and_rejects_unmapped_candidates(tmp_path):
+    species = 'Species_assembly'
+    fasta = tmp_path / 'cds.fa'
+    mapping = tmp_path / 'map.tsv'
+    fasta.write_text('>z\nATGCCCTAA\n>a\natgaaataa\n>picked\nATGGGGTAA\n'
+                     '>longer\nATGAAAGGGTAA\n>usable\nATGAAATAA\n>bad\nATGNNNGGGTAA\n')
+    mapping.write_text(f'transcript_id\tgene_id\tbaseline\nz\t{species}_tie\t0\na\t{species}_tie\t0\n'
+                       f'picked\t{species}_marked\t1\nlonger\t{species}_marked\t0\n'
+                       f'usable\t{species}_excluded\t0\nbad\t{species}_excluded\t0\n')
+    source = {'fasta': fasta, 'transcript_gene_map': mapping, 'genetic_code': 1}
+    output = tmp_path / 'initial.fa'
+    refinement.transcriptome.write_initial_cds(species, source, output)
+    assert output.read_text() == f'>{species}_marked\nATGGGGTAA\n>{species}_tie\nATGAAATAA\n'
+    with fasta.open('a') as stream:
+        stream.write('>unmapped\nATGTAA\n')
+    with pytest.raises(ValueError, match='Unmapped or duplicate transcriptome CDS ID: unmapped'):
+        refinement.transcriptome.write_initial_cds(species, source, output)
+
+
+def test_transcriptome_only_refinement_retains_explicit_baseline_and_verifies_outputs(tmp_path):
+    species, gene = 'Species_assembly', 'Species_assembly_gene'
+    cds, mapping = tmp_path / 'cds.fa', tmp_path / 'map.tsv'
+    cds.write_text('>short\nATGAAATAA\n>long\nATGAAAAAATAA\n')
+    mapping.write_text(f'transcript_id\tgene_id\tbaseline\nshort\t{gene}\t1\nlong\t{gene}\t0\n')
+    inputs, edges = tmp_path / 'assemblies.tsv', tmp_path / 'edges.tsv'
+    inputs.write_text(f'species\tcds\ttranscript_gene_map\n{species}\t{cds.name}\t{mapping.name}\n')
+    edges.write_text('species_a\tgene_a\tspecies_b\tgene_b\n')
+    output = tmp_path / 'run'
+    value = refinement.plan(output, transcriptome_inputs=inputs, edges=edges)
+    effective = refinement.finalize(output, value)
+    assert all(refinement.inspect_stages(output, value).values())
+    choices = refinement.read_table(effective / 'sequence/representative_map.tsv')
+    assert len(choices) == 1 and choices[0]['source_transcript_id'] == 'short'
+    assert choices[0]['reason'] == 'no_trusted_crossspecies_correspondence'
+    assert not (effective / 'inputs.tsv').exists()
+    protein = effective / 'sequence/species_protein' / f'{species}.fa'
+    protein.write_text('damaged\n')
+    assert not refinement.inspect_stages(output, value)['effective']
 
 
 def classification_fixture(*, valid_original=False, other_locus=False):
@@ -97,6 +196,23 @@ def test_weak_donor_cannot_supply_independent_support():
     assert result["status"] == "proposal"
     assert result["donors"] == ["Species_donor1"]
     assert result["problems"] == ["insufficient_independent_support"]
+
+
+def test_classification_reuses_quality_only_for_identical_sequences(monkeypatch):
+    catalog, models, edges = classification_fixture()
+    changed = {**models[1], 'sequence': models[1]['sequence'][:-3] + 'AAA'}
+    original, checked = refinement.validate_candidate, []
+
+    def record(candidate, genetic_code):
+        checked.append(candidate['cds'])
+        return original(candidate, genetic_code)
+
+    monkeypatch.setattr(refinement, 'validate_candidate', record)
+    result, = classify(catalog, [*models, changed], edges)
+    assert checked == [models[0]['sequence'], changed['sequence']]
+    assert result['candidate']['cds'] == models[0]['sequence']
+    assert result['status'] == 'proposal'
+    assert 'invalid_predicted_coding_path' in result['problems']
 
 
 @pytest.mark.parametrize("problem", ["frameshift", "noncanonical_splice", "assembly_gap", "outside_search_window"])
@@ -180,7 +296,7 @@ def test_explained_formatter_difference_retains_dna_with_separate_translation_ad
     assert (effective / "species_cds" / (species + ".fa")).read_text() == f">{species}_g\n{coding}\n"
     assert (effective / "source_annotation" / (species + ".gff3")).read_text() == Path(target["gff"]).read_text()
     assert not [r for r in refinement.read_table(effective / "effective_exclusions.tsv") if r["species"] == species]
-    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv") if r["species"] == species)
+    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv.gz") if r["species"] == species)
     quality = json.loads(admitted["quality"])
     assert not quality["sequence_mismatch"]
     assert quality["partial"] is partial
@@ -242,7 +358,7 @@ def test_effective_withholds_dual_context_protein_and_analysis_but_preserves_dna
         assert (effective / 'source_cds' / (name + '.fa')).read_bytes() == before[row['cds']]
         assert (effective / 'source_annotation' / (name + '.gff3')).read_bytes() == before[row['gff']]
         assert '\tCDS\t1\t9\t' in (effective / 'full_annotation' / (name + '.gff3')).read_text()
-    audit = refinement.read_table(effective / 'translation_admission.tsv')
+    audit = refinement.read_table(effective / 'translation_admission.tsv.gz')
     assert all(row['status'] == 'excluded' and json.loads(row['quality'])['translation_uncertain']
                and json.loads(row['quality'])['rna_supported'] for row in audit)
     assert all(Path(path).read_bytes() == content for path, content in before.items())
@@ -752,6 +868,27 @@ def test_effective_verification_binds_parsing_before_the_hash_batch(tmp_path, mo
         refinement.verify_inputs(manifest)
 
 
+def test_effective_genome_preserves_original_gzip_and_uses_manifest_path(tmp_path):
+    import gzip
+
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    for row in rows:
+        plain = Path(row['genome'])
+        compressed = plain.with_suffix('.fa.gz')
+        compressed.write_bytes(gzip.compress(plain.read_bytes()))
+        row['genome'] = str(compressed)
+    write_tsv(inputs, list(rows[0]), rows)
+    root = tmp_path / 'refinement'
+    effective = refinement.finalize(root, refinement.plan(root, inputs=inputs, edges=edges, mode='off'))
+    source = {row['species']: row['genome'] for row in rows}
+    for row in refinement.verify_inputs(effective / 'inputs.tsv'):
+        genome = Path(row['genome'])
+        assert genome.suffix == '.gz'
+        assert genome.read_bytes() == Path(source[row['species']]).read_bytes()
+        with refinement.indexed_genome(genome) as reference:
+            assert reference.references
+
+
 def test_effective_verification_retains_external_role_paths_and_checks_their_bytes(tmp_path):
     inputs, edges, _rows = tiny_inputs(tmp_path)
     root = tmp_path / 'run'
@@ -842,7 +979,7 @@ def test_qc_fails_on_corrupt_catalog_receipt_artifact(tmp_path):
     assert "Corrupt refinement stage" in result.stderr
 
 
-@pytest.mark.parametrize("damage", ["missing_catalog", "missing_index", "foreign_key", "upstream_key"])
+@pytest.mark.parametrize("damage", ["missing_catalog", "missing_index", "foreign_key", "upstream_key", "effective_key"])
 def test_qc_requires_every_stage_and_its_current_dependency_key(tmp_path, damage):
     inputs, edges, _rows = tiny_inputs(tmp_path)
     root = tmp_path / "run"
@@ -853,9 +990,9 @@ def test_qc_requires_every_stage_and_its_current_dependency_key(tmp_path, damage
         directory = root / ("catalog/Species_target" if damage == "missing_catalog" else "catalog_index")
         shutil.rmtree(directory)
     else:
-        path = root / "selection_final/receipt.json"
+        path = root / ("effective/receipt.json" if damage == "effective_key" else "selection_final/receipt.json")
         receipt = json.loads(path.read_text())
-        if damage == "foreign_key":
+        if damage in {"foreign_key", "effective_key"}:
             receipt["key"]["plan"] = "other-run"
         else:
             receipt["key"]["dependencies"]["correspondence"] = "obsolete-stage"
@@ -1050,7 +1187,7 @@ def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changin
                                       "chr1\ts\tmRNA\t1\t50\t.\t+\t.\tID=t1;Parent=g\n"
                                       "chr1\ts\tCDS\t1\t3\t.\t+\t0\tParent=t1\n"
                                       "chr1\ts\tCDS\t45\t50\t.\t+\t0\tParent=t1\n")
-    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus, *, compact, executable):
         return [dict(query=region["id"], seqid=seqid, strand="+", cds=[[0 - start, 3 - start, 0], [44 - start, 50 - start, 0]],
                      frameshift=False, coverage=1.0, identity=1.0)
                 for (seqid, start, _end), regions in windows.items() for region in regions]
@@ -1115,7 +1252,7 @@ def test_refined_representative_preserves_historical_rescue_locus_without_borrow
             if edge['species_' + side] == name:
                 edge['gene_' + side] = gene_id
     write_tsv(edges, list(links[0]), links)
-    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus, *, compact, executable):
         return [dict(query=region['id'], seqid=seqid, strand='+', cds=[[94 - start, 112 - start, 0]],
                      frameshift=False, coverage=1., identity=1.)
                 for (seqid, start, _end), regions in windows.items() for region in regions]
@@ -1281,6 +1418,65 @@ def test_selection_does_not_publish_when_dependency_changes_during_build(tmp_pat
     assert (root / 'selection_initial.failed/selection.json').exists()
 
 
+@pytest.mark.parametrize('predictions', [False, True])
+def test_catalog_index_scratch_build_and_checked_publication(tmp_path, monkeypatch, predictions):
+    inputs, edges, _rows = tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    db = refinement.catalog_index(root, value, predictions=predictions)
+    expected = db.read_bytes()
+    receipt = json.loads((db.parent / 'receipt.json').read_text())
+    db.parent.rename(tmp_path / 'original-index')
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+    built = []
+
+    @contextmanager
+    def scratch_directory(staging):
+        with refinement.tempfile.TemporaryDirectory(dir=scratch) as directory:
+            work = Path(directory)
+            yield work
+            built.append((work / 'loci.sqlite3').read_bytes())
+            assert not (work / 'loci.sqlite3-journal').exists()
+
+    monkeypatch.setattr(refinement, 'scratch_build_directory', scratch_directory)
+    if predictions:
+        # With no accepted predictions, copy the verified initial index
+        # directly into staging without importing or opening it for writes.
+        @wraps(refinement.build_store)
+        def unexpected_reimport(*args):
+            pytest.fail('Final index re-imported the locus catalogs')
+
+        monkeypatch.setattr(refinement, 'build_store', unexpected_reimport)
+    assert refinement.catalog_index(root, value, predictions=predictions) == db
+    assert built == ([] if predictions else [expected])
+    assert db.read_bytes() == expected
+    published = json.loads((db.parent / 'receipt.json').read_text())
+    assert published['key'] == receipt['key']
+    assert published['files']['loci.sqlite3'] == receipt['files']['loci.sqlite3']
+    assert published['files']['summary.json'] == receipt['files']['summary.json']
+    assert not any(scratch.iterdir())
+
+
+def test_final_catalog_index_rejects_catalog_receipt_change_after_initial_index(tmp_path, monkeypatch):
+    inputs, edges, _rows = tiny_inputs(tmp_path)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    refinement.catalog_index(root, value)
+    for name in value['species']:
+        refinement.predict_species(root, value, name)
+    receipt = root / 'catalog' / value['species'][0] / 'receipt.json'
+
+    def change_catalog(_root, _value, name, _cpus=1):
+        if name == value['species'][-1]:
+            receipt.write_bytes(receipt.read_bytes() + b'\n')
+
+    monkeypatch.setattr(refinement, 'predict_species', change_catalog)
+    with pytest.raises(ValueError, match='Initial refinement index catalog receipts changed'):
+        refinement.catalog_index(root, value, predictions=True)
+    assert not (root / 'catalog_index_final').exists()
+
+
 @pytest.mark.parametrize('consumer', ['correspondence', 'selection_initial', 'selection_final', 'prediction', 'effective'])
 @pytest.mark.parametrize('damage', ['receipt', 'content'])
 def test_all_index_consumers_refuse_changes_during_cached_invocation(tmp_path, monkeypatch, consumer, damage):
@@ -1327,14 +1523,25 @@ def test_all_index_consumers_refuse_changes_during_cached_invocation(tmp_path, m
             return refinement.correspondence(root, value)
         publication = root / 'correspondence'
     elif consumer.startswith('selection_'):
-        original = refinement.select_from_store
+        if final_index:
+            original_copy = refinement.shutil.copyfile
 
-        def changing_selection(*args, **kwargs):
-            result = original(*args, **kwargs)
-            change_index()
-            return result
+            def changing_selection_copy(source, destination):
+                result = original_copy(source, destination)
+                if Path(source) == root / 'selection_initial/selection.json':
+                    change_index()
+                return result
 
-        monkeypatch.setattr(refinement, 'select_from_store', changing_selection)
+            monkeypatch.setattr(refinement.shutil, 'copyfile', changing_selection_copy)
+        else:
+            original = refinement.select_from_store
+
+            def changing_selection(*args, **kwargs):
+                result = original(*args, **kwargs)
+                change_index()
+                return result
+
+            monkeypatch.setattr(refinement, 'select_from_store', changing_selection)
         def operation():
             return refinement.select(root, value, predictions=final_index)
         publication = root / consumer
@@ -1462,7 +1669,7 @@ def test_analysis_view_clips_only_known_partial_bases_and_retains_raw_cds(tmp_pa
     assert candidate['cds'] == 'ATGAAATAA' and candidate['protein'] == 'MK'
     assert candidate['quality']['usable']
     assert 'Note=original' in (effective / 'analysis_gff' / (name + '.gff3')).read_text()
-    admission = next(row for row in refinement.read_table(effective / 'coding_admission.tsv') if row['species'] == name)
+    admission = next(row for row in refinement.read_table(effective / 'coding_admission.tsv.gz') if row['species'] == name)
     assert (admission['head_bases_removed'], admission['tail_bases_removed']) == ('1', '0')
     layout = refinement.verify_inputs(effective / 'inputs.tsv', 'coding_layout').split('\t')
     assert Path(layout[0]) == effective / 'analysis_cds'
@@ -1690,3 +1897,78 @@ def test_flanking_anchors_nominate_only_unambiguous_existing_broken_locus(tmp_pa
         assert actual[0]["gene_b"] == "Species_donor_broken"
         assert actual[0]["evidence"]["kind"] == "two_flanking_anchors"
         assert not actual[0]["ambiguous"]
+
+
+def test_automatic_assembly_detection_rejects_input_changed_before_preparation(tmp_path, monkeypatch):
+    transcriptome = refinement.transcriptome
+    assembly_dir = tmp_path / 'assembled_transcripts_with_isoforms'
+    assembly_dir.mkdir()
+    assembly = assembly_dir / 'Plant_example_isoform.fa'
+    assembly.write_text('>TRINITY_DN1_c0_g1_i1\nATGAAATAA\n')
+    corset = tmp_path / 'corset_clusters' / 'Plant_example_corset.clusters.tsv'
+    corset.parent.mkdir()
+    corset.write_text('obsolete Corset output\n')
+    discover = transcriptome.discover_assemblies
+
+    def change_after_discovery(*args):
+        result = discover(*args)
+        assert result['Plant_example'][1:3] == ('trinity', None)
+        assembly.write_text('>TRINITY_DN1_c0_g1_i1\nATGCCCTAA\n')
+        return result
+
+    monkeypatch.setattr(transcriptome, 'discover_assemblies', change_after_discovery)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        transcriptome.prepare_assemblies(tmp_path, set(), tmp_path / 'prepared', 1, None,
+                                        refinement.FreshDigestBatch())
+
+
+def test_rna_bam_discovery_rejects_cross_species_aliases_and_reindexes_stale_index(tmp_path):
+    first = tmp_path / 'Plant_first.bam'
+    first.write_bytes(b'bam')
+    index = first.with_suffix('.bam.bai')
+    index.touch()
+    old = first.stat().st_mtime - 10
+    import os
+    os.utime(index, (old, old))
+    aliases = tmp_path / 'Plant_first'
+    aliases.mkdir()
+    (aliases / 'copy.bam').hardlink_to(first)
+    assert refinement.refinement_rna.discover(tmp_path, ['Plant_first']) == {
+        'Plant_first': [{'bam': str(first), 'index': None}]}
+    alias_index = aliases / 'copy.bam.bai'
+    alias_index.touch()
+    assert refinement.refinement_rna.discover(tmp_path, ['Plant_first']) == {
+        'Plant_first': [{'bam': str(aliases / 'copy.bam'), 'index': str(alias_index)}]}
+    (tmp_path / 'Plant_second.bam').symlink_to(first)
+    with pytest.raises(ValueError, match='assigned to multiple species'):
+        refinement.refinement_rna.discover(tmp_path, ['Plant_first', 'Plant_second'])
+
+
+@pytest.mark.parametrize('same_locus', [False, True])
+def test_nearest_donor_fusion_uses_rna_from_a_qualifying_isoform_of_same_locus(tmp_path, monkeypatch, same_locus):
+    panel = {'sister_clades': {'target': [[['fusion'], ['split1']], [['split2']]]}}
+    search = refinement.refinement_native_splits.DonorSearch(
+        panel, None, tmp_path, 1, {('fusion', 'chr', '+', ((0, 12), (20, 32))): 2})
+    original, left, right = 'MMMMKKKK', 'MMMM', 'KKKK'
+    alignments = []
+    for donor, protein, identifier, score in [
+        ('fusion', original, 'best', 100), ('fusion', original, 'rna_isoform', 95),
+        ('split1', left, 'left', 90), ('split1', right, 'right', 90),
+        ('split2', left, 'left', 90), ('split2', right, 'right', 90),
+    ]:
+        alignments.append((protein, {'donor': donor, 'query': identifier, 'bitscore': score,
+                                     'identity': 1., 'coverage': 1.}, str(len(protein)), 0, len(protein)))
+    split_positions = {'left': ('left', 'chr', '+', 0, 12), 'right': ('right', 'chr', '+', 20, 32)}
+    search.positions = {'split1': split_positions, 'split2': split_positions,
+                        'fusion': {'best': ('old', 'chr', '+', 0, 32),
+                                   'rna_isoform': ('old' if same_locus else 'another_gene', 'chr', '+', 0, 32)}}
+    search.observed_fusions['fusion'] = {'rna_isoform': 2}
+    monkeypatch.setattr(search, 'alignments', lambda *args, **kwargs: iter(alignments))
+    decision, = search.fission_support('target', {'split': {
+        'source_protein': original, 'proteins': (left, right),
+        'source_windows': (set(range(4)), set(range(4, 8))),
+    }}, {'min_support': 2}).values()
+    assert decision['reason'] == ('closest_donor_fusion_supported_by_rna' if same_locus else 'supported_split')
+    assert decision['fusion_annotation_support'][0]['query'] == 'best'
+    assert decision['fusion_annotation_support'][0]['rna_witnesses'] == (2 if same_locus else 0)
+    assert decision['fusion_annotation_support'][0].get('rna_supported_query') == ('rna_isoform' if same_locus else None)

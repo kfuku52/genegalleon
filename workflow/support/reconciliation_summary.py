@@ -126,7 +126,9 @@ def read_expression(path, families):
 
 def collect_evidence(inputs, config, db, families, gene_query=None):
     gene_query = gene_query or "SELECT gene_id,orthogroup,species FROM reconciliation_gene"
-    gene_family = dict(db.execute("SELECT gene_id,orthogroup FROM ("+gene_query+")"))
+    gene_family = {}
+    if "proteome" in inputs or "gene_annotations" in inputs:
+        gene_family = dict(db.execute("SELECT gene_id,orthogroup FROM ("+gene_query+")"))
     expression = {view: read_expression(inputs["expression_" + view], families)
                   for view in ("transcript", "cds") if "expression_" + view in inputs}
     if expression and config.get("expression_p_value_semantics") != "one_sided_trap_enrichment_positive_logfc_v1":
@@ -335,6 +337,9 @@ def _build_results(database, config_path, output_dir, record=None):
                 writer.writerow(columns)
                 batch = []
                 for key, label in target_keys.items():
+                    branch_taxa = db_branches[key]
+                    branch_members = set(branch_taxa)
+                    unique_taxa = len(branch_members) == len(branch_taxa)
                     events = defaultdict(Counter)
                     branch_status = {}
                     if common:
@@ -354,7 +359,10 @@ def _build_results(database, config_path, output_dir, record=None):
                             status = branch_status.get(family, "missing_statistics")
                         valid = status == "imported"
                         counts = gene_counts[family]
-                        inside = sum(counts[taxon] for taxon in db_branches[key])
+                        if unique_taxa and len(counts) < len(branch_taxa):
+                            inside = sum(count for taxon, count in counts.items() if taxon in branch_members)
+                        else:
+                            inside = sum(counts[taxon] for taxon in branch_taxa)
                         cafe_change, cafe_significant, cafe_status = cafe.get((label, family), (None, None, "not_analysed"))
                         row = dict.fromkeys(columns)
                         row.update(branch_id=label, orthogroup=family, reconciliation_status=status,

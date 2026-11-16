@@ -99,40 +99,54 @@ def inventory(path, outdir, manifest=None):
     from nwkit.time_tree import parse_mcmctree_calibration
 
     path, outdir = Path(path), Path(outdir)
-    tree = load_tree(path, require_binary=False)
-    topology = topology_digest(tree)
-    rows = []
+    tree_bytes = path.read_bytes()
+    tree_sha = digest(tree_bytes)
+    snapshot = outdir / tree_sha
+    new_snapshot = not snapshot.exists()
+    # Give NWKIT a file so it handles the same tree formats and encodings as
+    # usual. Parse exactly the bytes used for the snapshot and its digest.
+    with tempfile.TemporaryDirectory() as work:
+        observed = Path(work) / "observed.nwk"
+        observed.write_bytes(tree_bytes)
+        tree = load_tree(observed, require_binary=False)
+    topology_ids, rows, labels = [], [], {}
     for node in tree.traverse():
+        descendants = json_text(sorted(node.leaf_names()))
+        key = digest(descendants.encode())
+        topology_ids.append(key)
         if node.is_leaf:
             continue
         record = parse_mcmctree_calibration(node.name)
-        row = dict.fromkeys(FIELDS, "")
-        row.update(topology_sha256=topology, node_id=node_id(node),
-                   descendant_tips=json_text(sorted(node.leaf_names())),
-                   calibration=record["raw"] if record else "", decision="unreviewed", source_type="unknown",
-                   interval_kind="unknown", time_unit="Ma", dependency_groups="[]",
-                   sequence_overlap="unknown", calibration_overlap="unknown")
-        rows.append(row)
-    # These immutable snapshots are separate from the legacy artifact contract.
-    snapshot = outdir / digest(path.read_bytes())
-    if not snapshot.exists():
+        if record:
+            labels[key] = {field: value for field, value in record.items() if field != "raw"}
+        if new_snapshot:
+            row = dict.fromkeys(FIELDS, "")
+            row.update(node_id=key, descendant_tips=descendants,
+                       calibration=record["raw"] if record else "", decision="unreviewed", source_type="unknown",
+                       interval_kind="unknown", time_unit="Ma", dependency_groups="[]",
+                       sequence_overlap="unknown", calibration_overlap="unknown")
+            rows.append(row)
+    topology = digest(json_text(sorted(topology_ids)).encode())
+    if new_snapshot:
+        for row in rows:
+            row["topology_sha256"] = topology
         outdir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=outdir) as work:
             staging = Path(work) / "snapshot"
             staging.mkdir()
             (staging / "candidates.tsv").write_text(table_text(rows), encoding="utf-8")
-            shutil.copyfile(path, staging / "observed.nwk")
+            (staging / "observed.nwk").write_bytes(tree_bytes)
             (staging / "status.json").write_text(json_text({
                 "schema_version": 1, "status": "unreviewed",
-                "tree_sha256": digest(path.read_bytes()), "topology_sha256": topology,
+                "tree_sha256": tree_sha, "topology_sha256": topology,
                 "observed_utc": datetime.now(timezone.utc).isoformat(),
                 "candidate_count": len(rows),
                 "source_provenance": "unknown; labels alone do not establish TimeTree sources",
                 "historical_mcmc_diagnostics": "unknown",
             }) + "\n", encoding="utf-8")
             staging.rename(snapshot)
-    current = {"schema_version": 1, "status": "unreviewed", "tree_sha256": digest(path.read_bytes()),
-               "topology_sha256": topology, "calibration_sha256": calibration_digest(tree),
+    current = {"schema_version": 1, "status": "unreviewed", "tree_sha256": tree_sha,
+               "topology_sha256": topology, "calibration_sha256": digest(json_text(labels).encode()),
                "inventory": str(snapshot / "candidates.tsv"), "mcmc_diagnostics": "unknown"}
     reviewed_path = path.parent / "reviewed_calibrations.json"
     if manifest is not None and reviewed_path.is_file():

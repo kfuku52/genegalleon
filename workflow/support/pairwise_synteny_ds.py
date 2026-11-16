@@ -126,13 +126,13 @@ def anchor_pairs(path):
     return sorted(pairs)
 
 
-def align_pair(pair, sequences, code):
+def align_pair(pair, sequences, code, *, env=None):
     from cdskit.backalign import backalign_sequence_strings
 
     records = [sequences[i][gene] for i, gene in enumerate(pair)]
     fasta = "".join(f">{name}\n{record[1]}\n" for name, record in zip(("target", "query"), records, strict=True))
     alignment = subprocess.run(["mafft", *MAFFT_ARGS, "-"], input=fasta,
-                               capture_output=True, text=True, check=True)
+                               capture_output=True, text=True, check=True, env=env)
     rows = list(SeqIO.parse(io.StringIO(alignment.stdout), "fasta"))
     aligned = {record.id: str(record.seq).upper() for record in rows}
     if len(rows) != 2 or set(aligned) != {"target", "query"} or len(aligned["target"]) != len(aligned["query"]):

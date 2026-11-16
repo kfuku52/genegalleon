@@ -113,10 +113,13 @@ def get_species_count_table(genecount_df, leaf_names):
         # Valid TSVs normally already have NumPy numeric columns. Keep the
         # independent output without reassembling them via per-column apply.
         species_counts = genecount_df.loc[:, leaf_names].copy(deep=True)
-        invalid_cols = []
-        if any(dtype.kind == "f" for dtype in dtypes):
-            invalid = species_counts.isna().any(axis=0)
-            invalid_cols = invalid.index[invalid].tolist()
+        if all(dtype.kind in "iu" for dtype in dtypes):
+            # Native integer columns are already finite and integral.
+            if (species_counts.min(axis=0) < 0).any():
+                fail("Orthogroup gene-count table contains negative copy numbers.")
+            return species_counts
+        invalid = species_counts.isna().any(axis=0)
+        invalid_cols = invalid.index[invalid].tolist()
     else:
         raw_counts = genecount_df.loc[:, leaf_names]
         boolean_columns = [col for col in leaf_names if

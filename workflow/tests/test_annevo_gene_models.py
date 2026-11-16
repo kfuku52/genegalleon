@@ -328,6 +328,22 @@ def test_transfer_confirmation_needs_actual_same_query_and_junctions(tmp_path, s
         assert 'annevo_unconfirmed_coding_structure' in negative['problems']
 
 
+def test_transfer_confirmation_keeps_order_and_duplicates_in_the_audit():
+    region = {'target': 'Target', 'donor': 'Donor', 'query': 'p'}
+    coding = {'seqid': 'chr', 'strand': '+', 'cds': [[1, 7, 0], [20, 26, 0]],
+              'coverage': 1., 'identity': 1., 'sequence': 'ATGAAACCCTAA', 'problems': []}
+    native = {**copy.deepcopy(coding), 'evidence': {**region, 'oriongeno': {'native_transcript_id': 'native.t'}}}
+    first = {**copy.deepcopy(coding), 'query': 'first', 'evidence': region}
+    other = {**copy.deepcopy(first), 'query': 'other'}
+    other['cds'][1] = [23, 29, 0]
+    last = {**copy.deepcopy(first), 'query': 'last'}
+    last['cds'][0][0] = 4
+    annevo.confirm_transferred_structure(iter([native]), iter([first, other, last, first]))
+    assert native['evidence']['oriongeno']['genomic_structure_transfer']['matching_paths'] == [
+        {'query': model['query'], 'cds': model['cds']} for model in (first, last, first)
+    ]
+
+
 @pytest.mark.parametrize('strand', ['+', '-'])
 def test_source_structure_retains_exons_and_complete_termini(strand):
     from gene_model_source_retention import source_structure_retention

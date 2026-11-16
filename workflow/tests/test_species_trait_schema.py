@@ -27,6 +27,26 @@ def test_declared_categories_are_excluded_even_when_numeric(tmp_path):
         select_traits(table)
 
 
+def test_trait_schema_cannot_bind_to_replacement_of_selected_table(tmp_path, monkeypatch):
+    import species_trait_schema as schema
+
+    table = tmp_path / "traits.tsv"
+    original = b"species\theight\tweight\nA\t4\t2\n"
+    replacement = b"species\theight\tweight\nA\t5\t2\n"
+    table.write_bytes(original)
+    schema_path(table).write_bytes(schema_payload(original, {"height": "numeric", "weight": "numeric"}))
+
+    def replace_after_read(path):
+        snapshot = read_table(path)
+        table.write_bytes(replacement)
+        schema_path(table).write_bytes(schema_payload(replacement, {"height": "categorical", "weight": "numeric"}))
+        return snapshot
+
+    monkeypatch.setattr(schema, "read_table", replace_after_read)
+    with pytest.raises(ValueError, match="Trait schema does not match the table content"):
+        select_traits(table)
+
+
 @pytest.mark.parametrize("value", ["bad", "Inf", "-Inf", "TRUE"])
 def test_numeric_corruption_is_never_auto_excluded(tmp_path, value):
     table = tmp_path / "traits.tsv"

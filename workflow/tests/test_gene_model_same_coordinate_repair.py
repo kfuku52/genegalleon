@@ -164,7 +164,8 @@ class SameCoordinateRepair(unittest.TestCase):
         for mutation in ("none", "before_guard", "during_build"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(prefix="same_coordinate_selection_toy_") as td:
                 root = Path(td)
-                (root / "plan.json").write_text("{}")
+                value = {"species": [SPECIES], "request": {"parameters": PARAMS}}
+                (root / "plan.json").write_text(json.dumps(value))
                 paths = {
                     "catalog": root / "catalog" / SPECIES,
                     "index": root / "catalog_index_final",
@@ -174,15 +175,18 @@ class SameCoordinateRepair(unittest.TestCase):
                 row, = classify()
                 for kind, directory in paths.items():
                     directory.mkdir(parents=True)
-                    member = ("predictions.json" if kind == "predictions" else
-                              "edges.json" if kind == "correspondence" else "small.json")
-                    payload = json.dumps([row] if kind == "predictions" else [])
+                    member, records = {
+                        "predictions": ("predictions.json", [row]),
+                        "correspondence": ("edges.json", []),
+                        "index": ("summary.json", {"accepted_prediction_count": 1}),
+                        "catalog": ("small.json", []),
+                    }[kind]
+                    payload = json.dumps(records)
                     (directory / member).write_text(payload)
                     key = {"fixture": kind}
                     (directory / "receipt.json").write_text(json.dumps({
                         "key": key, "files": {member: refine.digest(directory / member)}}))
                 predictions = paths["predictions"] / "predictions.json"
-                value = {"species": [SPECIES], "request": {"parameters": PARAMS}}
                 if mutation == "before_guard":
                     predictions.write_text("[]")
                 original_stream = refine.stream_json_array
@@ -389,7 +393,7 @@ class SameCoordinateRepair(unittest.TestCase):
             gff.write_text(annotation)
             genome = root / "genome.fa"
             genome.write_text(">chr1\n" + "N" * 1000 + FIXTURE["genomic_sequence"] + "N" * 10 + "\n")
-            value = {"species": [SPECIES], "request": {"sources": {SPECIES: {
+            value = {"species": [SPECIES], "request": {"parameters": PARAMS, "sources": {SPECIES: {
                 "fasta": str(raw), "gff": str(gff), "genome": str(genome), "genetic_code": 1}}}}
             tmp = root / "effective"
             tmp.mkdir()
@@ -399,7 +403,7 @@ class SameCoordinateRepair(unittest.TestCase):
                 return tmp
             with patch.object(refine, "select", return_value=final), \
                     patch.object(refine, "catalog_index", return_value=db), \
-                    patch.object(refine, "iter_loci", return_value=iter([gene])), \
+                    patch.object(refine, "iter_loci", side_effect=lambda *_: iter([gene])), \
                     patch.object(refine, "stage", side_effect=build_only), \
                     patch.object(refine.rescue, "run", side_effect=AssertionError("No scientific dispatch")):
                 refine.finalize(root, value)

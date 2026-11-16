@@ -337,12 +337,13 @@ def test_duplicate_preparation_targets_fail_without_losing_a_file(tmp_path):
     assert not (tmp_path / "names.txt").exists()
 
 
-def test_filename_inventory_is_literal_not_csv_quoted_or_missing(tmp_path):
+@pytest.mark.parametrize("file_name", ['"quoted".nwk', "OG\u2028literal.nwk", "OG\vliteral.nwk"])
+def test_filename_inventory_is_literal_not_csv_quoted_or_missing(tmp_path, file_name):
     initial = run_wrapper(tmp_path)
     assert initial.returncode == 0, initial.stderr
     original = tmp_path / "rooted/OG001.nwk"
-    original.rename(tmp_path / 'rooted/"quoted".nwk')
+    original.rename(tmp_path / "rooted" / file_name)
     result = run_wrapper(tmp_path, empty=True)
     assert result.returncode == 0, result.stderr
     summary = pd.read_csv(tmp_path / "results/grampa_summary.tsv", sep="\t", keep_default_na=False)
-    assert set(summary["file_name"]) == {'"quoted".nwk'}
+    assert set(summary["file_name"]) == {file_name}

@@ -135,7 +135,7 @@ changing outputs.
 
 The earlier `species_tree_busco_copy_policy=best-score` option remains available
 with its HMM score, aligned length and gene-ID ranking and its original
-`species_tree/busco_representative_selection.tsv` schema. Use only one opt-in
+`species_tree/busco_representative_selection.tsv.gz` schema. Use only one opt-in
 policy at a time; enabling both stops before changing outputs. The
 `species_tree_busco_duplicate_policy=best_score` option adds the sequence-quality
 ranking and selection reasons described below.
@@ -160,7 +160,7 @@ input/output path overlaps, including hard-linked report destinations, before
 removing any managed FASTAs or truncating a report.
 
 The persistent audit is
-`output/species_tree/busco_summary_table/busco_copy_selection.tsv`.
+`output/species_tree/busco_summary_table/busco_copy_selection.tsv.gz`.
 It contains one row per candidate source gene for duplicated groups: original
 BUSCO sequence IDs/status/length, score, sequence mode and genetic code,
 sequence length (nucleotides for CDS, residues for protein), internal stops,
@@ -168,8 +168,8 @@ ambiguous fraction, selected flag, reason, selected and runner-up IDs, and
 score margin (selected minus runner-up; it can be negative when quality wins).
 Multiple transcript-coordinate hits for one source gene are collapsed using
 their highest complete-candidate score. Rows are sorted independently of input
-order. In `exclude` mode the audit has a header only, clearing earlier decisions
-when extraction is rerun with that policy. The original all-copy BUSCO summary
+order. In `exclude` mode no new selection audit is written. A successful
+rerun removes the compressed audit from the previous policy. The all-copy BUSCO summary
 and duplicate-aware genome-evolution inputs remain unchanged. Existing `exclude`
 results can be reused without a selection audit; `best_score` requires its audit
 as part of the provenance contract.
@@ -851,11 +851,15 @@ permutations.
 
 Per-family outputs are written under `csubst_scan/`, `csubst_scan_units/`,
 `csubst_scan_foreground_branch/`, `csubst_scan_plot/` and `csubst_scan_log/`.
-`csubst_scan_audit/<family>_csubst_scan_audit.zip` preserves the complete scan
-output, JSON inference definitions/disabled-calibration record and copies of
-its input alignment, topology and foreground table. It is verified and
-atomically published before scratch cleanup, including for empty scans.
-Source execution paths may need relocation when reproducing a saved run.
+`csubst_scan_audit/<family>_csubst_scan_audit.zip` preserves scan diagnostics,
+the inference and calibration JSON, and exact input alignment, topology and
+foreground bytes. Its `external_members.json` records checksums of the two
+published scan tables. The audit and tables are staged together before scratch
+cleanup, including for empty scans. To export a self-contained archive with
+both tables, use `diagnostic_archive.py materialize --source AUDIT.zip
+--logical-root FAMILY_OUTPUT_ROOT --destination COMPLETE.zip`. The command
+reads both ordinary files and the logical gene-family ZIP store and validates
+the table checksums. It also reads historical self-contained scan archives.
 
 Current score/analytical-P/analytical-q/testability/inference marker columns are
 required; optional columns are unioned by header name. Unsupported legacy scan

@@ -1147,15 +1147,17 @@ def main():
         df_tmp.loc[:, "bl_unrooted"] = numpy.nan
         unrooted = new_unrooted_tree(params["unrooted_tree"])
         try:
-            mapped_support, support_diagnostics = map_internal_support_by_split(rooted_tree, unrooted)
-            for branch_id, support in mapped_support.items():
-                df_tmp.at[branch_id, "support_unrooted"] = support
+            # IQ-TREE can reinsert identical tips with unlabelled internal splits.
+            mapped_support, support_diagnostics = map_internal_support_by_split(
+                rooted_tree, unrooted, allow_partial=True
+            )
+            df_tmp["support_unrooted"] = df_tmp["branch_id"].map(mapped_support)
             print(
                 "Mapped generic unrooted support by split: "
                 f"{support_diagnostics['supported_split_count']}/"
                 f"{support_diagnostics['internal_split_count']} internal splits."
             )
-        except Exception as exc:
+        except ValueError as exc:
             print(
                 "Warning: Failed to transfer unrooted-tree branch annotations to the rooted tree. "
                 f"Leaving support_unrooted as NA: {exc}",
@@ -1191,8 +1193,7 @@ def main():
             support_max=100.0,
             require_support=True,
         )
-        for branch_id, support in mapped_support.items():
-            df_tmp_generax_ufboot.at[branch_id, "support_generax_ufboot"] = support
+        df_tmp_generax_ufboot["support_generax_ufboot"] = df_tmp_generax_ufboot["branch_id"].map(mapped_support)
         print(
             "Mapped GeneRax-topology UFBoot by split: "
             f"{support_diagnostics['supported_split_count']}/"

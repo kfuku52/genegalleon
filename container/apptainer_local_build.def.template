@@ -69,9 +69,9 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     paml_repo_sha="@@PAML_REPO_SHA@@"
     iqtree_repo_sha="@@IQTREE_REPO_SHA@@"
     aster_repo_sha="@@ASTER_REPO_SHA@@"
-    kffractbias_repo_url="@@KFFRACTBIAS_REPO_URL@@"
-    kffractbias_repo_ref="@@KFFRACTBIAS_REPO_REF@@"
-    kffractbias_repo_sha="@@KFFRACTBIAS_REPO_SHA@@"
+    locuskit_repo_url="@@LOCUSKIT_REPO_URL@@"
+    locuskit_repo_ref="@@LOCUSKIT_REPO_REF@@"
+    locuskit_repo_sha="@@LOCUSKIT_REPO_SHA@@"
     kftools_repo_url="@@KFTOOLS_REPO_URL@@"
     rkftools_repo_url="@@RKFTOOLS_REPO_URL@@"
     kftools_repo_ref_override="@@KFTOOLS_REPO_REF@@"
@@ -169,9 +169,9 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     bash /opt/pg/scripts/build_source_artifact.sh aster ASTER \
         "${aster_repo_url}" "${aster_repo_sha:-${aster_repo_ref}}" \
         "${artifact_root}/ASTER"
-    bash /opt/pg/scripts/build_source_artifact.sh python kfFractBias \
-        "${kffractbias_repo_url}" "${kffractbias_repo_sha:-${kffractbias_repo_ref}}" \
-        "${artifact_root}/kfFractBias"
+    bash /opt/pg/scripts/build_source_artifact.sh python locuskit \
+        "${locuskit_repo_url}" "${locuskit_repo_sha:-${locuskit_repo_ref}}" \
+        "${artifact_root}/locuskit"
     bash /opt/pg/scripts/build_source_artifact.sh python kftools \
         "${kftools_repo_url}" "${kftools_repo_sha:-${kftools_repo_ref_override:-${kfu52_repo_ref}}}" \
         "${artifact_root}/kftools"

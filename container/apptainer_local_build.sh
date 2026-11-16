@@ -79,9 +79,9 @@ render_definition() {
     -e "s|@@PAML_REPO_SHA@@|$(escape_sed_replacement "${PAML_REPO_SHA}")|g" \
     -e "s|@@IQTREE_REPO_SHA@@|$(escape_sed_replacement "${IQTREE_REPO_SHA}")|g" \
     -e "s|@@ASTER_REPO_SHA@@|$(escape_sed_replacement "${ASTER_REPO_SHA}")|g" \
-    -e "s|@@KFFRACTBIAS_REPO_URL@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_URL}")|g" \
-    -e "s|@@KFFRACTBIAS_REPO_REF@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_REF}")|g" \
-    -e "s|@@KFFRACTBIAS_REPO_SHA@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_SHA}")|g" \
+    -e "s|@@LOCUSKIT_REPO_URL@@|$(escape_sed_replacement "${LOCUSKIT_REPO_URL}")|g" \
+    -e "s|@@LOCUSKIT_REPO_REF@@|$(escape_sed_replacement "${LOCUSKIT_REPO_REF}")|g" \
+    -e "s|@@LOCUSKIT_REPO_SHA@@|$(escape_sed_replacement "${LOCUSKIT_REPO_SHA}")|g" \
     -e "s|@@KFTOOLS_REPO_URL@@|$(escape_sed_replacement "${KFTOOLS_REPO_URL}")|g" \
     -e "s|@@RKFTOOLS_REPO_URL@@|$(escape_sed_replacement "${RKFTOOLS_REPO_URL}")|g" \
     -e "s|@@KFTOOLS_REPO_REF@@|$(escape_sed_replacement "${KFTOOLS_REPO_REF}")|g" \

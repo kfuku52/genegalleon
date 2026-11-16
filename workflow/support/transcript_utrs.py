@@ -99,7 +99,8 @@ def native_correspondence(selected, native):
 
 def complete(selected_text, original_text, genome, species, native=None):
     """Return selected GFF, per-transcript audit and spliced transcript sequences."""
-    selected, original = read_models(selected_text, strict=False), read_models(original_text, strict=False)
+    selected = read_models(selected_text, strict=False)
+    original = selected if original_text == selected_text else read_models(original_text, strict=False)
     native_available = native is not None
     native = native or {}
     # pysam exposes all reference names as a tuple. Repeated membership scans
@@ -115,7 +116,7 @@ def complete(selected_text, original_text, genome, species, native=None):
     for model in native.values():
         if not exons_within_reference(model, reference_lengths.get(model['seqid'])):
             raise ValueError('OrionGeno transcript lies outside target genome')
-    donors, correspondence = native_correspondence(selected, native)
+    donors, correspondence = native_correspondence(selected, native) if native_available else ({}, {})
     updates, audit, sequences = {}, [], {}
     for tid, model in selected.items():
         if model.get('problem'):
@@ -124,7 +125,8 @@ def complete(selected_text, original_text, genome, species, native=None):
             continue
         candidates = [('existing', m) for m in original_by_gene[model['gene']]
                       if (m['seqid'], m['strand']) == (model['seqid'], model['strand'])]
-        candidates += [('oriongeno', m) for m in donors[model['gene']]]
+        native_donors = donors.get(model['gene'], ())
+        candidates += [('oriongeno', m) for m in native_donors]
         # A newly selected native/predicted transcript may not exist in source GFF.
         candidates += [('selected', model)]
         choices, evaluations = {}, {}
@@ -145,7 +147,7 @@ def complete(selected_text, original_text, genome, species, native=None):
         updates[tid] = dict(model=model, choices=choices, exons=exons)
         audit.append(dict(species=species, transcript_id=tid, gene_id=model['gene'],
                           utr5=choices['5'], utr3=choices['3'], candidates=evaluations,
-                          native_status='mapped' if donors[model['gene']] else 'no_unique_coding_overlap' if native_available else 'missing_prediction',
+                          native_status='mapped' if native_donors else 'no_unique_coding_overlap' if native_available else 'missing_prediction',
                           native_correspondence=correspondence[tid] if native_available else dict(status='missing_prediction', candidates=[]),
                           annotation_basis='projected_longest_per_side',
                           exon_path_basis=model.get('exon_path_basis', 'declared_or_cds_derived'),

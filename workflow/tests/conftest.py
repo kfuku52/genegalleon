@@ -75,6 +75,11 @@ class RuntimeSkipGuard:
         self.unexpected = set()
 
     def pytest_runtest_logreport(self, report):
+        if report.failed and not hasattr(self.config, "workerinput"):
+            terminal = self.config.pluginmanager.get_plugin("terminalreporter")
+            if terminal is not None:
+                terminal.write_line(f"\n[validation] test failed ({report.when}) {report.nodeid}")
+                terminal.flush()
         if report.skipped:
             allowed_reason = VALIDATION_MANIFEST["allowed_skips"].get(report.nodeid)
             if not allowed_reason or allowed_reason not in str(report.longrepr):

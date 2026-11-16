@@ -62,6 +62,7 @@ trimal
 #   on pysais, which is unavailable in this arm64 solver profile.
 # BUSCO itself is installed from the current upstream branch via pip
 # to avoid conda sepp/gsl solver conflicts.
+bbmap
 hmmer
 metaeuk
 prodigal

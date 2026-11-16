@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import json
 import subprocess
 import sys
@@ -691,6 +692,78 @@ def test_legacy_download_rejects_original_changed_before_receipt(bound_staging_p
     assert not Path(str(plan) + '.tasks/1.json').exists()
 
 
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (None, ""),
+        ("url", "import URL does not match"),
+        ("size", "expected size"),
+        ("checksum", "checksum mismatch"),
+        ("existing", "checksum mismatch"),
+        ("format", "expected gzip signature"),
+    ],
+)
+def test_stage_verified_public_download_import(tmp_path, error, message):
+    downloads = tmp_path / "downloads"
+    source = tmp_path / "transferred.cds.gz"
+    contents = b">gene1\nATGAAATAA\n"
+    source.write_bytes(contents if error == "format" else gzip.compress(contents))
+    url = "https://publisher.invalid/species.cds.fa.gz"
+    digest = hashlib.md5(source.read_bytes(), usedforsecurity=False).hexdigest()
+    row = {
+        "provider": "direct", "id": "release", "species_key": "Arabidopsis_thaliana",
+        "cds_url": url, "cds_import_url": url if error != "url" else url + "?other=1",
+        "cds_import_path": str(source),
+        "cds_import_size": source.stat().st_size + (error == "size"),
+        "cds_import_checksum": f"md5:{digest if error != 'checksum' else '0' * 32}",
+    }
+    manifest = tmp_path / "manifest.tsv"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=row.keys(), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+
+    plan = tmp_path / "plan.json"
+    planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                         "--download-dir", str(downloads), "--stage-downloads", "--outfile", str(plan))
+    assert planned.returncode == 0, planned.stderr
+    staged_plan = json.loads(plan.read_text())
+    plan_hash = hashlib.sha256(plan.read_bytes()).hexdigest()
+    target = (Path(staged_plan["tasks"][0]["download_dir"]) / "staged" / plan_hash
+              / "Direct" / "species_wise_original" / row["species_key"] / "species.cds.fa.gz")
+    if error == "existing":
+        target.parent.mkdir(parents=True)
+        original = bytearray(source.read_bytes())
+        original[4] ^= 1  # Change the gzip header mtime and keep both size and gzip integrity.
+        target.write_bytes(original)
+
+    staged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    receipts = Path(str(plan) + ".tasks")
+    if error:
+        assert staged.returncode != 0 and message in staged.stderr, staged.stderr
+        assert not (receipts / "1.json").exists()
+        if error == "existing":
+            assert target.read_bytes() == original
+        else:
+            assert not list(downloads.rglob("species.cds.fa.gz"))
+        assert not list(downloads.rglob(".gg-import-*"))
+        return
+
+    assert staged.returncode == 0, staged.stdout + staged.stderr
+    task = json.loads((receipts / "1.json").read_text())["task"]
+    payload = Path(task["cds_path"])
+    assert payload.read_bytes() == source.read_bytes()
+    assert task["input_sha256"][str(payload)] == hashlib.sha256(source.read_bytes()).hexdigest()
+    with (receipts / "1.resolved.tsv").open() as handle:
+        resolved = next(csv.DictReader(handle, delimiter="\t"))
+    assert resolved["cds_url"] == url
+    assert resolved["cds_import_checksum"] == f"md5:{digest}"
+    source.unlink()
+    restaged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    assert restaged.returncode == 0, restaged.stdout + restaged.stderr
+    assert gzip.decompress(payload.read_bytes()) == contents
+
+
 def test_bound_sources_preserve_formatted_outputs_without_raw_copy_and_reject_changes(tmp_path):
     raw = tmp_path / "raw"
     species = "Arabidopsis_thaliana"
@@ -1363,6 +1436,64 @@ def test_merge_requires_validation_qc_to_be_bound_to_worker_receipt(tmp_path: Pa
     assert run_python(MERGE_SCRIPT, *merge_args).returncode != 0
 
 
+@pytest.mark.parametrize("issue", ["summary", "stats", "resolved", "changed"])
+def test_merge_requires_all_consumed_shards_to_match_the_receipt(tmp_path, monkeypatch, capsys, issue):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import merge_input_generation_shards as merge
+
+    species = "Arabidopsis_thaliana"
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 1, "tasks": [
+        {"species_prefix": species, "species_key": species, "manifest_row": {}},
+    ]}))
+    paths = {
+        "summary": tmp_path / "summary" / "1.tsv",
+        "stats": tmp_path / "stats" / "1.json",
+        "resolved": tmp_path / "plan.json.tasks" / "1.resolved.tsv",
+    }
+    for path in paths.values():
+        path.parent.mkdir()
+    summary = f"provider\tspecies_key\tspecies_prefix\ndirect\t{species}\t{species}\n"
+    paths["summary"].write_text(summary)
+    paths["stats"].write_text(json.dumps({"species_prefix": species, "species_processed": 1}))
+    paths["resolved"].write_text(f"species_key\tcds_url\n{species}\tfile:///fixture.fa\n")
+    receipt = tmp_path / "plan.json.completed" / "1.json"
+    receipt.parent.mkdir()
+    receipt.write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "task_index": 1,
+        "files": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for name, path in paths.items() if name != issue},
+    }))
+    if issue == "changed":
+        read_receipt = merge.read_verified_receipt
+
+        def replace_after_verification(*args, **kwargs):
+            verified = read_receipt(*args, **kwargs)
+            assert verified is not None
+            paths["summary"].write_text(summary.replace("direct", "replacement"))
+            return verified
+
+        monkeypatch.setattr(merge, "read_verified_receipt", replace_after_verification)
+
+    outputs = {name: tmp_path / (name + ".old")
+               for name in ("species-summary", "aggregate-stats", "resolved-manifest", "mapping-qc")}
+    for path in outputs.values():
+        path.write_text("previous output\n")
+    argv = [str(MERGE_SCRIPT), "--task-plan", str(plan), "--species-summary-shard-dir",
+            str(paths["summary"].parent), "--task-stats-dir", str(paths["stats"].parent)]
+    for name, path in outputs.items():
+        argv.extend(("--" + name + "-output", str(path)))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as failure:
+        merge.main()
+    assert failure.value.code == 2
+    expected = "changed after worker completion verification" if issue == "changed" else "not bound to the worker completion receipt"
+    assert expected in capsys.readouterr().err
+    assert all(path.read_text() == "previous output\n" for path in outputs.values())
+
+
 def test_manifest_planning_defers_downloads_and_freezes_inputs(tmp_path):
     source = tmp_path / "sources"
     write_direct_species_fixture(source, "Arabidopsis_thaliana")
@@ -1541,7 +1672,8 @@ print({"array_prepare": 101, "array_worker": 102, "array_finalize": 103, "rescue
     assert "--dependency=afterok:105" in submissions[5]["argv"]
 
 
-def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path):
+@pytest.mark.parametrize("split", [False, True])
+def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path, split):
     import hashlib
     plan = tmp_path / "plan.json"
     plan.write_text(json.dumps({"task_count": 1, "tasks": [{"species_prefix": "A_b"}]}))
@@ -1551,16 +1683,89 @@ def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path):
         "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
     rescue = tmp_path / "rescue"
     rescue.mkdir()
-    (rescue / "plan.json").write_text(json.dumps({"species": ["A_b"], "synteny_jobs": []}))
+    (rescue / "plan.json").write_text(json.dumps({"species": ["A_b"], "synteny_jobs": [], "donors": {"A_b": []}}))
+    plan_sha = hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()
     models = rescue / "rescued" / "A_b"
     models.mkdir(parents=True)
     (models / "models.json").write_text("[]")
     (models / "receipt.json").write_text(json.dumps({"key": {"plan": hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()},
                                                     "files": {"models.json": hashlib.sha256(b"[]").hexdigest()}}))
+    if split:
+        prepared = rescue / "prepared" / "A_b"
+        prepared.mkdir(parents=True)
+        (prepared / "genes.pep").write_text("protein")
+        prepared_receipt = {"key": {"plan": plan_sha, "species": "A_b"},
+                            "files": {"genes.pep": hashlib.sha256(b"protein").hexdigest()}}
+        (prepared / "receipt.json").write_text(json.dumps(prepared_receipt))
+        prediction = rescue / "miniprot_predictions" / "A_b"
+        prediction.mkdir(parents=True)
+        (prediction / "prediction_state.json").write_text("{}")
+        (prediction / "receipt.json").write_text(json.dumps({
+            "key": {"plan": plan_sha, "species": "A_b", "comparisons": {},
+                    "prepared": {"A_b": hashlib.sha256((prepared / "receipt.json").read_bytes()).hexdigest()}},
+            "files": {"prediction_state.json": hashlib.sha256(b"{}").hexdigest()},
+        }))
     helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
-    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(rescue), "--retry")
+    extra = ["--rescue-split-miniprot"] if split else []
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(rescue), "--retry", *extra)
     assert result.returncode == 0, result.stderr
-    assert "GG_INPUT_INPUT_GENERATION_MODE=rescue_models" in result.stdout and "--array=1%8" in result.stdout
+    expected = "rescue_postprocess" if split else "rescue_models"
+    assert "GG_INPUT_INPUT_GENERATION_MODE=" + expected in result.stdout and "--array=1%8" in result.stdout
+    assert "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict" not in result.stdout
+
+
+@pytest.mark.parametrize("limit", [1, 6])
+def test_slurm_split_retry_unblocks_ready_species_and_caps_postprocessing(tmp_path, limit):
+    import hashlib
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 2, "tasks": [{"species_prefix": "A_b"}, {"species_prefix": "C_d"}]}))
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+    rescue = tmp_path / "rescue"
+    rescue.mkdir()
+    (rescue / "plan.json").write_text(json.dumps({
+        "species": ["A_b", "C_d"], "synteny_jobs": [], "donors": {"A_b": [], "C_d": []}}))
+    plan_sha = hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()
+    prepared = rescue / "prepared" / "A_b"
+    prepared.mkdir(parents=True)
+    (prepared / "genes.pep").write_text("protein")
+    (prepared / "receipt.json").write_text(json.dumps({
+        "key": {"plan": plan_sha, "species": "A_b"}, "files": {"genes.pep": hashlib.sha256(b"protein").hexdigest()}}))
+    checkpoint = rescue / "miniprot_predictions" / "A_b"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "prediction_state.json").write_text("{}")
+    (checkpoint / "receipt.json").write_text(json.dumps({
+        "key": {"plan": plan_sha, "species": "A_b", "comparisons": {},
+                "prepared": {"A_b": hashlib.sha256((prepared / "receipt.json").read_bytes()).hexdigest()}},
+        "files": {"prediction_state.json": hashlib.sha256(b"{}").hexdigest()},
+    }))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--rescue-output", str(rescue), "--rescue",
+                        "--rescue-split-miniprot", "--retry", "--rescue-max-running", str(limit))
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    predict, = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict " in line]
+    ready, dependent = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_postprocess " in line]
+    assert "--array=2%" in predict
+    assert f"--array=1%{max(1, limit // 2)}" in ready and "--dependency" not in ready
+    assert f"--array=2%{max(1, limit - max(1, limit // 2))}" in dependent
+    assert "--dependency=aftercorr:" in dependent and (",afterany:" in dependent) == (limit == 1)
+
+
+def test_slurm_rescue_split_prediction_and_postprocess_resources(tmp_path):
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--rescue",
+                        "--rescue-split-miniprot", "--rescue-predict-cpus", "12", "--rescue-predict-memory", "48G",
+                        "--rescue-predict-max-running", "3", "--rescue-cpus", "2", "--rescue-memory", "12G")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    predict = next(line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_predict" in line)
+    post = next(line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_postprocess" in line)
+    assert all(option in predict for option in ("--cpus-per-task=12", "--mem=48G", "--array=1-S%3"))
+    assert all(option in post for option in (
+        "--cpus-per-task=2", "--mem=12G", "--dependency=aftercorr:", "--kill-on-invalid-dep=yes"))
 
 
 def test_slurm_rescue_active_retry_rejects_before_submitting_any_job(tmp_path, monkeypatch):
@@ -2042,8 +2247,11 @@ def test_array_plan_rejects_escaping_species_and_download_filenames(tmp_path):
         assert not output.exists()
 
 
-@pytest.mark.parametrize('combined', [False, True])
-def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined):
+@pytest.mark.parametrize(('combined', 'transcriptome', 'fixed'), [
+    (False, False, False), (True, False, False), (True, True, False),
+    (True, False, True), (False, True, True),
+])
+def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined, transcriptome, fixed):
     import os
     plan = tmp_path / 'tmp' / 'plan.json'
     plan.parent.mkdir()
@@ -2071,12 +2279,23 @@ if mode == 'refinement_prepare' or mode == 'array_finalize' and os.environ.get('
     anchors.mkdir(exist_ok=True)
     if not (anchors / 'plan.json').exists():
         (anchors / 'plan.json').write_text(json.dumps({'synteny_jobs': [{'a': 'A_b', 'b': 'C_d', 'index': 1}, {'a': 'A_b', 'b': 'A_b', 'index': 2}]}))
-    (root / 'plan.json').write_text(json.dumps({'species': ['A_b', 'C_d'], 'request': {'rescue_output': str(anchors), 'edges': None}}))
+    request = {'rescue_output': str(anchors), 'edges': None}
+    species = ['A_b', 'C_d']
+    if os.environ['TEST_TRANSCRIPTOME'] == '1':
+        request.update(edges='mixed_edges.tsv', transcriptome_sources={'E_f': {}})
+        species.append('E_f')
+    if os.environ['TEST_FIXED'] == '1':
+        request['target_species'] = [species[-1]]
+        if request.get('transcriptome_sources'):
+            request['rescue_output'] = None
+    (root / 'plan.json').write_text(json.dumps({'species': species, 'request': request}))
 print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue_synteny': 104, 'refinement_catalog': 105, 'refinement_correspondence': 106, 'refinement_predict': 107, 'refinement_finalize': 108, 'rescue_models': 109, 'rescue_finalize': 110, 'refinement_prepare': 111}[mode])
 ''')
     fake.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('TEST_CALLS', str(calls))
+    monkeypatch.setenv('TEST_TRANSCRIPTOME', str(int(transcriptome)))
+    monkeypatch.setenv('TEST_FIXED', str(int(fixed)))
     helper = SUPPORT_DIR.parent / 'gg_input_generation_array.py'
     result = run_python(helper, '--task-plan', str(plan), '--refinement', '--submit', '--max-running', '5',
                         '--rescue-max-running', '3', '--rescue-cpus', '8', '--rescue-memory', '64G', *(['--rescue'] if combined else []))
@@ -2087,6 +2306,13 @@ print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue
         assert '--wait' in submissions[5]['argv']
         assert '--dependency=afterok:110' in submissions[6]['argv'] and '--wait' in submissions[6]['argv']
         submissions = submissions[:3] + submissions[7:]
+    if fixed:
+        assert [row['mode'] for row in submissions] == ['array_prepare', 'array_worker', 'array_finalize',
+               'refinement_correspondence', 'refinement_predict', 'refinement_finalize']
+        assert '--array=1%3' in submissions[4]['argv']
+        assert '--dependency=afterok:106' in submissions[4]['argv']
+        assert '--dependency=afterok:107' in submissions[5]['argv']
+        return
     assert [row['mode'] for row in submissions] == ['array_prepare', 'array_worker', 'array_finalize',
            'rescue_synteny', 'refinement_catalog', 'refinement_correspondence', 'refinement_predict', 'refinement_finalize']
     assert all(row['refinement'] == '1' for row in submissions)
@@ -2095,7 +2321,7 @@ print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue
     assert submissions[3]['anchors'].endswith('/gene_model_rescue' if combined else '/anchors')
     assert '--dependency=afterok:104:105' in submissions[5]['argv']
     assert '--dependency=afterok:106' in submissions[6]['argv']
-    assert '--array=1-2%3' in submissions[6]['argv']
+    assert ('--array=1-3%3' if transcriptome else '--array=1-2%3') in submissions[6]['argv']
     assert '--cpus-per-task=8' in submissions[6]['argv'] and '--mem=64G' in submissions[6]['argv']
     assert '--dependency=afterok:107' in submissions[7]['argv']
 

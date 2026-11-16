@@ -1,6 +1,7 @@
 """Download runtime implementation: manifest."""
 
 import os
+from collections import Counter
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -45,6 +46,7 @@ from format_species_provider_urls import (
 )
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 
+from .adoption import manifest_download_imports, materialize_download_import
 from .cache_validation import GzipValidationCache, gzip_validation_key_for_target
 from .dispatch import dispatch_download_jobs
 from .local import (
@@ -91,6 +93,17 @@ def _execute_download_target_job(
     local_errors = []
     downloaded = 0
     failed = []
+
+    import_spec = job.get("import_spec")
+    if import_spec is not None:
+        context = "[download:{}] {} {} import".format(provider, species_key, label)
+        try:
+            downloaded = int(materialize_download_import(
+                import_spec, target, overwrite, lock_stale_seconds, local_warnings, context
+            ))
+        except (OSError, ValueError) as exc:
+            local_errors.append(f"{context}: {exc}")
+        return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
 
     # NCBI can expose a newly released assembly through E-utilities and the
     # Datasets API before its FTP directory is published. The resolver marks
@@ -272,6 +285,7 @@ def download_from_manifest(
     cleanup_paths = []
     failed_downloads = []
     row_target_paths = {}
+    import_targets = set()
     preexisting_cache_diagnostics = scan_download_cache_diagnostics(download_root)
 
     if len(rows) == 0:
@@ -337,6 +351,7 @@ def download_from_manifest(
             errors.append("Manifest line {}: unsupported provider '{}'".format(i, provider))
             continue
         try:
+            imports = manifest_download_imports(row)
             fernbase_confidence_mode = parse_fernbase_confidence_mode(fernbase_confidence_mode_raw)
         except ValueError as exc:
             errors.append("Manifest line {}: {}".format(i, exc))
@@ -721,6 +736,12 @@ def download_from_manifest(
                 if stale_combined_gff != raw_dir / gff_filename:
                     cleanup_paths.append(stale_combined_gff)
 
+        row_import_targets = {target for label, _, target, _ in download_targets if label in imports}
+        if any(target.parent != raw_dir or target.name.startswith(".") for target in row_import_targets):
+            errors.append(f"Manifest line {i}: imports require non-hidden download filenames")
+            continue
+        import_targets.update(row_import_targets)
+
         resolved_row = build_resolved_manifest_row(
             raw_row=row,
             fieldnames=resolved_fieldnames,
@@ -755,7 +776,8 @@ def download_from_manifest(
                 validation_relative_target = str(target.relative_to(download_root))
             except ValueError:
                 validation_relative_target = os.path.relpath(str(target), str(download_root))
-            if target.exists() and target.stat().st_size > 0 and not overwrite:
+            import_spec = imports.get(label)
+            if import_spec is None and target.exists() and target.stat().st_size > 0 and not overwrite:
                 if (not dry_run) and quarantine_corrupt_gzip(
                     target,
                     warnings,
@@ -785,11 +807,20 @@ def download_from_manifest(
                     "url": url,
                     "target": target,
                     "archive_member": archive_member,
+                    "import_spec": import_spec,
                     "validation_cache": validation_cache,
                     "validation_key": validation_key,
                     "validation_relative_target": validation_relative_target,
                 }
             )
+
+    if import_targets:
+        target_counts = Counter(target for row in row_target_paths.values() for target in row["paths"].values())
+        conflicts = {target for target in import_targets if target_counts[target] > 1}
+        errors.extend(f"Multiple manifest inputs select the same import destination: {target}"
+                      for target in sorted(conflicts))
+        if conflicts:
+            download_jobs = [job for job in download_jobs if job["target"] not in conflicts]
 
     # Check CoGe annotations before starting potentially enormous sequence
     # transfers. The resolver's remote preview is not a cache/content proof.

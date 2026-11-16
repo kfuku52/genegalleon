@@ -7,6 +7,7 @@ import json
 import random
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -318,18 +319,19 @@ def hidden_models(tmp_path):
     return tmp_path, species, cds
 
 
-def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, directory_name="rescue"):
+def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, directory_name="rescue", extra_args=()):
     root, species, cds = fixture
     output = root / directory_name
     storage_args = ["--model-storage", model_storage]
     if retain_search_inputs:
         storage_args.append("--retain-search-inputs")
     cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
-        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output, *storage_args)
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output, *storage_args, *extra_args)
     return output, species, cds
 
 
-def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models):
+@pytest.mark.parametrize("split", [False, True])
+def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models, split):
     from workflow.support.rescue_model_store import (
         iter_models,
         iter_partial_models,
@@ -338,21 +340,41 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models)
     legacy, names, _ = make_plan(hidden_models, directory_name="legacy_storage")
     compact, _, _ = make_plan(hidden_models, model_storage="compact", retain_search_inputs=False,
                               directory_name="compact_storage")
-    for output in (legacy, compact):
-        cli("run", "--output", output, "--cpus", "4", "--interval-workers", "4")
+    cli("run", "--output", legacy, "--cpus", "4", "--interval-workers", "4")
+    if split:
+        cli("synteny", "--output", compact, "--cpus", "4")
+        cli("predict", "--output", compact, "--cpus", "4", "--interval-workers", "4")
+        assert not (compact / "rescued").exists()
+        cli("postprocess", "--output", compact, "--cpus", "2")
+        cli("finalize", "--output", compact, "--cpus", "2")
+    else:
+        cli("run", "--output", compact, "--cpus", "4", "--interval-workers", "4")
     for name in names:
         a, b = legacy / "rescued" / name, compact / "rescued" / name
         assert list(iter_models(b)) == json.loads((a / "models.json").read_text())
         assert list(iter_partial_models(b)) == json.loads((a / "partial_models.json").read_text())
         assert list(iter_revision_models(b)) == json.loads((a / "revision_candidates.json").read_text())
         assert (b / "model_store/manifest.json").is_file()
+        details = compact.parent / (name + '_diagnostics')
+        cli("export-diagnostics", "--output", compact, "--task-index", str(names.index(name) + 1),
+            "--destination", details)
         for filename in ("quality_flags.tsv", "audit.tsv"):
-            assert (a / filename).read_bytes() == (b / filename).read_bytes()
+            assert not (b / filename).exists()
+            assert (a / filename).read_text() == (details / filename).read_text()
+        assert 'status_counts' in json.loads((b / "diagnostics.json").read_text())
         assert not any((b / filename).exists() for filename in (
             "models.json", "partial_models.json", "revision_candidates.json", "regions.fa", "queries.fa",
             "genome.gff", "unresolved.fa", "unresolved.unique.fa", "genome.covered.unique.fa"))
-        assert not list((b / "intervals").glob("*/region.fa"))
-        assert not list((b / "intervals").glob("*/queries.fa"))
+        assert not (b / "intervals").exists()
+        originals = sorted((a / "intervals").glob("*/models.gff"))
+        if originals:
+            with zipfile.ZipFile(b / rescue.INTERVAL_ARCHIVE) as archive:
+                for original in originals:
+                    assert archive.read(original.relative_to(a).as_posix()) == original.read_bytes()
+            assert json.loads((b / "receipt.json").read_text())["files"][rescue.INTERVAL_ARCHIVE] == (
+                rescue.digest(b / rescue.INTERVAL_ARCHIVE))
+        else:
+            assert not (b / rescue.INTERVAL_ARCHIVE).exists()
         for folder, suffix in (("species_cds", ".rescue.cds.fa"), ("species_gff", ".rescue.gff3")):
             assert (legacy / "augmented" / folder / (name + suffix)).read_bytes() == (
                 compact / "augmented" / folder / (name + suffix)).read_bytes()
@@ -403,6 +425,40 @@ def test_parallel_intervals_preserve_every_real_alignment_and_order(hidden_model
         assert (serial / relative / "models.gff").read_bytes() == (parallel / relative / "models.gff").read_bytes()
         command = json.loads((parallel / relative / "logs/miniprot.command.json").read_text())
         assert command[command.index("-t") + 1] == "1"
+
+
+def test_deduplicated_intervals_preserve_donor_specific_alignments_and_archive(hidden_models):
+    import pysam
+
+    root, names, sequences = hidden_models
+    genome_path = root / "genome" / (names[0] + ".genome.fa")
+    pysam.faidx(str(genome_path))
+    donors = names[1:3]
+    proteins = {donor: {f"g{i}": str(Seq(sequence).translate())[:-1] for i, sequence in enumerate(sequences)}
+                for donor in donors}
+    windows = {}
+    for i in (8, 9):
+        start = i * (len(sequences[0]) + 60)
+        windows[("chr1", start, start + len(sequences[i]) + 10)] = [
+            {"id": f"query_{i}_{j}", "donor": donor, "query": f"g{query}"}
+            for j, (donor, query) in enumerate(((donors[0], i), (donors[0], 0), (donors[1], i)))
+        ]
+    original, deduplicated = root / "original", root / "deduplicated"
+    original.mkdir()
+    deduplicated.mkdir()
+    with pysam.FastaFile(str(genome_path)) as genome:
+        expected = rescue.search_intervals(original, windows, proteins, genome, 1, 20000, 2, compact=True)
+        actual = rescue.search_intervals(deduplicated, windows, proteins, genome, 1, 20000, 2,
+                                         compact=True, deduplicate_queries=True)
+    assert actual == expected
+    assert {"query_8_0", "query_8_2", "query_9_0", "query_9_2"} <= {model["query"] for model in actual}
+    with (zipfile.ZipFile(original / rescue.INTERVAL_ARCHIVE) as before,
+          zipfile.ZipFile(deduplicated / rescue.INTERVAL_ARCHIVE) as after):
+        for name in ("intervals/1/models.gff", "intervals/2/models.gff"):
+            assert before.read(name) == after.read(name)
+    for directory in (original, deduplicated):
+        with gzip.open(directory / rescue.LOCAL_RECORDS, "rt") as stream:
+            assert [len(json.loads(line)["queries"]) for line in stream] == [3, 3]
 
 
 def test_local_input_diagnostics_fetch_each_new_window_once(tmp_path):
@@ -513,6 +569,77 @@ def test_genome_only_search_uses_fallback_inputs_without_local_diagnostics(hidde
     assert accepted[0]["placement_evidence"]["expected_copy"] == 'unassigned'
 
 
+@pytest.mark.parametrize("storage", ["legacy", "compact"])
+def test_split_miniprot_retries_only_postprocessing(hidden_models, monkeypatch, storage):
+    from workflow.support.rescue_model_store import iter_models
+
+    fixture, names, sequences = hidden_models
+    baseline, _, _ = make_plan(hidden_models, model_storage=storage, retain_search_inputs=storage == "legacy",
+                               extra_args=("--diagnostics", "legacy"))
+    plan = rescue.load(baseline)
+    name, donor = names[:2]
+    plan["donors"][name] = [donor]
+    plan["synteny_jobs"] = []
+    rescue.atomic_json(baseline / "plan.json", plan)
+    output = fixture / "split"
+    output.mkdir()
+    rescue.atomic_json(output / "plan.json", plan)
+    start = 8 * (len(sequences[0]) + 60)
+    end = start + len(sequences[8])
+    local = {"id": "local", "donor": donor, "query": donor + "_g8", "seqid": "chr1",
+             "start": start, "end": end, "expected_start": start, "expected_end": end}
+    fallback = {"id": "fallback", "donor": donor, "query": donor + "_g9", "genome_only": True,
+                "target": name, "placement": "unanchored", "nomination": {"reason": "no_target_match"},
+                "orthology": "unassigned", "expected_copy": "unassigned"}
+    monkeypatch.setattr(rescue, "candidates", lambda *_: [copy.deepcopy(local)])
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates",
+                        lambda *_: ([copy.deepcopy(fallback)], {"nominated": 1}))
+    expected = rescue.rescue(baseline, plan, name, 2)
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
+    checkpoint = rescue.rescue(output, plan, name, 2, phase="predict")
+    assert (checkpoint / "genome.unique.gff").is_file()
+    assert not (checkpoint / "genome.mpi").exists()
+    assert not (output / "rescued" / name).exists()
+    receipt = (checkpoint / "receipt.json").read_bytes()
+
+    def unexpected_search(*args, **kwargs):
+        pytest.fail("Postprocessing invoked a predictor")
+
+    monkeypatch.setattr(rescue, "run", unexpected_search)
+    monkeypatch.setattr(rescue, "prepared", unexpected_search)
+    monkeypatch.setattr(rescue, "candidates", unexpected_search)
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", unexpected_search)
+    raw_path = checkpoint / "genome.unique.gff"
+    raw_bytes = raw_path.read_bytes()
+    raw_path.write_bytes(raw_bytes + b"# corrupted checkpoint\n")
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
+    raw_path.write_bytes(raw_bytes)
+    with monkeypatch.context() as failure:
+        def failed_write(*args, **kwargs):
+            raise OSError("Simulated postprocessing failure")
+        failure.setattr(rescue, "consolidate", failed_write)
+        with pytest.raises(OSError, match="Simulated postprocessing failure"):
+            rescue.rescue(output, plan, name, 1, phase="postprocess")
+    assert not (output / "rescued" / name).exists()
+    assert (checkpoint / "receipt.json").read_bytes() == receipt
+    actual = rescue.rescue(output, plan, name, 1, phase="postprocess")
+    for filename in ("audit.tsv", "quality_flags.tsv", "genome.unique.gff", "model_repair_candidates.json"):
+        assert (actual / filename).read_bytes() == (expected / filename).read_bytes()
+    assert list(iter_models(actual)) == list(iter_models(expected))
+    assert (actual / "genome.unique.gff").samefile(checkpoint / "genome.unique.gff")
+    assert (actual / "candidates.json").samefile(checkpoint / "candidates.json")
+    assert json.loads((actual / "miniprot_checkpoint.json").read_text()) == {
+        "receipt_sha256": hashlib.sha256(receipt).hexdigest()
+    }
+    assert rescue.rescue(output, plan, name, 1, phase="postprocess") == actual
+    with (checkpoint / "genome.unique.gff").open("a") as handle:
+        handle.write("# corrupted checkpoint\n")
+    with pytest.raises(ValueError, match="Missing or invalid miniprot prediction checkpoint"):
+        rescue.rescue(output, plan, name, 1, phase="postprocess")
+
+
 def test_broader_genome_contract_researches_cached_positive_and_empty_coverage(hidden_models, monkeypatch):
     """Real miniprot, strict QC and two cache generations, without old decisions."""
     fixture, names, sequences = hidden_models
@@ -597,6 +724,7 @@ def test_genome_query_dedup_restores_exact_real_gff_and_each_candidate(hidden_mo
     full, unique = root / "full.fa", root / "unique.fa"
     full.write_text("".join(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n" for r in regions))
     mapping = rescue.write_unique_queries(regions, proteins, unique)
+    assert rescue.write_unique_queries(iter(regions), proteins) == mapping
     assert len(list(rescue.fasta_records(unique))) == 3 and len(mapping) == 5
     baseline, dedup, expanded = root / "full.gff", root / "unique.gff", root / "expanded.gff"
     for query, out, label in [(full, baseline, "full"), (unique, dedup, "unique")]:
@@ -1684,7 +1812,8 @@ def test_external_qc_refuses_inputs_changed_during_report(hidden_models, monkeyp
     assert not (output / "qc_report" / "receipt.json").exists()
 
 
-def test_worker_completion_refuses_qc_changed_after_comparability_check(hidden_models, monkeypatch):
+@pytest.mark.parametrize("changed", ["busco", "effective", "rescue"])
+def test_worker_completion_refuses_dependencies_changed_during_comparability_check(hidden_models, monkeypatch, changed):
     root, names, _ = hidden_models
     output, _, _ = make_plan(hidden_models)
     plan = rescue.load(output)
@@ -1703,11 +1832,15 @@ def test_worker_completion_refuses_qc_changed_after_comparability_check(hidden_m
     summary = short_dir / (name + ".busco.short.txt")
     summary.write_bytes((root / "busco" / summary.name).read_bytes())
     (full_dir / (name + ".busco.full.tsv")).write_text("# synthetic complete table\n")
+    changed_path = {"busco": summary, "effective": output / "effective" / name / "inputs.tsv",
+                    "rescue": output / "rescued" / name / "audit.tsv"}[changed]
     original_quality = rescue.busco_quality
     def replace_after_check(path):
         result = original_quality(path)
         if Path(path) == summary:
-            summary.write_text(summary.read_text().replace("n:100", "n:101"))
+            replacement = changed_path.with_suffix(".replacement")
+            replacement.write_bytes(changed_path.read_bytes())
+            replacement.replace(changed_path)
         return result
     monkeypatch.setattr(rescue, "busco_quality", replace_after_check)
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), "worker-complete", "--output", str(output), "--task-index", "1"])

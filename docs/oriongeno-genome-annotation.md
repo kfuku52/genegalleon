@@ -371,7 +371,7 @@ The representative bundle adds:
 - updated selected/full/analysis GFF views with consistent exon and UTR parents;
 - `species_transcript/SPECIES.fa`, spliced sequences keyed by selected transcript
   IDs, separate from unchanged CDS/protein FASTAs;
-- `utr_audit/SPECIES.json`, per-side candidates, source identities, adjusted
+- `utr_audit/SPECIES.json.gz`, per-side candidates, source identities, adjusted
   blocks/lengths, boundary shifts and newly inferred junctions;
 - `utr_summary.tsv`, cohort denominators and 5-prime/3-prime/both-side coverage;
 - transcript paths/hashes in `effective/inputs.tsv` and all new files in the

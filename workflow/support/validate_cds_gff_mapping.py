@@ -199,16 +199,19 @@ def first_n(items, limit):
     return items[: max(0, int(limit))]
 
 
-def index_gff_files_by_species(gff_files):
+def index_files_by_species(files):
     out = {}
-    for path in gff_files:
+    for path in files:
         species_prefix = species_prefix_from_name(path.name)
         if species_prefix == "":
             continue
         out.setdefault(species_prefix, []).append(path)
-    for species_prefix in out:
-        out[species_prefix] = sorted(out[species_prefix], key=gff_candidate_sort_key)
     return out
+
+
+def index_gff_files_by_species(gff_files):
+    return {species: sorted(paths, key=gff_candidate_sort_key)
+            for species, paths in index_files_by_species(gff_files).items()}
 
 
 def read_species_summary_pairs(path):
@@ -239,7 +242,7 @@ def read_species_summary_pairs(path):
                     )
                 )
                 continue
-            pairs.append((species_prefix, cds_file, gff_file))
+            pairs.append((species_prefix, cds_file, gff_file, row))
     return pairs, errors
 
 
@@ -468,13 +471,14 @@ def main(argv=None, *, verification_session=None):
     if species_summary is not None:
         summary_pairs, summary_errors = read_species_summary_pairs(species_summary)
         errors.extend(summary_errors)
-        for index, (species_prefix, cds_file, gff_file) in enumerate(summary_pairs):
+        for index, (species_prefix, cds_file, gff_file, row) in enumerate(summary_pairs):
             tasks.append(
                 {
                     "index": index,
                     "species_prefix": species_prefix,
                     "cds_file": cds_file,
                     "gff_file": gff_file,
+                    "summary_row": row,
                 }
             )
     else:
@@ -506,27 +510,19 @@ def main(argv=None, *, verification_session=None):
 
     for task in tasks:
         task["strict"] = bool(args.strict)
-    if species_summary is not None:
-        with species_summary.open(encoding="utf-8", newline="") as handle:
-            summary_rows = {row["species_prefix"]: row for row in csv.DictReader(handle, delimiter="\t")}
-        for task in tasks:
-            task["summary_row"] = summary_rows[task["species_prefix"]]
     if args.species_genome_dir:
         genome_dir = Path(args.species_genome_dir).expanduser().resolve()
         if not genome_dir.is_dir():
             parser.error("--species-genome-dir not found: {}".format(genome_dir))
         if species_summary is not None:
-            with open(species_summary, encoding="utf-8", newline="") as handle:
-                genomes = {row["species_prefix"]: row.get("genome_output_path", "").strip()
-                           for row in csv.DictReader(handle, delimiter="\t")}
             for task in tasks:
-                path = genomes.get(task["species_prefix"], "")
+                path = task["summary_row"].get("genome_output_path", "").strip()
                 if path:
                     task["genome_file"] = Path(path).expanduser().resolve()
         else:
-            genome_files = list_nonhidden_files(genome_dir, FASTA_EXTENSIONS)
+            genomes = index_files_by_species(list_nonhidden_files(genome_dir, FASTA_EXTENSIONS))
             for task in tasks:
-                matching = [path for path in genome_files if species_prefix_from_name(path.name) == task["species_prefix"]]
+                matching = genomes.get(task["species_prefix"], [])
                 if len(matching) != 1:
                     errors.append("[{}] Expected one genome FASTA, found {}".format(task["species_prefix"], len(matching)))
                 else:

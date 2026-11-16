@@ -99,6 +99,57 @@ def test_slurm_memory_uses_allocation_and_respects_explicit_overrides(memory, ov
     assert 0 < tool <= total
 
 
+@pytest.mark.parametrize("job_record, expected, source, usable", [
+    ("JobId=123 ArrayJobId=120 ArrayTaskId=1 NumNodes=1 AllocTRES=cpu=4,mem=128G,node=1", 128, "slurm-alloc-tres", True),
+    ("JobId=123 NumNodes=1 AllocTRES=cpu=4,mem=196608M,node=1", 192, "slurm-alloc-tres", True),
+    ("JobId=123 NumNodes=2 AllocTRES=cpu=8,mem=256G,node=2", 12, "estimated", False),
+    ("JobId=120 NumNodes=1 AllocTRES=cpu=4,mem=128G,node=1", 12, "estimated", False),
+    ("JobId=123 NumNodes=1 AllocTRES=cpu=4,mem=0,node=1", 12, "estimated", False),
+    ("", 12, "estimated", False),
+])
+def test_slurm_missing_memory_recovers_exact_job_or_blocks_rnaspades(tmp_path, job_record, expected, source, usable):
+    script = r"""
+scontrol() {
+  [[ "$*" == '--oneliner show job 123' && -n "${AUDIT_JOB_RECORD:-}" ]] || return 1
+  printf '%s\n' "$AUDIT_JOB_RECORD"
+}
+gg_normalize_scheduler_env >/dev/null
+gg_normalize_scheduler_env >/dev/null
+gg_workspace_dir="$2"
+gg_workflow_dir="$1/.."
+gg_container_image_path="$2/runtime.sif"
+set_singularityenv >/dev/null
+[[ "$APPTAINERENV_GG_MEM_TOTAL_GB" == "$SINGULARITYENV_GG_MEM_TOTAL_GB" ]]
+[[ "$APPTAINERENV_GG_MEM_TOTAL_SOURCE" == "$SINGULARITYENV_GG_MEM_TOTAL_SOURCE" ]]
+printf '%s %s\n' "$APPTAINERENV_GG_MEM_TOTAL_GB" "$APPTAINERENV_GG_MEM_TOTAL_SOURCE"
+env -i PATH="$PATH" GG_CORE_SOURCE_ONLY=1 \
+  GG_SCHEDULER_KIND="$APPTAINERENV_GG_SCHEDULER_KIND" GG_MEM_TOTAL_SOURCE="$APPTAINERENV_GG_MEM_TOTAL_SOURCE" \
+  bash -c 'source "$1"; require_rnaspades_memory_budget "$2"' audit \
+  "$1/../core/gg_transcriptome_generation_core.sh" "$((APPTAINERENV_GG_MEM_TOTAL_GB - 4))"
+"""
+    (tmp_path / "runtime.sif").touch()
+    result = run_shell(script, tmp_path, env={
+        "SLURM_JOB_ID": "123", "SLURM_CPUS_PER_TASK": "4", "AUDIT_JOB_RECORD": job_record,
+    })
+    assert result.stdout.strip() == f"{expected} {source}", result.stderr
+    assert (result.returncode == 0) is usable
+    if not usable:
+        assert "Slurm memory could not be verified" in result.stderr
+
+
+def test_rnaspades_requires_headroom_and_preserves_local_use():
+    helper = r"""
+GG_CORE_SOURCE_ONLY=1 source "$1/../core/gg_transcriptome_generation_core.sh"
+require_rnaspades_memory_budget "$2"
+"""
+    missing = run_shell(helper, 0, env={
+        "GG_SCHEDULER_KIND": "slurm", "GG_MEM_TOTAL_SOURCE": "explicit",
+    })
+    assert missing.returncode != 0
+    assert "no memory remains" in missing.stderr
+    assert run_shell(helper, 8).returncode == 0
+
+
 @pytest.mark.parametrize("status", [0, 23])
 def test_disabled_semaphore_preserves_command_status(tmp_path, status):
     result = run_shell('gg_run_with_shared_semaphore "$2" 0 audit bash -c "exit $3"', tmp_path, status)

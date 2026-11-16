@@ -53,6 +53,34 @@ def test_legacy_inventory_is_additive_idempotent_and_never_infers_sources(tmp_pa
     assert status["historical_mcmc_diagnostics"] == "unknown"
 
 
+def test_inventory_binds_rows_and_snapshot_to_one_tree_read(tmp_path, monkeypatch):
+    tree = tmp_path / "tree.nwk"
+    original = b"\xef\xbb\xbf[&R] ((a,b)'B(10,20,0.025,0.025)',c);\r\n"
+    replacement = b"((a,c)'B(30,40,0.025,0.025)',b);\n"
+    tree.write_bytes(original)
+    read_tree = audit.load_tree
+
+    def replace_before_parsing(path, **kwargs):
+        tree.write_bytes(replacement)
+        return read_tree(path, **kwargs)
+
+    monkeypatch.setattr(audit, "load_tree", replace_before_parsing)
+    outdir = tmp_path / "audit"
+    snapshot = audit.inventory(tree, outdir)
+
+    assert tree.read_bytes() == replacement
+    assert snapshot.name == audit.digest(original)
+    assert (snapshot / "observed.nwk").read_bytes() == original
+    with (snapshot / "candidates.tsv").open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [(json.loads(row["descendant_tips"]), row["calibration"]) for row in rows] == [
+        (["a", "b", "c"], ""),
+        (["a", "b"], "B(10,20,0.025,0.025)"),
+    ]
+    for status_file in (snapshot / "status.json", outdir / "current_status.json"):
+        assert json.loads(status_file.read_text())["tree_sha256"] == snapshot.name
+
+
 def test_reviewed_selection_uses_exact_clades_preserves_inputs_and_soft_tails(tmp_path):
     tree, manifest, rows = fixture_manifest(tmp_path)
     inputs = tree.read_bytes(), manifest.read_bytes()

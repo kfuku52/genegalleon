@@ -1,37 +1,55 @@
 #!/usr/bin/env python3
-"""Restartable, opt-in synteny-guided coding model refinement.
+"""Restartable coding-model refinement and conserved isoform selection.
 
-Original annotations are immutable. Accepted predictions and representative
-adoption are separate decisions; every effective sequence has an exact GFF path.
+Original annotations are immutable. Genomic representatives have exact GFF
+paths, and assembly representatives retain their original transcript IDs.
 """
 import argparse
 import bisect
 import contextlib
 import copy
+import csv
 import functools
 import gzip
 import hashlib
 import importlib.metadata
+import io
 import json
 import math
+import os
 import re
 import resource
 import shutil
 import sqlite3
 import sys
+import tempfile
 import time
-from collections import defaultdict
-from itertools import chain
+from collections import defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor
+from itertools import chain, islice
+from multiprocessing import get_context
 from pathlib import Path
 from urllib.parse import quote
 
+from Bio.Align import PairwiseAligner
+from Bio.Seq import Seq
+from cdskit.translate import translate_sequence_string
+
 try:
+    import annevo_gene_models
+    import gene_model_transcriptome as transcriptome
+    import refinement_native_splits
+    import refinement_rna
+    import refinement_transcriptome_edges
     import rescue_gene_models as rescue
-    from fasta_sequence_store import exclusive_lock, open_text
+    import rescue_split_replay
+    from fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from filesystem_io import scratch_build_directory
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_catalog import (
         SOURCE_RESCUE_LOCUS_ATTRIBUTES,
         _formatted_id,
+        _generated_annotation_source,
         build_catalog,
         indexed_genome,
         validate_candidate,
@@ -44,17 +62,28 @@ try:
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
+    from rescue_coding_paths import coding_overlap, coding_shape
     from rescue_homology_policy import homology_supported
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from rescue_prediction_cache import stream_json_array
     from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
+    from . import (
+        annevo_gene_models,
+        refinement_native_splits,
+        refinement_rna,
+        refinement_transcriptome_edges,
+        rescue_split_replay,
+    )
+    from . import gene_model_transcriptome as transcriptome
     from . import rescue_gene_models as rescue
-    from .fasta_sequence_store import exclusive_lock, open_text
+    from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from .filesystem_io import scratch_build_directory
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_catalog import (
         SOURCE_RESCUE_LOCUS_ATTRIBUTES,
         _formatted_id,
+        _generated_annotation_source,
         build_catalog,
         indexed_genome,
         validate_candidate,
@@ -67,6 +96,7 @@ except ImportError:
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
+    from .rescue_coding_paths import coding_overlap, coding_shape
     from .rescue_homology_policy import homology_supported
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from .rescue_prediction_cache import stream_json_array
@@ -74,6 +104,8 @@ except ImportError:
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
+CONCRETE_CDS = re.compile('[ACGT]+')
+OWNERSHIP_ATTRIBUTES = frozenset(('ID', 'Parent', 'gene_id', 'transcript_id'))
 DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
                 minimum_coverage=0.70, minimum_identity=0.50, minimum_broad_coverage=0.90,
                 minimum_lower_coverage_identity=0.70, max_intron=20000,
@@ -87,12 +119,17 @@ _RECEIPT_SNAPSHOT = None
 _INPUT_SNAPSHOT = None
 
 
+def _receipt_verifier(cpus):
+    """Bound parallel full-byte member hashing by the allocated CPUs."""
+    return functools.partial(rescue.verified, hash_workers=min(cpus, 4))
+
+
 @contextlib.contextmanager
-def invocation_context():
+def invocation_context(cpus=1):
     """Retain immutable dependency proofs only within an explicit command."""
     global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
     previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
-    snapshot = ReceiptSnapshot(rescue.verified)
+    snapshot = ReceiptSnapshot(_receipt_verifier(cpus))
     inputs = RefinementInputSnapshot()
     _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = {}, snapshot
     _INPUT_SNAPSHOT = inputs
@@ -124,7 +161,7 @@ def implementation():
                sys.modules[build_store.__module__])
     support = Path(__file__).parent
     dependencies = ('cds_model_normalisation.py', 'gff_feature_structure.py', 'gff_attribute_syntax.py',
-                    'fasta_sequence_store.py', 'species_labeling.py', 'pairwise_synteny.py',
+                    'fasta_sequence_store.py', 'filesystem_io.py', 'species_labeling.py', 'pairwise_synteny.py',
                     'representative_selection.py', 'rescue_anchor_admission.py', 'gene_model_species_profiles.py',
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
@@ -132,8 +169,9 @@ def implementation():
                     'rescue_homology_policy.py', 'rescue_path_compatibility.py', 'rescue_boundary_revalidation.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
-                    'refinement_input_snapshot.py', 'annevo_gene_models.py', 'oriongeno_runtime.py', 'oriongeno_model_profiles.py', 'transcript_utrs.py', 'genome_sequence_identity.py',
-                    'gene_model_source_retention.py')
+                    'refinement_input_snapshot.py', 'refinement_native_splits.py', 'rescue_split_replay.py', 'annevo_gene_models.py', 'oriongeno_runtime.py', 'oriongeno_model_profiles.py', 'transcript_utrs.py', 'genome_sequence_identity.py',
+                    'gene_model_source_retention.py', 'gene_model_transcriptome.py', 'rename_rnabloom_transcripts.py',
+                    'model_protein_correspondence.py', 'refinement_rna.py', 'refinement_transcriptome_edges.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -168,10 +206,137 @@ def revision_models(request, name):
     return iter_revision_models(directory)
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, **parameters):
+def read_model_publication(path, receipt_sha, *, required=True):
+    receipt = (path.parent / 'receipt.json').read_bytes()
+    if hashlib.sha256(receipt).hexdigest() != receipt_sha:
+        raise ValueError('Rescue worker receipt changed during planning: ' + str(path.parent))
+    expected = json.loads(receipt)['files'].get(path.name)
+    if expected is None:
+        if required:
+            raise ValueError('Rescue has no verified candidate publication: ' + str(path))
+        return [], None
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError('Candidates differ from the verified rescue publication: ' + str(path))
+    return json.loads(data), expected
+
+
+def freeze_model_reviews(approvals, anchor_root, receipts, publication, label):
+    approvals = Path(approvals).resolve()
+    data = approvals.read_bytes()
+    rows = list(csv.DictReader(io.StringIO(data.decode(), newline=''), delimiter='\t'))
+    if not rows or any(set(row) != {'species', 'candidate_id'} or not all(row.values()) for row in rows):
+        raise ValueError(label + ' approvals require species and candidate_id columns and at least one row')
+    requested = defaultdict(set)
+    for row in rows:
+        name, identifier = row['species'], row['candidate_id']
+        if name not in receipts:
+            raise ValueError(label + ' approval requires completed rescue for species: ' + name)
+        if identifier in requested[name]:
+            raise ValueError('Duplicate ' + label.lower() + ' approval: ' + identifier)
+        requested[name].add(identifier)
+    publications = {str(approvals): hashlib.sha256(data).hexdigest()}
+    selected = {}
+    for name, identifiers in sorted(requested.items()):
+        path = anchor_root / 'rescued' / name / publication
+        rows, expected = read_model_publication(path, receipts[name])
+        candidates = {row['candidate_id']: row for row in rows}
+        claimed = set()
+        selected[name] = []
+        for identifier in sorted(identifiers):
+            if identifier not in candidates:
+                raise ValueError('Unknown ' + label.lower() + ' candidate for ' + name + ': ' + identifier)
+            candidate = candidates[identifier]
+            owners = {row['gene_id'] for row in candidate['owner_overlap']}
+            if owners & claimed:
+                raise ValueError('Approved ' + label.lower() + ' candidates share a source gene: ' + identifier)
+            claimed.update(owners)
+            selected[name].append(candidate)
+        publications[str(path)] = expected
+    return selected, publications
+
+
+def same_species_split_hits(review, species):
+    """Nominate a continuous coding path spanning exactly two source models."""
+    if len(review['cds']) != 1 or len(review['owner_overlap']) != 2:
+        return []
+    return [hit for hit in review['support']
+            if hit['donor'] == species and hit['coverage'] >= .90 and hit['identity'] >= .80]
+
+
+def freeze_split_donors(options, oriongeno, anchor_root, anchor_plan_sha, sources, rescue_proof):
+    queries, same_species = defaultdict(set), defaultdict(set)
+    predictions = (oriongeno or {}).get('predictions', {})
+    for name, rows in options.items():
+        for row in rows:
+            same_species[name].update(hit['query'] for hit in same_species_split_hits(row, name))
+            if name in predictions:
+                for hit in row['support']:
+                    if hit['donor'] != name:
+                        queries[hit['donor']].add(hit['query'])
+    for donor, wanted in same_species.items():
+        if wanted:
+            queries[donor].update(wanted)
+    proteins, loci = {}, {}
+    for donor, identifiers in sorted(queries.items()):
+        directory = anchor_root / 'prepared' / donor
+        if donor not in sources or not rescue.verified_dependency(
+                rescue_proof, directory, {'plan': anchor_plan_sha, 'species': donor}):
+            raise ValueError('Split merge donor preparation is incomplete: ' + donor)
+        proteins[donor] = {identifier: sequence for identifier, _, sequence in
+                          fasta_records(directory / 'genes.pep') if identifier in identifiers}
+        if same_species[donor]:
+            mapped = defaultdict(set)
+            for row in read_table(directory / 'genes.id_map.tsv'):
+                if row['status'] == 'selected' and row['jcvi_id'] in same_species[donor]:
+                    mapped[row['jcvi_id']].add(row['locus_id'])
+            loci[donor] = {query: next(iter(ids)) for query, ids in mapped.items() if len(ids) == 1}
+    return proteins, loci
+
+
+def freeze_native_split_panel(oriongeno, sources, anchor_root, anchor_sha, rescue_donors, proof):
+    """Bind donor proteins and executable to the same immutable refinement inputs."""
+    cohorts = {}
+    for name in (oriongeno or {}).get('predictions', {}):
+        available = rescue_donors.get(name, ()) if anchor_root else sources.keys()
+        donors = sorted(set(available) & sources.keys() - {name})
+        if len(donors) >= 2:
+            cohorts[name] = donors
+    if not cohorts:
+        return {}, []
+    executable = shutil.which('diamond')
+    if not executable:
+        raise ValueError('DIAMOND is required to evaluate OrionGeno split models')
+    proteins, positions, id_maps, files = {}, {}, {}, []
+    if anchor_root:
+        for donor in sorted({d for cohort in cohorts.values() for d in cohort}):
+            directory = anchor_root / 'prepared' / donor
+            if not rescue.verified_dependency(proof, directory, {'plan': anchor_sha, 'species': donor}):
+                raise ValueError('Native coding-path donor preparation is incomplete: ' + donor)
+            proteins[donor] = str((directory / 'genes.pep').resolve())
+            positions[donor] = str((directory / 'genes.bed').resolve())
+            id_maps[donor] = str((directory / 'genes.id_map.tsv').resolve())
+            files.extend((proteins[donor], positions[donor], id_maps[donor], str(directory / 'receipt.json')))
+    return {'donors': cohorts, 'proteins': proteins, 'positions': positions, 'id_maps': id_maps,
+            'executable': {'path': executable, 'sha256': digest(executable)}}, files
+
+
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, transcriptome_inputs=None, rna_bam_dir=None, transcriptome_assembly_dir=None,
+         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, species_tree=None, cpus=1, **parameters):
+    if type(cpus) is not int or cpus < 1:
+        raise ValueError('--cpus must be positive')
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    with exclusive_lock(root / '.plan.lock'):
+    with exclusive_lock(root / '.plan.lock'), ReceiptSnapshot(_receipt_verifier(cpus)) as rescue_proof:
+        transcriptome_sources = {}
+        transcriptome_proof = FreshDigestBatch()
+        if transcriptome_inputs:
+            transcriptome_inputs = Path(transcriptome_inputs).resolve()
+            transcriptome_proof.read([transcriptome_inputs])
+            transcriptome_sources = transcriptome.read_sources(transcriptome_inputs)
+        receipts = {}
+        pool = None
+        genomic_targets = []
         if rescue_output:
             if inputs:
                 raise ValueError('Choose --inputs or --rescue-output; explicit inputs must not be silently ignored')
@@ -179,17 +344,34 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             # Consume the frozen producer; its schema, receipts and inputs are
             # verified below. A downstream catalogue update does not rerun it.
             anchors = rescue.load(anchor_root, inspect_only=True)
+            anchor_plan_sha = rescue.plan_digest(anchor_root, anchors)
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
+            pool = anchors['request'].get('fixed_donor_pool')
+            if donor_plan and (not pool or Path(donor_plan).resolve() != Path(pool['root'])):
+                raise ValueError('Refinement donor plan must match the rescue donor plan')
+            if pool:
+                genomic_targets = anchors['species']
+                if target and target not in genomic_targets:
+                    raise ValueError('Requested refinement target does not match the rescue target')
+                if len(genomic_targets) != 1 or not augmented.is_dir():
+                    raise ValueError('Fixed-panel refinement requires completed rescue for exactly one genomic target')
+                target, = genomic_targets
+                used = set(anchors['donors'][target])
+                if used != set(pool['species']) - {target}:
+                    raise ValueError('Rescue donors differ from the fixed panel')
+                sources = {name: sources[name] for name in [target, *sorted(used)]}
             revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if augmented.exists():
-                receipts = {}
                 for name in anchors['species']:
                     directory = anchor_root / 'rescued' / name
-                    if not rescue.verified(directory, rescue.rescue_key(anchor_root, anchors, name)):
+                    worker_key = rescue.rescue_key(anchor_root, anchors, name, dependency_snapshot=rescue_proof)
+                    if not rescue.verified_dependency(rescue_proof, directory, worker_key):
                         raise ValueError('Missing-gene rescue incomplete or corrupt: ' + name)
-                    receipts[name] = digest(directory / 'receipt.json')
+                    receipt_path = directory / 'receipt.json'
+                    receipts[name] = digest(receipt_path)
+                    rescue_proof.check({receipt_path: receipts[name]})
                     files.append(str(directory / 'receipt.json'))
                     revision_path = directory / 'revision_candidates.json'
                     if (directory / 'model_store/manifest.json').is_file():
@@ -203,11 +385,11 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                             raise ValueError('Rescue revisions are not a verified worker publication: ' + name)
                         revision_candidates[name] = str(revision_path.resolve())
                         files.append(str(revision_path.resolve()))
-                augmented_key = {'plan': digest(anchor_root / 'plan.json'), 'rescue_receipts': receipts}
-                if not rescue.verified(augmented, augmented_key):
+                augmented_key = {'plan': anchor_plan_sha, 'rescue_receipts': receipts}
+                if not rescue.verified_dependency(rescue_proof, augmented, augmented_key):
                     raise ValueError('Augmented rescue inputs incomplete or corrupt')
                 rows = read_table(augmented / 'inputs.tsv')
-                if len(rows) != len(sources) or {row['species'] for row in rows} != set(sources):
+                if len(rows) != len(anchors['species']) or {row['species'] for row in rows} != set(anchors['species']):
                     raise ValueError('Augmented rescue input species disagree with the anchor plan')
                 for row in rows:
                     source = sources[row['species']]
@@ -226,7 +408,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                     if donor not in sources:
                         raise ValueError('Rescue revision donor is absent from the frozen cohort: ' + donor)
                     directory = anchor_root / 'prepared' / donor
-                    if not rescue.verified(directory, {'plan': digest(anchor_root / 'plan.json'), 'species': donor}):
+                    if not rescue.verified_dependency(rescue_proof, directory, {'plan': augmented_key['plan'], 'species': donor}):
                         raise ValueError('Rescue revision donor preparation is incomplete: ' + donor)
                     metadata = {role: str((directory / filename).resolve()) for role, filename in
                                 (('mapping', 'genes.id_map.tsv'), ('protein', 'genes.pep'), ('receipt', 'receipt.json'))}
@@ -235,10 +417,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         else:
             anchor_root = None
             revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
-            if not inputs:
-                raise ValueError('Provide --inputs or --rescue-output')
             sources = {}
-            for row in read_table(inputs):
+            for row in read_table(inputs) if inputs else ():
                 name = row['species']
                 rescue.safe_token(name, 'species')
                 if name in sources:
@@ -250,9 +430,58 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                 sources[name] = {'species': name, 'fasta': resolve_path(row.get('cds', row.get('fasta', ''))),
                                  'gff': resolve_path(row['gff']), 'genome': resolve_path(row['genome']),
                                  'genetic_code': int(row.get('genetic_code') or 1)}
-            files = [str(Path(inputs).resolve())]
-        if not sources:
-            raise ValueError('No species')
+            files = [str(Path(inputs).resolve())] if inputs else []
+            if donor_plan:
+                if inputs:
+                    raise ValueError('Fixed-panel genomic refinement requires a completed fixed-panel rescue')
+                donor_root = Path(donor_plan).resolve(strict=True)
+                donors = rescue.load(donor_root, inspect_only=True)
+                if donors['request'].get('fixed_donor_pool'):
+                    raise ValueError('A target rescue plan cannot define a donor panel')
+                pool = {'root': str(donor_root), 'species': donors['species'],
+                        'plan_sha256': rescue.plan_digest(donor_root, donors)}
+                sources = copy.deepcopy(donors['request']['sources'])
+        if transcriptome_assembly_dir and not transcriptome_inputs and not genomic_targets:
+            if pool and not target:
+                raise ValueError('Use --target to select one assembly from a fixed-panel assembly directory')
+            transcriptome_sources, prepared_files = transcriptome.prepare_assemblies(
+                transcriptome_assembly_dir, {} if pool else sources, root / 'assembly_inputs', assembly_cpus, assembly_genetic_codes,
+                transcriptome_proof, **({'only': target} if target else {}))
+            files.extend(prepared_files)
+        if pool:
+            if not genomic_targets:
+                for name in transcriptome_sources:
+                    sources.pop(name, None)
+            fixed_donors = sorted(sources.keys() - set(genomic_targets))
+            targets = sorted(set(genomic_targets) | transcriptome_sources.keys())
+            if len(targets) != 1 or (genomic_targets and transcriptome_sources):
+                raise ValueError('Use a separate fixed-panel refinement output for each target')
+            if target and targets != [target]:
+                raise ValueError('Requested refinement target is absent from the inputs')
+            if edges:
+                raise ValueError('Fixed-panel refinement uses the rescue or protein correspondence')
+            donor_root = Path(pool['root'])
+            if root.is_relative_to(donor_root) or donor_root.is_relative_to(root):
+                raise ValueError('Use separate refinement and donor plan directories')
+            donor_plan_path = str(donor_root / 'plan.json')
+            donor_record = rescue.load(donor_root, inspect_only=True)
+            if rescue.plan_digest(donor_root, donor_record) != pool['plan_sha256']:
+                raise ValueError('Frozen donor plan changed')
+            expected_donors = {sources[name][role]: donor_record['request']['files'][sources[name][role]]
+                               for name in fixed_donors for role in ('fasta', 'gff', 'genome')}
+            transcriptome_proof.read(expected_donors, expected=expected_donors)
+            transcriptome_proof.read([donor_plan_path], expected={donor_plan_path: pool['plan_sha256']})
+            files.append(donor_plan_path)
+        elif target:
+            raise ValueError('--target requires a fixed donor plan')
+        if sources.keys() & transcriptome_sources.keys():
+            raise ValueError('A species may occur in only one of the genomic and transcriptome inputs')
+        if not sources and not transcriptome_sources:
+            raise ValueError('Provide species through --inputs, --rescue-output or --transcriptome-inputs')
+        if transcriptome_sources:
+            if transcriptome_inputs:
+                files.append(str(transcriptome_inputs))
+            files.extend(s[k] for s in transcriptome_sources.values() for k in ('fasta', 'transcript_gene_map'))
         inherited = {k: v for k, v in anchors['request']['parameters'].items() if k.startswith('terminal_')} if anchor_root else {}
         params = {**DEFAULTS, **inherited, **parameters}
         if params['policy'] not in {'longest', 'conserved'} or params['mode'] not in {'off', 'audit', 'conservative'}:
@@ -268,29 +497,106 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if any(int(params[k]) < 1 for k in ('min_support', 'max_intron', 'max_interval', 'candidate_limit')) or params['padding'] < 0:
             raise ValueError('Invalid resource/evidence bound')
         files += [s[k] for s in sources.values() for k in ('fasta', 'gff', 'genome')]
-        profiles = (read_profiles(species_profiles, sources) if species_profiles else
+        prediction_sources = {n: sources[n] for n in genomic_targets} if pool else sources
+        profiles = (read_profiles(species_profiles, prediction_sources) if species_profiles else
                     copy.deepcopy(anchors['request'].get('species_profiles', {})) if anchor_root else {})
         for optional in (edges, rna, species_profiles):
             if optional:
                 files.append(str(Path(optional).resolve()))
-        import annevo_gene_models
+        rna_bams = refinement_rna.discover(rna_bam_dir, prediction_sources) if rna_bam_dir else {}
+        files.extend(path for entries in rna_bams.values() for entry in entries for path in entry.values() if path)
         inherited_annevo = anchors['request'].get('annevo') if anchor_root else None
         if inherited_annevo:
             annevo_gene_models.verify_inputs(inherited_annevo)
         annevo_table = annevo_inputs or (inherited_annevo['table'] if inherited_annevo else None)
-        annevo = annevo_gene_models.freeze_inputs(annevo_table, sources) if annevo_table else None
+        annevo = annevo_gene_models.freeze_inputs(annevo_table, prediction_sources) if annevo_table else None
         if annevo:
             annevo_gene_models.verify_inputs(annevo)
             files.extend(annevo['files'])
         inherited_oriongeno = anchors['request'].get('oriongeno') if anchor_root else None
         if inherited_oriongeno:
             annevo_gene_models.verify_inputs(inherited_oriongeno)
-        oriongeno = (annevo_gene_models.freeze_inputs(oriongeno_inputs, sources, engine='oriongeno')
+        oriongeno = (annevo_gene_models.freeze_inputs(oriongeno_inputs, prediction_sources, engine='oriongeno')
                      if oriongeno_inputs else copy.deepcopy(inherited_oriongeno))
         if oriongeno:
             files.extend(oriongeno['files'])
-        tool = shutil.which('miniprot') if params['mode'] != 'off' else None
-        request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
+        genomic_prediction = bool(genomic_targets if pool else sources) and params['mode'] != 'off'
+        tool = shutil.which('miniprot') if genomic_prediction else None
+        reviews, publications, claimed = {}, {}, set()
+        for key, approvals, publication, label in (
+            ('split_model_merges', split_model_merges, 'split_model_candidates.json', 'Split model'),
+            ('model_repairs', model_repairs, 'model_repair_candidates.json', 'Model repair'),
+        ):
+            if not approvals:
+                continue
+            if not receipts or params['mode'] != 'conservative':
+                raise ValueError(label + ' approvals require completed --rescue-output and --mode conservative')
+            selected, proof = freeze_model_reviews(approvals, anchor_root, receipts, publication, label)
+            owners = {(name, owner['gene_id']) for name, candidates in selected.items()
+                      for candidate in candidates for owner in candidate['owner_overlap']}
+            if owners & claimed:
+                raise ValueError('Approved repair and merge share a source gene: ' + str(sorted(owners & claimed)))
+            claimed.update(owners)
+            reviews[key] = selected
+            publications.update(proof)
+            files.extend(proof)
+        if params['mode'] == 'conservative':
+            for key, publication in (('automatic_model_repairs', 'model_repair_candidates.json'),
+                                     ('automatic_split_merges', 'split_model_candidates.json')):
+                automatic = {}
+                for name, receipt_sha in sorted(receipts.items()):
+                    path = anchor_root / 'rescued' / name / publication
+                    rows, expected = read_model_publication(path, receipt_sha, required=False)
+                    candidates = []
+                    for row in rows:
+                        if any((name, owner['gene_id']) in claimed for owner in row['owner_overlap']):
+                            continue
+                        support = row['support']
+                        if key == 'automatic_model_repairs':
+                            if row['kind'] != 'coding_path':
+                                continue
+                            support = [hit for hit in support if hit.get('syntenic_locus') or hit.get('reciprocal_locus')]
+                        if (len({hit['donor'] for hit in support} - {name}) >= 2
+                                or key == 'automatic_split_merges' and same_species_split_hits(row, name)):
+                            candidates.append(row)
+                    if candidates:
+                        automatic[name] = candidates
+                        publications[str(path)] = expected
+                        files.append(str(path))
+                if automatic:
+                    reviews[key] = automatic
+        split_donor_proteins, split_same_species_loci = freeze_split_donors(
+            reviews.get('automatic_split_merges', {}), oriongeno, anchor_root, anchor_plan_sha if anchor_root else None,
+            sources, rescue_proof)
+        native_split_panel, native_split_publications = {}, {}
+        if params['mode'] == 'conservative' and oriongeno:
+            for name, prediction in oriongeno['predictions'].items():
+                published = (rescue_split_replay.read_publication(
+                    anchor_root, name, anchor_plan_sha, receipts[name], sources[name],
+                    oriongeno['files'][prediction['gff']], {**params, **profiles.get(name, {})}, transcriptome_proof)
+                    if name in receipts else None)
+                if published is not None:
+                    native_split_publications[name], proof_files = published
+                    files.extend(proof_files)
+            native_split_panel, donor_files = freeze_native_split_panel(
+                oriongeno, sources, anchor_root, anchor_plan_sha if anchor_root else None,
+                anchors['donors'] if anchor_root else {}, rescue_proof)
+            files.extend(donor_files)
+            if native_split_panel:
+                guide = (anchors['request'].get('guide_tree_receipt')
+                         if not species_tree and anchor_root else None)
+                tree = (Path(species_tree).resolve(strict=True) if species_tree else
+                        Path(guide).parent / 'guide_tree.nwk' if guide else
+                        anchor_root / 'selection.nwk' if anchor_root else None)
+                if tree and (species_tree or guide or tree.is_file()):
+                    version = transcriptome_proof.read([str(tree)])[str(tree)]
+                    if guide and version != anchors['request']['files'].get(str(tree)):
+                        raise ValueError('Frozen rescue guide tree changed: ' + str(tree))
+                    native_split_panel['sister_clades'] = refinement_native_splits.sister_clades(
+                        tree, native_split_panel['donors'], midpoint_root=bool(guide))
+                    native_split_panel['tree_rooting'] = 'midpoint' if guide else 'as_supplied'
+                    files.append(str(tree))
+        request = {'schema': SCHEMA, 'sources': sources, 'files': transcriptome_proof.read(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
                    'rna': str(Path(rna).resolve()) if rna else None, 'species_profiles': profiles,
@@ -298,23 +604,82 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
+        if anchor_root:
+            rescue.require_same_key(anchor_plan_sha, request['files'][str(anchor_root / 'plan.json')])
+        if any(request['files'][path] != expected for path, expected in publications.items()):
+            raise ValueError('Reviewed candidate publication changed during planning')
+        request.update(reviews)
+        if native_split_publications:
+            request['native_split_publications'] = native_split_publications
+        if native_split_panel:
+            request['native_split_panel'] = native_split_panel
+        if split_donor_proteins:
+            request['split_merge_donor_proteins'] = split_donor_proteins
+        if split_same_species_loci:
+            request['split_merge_same_species_loci'] = split_same_species_loci
+        if rna_bams:
+            request['rna_bams'] = rna_bams
         if annevo:
             request['annevo'] = annevo
         if oriongeno:
             request['oriongeno'] = oriongeno
-        if not edges and not anchor_root:
+        if transcriptome_sources:
+            request['transcriptome_sources'] = transcriptome_sources
+        if pool:
+            request['target_species'] = targets
+            request['fixed_donors'] = fixed_donors
+            request['donor_plan_path'] = donor_plan_path
+        if not edges and transcriptome_sources and len(sources) + len(transcriptome_sources) > 1:
+            diamond = shutil.which('diamond')
+            if not diamond:
+                raise ValueError('DIAMOND is required to infer transcriptome correspondence')
+            request['transcriptome_diamond'] = {'path': diamond, 'sha256': digest(diamond)}
+        if not edges and not anchor_root and not transcriptome_sources:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
-        if params['mode'] != 'off' and not tool:
+        if genomic_prediction and not tool:
             raise ValueError('miniprot is required for prediction')
+        transcriptome_proof.check()
+        rescue_proof.check_all()
         path = root / 'plan.json'
         if path.exists():
             previous = json.loads(path.read_text())
             if previous['request'] != request:
                 raise ValueError('Frozen refinement plan differs; use a new output directory')
             return previous
-        value = {'request': request, 'species': sorted(sources)}
+        value = {'request': request, 'species': sorted(sources.keys() | transcriptome_sources.keys())}
         atomic_json(path, value, immutable=True)
         return value
+
+
+def target_species(value):
+    return value['request'].get('target_species', value['species'])
+
+
+def donor_cache(request):
+    return Path(request['donor_plan_path']).parent.parent / 'gene_model_refinement_donor_cache'
+
+
+def donor_catalog_key(request, name):
+    source = request['sources'][name]
+    return {'schema': 1, 'species': name, 'genetic_code': source['genetic_code'],
+            'files': {role: request['files'][source[role]] for role in ('fasta', 'gff', 'genome')},
+            'implementation': request['implementation'], 'dependencies': request['dependencies']}
+
+
+def donor_catalog_relative(request, name):
+    key = json.dumps(donor_catalog_key(request, name), sort_keys=True).encode()
+    return Path('catalog') / hashlib.sha256(key).hexdigest()
+
+
+def catalog_directory(root, value, name):
+    request = value['request']
+    if name in request.get('fixed_donors', ()):
+        return donor_cache(request) / donor_catalog_relative(request, name)
+    return root / 'catalog' / name
+
+
+def catalog_hashes(root, value):
+    return {name: digest(catalog_directory(root, value, name) / 'receipt.json') for name in value['species']}
 
 
 def load(root, names=None):
@@ -330,28 +695,44 @@ def load(root, names=None):
     request = value['request']
     if request['schema'] != SCHEMA or request['implementation'] != implementation() or request['dependencies'] != dependency_identities():
         raise ValueError('Refinement implementation changed; use a new output directory')
-    species_paths = {source[k] for source in request['sources'].values() for k in ('fasta', 'gff', 'genome')}
+    source_paths = {name: [source[k] for k in ('fasta', 'gff', 'genome')]
+                    for name, source in request['sources'].items()}
+    source_paths.update({name: [source[k] for k in ('fasta', 'transcript_gene_map')]
+                         for name, source in request.get('transcriptome_sources', {}).items()})
+    species_paths = set(chain.from_iterable(source_paths.values()))
     native_groups = [request.get(engine, {}).get('predictions', {}) for engine in ('annevo', 'oriongeno')]
     species_paths.update(prediction[k] for native in native_groups for prediction in native.values() for k in ('gff', 'receipt'))
+    bam_paths = {n: {path for entry in entries for path in entry.values() if path}
+                 for n, entries in request.get('rna_bams', {}).items()}
+    species_paths.update(path for paths in bam_paths.values() for path in paths)
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
-        files.update({request['sources'][n][k]: request['files'][request['sources'][n][k]] for n in names for k in ('fasta', 'gff', 'genome')})
+        files.update({path: request['files'][path] for name in names for path in source_paths[name]})
         files.update({native[n][k]: request['files'][native[n][k]] for native in native_groups for n in names if n in native for k in ('gff', 'receipt')})
+        files.update({path: request['files'][path] for n in names for path in bam_paths.get(n, ())})
     if _INPUT_SNAPSHOT is None:
         if digest_paths(files) != files:
             raise ValueError('Frozen refinement input changed')
     else:
         _INPUT_SNAPSHOT.verify_files(files)
-    tool = request['miniprot']
-    if tool and digest(tool['path']) != tool['sha256']:
-        raise ValueError('Frozen predictor changed')
+    executables = [request.get(key) for key in ('miniprot', 'transcriptome_diamond')]
+    executables.append(request.get('native_split_panel', {}).get('executable'))
+    for tool in executables:
+        if not tool:
+            continue
+        if _INPUT_SNAPSHOT is not None:
+            _INPUT_SNAPSHOT.verify_predictor(tool['path'], tool['sha256'])
+        elif digest(tool['path']) != tool['sha256']:
+            raise ValueError('Frozen predictor changed: ' + tool['path'])
     return value
 
 
-def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
+def stage(root, relative, key, builder, names=None, prepared_snapshot=None, *, cpus=1):
     dependencies = key.get('dependencies', {})
-    snapshots = {root / 'catalog' / name / 'receipt.json': expected
-                 for name, expected in dependencies.get('catalog', {}).items()}
+    catalog_deps = dependencies.get('catalog', {})
+    value = json.loads((root / 'plan.json').read_text()) if catalog_deps else None
+    snapshots = {catalog_directory(root, value, name) / 'receipt.json': expected
+                 for name, expected in catalog_deps.items()}
     snapshots.update({root / directory / 'receipt.json': expected
                       for directory, expected in dependencies.get('index', {}).items()})
     for field, directory in (('correspondence', 'correspondence'), ('initial', 'selection_initial'), ('selection', 'selection_final')):
@@ -419,17 +800,48 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
 
-    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
-    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
+    options = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
+    if receipt_snapshot is not None:
+        options['verify'] = receipt_snapshot.verify_reusable
+    if cpus > 1:
+        options['hash_workers'] = min(cpus, 4)
+    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **options)
 
 
 @invocation_cached
 def catalog_species(root, value, name):
-    source = value['request']['sources'][name]
+    request = value['request']
+    if name in request.get('fixed_donors', ()):
+        source = request['sources'][name]
+
+        def build_donor(tmp):
+            catalog = build_catalog(name, source['fasta'], source['gff'], source['genome'], source['genetic_code'])
+            for locus in catalog['loci']:
+                locus['fixed_representative'] = True
+            write_catalog(catalog, tmp)
+
+        def guard():
+            load(root, [name])
+
+        options = {'verify': _RECEIPT_SNAPSHOT.verify_reusable} if _RECEIPT_SNAPSHOT is not None else {}
+        return rescue.stage(donor_cache(request), donor_catalog_relative(request, name),
+                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard, **options)
+
     def build(tmp):
+        transcriptome_source = value['request'].get('transcriptome_sources', {}).get(name)
+        if transcriptome_source:
+            write_catalog(transcriptome.build_catalog(name, transcriptome_source), tmp)
+            return
+        source = value['request']['sources'][name]
         catalog = build_catalog(name, source['fasta'], source['gff'], source['genome'], source['genetic_code'])
-        if value['request']['rna']:
-            rna = rna_path_index(read_table(value['request']['rna']))
+        entries = value['request'].get('rna_bams', {}).get(name, [])
+        if value['request']['rna'] or entries:
+            evidence = read_table(value['request']['rna']) if value['request']['rna'] else []
+            evidence.extend(refinement_rna.evidence_rows(
+                name, source['genome'], entries,
+                (c for gene in catalog['loci'] if len(gene['candidates']) > 1 or any(
+                    c.get('rescue_alternative_coding_path') for c in gene['candidates']) for c in gene['candidates']), tmp))
+            rna = rna_path_index(evidence)
             for gene in catalog['loci']:
                 for candidate in gene['candidates']:
                     paths = rna_support(candidate, name, rna)
@@ -443,55 +855,165 @@ def catalog_species(root, value, name):
                     status = 'accepted' if candidate['quality'].get('valid_orf') else 'proposal'
                     set_representative_admission({'candidate': candidate, 'rna_paths': paths, 'status': status}, True, params)
         write_catalog(catalog, tmp)
-        # The integration contract is independent of catalog writer filenames.
-        atomic_json(tmp / 'catalog.json', catalog)
     return stage(root, Path('catalog') / name, {}, build, [name])
 
 
+def _build_catalog_worker(root, expected_plan, name):
+    with invocation_context():
+        value = load(root, [name])
+        rescue.require_same_key(expected_plan, value)
+        directory = catalog_species(root, value, name)
+        receipt = (directory / 'receipt.json').read_bytes()
+        request = value['request']
+        key = (donor_catalog_key(request, name) if name in request.get('fixed_donors', ())
+               else {'plan': rescue.plan_digest(root, value)})
+        rescue.require_same_key(key, json.loads(receipt)['key'])
+        return directory, hashlib.sha256(receipt).hexdigest()
+
+
+def _build_catalogs(root, value, names, cpus):
+    """Build independent cold catalogs within the command's resources."""
+    budget = os.environ.get('GG_MEM_TOOL_GB', '')
+    if cpus < 2 or len(names) < 2 or not budget.isdecimal() or int(budget) < 8:
+        return [catalog_species(root, value, name) for name in names]
+
+    directories = {name: catalog_directory(root, value, name) for name in names}
+    missing = [name for name, directory in directories.items() if not (directory / 'receipt.json').is_file()]
+    if len(missing) < 2:
+        return [catalog_species(root, value, name) for name in names]
+
+    # Estimate Python object storage from the annotation inputs, leaving space
+    # for the parent and decompression. RNA read evidence has a separate working set.
+    request = value['request']
+    assemblies = request.get('transcriptome_sources', {})
+    rna_bams = request.get('rna_bams', {})
+    annotation_sizes = {}
+    for name in missing:
+        if request.get('rna') or rna_bams.get(name):
+            return [catalog_species(root, value, name) for name in names]
+        if name in assemblies:
+            source, fields = assemblies[name], ('fasta', 'transcript_gene_map')
+        else:
+            source, fields = request['sources'][name], ('fasta', 'gff')
+        annotation_sizes[name] = sum(Path(source[field]).stat().st_size for field in fields)
+    workers = min(cpus, len(missing), 8)
+    # Start larger builds first so one late catalog cannot strand the other workers.
+    build_order = sorted(missing, key=annotation_sizes.__getitem__, reverse=True)
+    available = (int(budget) - 4) * 1024 ** 3
+    while workers > 1 and sum(annotation_sizes[name] for name in build_order[:workers]) * 64 > available:
+        workers -= 1
+    if workers < 2:
+        return [catalog_species(root, value, name) for name in names]
+
+    cold = set(missing)
+    for name in names:
+        if name not in cold:
+            directories[name] = catalog_species(root, value, name)
+
+    pending, receipts = deque(), {}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
+        for name in build_order:
+            pending.append(executor.submit(_build_catalog_worker, root, value, name))
+            if len(pending) >= workers * 2:
+                directory, sha = pending.popleft().result()
+                receipts[directory / 'receipt.json'] = sha
+        for future in pending:
+            directory, sha = future.result()
+            receipts[directory / 'receipt.json'] = sha
+    if _RECEIPT_SNAPSHOT is not None:
+        _RECEIPT_SNAPSHOT.verify(receipts)
+    return list(directories.values())
+
+
 @invocation_cached
-def catalog_index(root, value, predictions=False):
-    directories = [catalog_species(root, value, name) for name in value['species']]
-    dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']}}
+def catalog_index(root, value, predictions=False, *, cpus=1):
+    dependencies = {}
     if predictions:
-        for name in value['species']:
-            predict_species(root, value, name)
-        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
+        initial_db = catalog_index(root, value, cpus=cpus)
+        initial_receipt = (initial_db.parent / 'receipt.json').read_bytes()
+        initial_record = json.loads(initial_receipt)
+        initial_files = initial_record['files']
+        dependencies['index'] = {'catalog_index': hashlib.sha256(initial_receipt).hexdigest()}
+        for name in target_species(value):
+            predict_species(root, value, name, cpus)
+        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
+    else:
+        directories = _build_catalogs(root, value, value['species'], cpus)
+    dependencies['catalog'] = catalog_hashes(root, value)
+    if predictions and initial_record['key']['dependencies']['catalog'] != dependencies['catalog']:
+        raise ValueError('Initial refinement index catalog receipts changed before final indexing')
+
     def build(tmp):
-        db = tmp / 'loci.sqlite3'
-        summary = build_store(directories, db)
-        summary['database'] = str((root / ('catalog_index_final' if predictions else 'catalog_index') / 'loci.sqlite3').resolve())
         if predictions:
-            accepted_count = 0
-            with sqlite3.connect(db) as connection:
-                for name in value['species']:
-                    additions = json.loads((root / 'predictions' / name / 'predictions.json').read_text())
-                    by_gene = defaultdict(list)
-                    for model in additions:
-                        if model['status'] == 'accepted':
-                            by_gene[model['gene_id']].append(model['candidate'])
-                    for gene, candidates in by_gene.items():
-                        locus = json.loads(connection.execute('SELECT json FROM loci WHERE species=? AND gene_id=?', (name, gene)).fetchone()[0])
-                        locus['candidates'].extend(candidates)
-                        for candidate in candidates:
-                            connection.execute('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)', (name, candidate['candidate_id'], gene))
-                        serialized = json.dumps(locus, sort_keys=True)
-                        connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
-                        accepted_count += len(candidates)
-                        summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
-            summary['accepted_prediction_count'] = accepted_count
-            summary['candidate_count'] += accepted_count
+            raw_summary = (initial_db.parent / 'summary.json').read_bytes()
+            if hashlib.sha256(raw_summary).hexdigest() != initial_files['summary.json']:
+                raise ValueError('Initial refinement index summary changed during copying')
+            summary = json.loads(raw_summary)
+            overlays = catalog_prediction_overlays(root, target_species(value))
+            first_overlay = next(overlays, None)
+            summary['accepted_prediction_count'] = 0
+        # Without accepted predictions a verified sequential copy is all the
+        # final index needs. Keep SQLite updates on local scratch when present.
+        scratch = (contextlib.nullcontext(tmp) if predictions and first_overlay is None
+                   else scratch_build_directory(tmp))
+        with scratch as work:
+            db = work / 'loci.sqlite3'
+            if predictions:
+                copy_refinement_index(initial_db, db, initial_files[db.name])
+                if first_overlay is not None:
+                    apply_catalog_predictions(db, summary, chain((first_overlay,), overlays))
+            else:
+                summary = build_store(directories, db)
+            if work != tmp:
+                shutil.copyfile(db, tmp / db.name)
+            if work != tmp or predictions:
+                with (tmp / db.name).open('rb') as handle:
+                    os.fsync(handle.fileno())
+        summary['database'] = str((root / ('catalog_index_final' if predictions else 'catalog_index') / 'loci.sqlite3').resolve())
         atomic_json(tmp / 'summary.json', summary)
     directory = stage(root, 'catalog_index_final' if predictions else 'catalog_index', {'dependencies': dependencies}, build)
     return directory / 'loci.sqlite3'
 
 
-def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, params):
-    """Nominate existing nonanchor loci only between two conserved anchors.
+def catalog_prediction_overlays(root, species):
+    for name in species:
+        by_gene = defaultdict(list)
+        for model in stream_json_array(root / 'predictions' / name / 'predictions.json'):
+            if model['status'] == 'accepted':
+                by_gene[model['gene_id']].append(model['candidate'])
+        for gene, candidates in by_gene.items():
+            yield name, gene, candidates
 
-    A rank correspondence requires equal bounded counts and independent coding
-    similarity. Copy conflicts remain ambiguous when all block evidence merges.
-    """
-    result = []
+
+def apply_catalog_predictions(db, summary, overlays):
+    accepted_count = 0
+    with contextlib.closing(sqlite3.connect(db)) as connection, connection:
+        for name, gene, candidates in overlays:
+            locus = load_locus(connection, name, gene)
+            locus['candidates'].extend(candidates)
+            connection.executemany('INSERT INTO candidate_owners(species,candidate_id,gene_id) VALUES(?,?,?)',
+                                   ((name, candidate['candidate_id'], gene) for candidate in candidates))
+            serialized = json.dumps(locus, sort_keys=True)
+            connection.execute('UPDATE loci SET json=? WHERE species=? AND gene_id=?', (serialized, name, gene))
+            accepted_count += len(candidates)
+            summary['max_locus_json_bytes'] = max(summary['max_locus_json_bytes'], len(serialized.encode()))
+    summary['accepted_prediction_count'] = accepted_count
+    summary['candidate_count'] += accepted_count
+
+
+def copy_refinement_index(source, destination, expected_sha256):
+    """Copy and check a receipted refinement index in one pass."""
+    checksum = hashlib.sha256()
+    with source.open('rb') as original, destination.open('wb') as copy_file:
+        for chunk in iter(lambda: original.read(1024 * 1024), b''):
+            copy_file.write(chunk)
+            checksum.update(chunk)
+    if checksum.hexdigest() != expected_sha256:
+        raise OSError('Copied refinement SQLite index differs from its source database')
+
+
+def _flanked_locus_pairs(db, species_a, species_b, anchor_pairs, position_index, params):
+    """Pair existing nonanchor loci only between two conserved anchors."""
     def interior(species, left, right):
         positions, tracks = position_index[species]
         a, b = positions[left], positions[right]
@@ -515,22 +1037,34 @@ def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, p
             la, lb = load_locus(db, species_a, ga['gene_id']), load_locus(db, species_b, gb['gene_id'])
             ca = max(la['candidates'], key=lambda c: c.get('corrected_cds_length', len(c['cds'])))
             cb = max(lb['candidates'], key=lambda c: c.get('corrected_cds_length', len(c['cds'])))
-            score = pair_score(ca, cb)
-            if score.bounded or score.identity < params['minimum_identity'] or min(score.coverage_a, score.coverage_b) < 0.75:
-                continue
-            result.append(dict(species_a=species_a, gene_a=ga['gene_id'], species_b=species_b, gene_b=gb['gene_id'],
-                               weight=0.8, ambiguous=False,
-                               evidence={'kind': 'two_flanking_anchors', 'left': list(left), 'right': list(right),
-                                         'identity': score.identity, 'coverage_a': score.coverage_a, 'coverage_b': score.coverage_b}))
-    return result
+            yield (species_a, species_b, ga['gene_id'], gb['gene_id'], left, right), (ca, cb)
+
+
+def _flanked_edge(context, score, params):
+    if score.bounded or score.identity < params['minimum_identity'] or min(score.coverage_a, score.coverage_b) < 0.75:
+        return None
+    species_a, species_b, ga, gb, left, right = context
+    return dict(species_a=species_a, gene_a=ga, species_b=species_b, gene_b=gb, weight=0.8, ambiguous=False,
+                evidence={'kind': 'two_flanking_anchors', 'left': list(left), 'right': list(right),
+                          'identity': score.identity, 'coverage_a': score.coverage_a, 'coverage_b': score.coverage_b})
+
+
+def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, params):
+    """Require independent coding similarity after pairing equal bounded ranks."""
+    return [edge for context, (ca, cb) in _flanked_locus_pairs(db, species_a, species_b, anchor_pairs, position_index, params)
+            if (edge := _flanked_edge(context, pair_score(ca, cb), params)) is not None]
+
+
+def uses_rescue_correspondence(request):
+    return bool(request['rescue_output'] and (not request['edges'] or request.get('transcriptome_sources')))
 
 
 @invocation_cached
 def correspondence(root, value, cpus=1, comparison_cache=None):
-    db = catalog_index(root, value)
+    db = catalog_index(root, value, cpus=cpus)
     request = value['request']
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
-    if anchor_root and not request['edges']:
+    if uses_rescue_correspondence(request):
         anchor_plan = rescue.load(anchor_root, inspect_only=True)
         with PreparedSnapshot(anchor_root, anchor_plan, rescue) as snapshot:
             return _correspondence(root, value, db, cpus, comparison_cache, anchor_plan, snapshot)
@@ -539,26 +1073,36 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
 
 def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, prepared_snapshot=None):
     request = value['request']
-    dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+    dependencies = {'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     jobs = []
-    if anchor_root and not request['edges']:
+    if anchor_plan is not None:
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
+        dependencies['anchors'] = {}
         for job in jobs:
-            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
-                           prepared_snapshot=prepared_snapshot)
-        dependencies['anchors'] = {j['id']: digest(anchor_root / 'synteny' / j['id'] / 'receipt.json') for j in jobs}
+            directory = anchor_root / 'synteny' / job['id']
+            if 'fixed_donors' not in request:
+                rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
+                               prepared_snapshot=prepared_snapshot)
+            receipt = (directory / 'receipt.json').read_bytes()
+            if json.loads(receipt).get('key') != rescue.comparison_key(anchor_root, job, prepared_snapshot):
+                raise ValueError('Unverified synteny comparison: ' + job['id'])
+            dependencies['anchors'][job['id']] = hashlib.sha256(receipt).hexdigest()
         dependencies['prepared'] = {}
-        for name in value['species']:
+        anchor_species = sorted({job[side] for job in jobs for side in ('a', 'b')})
+        if 'fixed_donors' not in request:
+            anchor_species = sorted(request['sources'])
+        for name in anchor_species:
             prepared_snapshot.prepared(name)
             dependencies['prepared'][name] = prepared_snapshot.receipt_digest(name)
     def build(tmp):
         edges = []
-        valid = defaultdict(set)
-        for species, gene in iter_locus_keys(db):
-            valid[species].add(gene)
+        sequence_edges = set()
         if request['edges']:
+            valid = defaultdict(set)
+            for species, gene in iter_locus_keys(db):
+                valid[species].add(gene)
             for row in read_table(request['edges']):
                 a, b, ga, gb = (row[k] for k in ('species_a', 'species_b', 'gene_a', 'gene_b'))
                 if a == b or ga not in valid.get(a, set()) or gb not in valid.get(b, set()):
@@ -566,51 +1110,88 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
                 weight = float(row.get('weight') or 1)
                 if not math.isfinite(weight) or weight <= 0 or weight > 1:
                     raise ValueError('Invalid correspondence weight')
+                sequence_only = any(n in request.get('transcriptome_sources', {}) for n in (a, b))
+                ambiguity = (row.get('ambiguous') or '').strip().lower()
+                if sequence_only:
+                    pair = tuple(sorted(((a, ga), (b, gb))))
+                    if pair in sequence_edges or ambiguity not in {'', '0', '1', 'false', 'true', 'no', 'yes'}:
+                        raise ValueError('Duplicate or malformed transcriptome correspondence: ' + str(row))
+                    sequence_edges.add(pair)
                 edges.append(dict(species_a=a, gene_a=ga, species_b=b, gene_b=gb, weight=weight,
-                                  evidence=row.get('evidence') or 'user_frozen_synteny',
-                                  ambiguous=str(row.get('ambiguous', '')).lower() in {'1', 'true', 'yes'}))
-        else:
-            aliases = {}
-            for n in value['species']:
+                                  evidence=row.get('evidence') or ('user_frozen_orthology' if sequence_only else 'user_frozen_synteny'),
+                                  ambiguous=ambiguity in {'1', 'true', 'yes'}))
+                if sequence_only:
+                    edges[-1]['comparison_basis'] = 'protein_alignment'
+        if anchor_plan is not None:
+            aliases, position_index = {}, {}
+            for n in anchor_species:
                 prepared_snapshot.check([n])
-                lookup = {}
+                lookup, positions, tracks = {}, {}, defaultdict(list)
                 for g in iter_loci(db, n):
                     for token in {g['gene_id'], g['gene_id'].removeprefix(n + '_'),
                                   *(c['source_gene_id'] for c in g['candidates']), *(c.get('gene_token', '') for c in g['candidates'])}:
                         if token in lookup and lookup[token] != g['gene_id']:
                             raise ValueError('Ambiguous gene alias: ' + token)
                         lookup[token] = g['gene_id']
-                aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
-                              for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
-            position_index = {}
-            for n in value['species']:
-                positions, tracks = {}, defaultdict(list)
-                for g in iter_loci(db, n):
                     blocks = [b for c in g['candidates'] for b in c['blocks']]
                     if not blocks:
                         continue
-                    position = dict(gene_id=g['gene_id'], seqid=g['seqid'], start=min(b[0] for b in blocks), end=max(b[1] for b in blocks))
+                    position = dict(gene_id=g['gene_id'], seqid=g['seqid'], start=min(b[0] for b in blocks),
+                                    end=max(b[1] for b in blocks))
                     positions[g['gene_id']] = position
                     tracks[g['seqid']].append(position)
+                aliases[n] = {r['jcvi_id']: lookup.get(r['locus_id']) or lookup.get(r['original_id'])
+                              for r in read_table(anchor_root / 'prepared' / n / 'genes.id_map.tsv') if r['status'] == 'selected'}
                 ordered = {seqid: sorted(genes, key=lambda g: g['start']) for seqid, genes in tracks.items()}
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
-            with store_connection(db) as connection:
+            def score_inputs(connection):
                 for job in jobs:
-                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job, prepared_snapshot)):
-                        raise ValueError('Unverified synteny comparison')
-                    blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
+                    directory = anchor_root / 'synteny' / job['id']
+                    if _RECEIPT_SNAPSHOT is None:
+                        blocks = json.loads((directory / 'blocks.json').read_text())
+                    else:
+                        present, blocks = _RECEIPT_SNAPSHOT.read_json_member(
+                            directory / 'receipt.json', dependencies['anchors'][job['id']], 'blocks.json')
+                        if not present:
+                            raise ValueError('Synteny comparison has no receipted blocks')
                     for block in blocks:
                         anchor_pairs = [(aliases[job['a']].get(a), aliases[job['b']].get(b)) for a, b in block]
-                        edges.extend(infer_flanked_loci(connection, job['a'], job['b'], anchor_pairs, position_index, request['parameters']))
-                        for i, (a, b) in enumerate(block):
-                            ga, gb = aliases[job['a']].get(a), aliases[job['b']].get(b)
-                            if not ga or not gb:
-                                continue
-                            # Boundary anchors lack two independent flanks and are audit-only.
-                            edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
-                                              weight=1.0, evidence={'comparison': job['id'], 'anchors': len(block),
-                                                                  'left_flank': i > 0, 'right_flank': i + 1 < len(block)},
-                                              ambiguous=i == 0 or i + 1 == len(block)))
+                        yield from _flanked_locus_pairs(connection, job['a'], job['b'], anchor_pairs,
+                                                        position_index, request['parameters'])
+                        # Emit anchor evidence after its block's flanked pairs,
+                        # preserving which evidence wins a duplicate edge.
+                        yield (job, anchor_pairs), None
+
+            with store_connection(db) as connection:
+                for context, score in _ordered_scores(score_inputs(connection), pair_score, (), cpus):
+                    if score is not None:
+                        edge = _flanked_edge(context, score, request['parameters'])
+                        if edge is not None:
+                            edges.append(edge)
+                        continue
+                    job, anchor_pairs = context
+                    for i, (ga, gb) in enumerate(anchor_pairs):
+                        if not ga or not gb:
+                            continue
+                        # Boundary anchors lack two independent flanks and are audit-only.
+                        edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
+                                          weight=1.0, evidence={'comparison': job['id'], 'anchors': len(anchor_pairs),
+                                                              'left_flank': i > 0, 'right_flank': i + 1 < len(anchor_pairs)},
+                                          ambiguous=i == 0 or i + 1 == len(anchor_pairs)))
+        if request.get('transcriptome_diamond'):
+            with contextlib.ExitStack() as stack:
+                scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='transcriptome-proteins-', dir=tmp)))
+                executable = request['transcriptome_diamond']['path']
+                if 'target_species' in request:
+                    target, = request['target_species']
+                    donors = request['fixed_donors']
+                    edges.extend(refinement_transcriptome_edges.fixed_panel_edges(
+                        db, target, donors, executable, request['parameters'], scratch, cpus, donor_cache(request),
+                        {n: donor_catalog_key(request, n) for n in donors}, lambda: load(root)))
+                else:
+                    edges.extend(refinement_transcriptome_edges.infer_edges(
+                        db, value['species'], request['transcriptome_sources'], executable,
+                        request['parameters'], scratch, cpus))
         unique = {}
         for e in edges:
             key = tuple(sorted(((e['species_a'], e['gene_a']), (e['species_b'], e['gene_b']))))
@@ -666,28 +1247,70 @@ def prediction_donor_names(directory, name, species):
 
 
 @invocation_cached
-def select(root, value, predictions=False):
-    db = catalog_index(root, value, predictions)
-    directory = correspondence(root, value)
+def select(root, value, predictions=False, *, cpus=1):
+    db = catalog_index(root, value, predictions, cpus=cpus)
+    directory = correspondence(root, value, cpus)
     params = value['request']['parameters']
     dependencies = {'correspondence': digest(directory / 'receipt.json'),
-                    'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+                    'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     if predictions:
-        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
+        dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in target_species(value)}
+        initial = select(root, value, cpus=cpus)
+        dependencies['initial'] = digest(initial / 'receipt.json')
+
     def build(tmp):
-        edges = json.loads((directory / 'edges.json').read_text())
-        selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
-                                           min_support=params['min_support'], candidate_limit=params['candidate_limit'])
         if predictions:
-            repairs = (row for name in value['species']
+            count = json.loads((db.parent / 'summary.json').read_text())['accepted_prediction_count']
+            assembly_only = set(target_species(value)) <= value['request'].get('transcriptome_sources', {}).keys()
+            if assembly_only and count != 0:
+                raise ValueError('Assembly-only target has an unexpected genomic prediction')
+            if count == 0:
+                # Correspondence and indexed coding loci are unchanged. All
+                # same-coordinate repairs require an accepted prediction.
+                for filename in ('selection.json', 'representative_map.tsv'):
+                    shutil.copyfile(initial / filename, tmp / filename)
+                return
+        edges = json.loads((directory / 'edges.json').read_text())
+        # Graph components read loci in an order that is expensive on shared
+        # storage. Verify one sequential copy before opening it for selection.
+        scratch_context = (scratch_build_directory(db.parent) if 'fixed_donors' in value['request']
+                           else contextlib.nullcontext(db.parent))
+        with scratch_context as scratch:
+            selection_db = db
+            if scratch != db.parent:
+                receipt = (db.parent / 'receipt.json').read_bytes()
+                if hashlib.sha256(receipt).hexdigest() != dependencies['index'][db.parent.name]:
+                    raise ValueError('Refinement index receipt changed before selection')
+                selection_db = scratch / db.name
+                copy_refinement_index(db, selection_db, json.loads(receipt)['files'][db.name])
+            selection = select_from_store(selection_db, edges, policy=params['policy'], min_margin=params['min_margin'],
+                                          min_support=params['min_support'], candidate_limit=params['candidate_limit'])
+        if predictions:
+            repairs = (row for name in target_species(value)
                        for row in stream_json_array(root / 'predictions' / name / 'predictions.json')
                        if row.get('same_coordinate_source_repair'))
             selection = apply_same_coordinate_repairs(selection, repairs)
         atomic_json(tmp / 'selection.json', selection)
         rescue.write_tsv(tmp / 'representative_map.tsv', MAP_FIELDS,
                          [[r.get(k, '') for k in MAP_FIELDS] for r in selection['selections']])
-    return stage(root, 'selection_final' if predictions else 'selection_initial', {'dependencies': dependencies}, build)
+    return stage(root, 'selection_final' if predictions else 'selection_initial', {'dependencies': dependencies}, build, cpus=cpus)
+
+
+def complete_rna_paths(rows):
+    for row in rows:
+        blocks = row['cds_blocks']
+        if isinstance(blocks, str):
+            blocks = json.loads(blocks)
+        if not isinstance(blocks, list) or not blocks or row['strand'] not in {'+', '-'}:
+            raise ValueError('Invalid whole coding RNA path')
+        if any(not isinstance(b, list) or len(b) != 2 or any(type(v) is not int for v in b) or b[0] < 0 or b[1] <= b[0] for b in blocks):
+            raise ValueError('RNA coding intervals require integer zero-based half-open coordinates')
+        if any((a[1] > b[0] if row['strand'] == '+' else b[1] > a[0]) for a, b in zip(blocks, blocks[1:], strict=False)):
+            raise ValueError('RNA coding intervals must be disjoint and in transcript order')
+        count = int(row.get('count') or 1)
+        if count > 0:
+            yield (row['species'], row['seqid'], row['strand'], tuple(map(tuple, blocks))), row, count
 
 
 def rna_path_index(rows):
@@ -695,23 +1318,25 @@ def rna_path_index(rows):
     if isinstance(rows, dict):
         return rows
     index = defaultdict(set)
-    for row in rows:
-        blocks = json.loads(row['cds_blocks'])
-        if not isinstance(blocks, list) or not blocks or row['strand'] not in {'+', '-'}:
-            raise ValueError('Invalid whole coding RNA path')
-        if any(not isinstance(b, list) or len(b) != 2 or any(type(v) is not int for v in b) or b[0] < 0 or b[1] <= b[0] for b in blocks):
-            raise ValueError('RNA coding intervals require integer zero-based half-open coordinates')
-        if any((a[1] > b[0] if row['strand'] == '+' else b[1] > a[0]) for a, b in zip(blocks, blocks[1:], strict=False)):
-            raise ValueError('RNA coding intervals must be disjoint and in transcript order')
-        if int(row.get('count') or 1) > 0:
-            key = row['species'], row['seqid'], row['strand'], tuple(map(tuple, blocks))
-            index[key].add(row.get('transcript_id') or 'rna_path')
+    for key, row, _ in complete_rna_paths(rows):
+        index[key].add(row.get('transcript_id') or 'rna_path')
     return {key: sorted(values) for key, values in index.items()}
 
 
+def rna_witness_counts(rows):
+    counts = defaultdict(dict)
+    for key, row, count in complete_rna_paths(rows):
+        molecule = row.get('read_name') or row.get('transcript_id') or 'rna_path'
+        counts[key][molecule] = max(counts[key].get(molecule, 0), count)
+    return {key: sum(witnesses.values()) for key, witnesses in counts.items()}
+
+
+def rna_candidate_key(candidate, name):
+    return name, candidate['seqid'], candidate['strand'], tuple(tuple(b[:2]) for b in candidate['blocks'])
+
+
 def rna_support(candidate, name, rows):
-    key = name, candidate['seqid'], candidate['strand'], tuple(tuple(b[:2]) for b in candidate['blocks'])
-    return list(rna_path_index(rows).get(key, ()))
+    return list(rna_path_index(rows).get(rna_candidate_key(candidate, name), ()))
 
 
 def annotation_ownership_spans(gff_path, catalog):
@@ -727,7 +1352,7 @@ def annotation_ownership_spans(gff_path, catalog):
             f = line.rstrip().split('\t')
             if len(f) != 9:
                 raise ValueError('Invalid annotation row')
-            parsed = parse_gff_attributes(f[8])
+            parsed = parse_gff_attributes(f[8], keys=OWNERSHIP_ATTRIBUTES)
             attr = {key: values[0] for key, values in parsed.items() if values}
             identifier = attr.get('ID', attr.get('transcript_id', attr.get('gene_id', '')))
             declared = parsed.get('Parent', ()) + parsed.get('gene_id', ()) + parsed.get('transcript_id', ())
@@ -883,6 +1508,11 @@ def apply_same_coordinate_repairs(selection, prediction_rows):
 def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     """Require target ownership, intact genomic ORF and independent support."""
     rna_rows = rna_path_index(rna_rows)
+    models = iter(models)
+    try:
+        first_model = next(models)
+    except StopIteration:
+        return []
     loci = {g['gene_id']: g for g in catalog['loci']}
     # Freeze the same species/locus predicates once. Scanning a cohort-wide
     # correspondence graph for every predicted coding path is quadratic.
@@ -896,27 +1526,29 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                 ambiguous_loci.add(gene)
             else:
                 trusted_donors[gene].add(edge['species_' + other])
-    spans = []
+    tracks = defaultdict(list)
     for g in loci.values():
         blocks = [b for c in g['candidates'] for b in c['blocks']]
-        if blocks:
-            spans.append((g['seqid'], min(b[0] for b in blocks), max(b[1] for b in blocks), g['gene_id'],
-                          '.' if g.get('ambiguous_coordinates') else g.get('strand', '.'), (() if g.get('ambiguous_coordinates') or
-                            any(c.get('quality', {}).get('structure_problem') for c in g['candidates'])
-                            else tuple(tuple(b[:2]) for b in blocks))))
-    spans.extend((r['seqid'], r['start'], r['end'], r['gene_id'], r.get('strand', '.'),
-                  tuple(tuple(b[:2]) for b in r.get('cds_blocks', ()))) for r in catalog.get('annotation_spans', []))
-    tracks = defaultdict(list)
-    for seqid, start, end, owner, strand, blocks in spans:
-        tracks[seqid].append((start, end, owner, strand, blocks))
+        if not blocks:
+            continue
+        ambiguous = g.get('ambiguous_coordinates')
+        strand = '.' if ambiguous else g.get('strand', '.')
+        start = min(b[0] for b in blocks)
+        end = max(b[1] for b in blocks)
+        coding = (() if ambiguous or any(c.get('quality', {}).get('structure_problem') for c in g['candidates'])
+                  else tuple(tuple(b[:2]) for b in blocks))
+        tracks[g['seqid']].append((start, end, g['gene_id'], strand, coding))
+    for row in catalog.get('annotation_spans', []):
+        coding = tuple(tuple(b[:2]) for b in row.get('cds_blocks', ()))
+        tracks[row['seqid']].append((row['start'], row['end'], row['gene_id'], row.get('strand', '.'), coding))
     indexes = {}
     for seqid, rows in tracks.items():
-        ordered = sorted(rows)
+        rows.sort()
         maxima, maximum = [], 0
-        for _, end, *_ in ordered:
+        for _, end, *_ in rows:
             maximum = max(maximum, end)
             maxima.append(maximum)
-        indexes[seqid] = [r[0] for r in ordered], ordered, maxima
+        indexes[seqid] = [r[0] for r in rows], rows, maxima
     def foreign_overlap(seqid, strand, blocks, start, end, owner):
         starts, rows, maxima = indexes.get(seqid, ([], [], []))
         i = bisect.bisect_left(starts, end) - 1
@@ -929,7 +1561,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
             i -= 1
         return False
     grouped = {}
-    for m in models:
+    for m in chain((first_model,), models):
         g = loci[m['gene_id']]
         candidate = {'seqid': m['seqid'], 'strand': m['strand'], 'blocks': m['cds'], 'cds': m['sequence'],
                      'origin': 'predicted', 'source_gene_id': g['candidates'][0]['source_gene_id'],
@@ -963,34 +1595,44 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         # Protected exceptions cannot become normal genes through donor transfer.
         if any(c.get('quality', {}).get('annotated_pseudogene') or c.get('quality', {}).get('translation_exception') or c.get('quality', {}).get('annotated_exception') or c.get('quality', {}).get('sequence_exception') for c in g['candidates']):
             problems.append('protected_annotation_exception')
-        identity = {'assembly': genome_hash, 'gene': m['gene_id'], 'shape': shape, 'cds': candidate['cds']}
-        identifier = catalog['species'] + '_ggrefine_' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
-        candidate.update(candidate_id=identifier, source_transcript_id=identifier,
-                         coding_key=hashlib.sha256(json.dumps(shape).encode()).hexdigest())
-        candidate['quality'] = validate_candidate(candidate, catalog.get('genetic_code', 1))
+        key = m['gene_id'], shape
+        row = grouped.get(key)
+        # The first candidate's quality remains untouched until grouping ends.
+        # Different sequences at the same coordinates still run full QC.
+        if (row is not None and type(candidate['cds']) is str
+                and type(row['candidate']['cds']) is str and candidate['cds'] == row['candidate']['cds']):
+            candidate = row['candidate']
+            retention = row['source_structure_retention']
+            rna_paths = row['rna_paths']
+        else:
+            identity = {'assembly': genome_hash, 'gene': m['gene_id'], 'shape': shape, 'cds': candidate['cds']}
+            identifier = catalog['species'] + '_ggrefine_' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
+            candidate.update(candidate_id=identifier, source_transcript_id=identifier,
+                             coding_key=hashlib.sha256(json.dumps(shape).encode()).hexdigest())
+            candidate['quality'] = validate_candidate(candidate, catalog.get('genetic_code', 1))
+            rna_paths = rna_support(candidate, catalog['species'], rna_rows)
+            candidate['quality']['rna_supported'] = bool(rna_paths)
+            from gene_model_source_retention import source_structure_retention
+            retention = source_structure_retention(candidate, g['candidates'], catalog.get('genetic_code', 1))
         if not candidate['quality']['valid_orf']:
             problems.append('invalid_predicted_coding_path')
         if m['donor_species'] not in trusted_donors[m['gene_id']]:
             problems.append('untrusted_donor_correspondence')
-        candidate['quality']['rna_supported'] = bool(rna_support(candidate, catalog['species'], rna_rows))
         rna_confirmed_structure = (candidate['quality']['rna_supported']
                                    and any(p.endswith('_unconfirmed_coding_structure') for p in alignment_problems))
         if rna_confirmed_structure:
             alignment_problems = [p for p in alignment_problems if not p.endswith('_unconfirmed_coding_structure')]
-        from gene_model_source_retention import source_structure_retention
-        retention = source_structure_retention(candidate, g['candidates'], catalog.get('genetic_code', 1))
         explicit_intact_adoption = (params.get('isoform_adoption') == 'conservation_supported'
                                    and any(c['quality'].get('valid_orf') for c in g['candidates']))
         if not candidate['quality']['rna_supported'] and not retention['preserved'] and not explicit_intact_adoption:
             problems.append('unconfirmed_source_structure_change')
         if not candidate['quality']['rna_supported'] and any(c.get('quality', {}).get('sequence_mismatch') for c in owners):
             problems.append('unresolved_source_sequence_mismatch')
-        key = m['gene_id'], shape
-        if key not in grouped:
-            grouped[key] = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
-                            'donors': [], 'alignments': [], 'rna_paths': rna_support(candidate, catalog['species'], rna_rows),
-                            'source_structure_retention': retention}
-        row = grouped[key]
+        if row is None:
+            row = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
+                   'donors': [], 'alignments': [], 'rna_paths': rna_paths,
+                   'source_structure_retention': retention}
+            grouped[key] = row
         supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
         if supported:
             row['donors'].append(m['donor_species'])
@@ -1182,82 +1824,198 @@ def import_rescue_revisions(models, catalog, edges, params, genome, resolve_dono
     return validated, proposals
 
 
+def search_refinement_intervals(root, request, tmp, windows, proteins, genome, source, params, cpus):
+    if not windows:
+        return []
+    code = source['genetic_code']
+    intron = params['max_intron']
+    executable = request['miniprot']['path']
+    if 'fixed_donors' not in request:
+        return rescue.search_intervals(tmp, windows, proteins, genome, code, intron, cpus,
+                                       compact=True, executable=executable)
+    key = {'schema': 1, 'genome': request['files'][source['genome']], 'code': code, 'max_intron': intron,
+           'miniprot': request['miniprot']['sha256'], 'implementation': request['implementation'],
+           'windows': [[list(window), [[region['id'], region['donor'], region['query'],
+                         hashlib.sha256(proteins[region['donor']][region['query']].encode()).hexdigest()]
+                        for region in regions]] for window, regions in windows.items()]}
+    relative = Path('miniprot') / hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+
+    def build_raw(work):
+        models = rescue.search_intervals(work, windows, proteins, genome, code, intron, cpus,
+                                         compact=True, executable=executable)
+        atomic_json(work / 'raw_models.json', models)
+
+    def guard():
+        load(root)
+
+    cache = rescue.stage(donor_cache(request), relative, key, build_raw, guard, publication_guard=guard)
+    receipt_path = cache / 'receipt.json'
+    receipt_sha = digest(receipt_path)
+    with ReceiptSnapshot(rescue.verified) as proof:
+        if not rescue.verified_dependency(proof, cache, key):
+            raise ValueError('Unverified refinement predictor cache')
+        present, models = proof.read_json_member(receipt_path, receipt_sha, 'raw_models.json')
+        if not present:
+            raise ValueError('Refinement predictor cache lacks its models')
+        record = json.loads(receipt_path.read_bytes())
+        proof.check({receipt_path: receipt_sha})
+        for member in (rescue.INTERVAL_ARCHIVE, rescue.LOCAL_RECORDS):
+            shutil.copyfile(cache / member, tmp / member)
+            if digest(tmp / member) != record['files'][member]:
+                raise ValueError('Refinement predictor diagnostics changed during copy')
+    return models
+
+
+def _nomination_indexes(targets, baseline, donors, params):
+    """Find donor coding paths that warrant a new predictor search."""
+    searches = []
+    target_baseline = targets[baseline]
+    for index, candidate in enumerate(donors):
+        if not candidate['quality'].get('usable') or not candidate['protein']:
+            continue
+        baseline_score = None
+        discrepancy = (not target_baseline['quality'].get('valid_orf')
+                       or len(targets) < len(donors)
+                       or abs(len(candidate['protein']) - len(target_baseline['protein']))
+                       > max(3, len(candidate['protein']) * .05))
+        if not discrepancy:
+            baseline_score = pair_score(target_baseline, candidate)
+            discrepancy = (not baseline_score.bounded and baseline_score.identity >= params['minimum_identity']
+                           and (not homology_supported(min(baseline_score.coverage_a, baseline_score.coverage_b),
+                                                      baseline_score.identity, params)
+                                or (len(target_baseline['blocks']) > 1 and len(candidate['blocks']) > 1
+                                    and baseline_score.junction_similarity < 0.8)))
+        if not discrepancy:
+            continue
+        for known in targets:
+            if not known['quality'].get('valid_orf'):
+                continue
+            match = (baseline_score if known is target_baseline and baseline_score is not None
+                     else pair_score(known, candidate))
+            if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
+                break
+        else:
+            searches.append(index)
+    return searches
+
+
+def _score_batch(function, rows, options):
+    return [function(*row, *options) if row is not None else None for row in rows]
+
+
+def _ordered_scores(inputs, function, options, cpus):
+    """Score bounded batches while keeping database reads and result order local."""
+    batch_size = 64
+    minimum_parallel_edges = 512
+    initial = list(islice(inputs, minimum_parallel_edges)) if cpus > 1 else []
+    remaining = chain(initial, inputs)
+    if len(initial) < minimum_parallel_edges:
+        for context, row in remaining:
+            yield context, function(*row, *options) if row is not None else None
+        return
+
+    def consume(batch):
+        contexts, future = batch
+        yield from zip(contexts, future.result(), strict=True)
+
+    workers = min(cpus, 8)
+    pending = deque()
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
+        while batch := list(islice(remaining, batch_size)):
+            contexts, rows = zip(*batch, strict=True)
+            pending.append((contexts, executor.submit(_score_batch, function, rows, options)))
+            if len(pending) >= workers * 2:
+                yield from consume(pending.popleft())
+        while pending:
+            yield from consume(pending.popleft())
+
+
+def _ordered_nominations(inputs, params, cpus):
+    for context, result in _ordered_scores(inputs, _nomination_indexes, (params,), cpus):
+        yield context, result or []
+
+
 @invocation_cached
 def predict_species(root, value, name, cpus=1):
-    initial = select(root, value)
+    if name not in target_species(value):
+        raise ValueError('Donor-only species has no refinement prediction: ' + name)
+    initial = select(root, value, cpus=cpus)
     cat_dir = catalog_species(root, value, name)
-    db = catalog_index(root, value)
-    corr = correspondence(root, value)
+    db = catalog_index(root, value, cpus=cpus)
+    corr = correspondence(root, value, cpus)
     donor_names = prediction_donor_names(corr, name, value['species'])
-    params, source = parameters_for(value['request'], name), value['request']['sources'][name]
-    dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+    params, source = parameters_for(value['request'], name), value['request']['sources'].get(name)
+    dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': catalog_hashes(root, value),
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     revision_directory = revision_worker(value['request'], name)
     if revision_directory is not None:
         dependencies['rescue_workers'] = {name: digest(revision_directory / 'receipt.json')}
     def build(tmp):
-        if params['mode'] == 'off':
+        if params['mode'] == 'off' or source is None:
             atomic_json(tmp / 'predictions.json', [])
             return
         catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
         catalog['loci'] = list(iter_loci(db, name))
         edges = json.loads((corr / 'edges.json').read_text())
-        catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
-        loci = {(name, g['gene_id']): g for g in catalog['loci']}
-        decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
+        edges = [edge for edge in edges if edge.get('comparison_basis') != 'protein_alignment'
+                 and name in (edge['species_a'], edge['species_b'])]
+        loci = {g['gene_id']: g for g in catalog['loci']}
+        needed = {(edge['species_' + side], edge['gene_' + side])
+                  for edge in edges if not edge['ambiguous'] for side in ('a', 'b')}
+        # The receipted map contains every selection's ID and status without
+        # the cohort-wide scoring and audit payloads from selection.json.
+        with (initial / 'representative_map.tsv').open(newline='', encoding='utf-8') as handle:
+            decisions = {(row['species'], row['gene_id']): (row['candidate_id'], row['status'])
+                         for row in csv.DictReader(handle, delimiter='\t')
+                         if (row['species'], row['gene_id']) in needed}
         proteins, windows, queries = {}, defaultdict(list), {}
         proposals = []
-        with store_connection(db) as connection:
+        def scoring_inputs(connection):
             for edge in edges:
-                if edge['ambiguous'] or name not in {edge['species_a'], edge['species_b']}:
+                if edge['ambiguous']:
                     continue
                 target_side = 'a' if edge['species_a'] == name else 'b'
                 donor_side = 'b' if target_side == 'a' else 'a'
                 target_gene = edge['gene_' + target_side]
                 donor = edge['species_' + donor_side]
-                target = loci[name, target_gene]
+                target = loci[target_gene]
                 donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
-                target_decision = decisions[name, target_gene]
-                target_baseline = next(c for c in target['candidates']
-                                       if c['candidate_id'] == target_decision['candidate_id'])
-                repair_only = (target_decision['status'] == 'ambiguous_correspondence'
+                target_candidate_id, target_status = decisions[name, target_gene]
+                baseline = next(i for i, c in enumerate(target['candidates'])
+                                if c['candidate_id'] == target_candidate_id)
+                target_baseline = target['candidates'][baseline]
+                repair_only = (target_status == 'ambiguous_correspondence'
                                and same_coordinate_source_owner(
                                    {'seqid': target['seqid'], 'strand': target['strand'],
                                     'cds': target_baseline['blocks'], 'sequence': target_baseline['cds']},
                                    target, catalog.get('genetic_code')) is not None)
-                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or (target_decision['status'] == 'ambiguous_correspondence' and not repair_only) or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
-                    proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
+                if (target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates')
+                        or (target_status == 'ambiguous_correspondence' and not repair_only)
+                        or decisions[donor, donor_locus['gene_id']][1] == 'ambiguous_correspondence'):
+                    yield ({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor}, None)
                     continue
                 if not any(c['cds'] and c['blocks'] for c in target['candidates']):
-                    proposals.append({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor})
+                    yield ({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor}, None)
                     continue
                 if len(target['candidates']) > params['candidate_limit'] or len(donor_locus['candidates']) > params['candidate_limit']:
-                    proposals.append({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor})
+                    yield ({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor}, None)
                     continue
-                baseline = next(c for c in target['candidates'] if c['candidate_id'] == decisions[name, target_gene]['candidate_id'])
-                # Intact concordant single coding paths need no predictor process.
-                for candidate in donor_locus['candidates'][:params['candidate_limit']]:
-                    if not candidate['quality'].get('usable') or not candidate['protein']:
-                        continue
-                    discrepancy = not baseline['quality'].get('valid_orf') or len(target['candidates']) < len(donor_locus['candidates']) or abs(len(candidate['protein']) - len(baseline['protein'])) > max(3, len(candidate['protein']) * .05)
-                    if not discrepancy:
-                        score = pair_score(baseline, candidate)
-                        discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (not homology_supported(min(score.coverage_a, score.coverage_b), score.identity, params) or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
-                    if not discrepancy:
-                        continue
-                    represented = False
-                    for known in target['candidates']:
-                        if not known['quality'].get('valid_orf'):
-                            continue
-                        match = pair_score(known, candidate)
-                        if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
-                            represented = True
-                            break
-                    if represented:
-                        continue
-                    blocks = [b for c in target['candidates'] for b in c['blocks']]
-                    start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
+                yield ((target_gene, donor, target, donor_locus['candidates'], repair_only),
+                       (target['candidates'], baseline, donor_locus['candidates']))
+
+        with store_connection(db) as connection:
+            for context, searches in _ordered_nominations(scoring_inputs(connection), params, cpus):
+                if isinstance(context, dict):
+                    proposals.append(context)
+                    continue
+                if not searches:
+                    continue
+                target_gene, donor, target, candidates, repair_only = context
+                blocks = [b for c in target['candidates'] for b in c['blocks']]
+                start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
+                for index in searches:
+                    candidate = candidates[index]
                     if end - start > params['max_interval']:
                         proposals.append({'gene_id': target_gene, 'status': 'interval_too_large', 'donor': donor})
                         continue
@@ -1289,7 +2047,8 @@ def predict_species(root, value, name, cpus=1):
                 for region in regions:
                     region['end'] = end
                 bounded[seqid, start, end] = regions
-            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'], params['max_intron'], cpus) if windows else []
+            models = search_refinement_intervals(root, value['request'], tmp, bounded, proteins,
+                                                 genome, source, params, cpus)
             for model in models:
                 region = queries[model['query']]
                 model['seqid'] = region['seqid']
@@ -1328,6 +2087,10 @@ def predict_species(root, value, name, cpus=1):
                 validated.extend(imported)
                 proposals.extend(import_proposals)
         rna = read_table(value['request']['rna']) if value['request']['rna'] else []
+        rna.extend(refinement_rna.evidence_rows(name, source['genome'],
+                                               value['request'].get('rna_bams', {}).get(name, []), validated, tmp))
+        if validated:
+            catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         predictions = classify_predictions(validated, catalog, edges, params, rna, value['request']['files'][source['genome']])
         atomic_json(tmp / 'predictions.json', predictions)
         atomic_json(tmp / 'nominations.json', {'queries': list(queries.values()), 'proposals': proposals})
@@ -1335,7 +2098,7 @@ def predict_species(root, value, name, cpus=1):
                                          'rescue_revision_models': revision_count,
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
-    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names)
+    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names, cpus=cpus)
 
 
 def source_rescue_locus_provenance(gene):
@@ -1384,15 +2147,16 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     return ''.join(lines)
 
 
-def _gff_source_graph(original):
-    """Parse source relationships once without retaining derived view edits."""
+def _gff_source_graph(original, *, retain_attributes=True):
+    """Parse source relationships, retaining decoded attributes only for callers that need them."""
     records, parents, implicit = [], {}, {}
     lines = original.splitlines(keepends=True) if isinstance(original, str) else original
     for line in lines:
         if line.strip() == '##FASTA':
             break
         if line.startswith('#') or not line.strip():
-            records.append((line, None, {}, []))
+            attributes, parent_ids = ({}, []) if retain_attributes else (None, ())
+            records.append((line, None, attributes, parent_ids))
             continue
         fields = line.rstrip().split('\t')
         if len(fields) != 9:
@@ -1400,7 +2164,7 @@ def _gff_source_graph(original):
         is_gtf = bool(re.match(r'^\s*[^\s=;]+\s+', fields[8]))
         parsed = parse_gff_attributes(fields[8])
         attributes = {key: values[0] for key, values in parsed.items() if values}
-        parent_ids = list(parsed.get('Parent', ()))
+        parent_ids = parsed.get('Parent', ())
         tid, gid = attributes.get('transcript_id'), attributes.get('gene_id')
         # GTF encodes its graph on every child rather than requiring ID/Parent rows.
         if tid and not attributes.get('ID') and fields[2].lower().endswith(('rna', 'transcript')):
@@ -1409,7 +2173,7 @@ def _gff_source_graph(original):
             attributes['ID'] = gid
         if not parent_ids and tid:
             parent_ids = [gid] if attributes.get('ID') == tid else [tid]
-            parent_ids = list(filter(None, parent_ids))
+            parent_ids = tuple(filter(None, parent_ids))
         if tid and gid:
             parents.setdefault(tid, set()).add(gid)
             implicit.setdefault(tid, (gid, fields[0], fields[6], []) )[3].append((int(fields[3]), int(fields[4])))
@@ -1437,7 +2201,8 @@ def _gff_source_graph(original):
             if additions:
                 fields[8] = fields[8].rstrip(';') + ';' + ';'.join(additions)
                 line = '\t'.join(fields) + '\n'
-        records.append((line, fields, attributes, parent_ids))
+        records.append((line, fields, attributes if retain_attributes else identifier,
+                        list(parent_ids) if retain_attributes else parent_ids))
     return records, parents, implicit
 
 
@@ -1446,6 +2211,10 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     if synthetic_parents_only and not retain_all:
         raise ValueError('Synthetic parent export requires the complete source graph')
     records, parents, implicit = source_graph
+
+    def record_id(value):
+        return value.get('ID') if isinstance(value, dict) else value
+
     if retain_all:
         transcript_ids = set(transcript_ids) | set(implicit)
     ancestors, pending = set(), list(transcript_ids)
@@ -1461,43 +2230,48 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False,
     changed = True
     while changed and not retain_all:
         changed = False
-        for _, fields, attributes, parent_ids in records:
-            if fields is None or attributes.get('ID') in ancestors or attributes.get('ID') in excluded_coding_owners:
+        for _, fields, identifier, parent_ids in records:
+            identifier = record_id(identifier)
+            if fields is None or identifier in ancestors or identifier in excluded_coding_owners:
                 continue
             if descendants.intersection(parent_ids):
-                identifier = attributes.get('ID')
                 if identifier and identifier not in descendants:
                     descendants.add(identifier)
                     changed = True
     structural_parents = descendants | ancestors
-    lines, known_ids = [], {attrs['ID'] for _, f, attrs, _ in records if f is not None and 'ID' in attrs}
+    lines, known_ids = [], {identifier for _, fields, value, _ in records if fields is not None
+                           and (identifier := record_id(value)) is not None}
     gene_spans = defaultdict(list)
     for tid in sorted(transcript_ids & implicit.keys()):
         gid, seqid, strand, spans = implicit[tid]
+        if gid in known_ids and tid in known_ids:
+            continue
         start, end = min(a for a, _ in spans), max(b for _, b in spans)
-        gene_spans[(gid, seqid, strand)].append((start, end))
+        if gid not in known_ids:
+            gene_spans[(gid, seqid, strand)].append((start, end))
         if tid not in known_ids:
             kind = 'mRNA' if tid in coding_owners else 'transcript'
             lines.append(f'{seqid}\tGeneGalleon\t{kind}\t{start}\t{end}\t.\t{strand}\t.\tID={quote(tid, safe="._-:")};Parent={quote(gid, safe="._-:")};gene_id={quote(gid, safe="._-:")}\n')
-    for _, fields, attributes, parent_ids in records:
-        if (fields is not None and fields[2].lower().endswith(('rna', 'transcript'))
-                and (retain_all or attributes.get('ID') in selected_ancestors)):
+    for _, fields, identifier, parent_ids in records:
+        if (fields is not None and parent_ids and fields[2].lower().endswith(('rna', 'transcript'))
+                and (retain_all or record_id(identifier) in selected_ancestors)):
+            span = int(fields[3]), int(fields[4])
             for gid in parent_ids:
-                gene_spans[(gid, fields[0], fields[6])].append((int(fields[3]), int(fields[4])))
+                if gid not in known_ids:
+                    gene_spans[(gid, fields[0], fields[6])].append(span)
     synthesized_genes = []
     for (gid, seqid, strand), spans in sorted(gene_spans.items()):
-        if gid not in known_ids:
-            start, end = min(a for a, _ in spans), max(b for _, b in spans)
-            synthesized_genes.append(f'{seqid}\tGeneGalleon\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={quote(gid, safe="._-:")}\n')
+        start, end = min(a for a, _ in spans), max(b for _, b in spans)
+        synthesized_genes.append(f'{seqid}\tGeneGalleon\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={quote(gid, safe="._-:")}\n')
     lines = ['##gff-version 3\n'] + synthesized_genes + lines
     if synthetic_parents_only:
         return ''.join(lines)
-    for line, fields, attributes, parent_ids in records:
+    for line, fields, identifier, parent_ids in records:
         if fields is None:
             if not line.startswith('##gff-version'):
                 lines.append(line)
             continue
-        identifier = attributes.get('ID', '')
+        identifier = record_id(identifier) or ''
         structural = identifier in transcript_ids or identifier in ancestors
         keep = retain_all or structural or identifier in descendants or (identifier not in coding_owners and bool(descendants.intersection(parent_ids)))
         if keep:
@@ -1519,6 +2293,8 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
 
 
 def extend_gene_bounds(original, bounds):
+    if not bounds:
+        return original, []
     lines, changes = [], []
     for line in original.splitlines(keepends=True):
         if line.startswith('#') or not line.strip():
@@ -1526,7 +2302,7 @@ def extend_gene_bounds(original, bounds):
             continue
         fields = line.rstrip().split('\t')
         if len(fields) == 9 and fields[2].lower().endswith('gene'):
-            parsed = parse_gff_attributes(fields[8])
+            parsed = parse_gff_attributes(fields[8], keys={'ID', 'gene_id'})
             identifier = next(iter(parsed.get('ID', parsed.get('gene_id', ()))), None)
             if identifier in bounds:
                 start, end = bounds[identifier]
@@ -1539,9 +2315,8 @@ def extend_gene_bounds(original, bounds):
     return ''.join(lines), changes
 
 
-def analysis_coding_candidate(candidate, genetic_code=None):
+def analysis_coding_candidate(candidate, genetic_code=None, *, projection=False):
     """Clip only already-known partial codon bases for the CDS analysis view."""
-    from Bio.Seq import Seq
     quality = candidate.get('quality', {})
     expected = str(candidate.get('protein', '')).upper()
     if not quality.get('usable') or not expected or '*' in expected:
@@ -1560,7 +2335,14 @@ def analysis_coding_candidate(candidate, genetic_code=None):
     trailing = len(coding) % 3
     coding = coding[:len(coding) - trailing]
     code = int(genetic_code if genetic_code is not None else quality.get('genetic_code', 1))
-    if not coding or str(Seq(coding).translate(table=code)).removesuffix('*') != expected:
+    # Catalog-admitted ordinary DNA uses the same translation kernel as
+    # catalog construction. Preserve Biopython's handling of other spellings
+    # and code overrides for direct callers.
+    if code == 1 and CONCRETE_CDS.fullmatch(coding):
+        translated = translate_sequence_string(coding, code, False)
+    else:
+        translated = str(Seq(coding).translate(table=code)) if coding else ''
+    if translated.removesuffix('*') != expected:
         raise ValueError('Analysis CDS does not reproduce the admitted protein')
     def clip(amount, at_start):
         while amount:
@@ -1581,10 +2363,15 @@ def analysis_coding_candidate(candidate, genetic_code=None):
     for index, block in enumerate(blocks):
         block[2] = (3 - cumulative % 3) % 3
         cumulative += block[1] - block[0]
-        if index + 1 < len(blocks):
+        if not projection and index + 1 < len(blocks):
             following = blocks[index + 1]
             donor, acceptor = (block[1], following[0]) if strand == '+' else (block[0], following[1])
             junctions.append([donor, acceptor, cumulative % 3])
+    if projection:
+        # The analysis view consumes geometry and admission only.
+        return {'cds': coding, 'protein': expected, 'blocks': blocks, 'seqid': candidate['seqid'],
+                'strand': strand, 'source_transcript_id': candidate['source_transcript_id'],
+                'quality': {'usable': True}}
     result = copy.deepcopy(candidate)
     result.update(cds=coding, protein=expected, blocks=blocks, junctions=junctions,
                   analysis={'removed_first_bases': offset, 'removed_final_bases': trailing,
@@ -1607,14 +2394,14 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
         by_owner[owner] = candidate
         ordered = sorted(tuple(b) for b in candidate['blocks'])
         indexes[owner] = [b[0] for b in ordered], ordered
-    source = selected_gff_rows(selected_gff_text, set(by_owner))
+    source = _selected_gff_source_rows(_gff_source_graph(selected_gff_text, retain_attributes=False), set(by_owner))
     records, used_ids, owner_shapes, exported = [], set(), defaultdict(lambda: defaultdict(list)), defaultdict(list)
     for line in source.splitlines(keepends=True):
         if line.startswith('#') or not line.strip():
             records.append((line, None, {}, {}))
             continue
         fields = line.rstrip('\r\n').split('\t')
-        attributes = parse_gff_attributes(fields[8])
+        attributes = parse_gff_attributes(fields[8], keys=OWNERSHIP_ATTRIBUTES)
         identifier = next(iter(attributes.get('ID', ())), None)
         if identifier:
             used_ids.add(identifier)
@@ -1724,39 +2511,851 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
     return ''.join(lines)
 
 
-@invocation_cached
-def finalize(root, value):
-    final = select(root, value, predictions=True)
-    db = catalog_index(root, value, predictions=True)
+def source_phase_repair(candidate, species):
+    """A complete, source-matching CDS fixes conflicting numeric phases uniquely."""
+    quality = candidate['quality']
+    blocks = candidate['blocks']
+    sequence = candidate['cds']
+    if (not quality.get('phase_conflict') or not quality.get('has_start') or not quality.get('has_stop')
+            or quality.get('partial') or not blocks or blocks[0][2] != 0
+            or any(block[2] not in (0, 1, 2) for block in blocks)
+            or not any(record['cds'].upper() == sequence for record in candidate.get('source_cds', []))
+            or rescue.phase_conventions([{'start': a, 'end': b, 'phase': str(p)} for a, b, p in blocks])):
+        return None
+    fixed = rescue.coding_phases(blocks)
+    shape = candidate['seqid'], candidate['strand'], fixed
+    identifier = species + '_ggphase_' + hashlib.sha256(repr((candidate['source_gene_id'], shape)).encode()).hexdigest()[:16]
+    return {'candidate_id': identifier, 'kind': 'phase_only', 'adoption': 'automatic',
+            'basis': 'exact_source_cds', 'seqid': candidate['seqid'], 'strand': candidate['strand'],
+            'cds': fixed, 'cds_sha256': hashlib.sha256(sequence.encode()).hexdigest(), 'support': []}
+
+
+def automatic_coding_gain(original, checked, *, syntenic):
+    """Keep the intact source CDS or extend a partial model in the same frame."""
+    old, new = original['cds'], checked['sequence']
+    if len(new) - len(old) < 3 * max(15, .10 * len(old) / 3):
+        return False
+    _, in_frame = coding_overlap({**original, 'cds': original['blocks']}, checked)
+    quality = original['quality']
+    if quality['valid_orf'] or not syntenic:
+        return in_frame == len(old) and (new.endswith(old) or new.startswith(old))
+    blocks, repaired = original['blocks'], checked['cds']
+    start_side, stop_side = (0, 1) if original['strand'] == '+' else (1, 0)
+    same_start = blocks[0][start_side] == repaired[0][start_side]
+    same_stop = blocks[-1][stop_side] == repaired[-1][stop_side]
+    return (quality['partial'] and in_frame * 3 >= len(old) * 2
+            and ((quality['has_start'] and same_start) or (quality['has_stop'] and same_stop)))
+
+
+def repair_coordinates(review):
+    blocks = review['cds']
+    return {'seqid': review['seqid'], 'strand': review['strand'], 'cds': blocks,
+            'start': min(b[0] for b in blocks), 'end': max(b[1] for b in blocks)}
+
+
+def automatic_model_choices(options, originals, ownership, genome, code, params):
+    """Choose a unique qualifying path and keep competing qualifying paths unresolved."""
+    choices = []
+    for owner, rows in options.items():
+        original, chosen = originals[owner]
+        supported = []
+        for review in rows:
+            coordinates = repair_coordinates(review)
+            geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
+            if [row['gene_id'] for row in geometry] != [owner]:
+                continue
+            basis = review.get('basis', 'exact_source_cds')
+            if review['kind'] == 'phase_only':
+                if not exact:
+                    continue
+                # This path has exact source evidence rather than alignment metrics.
+                metrics = {'coverage': 0., 'identity': 0.}
+                checks = {**params, 'minimum_coverage': 0., 'minimum_identity': 0., 'minimum_broad_coverage': 0.}
+                support = []
+            else:
+                if exact or geometry != review['owner_overlap']:
+                    continue
+                support = [row for row in review['support']
+                           if owner in (row.get('syntenic_locus'), row.get('reciprocal_locus'))
+                           and row['donor'] != original['species']
+                           and homology_supported(row['coverage'], row['identity'], params)]
+                if len({row['donor'] for row in support}) < max(2, params['min_support']):
+                    continue
+                syntenic = len({row['donor'] for row in support if row.get('syntenic_locus') == owner}) >= max(2, params['min_support'])
+                basis = 'syntenic_cds_gain' if syntenic else 'reciprocal_cds_extension'
+                metrics, checks = support[0], params
+            checked = rescue.validate_model({**coordinates, 'coverage': metrics['coverage'],
+                                             'identity': metrics['identity'], 'frameshift': False},
+                                            genome, code, checks)
+            if (checked['problems'] or checked['cds'] != review['cds']
+                    or hashlib.sha256(checked['sequence'].encode()).hexdigest() != review['cds_sha256']):
+                continue
+            if review['kind'] == 'coding_path' and not automatic_coding_gain(original, checked, syntenic=syntenic):
+                continue
+            supported.append(({**review, 'owner_overlap': geometry, 'support': support,
+                               'adoption': 'automatic', 'basis': basis}, checked))
+        if len(supported) != 1:
+            continue
+        review, checked = supported[0]
+        if chosen['candidate_id'] == original['candidate_id'] or (
+                chosen['cds'] == checked['sequence'] and chosen['blocks'] == review['cds']
+                and chosen['seqid'] == review['seqid'] and chosen['strand'] == review['strand']):
+            choices.append((review, checked))
+    return choices
+
+
+def fragment_donor_span(aligner, protein, donor, params):
+    """Bound the union of credible optimal placements on the donor."""
+    if not protein or len(protein) * len(donor) > params.get('terminal_max_alignment_cells', 25_000_000):
+        return None
+    low, high = len(donor), 0
+    for index, alignment in enumerate(islice(aligner.align(protein, donor), 9)):
+        if index == 8:
+            return None
+        blocks = list(zip(*alignment.aligned, strict=True))
+        paired = sum(int(b - a) for (a, b), _ in blocks)
+        identical = sum(sum(x == y for x, y in zip(protein[a:b], donor[c:d], strict=True))
+                        for (a, b), (c, d) in blocks)
+        if paired * 3 < len(protein) * 2 or identical < paired * params['minimum_identity']:
+            return None
+        low = min(low, int(blocks[0][1][0]))
+        high = max(high, int(blocks[-1][1][1]))
+    return (low, high) if low < high else None
+
+
+def complementary_split_support(fragments, support, proteins, params):
+    """Require separate, ordered regions of the same donor for all fragments."""
+    aligner = PairwiseAligner(mode='local', match_score=2, mismatch_score=-1,
+                              open_gap_score=-5, extend_gap_score=-.5)
+    accepted = []
+    for hit in support:
+        donor = proteins.get(hit['donor'], {}).get(hit['query'], '').upper().removesuffix('*')
+        if not donor or set(donor) - set('ACDEFGHIKLMNPQRSTVWYX'):
+            continue
+        spans = []
+        for fragment in fragments:
+            span = fragment_donor_span(aligner, fragment['protein'], donor, params)
+            if span is None or (spans and spans[-1][1] > span[0]):
+                break
+            spans.append(span)
+        else:
+            accepted.append({**hit, 'fragment_donor_intervals': [
+                {'gene_id': fragment['source_gene_id'], 'start': start, 'end': end}
+                for fragment, (start, end) in zip(fragments, spans, strict=True)]})
+    return accepted
+
+
+def conserved_split_bridge(protein, donor, start, end, params):
+    """Require the bridge and flanking codons to align through one homologous segment."""
+    if len(protein) * len(donor) > params.get('terminal_max_alignment_cells', 25_000_000):
+        return None
+    aligner = PairwiseAligner(mode='global', match_score=2, mismatch_score=-1,
+                              open_gap_score=-5, extend_gap_score=-.5)
+    evidence, donor_start = [], None
+    for index, alignment in enumerate(islice(aligner.align(protein, donor), 9)):
+        if index == 8:
+            return None
+        pairs = {int(a + k): int(c + k) for (a, b), (c, _) in zip(*alignment.aligned, strict=True)
+                 for k in range(int(b - a))}
+        flank_start = pairs.get(start - 3)
+        if flank_start is None or any(pairs.get(i) != flank_start + offset
+                                     for offset, i in enumerate(range(start - 3, end + 3))):
+            return None
+        if donor_start is not None and donor_start != flank_start + 3:
+            return None
+        donor_start = flank_start + 3
+        coverage = len(pairs) / max(len(protein), len(donor))
+        identity = sum(protein[i] == donor[j] for i, j in pairs.items()) / len(pairs)
+        identical = sum(protein[i] == donor[pairs[i]] for i in range(start, end))
+        if (coverage < .90 or identity < .80 or identical * 4 < (end - start) * 3
+                or not homology_supported(coverage, identity, params)):
+            return None
+        evidence.append({'coverage': coverage, 'identity': identity, 'identical_bridge_residues': identical})
+    if not evidence:
+        return None
+    return {**min(evidence, key=lambda row: (row['coverage'], row['identity'])),
+            'candidate_interval': [start, end], 'donor_interval': [donor_start, donor_start + end - start]}
+
+
+def same_species_bridge_support(fragments, checked, hits, proteins, reference_by_query, code, params):
+    """Recheck a missing stop, a complete downstream model and a distinct intact copy."""
+    if len(checked['cds']) != 1 or len(fragments) != 2:
+        return []
+    first, second = fragments
+    if (first['quality']['has_stop'] or not second['quality']['valid_orf']
+            or any(len(fragment['blocks']) != 1
+                   or coding_overlap({**fragment, 'cds': fragment['blocks']}, checked)[1] != len(fragment['cds'])
+                   for fragment in fragments)):
+        return []
+    lower, upper, _ = checked['cds'][0]
+    if checked['strand'] == '+':
+        left, right = first['blocks'][0][1] - lower, second['blocks'][0][0] - lower
+    else:
+        left, right = upper - first['blocks'][0][0], upper - second['blocks'][0][1]
+    if left % 3 or right % 3 or right - left < 24:
+        return []
+    protein = str(Seq(checked['sequence']).translate(table=code)).removesuffix('*')
+    accepted = []
+    members = {fragment['source_gene_id'] for fragment in fragments}
+    for hit in complementary_split_support(fragments, hits, proteins, params):
+        reference = reference_by_query.get(hit['query'])
+        if reference is None or reference['source_gene_id'] in members:
+            continue
+        if (reference['seqid'] == checked['seqid']
+                and min(a for a, _, _ in reference['blocks']) < upper
+                and max(b for _, b, _ in reference['blocks']) > lower):
+            continue
+        bridge = conserved_split_bridge(protein, reference['protein'], left // 3, right // 3, params)
+        if bridge:
+            accepted.append({**hit, 'reference_gene_id': reference['source_gene_id'],
+                             'reference_transcript_id': reference['source_transcript_id'], 'coding_bridge': bridge})
+    return accepted
+
+
+def automatic_split_choices(options, originals, ownership, genome, code, params, species, *,
+                            prediction_gff=None, donor_proteins=None, same_species_references=None, native_paths=None):
+    """Combine published geometry with independent evidence for one complete CDS."""
+    choices = []
+    predictions = None
+    donor_proteins = donor_proteins or {}
+    same_species_references = same_species_references or {}
+    minimum_donors = max(2, params['min_support'])
+    for review in options:
+        members = {row['gene_id'] for row in review['owner_overlap']}
+        if not members <= originals.keys():
+            continue
+        fragments = sorted((originals[member] for member in members),
+                           key=lambda row: min(a for a, _, _ in row['blocks']),
+                           reverse=review['strand'] == '-')
+        intact = [row for row in fragments if row['quality']['valid_orf']]
+        if len(intact) > 1:
+            continue
+        coordinates = repair_coordinates(review)
+        if rescue.split_model_geometry(coordinates, ownership) != review['owner_overlap']:
+            continue
+        external = [row for row in review['support'] if row['donor'] != species
+                    and homology_supported(row['coverage'], row['identity'], params)]
+        if len({row['donor'] for row in external}) < minimum_donors:
+            external = []
+        same_species = [row for row in same_species_split_hits(review, species)
+                        if row['query'] in same_species_references
+                        and homology_supported(row['coverage'], row['identity'], params)]
+        if not (external or same_species):
+            continue
+        hit = (external or same_species)[0]
+        checked = rescue.validate_model({**coordinates, 'coverage': hit['coverage'],
+                                         'identity': hit['identity'], 'frameshift': False},
+                                        genome, code, params)
+        if (checked['problems'] or checked['cds'] != review['cds']
+                or hashlib.sha256(checked['sequence'].encode()).hexdigest() != review['cds_sha256']):
+            continue
+        for original in fragments:
+            _, in_frame = coding_overlap({**original, 'cds': original['blocks']}, checked)
+            length = len(original['cds'])
+            if original['quality']['valid_orf']:
+                if in_frame != length or len(checked['sequence']) <= length:
+                    break
+            elif in_frame * 3 < 2 * length:
+                break
+        else:
+            evidence = {'basis': 'independent_donors_complementary_fragments'}
+            support = external if not intact else []
+            if intact and external and prediction_gff and donor_proteins:
+                if predictions is None:
+                    predictions = defaultdict(list)
+                    if native_paths is None:
+                        native_paths = annevo_gene_models.read_paths(prediction_gff, genome, engine='oriongeno')
+                    for path in native_paths:
+                        predictions[coding_shape(path)].append(path['native_transcript_id'])
+                transcripts = predictions.get(coding_shape(checked))
+                if transcripts:
+                    complementary = complementary_split_support(fragments, external, donor_proteins, params)
+                    if len({row['donor'] for row in complementary}) >= minimum_donors:
+                        support = complementary
+                        evidence = {'basis': 'oriongeno_and_complementary_donors',
+                                    'oriongeno_transcripts': sorted(transcripts)}
+            if not support and same_species:
+                support = same_species_bridge_support(
+                    fragments, checked, same_species, donor_proteins, same_species_references, code, params)
+                evidence = {'basis': 'same_species_copy_and_conserved_coding_bridge'}
+            if support:
+                choices.append(({**review, **evidence, 'support': support, 'adoption': 'automatic'}, checked))
+    return choices
+
+
+def independent_source_phases(source_gff, options, originals):
+    """Return phase repairs whose CDS rows can be edited without affecting other transcripts."""
+    expected = {}
+    for owner, rows in options.items():
+        if rows[0]['kind'] == 'phase_only':
+            model = originals[owner][0]
+            expected[owner] = {(model['seqid'], model['strand'], a, b, model['source_transcript_id'])
+                               for a, b, _ in model['blocks']}
+    if not expected:
+        return set()
+    pending = set().union(*expected.values())
+    positions = {key[:4] for key in pending}
+    seen, ambiguous = set(), set()
+    with open_text(Path(source_gff)) as handle:
+        for line in handle:
+            if line.strip() == '##FASTA':
+                break
+            if line.startswith('#') or not line.strip():
+                continue
+            fields = line.rstrip().split('\t')
+            if len(fields) != 9 or fields[2] != 'CDS':
+                continue
+            locus = fields[0], fields[6], int(fields[3]) - 1, int(fields[4])
+            if locus not in positions:
+                continue
+            attrs = parse_gff_attributes(fields[8], keys={'Parent', 'transcript_id'})
+            parents = attrs.get('Parent') or attrs.get('transcript_id', ())
+            matches = {(*locus, parent) for parent in parents} & pending
+            if len(parents) != 1:
+                ambiguous.update(matches)
+            ambiguous.update(matches & seen)
+            seen.update(matches)
+    return {owner for owner, keys in expected.items() if keys <= seen and not keys & ambiguous}
+
+
+def adopt_published_native_splits(rows, originals, ownership, genome, code, params, name, excluded):
+    """Reuse protein evidence while checking current representative and genomic ownership."""
+    choices = []
+    for row in rows:
+        path = {**repair_coordinates(row), 'native_transcript_id': row['oriongeno_transcripts'][0]}
+        shape = coding_shape(path)
+        if shape in excluded:
+            continue
+        support = [hit for hit in row['support'] if hit['donor'] != name
+                   and homology_supported(hit['coverage'], hit['identity'], params)
+                   and hit['paired_coverage'] >= params['minimum_coverage']]
+        if len({hit['donor'] for hit in support}) < max(2, params['min_support']):
+            continue
+        nominated = refinement_native_splits.nominate([path], originals, ownership, genome, code, params, name, set())
+        if shape not in nominated:
+            continue
+        confirmed = nominated[shape]
+        if any(row[k] != confirmed['review'][k] for k in ('candidate_id', 'cds_sha256', 'owner_overlap')):
+            raise ValueError('Published OrionGeno split model changed: ' + row['candidate_id'])
+        choices.append(({**row, 'support': support}, confirmed['checked']))
+    return choices
+
+
+def native_rna_counts(request, name, paths, donor_search, genome, supplied):
+    """Check complete coding paths in the indexed target RNA, when present."""
+    entries = request.get('rna_bams', {}).get(name, [])
+    if not entries or not paths:
+        return supplied or {}
+    scratch = donor_search.directory.parent / (name + '.rna')
+    scratch.mkdir(exist_ok=True)
+    evidence = refinement_rna.evidence_rows(
+        name, request['sources'][name]['genome'], entries, paths, scratch, limit=2, genome=genome)
+    bam = rna_witness_counts(evidence)
+    # An explicit path table and BAM may describe the same molecules.
+    return {**(supplied or {}), **{key: max(count, (supplied or {}).get(key, 0)) for key, count in bam.items()}}
+
+
+def nominate_native_models(extensions, merges, originals, ownership, genome, code, params,
+                           request, name, rna_counts, automatic):
+    if not (extensions or merges):
+        return {}
+    rna_available = bool(request.get('rna_bams', {}).get(name)) or any(
+        key[0] == name for key in (rna_counts or {}))
+    existing = {coding_shape(review) for review, _ in automatic}
+    extensions = refinement_native_splits.nominate_extensions(
+        extensions, originals, genome, code, params, name, rna_available=rna_available)
+    joined = refinement_native_splits.nominate(
+        merges, originals, ownership, genome, code, params, name, existing,
+        rna_available=rna_available, intact_only=name in request.get('native_split_publications', {}))
+    return {shape: candidate for shape, candidate in (extensions | joined).items() if shape not in existing}
+
+
+def native_model_choices(proposals, params, request, name, donor_search, genome, rna_counts, *, batch=None):
+    if not proposals:
+        return []
+    hits = donor_search.support(name, proposals, params, batch=batch)
+    rna_paths = []
+    for shape in hits:
+        candidate = proposals[shape]
+        if candidate['protect_rna_paths']:
+            rna_paths.append({**candidate['checked'], 'blocks': candidate['checked']['cds']})
+            rna_paths.extend(candidate['protect_rna_paths'])
+    counts = native_rna_counts(request, name, rna_paths, donor_search, genome, rna_counts)
+    choices = []
+    for shape, support in hits.items():
+        candidate = proposals[shape]
+        review, checked = candidate['review'], candidate['checked']
+        if candidate['protect_rna_paths']:
+            count = counts.get(rna_candidate_key({**checked, 'blocks': checked['cds']}, name), 0)
+            if count < 2 or any(counts.get(rna_candidate_key(old, name), 0)
+                                for old in candidate['protect_rna_paths']):
+                continue
+            review = {**review, 'whole_cds_rna_witnesses': count}
+        choices.append(({**review, 'support': support}, checked))
+    return choices
+
+
+def prepare_reviewed_models(request, name, db, selected, *, donor_search=None, rna_counts=None, fission_decisions=None):
+    """Recheck merge and repair paths against the frozen target inputs."""
+    native = request.get('oriongeno', {}).get('predictions', {}).get(name)
+    if donor_search is None or name not in donor_search.panel['donors'] or not native:
+        return _prepare_reviewed_models(request, name, db, selected)
+    source = request['sources'][name]
+    with open_text(Path(source['gff'])) as handle:
+        ownership = rescue.OwnershipIndex(rescue.original_ownership(handle, rescue.attributes))
+    with indexed_genome(source['genome']) as genome:
+        paths = annevo_gene_models.read_paths(native['gff'], genome, engine='oriongeno')
+        extensions = defaultdict(list)
+        native_paths, fission_groups = refinement_native_splits.native_paths_by_ownership(
+            paths, ownership, include_merges=True, extensions=extensions)
+        return _prepare_reviewed_models(request, name, db, selected, donor_search=donor_search,
+                                        genome=genome, ownership=ownership, native_paths=native_paths,
+                                        fission_groups=fission_groups, extensions=extensions, rna_counts=rna_counts,
+                                        fission_decisions=fission_decisions)
+
+
+def _prepare_reviewed_models(request, name, db, selected, *, donor_search=None,
+                             genome=None, ownership=None, native_paths=None, fission_groups=None,
+                             extensions=None, rna_counts=None, fission_decisions=None):
+    merges = request.get('split_model_merges', {}).get(name, [])
+    repairs = request.get('model_repairs', {}).get(name, [])
+    source = request['sources'][name]
+    parameters = parameters_for(request, name)
+    targets = {row['gene_id'] for review in chain(merges, repairs) for row in review['owner_overlap']}
+    nominations = defaultdict(list)
+    for row in request.get('automatic_model_repairs', {}).get(name, []):
+        nominations[row['owner_overlap'][0]['gene_id']].append(row)
+    split_options = request.get('automatic_split_merges', {}).get(name, [])
+    published_native = request.get('native_split_publications', {}).get(name, [])
+    split_targets = {row['gene_id'] for review in chain(split_options, published_native) for row in review['owner_overlap']}
+    if native_paths and (name not in request.get('native_split_publications', {}) or
+                         request.get('rna_bams', {}).get(name) or any(key[0] == name for key in (rna_counts or {}))):
+        split_targets.update(owner['gene_id'] for path in native_paths for owner in ownership.overlapping(path))
+    split_targets.update(fission_groups or {})
+    split_targets.update(extensions or {})
+    owners, auto_originals, auto_options, split_originals = {}, {}, {}, {}
+    same_species_loci = request.get('split_merge_same_species_loci', {}).get(name, {})
+    reference_ids = set(same_species_loci.values())
+    donor_proteins = request.get('split_merge_donor_proteins', {})
+    reference_models = {}
+    seen_automatic, duplicate_automatic = set(), set()
+    for gene in iter_loci(db, name):
+        originals = [c for c in gene['candidates'] if c['origin'] == 'original']
+        ids = {row['source_gene_id'] for row in originals}
+        duplicate_automatic.update(ids & seen_automatic)
+        seen_automatic.update(ids)
+        if ids & targets:
+            if len(ids) != 1 or gene.get('ambiguous_coordinates') or ids & owners.keys():
+                raise ValueError('Ambiguous catalog ownership for reviewed model: ' + gene['gene_id'])
+            owners[next(iter(ids))] = gene
+            continue
+        if parameters['mode'] != 'conservative' or gene.get('ambiguous_coordinates') or len(originals) != 1:
+            continue
+        original = originals[0]
+        owner = original['source_gene_id']
+        if any(original['quality'].get(flag) for flag in (
+                'annotated_exception', 'structure_problem', 'internal_stop', 'ambiguous',
+                'invalid_base', 'translation_uncertain', 'phase_unresolved', 'sequence_mismatch')):
+            continue
+        chosen_id = selected[gene['gene_id']]['candidate_id']
+        if (owner in reference_ids and original['quality']['valid_orf']
+                and not any(_generated_annotation_source(label)
+                            for label in original.get('source_annotation_sources', ()))):
+            reference_models[owner] = original
+        if (owner in split_targets and chosen_id == original['candidate_id']
+                and original['quality']['usable']):
+            split_originals[owner] = original
+            owners[owner] = gene
+        phase = source_phase_repair(original, name)
+        options = [phase] if phase else nominations.get(owner, []) if original['quality']['usable'] else []
+        if options:
+            if owner in auto_originals:
+                auto_options.pop(owner, None)
+                continue
+            chosen = next(c for c in gene['candidates'] if c['candidate_id'] == chosen_id)
+            auto_originals[owner], auto_options[owner], owners[owner] = (original, chosen), options, gene
+    manual_owners = {owner: owners[owner] for owner in targets if owner in owners}
+    if targets != manual_owners.keys() or len({gene['gene_id'] for gene in manual_owners.values()}) != len(targets):
+        raise ValueError('Approved model owners do not match distinct catalog loci: ' + name)
+    for owner in duplicate_automatic:
+        auto_options.pop(owner, None)
+        split_originals.pop(owner, None)
+    same_species_references = {query: reference_models[locus] for query, locus in same_species_loci.items()
+                               if locus in reference_models and locus not in duplicate_automatic
+                               and reference_models[locus]['protein'] == donor_proteins.get(name, {}).get(query)}
+    independent = independent_source_phases(source['gff'], auto_options, auto_originals)
+    auto_options = {owner: rows for owner, rows in auto_options.items()
+                    if rows[0]['kind'] != 'phase_only' or owner in independent}
+    if not (targets or auto_options or split_originals):
+        return [], {}, [], [], []
+    if ownership is None:
+        with open_text(Path(source['gff'])) as handle:
+            ownership = rescue.OwnershipIndex(rescue.original_ownership(handle, rescue.attributes))
+    code = source['genetic_code']
+    new_genes, repaired, merge_audit, repair_audit, fission_audit, footprints = [], {}, [], [], [], []
+    genome_context = indexed_genome(source['genome']) if genome is None else contextlib.nullcontext(genome)
+    with genome_context as genome:
+        automatic = automatic_model_choices(auto_options, auto_originals, ownership, genome, code, parameters)
+        native = request.get('oriongeno', {}).get('predictions', {}).get(name, {})
+        automatic.extend(automatic_split_choices(
+            split_options, split_originals, ownership, genome, code, parameters, name,
+            prediction_gff=native.get('gff'), donor_proteins=donor_proteins,
+            same_species_references=same_species_references, native_paths=native_paths))
+        existing = {coding_shape(row) for row, _ in automatic if 'kind' not in row}
+        if published_native:
+            automatic.extend(adopt_published_native_splits(
+                published_native, split_originals, ownership, genome, code, parameters, name, existing))
+        native = nominate_native_models(
+            extensions or {}, native_paths or [], split_originals, ownership, genome, code, parameters,
+            request, name, rna_counts, automatic)
+        split_proposals = {}
+        if fission_groups:
+            blocked = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                             for row in chain(merges, repairs, (row for row, _ in automatic))])
+            split_proposals = refinement_native_splits.nominate_fissions(
+                fission_groups, split_originals, genome, code, parameters, blocked)
+        batch = None
+        if native and split_proposals:
+            proteins = [proposal['protein'] for proposal in native.values()]
+            for proposal in split_proposals.values():
+                proteins.extend((proposal['source_protein'], *proposal['proteins']))
+            batch = donor_search.search(proteins)
+        native_choices = native_model_choices(
+            native, parameters, request, name, donor_search, genome, rna_counts, batch=batch)
+        automatic.extend(native_choices)
+        automatic_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                                 for row, _ in automatic])
+        manual_paths = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                              for row in chain(merges, repairs)])
+        for review, checked in chain(((row, None) for row in chain(merges, repairs)), automatic):
+            identifier = review['candidate_id']
+            kind = review.get('kind')
+            blocks = review['cds']
+            coordinates = repair_coordinates(review)
+            if checked is not None:
+                if (automatic_paths.overlapping(coordinates, owner=identifier)
+                        or manual_paths.overlapping(coordinates)):
+                    continue
+                geometry, support = review['owner_overlap'], review['support']
+            else:
+                if kind:
+                    geometry, exact = rescue.model_repair_geometry(coordinates, ownership)
+                    if kind != ('phase_only' if exact else 'coding_path'):
+                        raise ValueError('Approved model repair type changed: ' + identifier)
+                else:
+                    geometry = rescue.split_model_geometry(coordinates, ownership)
+                if not geometry or geometry != review['owner_overlap']:
+                    raise ValueError('Approved model ownership changed: ' + identifier)
+                support = [row for row in review['support']
+                           if homology_supported(row['coverage'], row['identity'], parameters)]
+                if not support or (kind and len({r['donor'] for r in support} - {name}) < (
+                        1 if kind == 'phase_only' else max(2, parameters['min_support']))):
+                    raise ValueError('Approved model lacks required independent homology: ' + identifier)
+                checked = rescue.validate_model({**coordinates, 'coverage': support[0]['coverage'],
+                                                 'identity': support[0]['identity'], 'frameshift': False},
+                                                genome, code, parameters)
+            sequence = checked['sequence']
+            donors = sorted({row['donor'] for row in support})
+            if (checked['problems'] or checked['cds'] != blocks
+                    or hashlib.sha256(sequence.encode()).hexdigest() != review['cds_sha256']):
+                raise ValueError('Approved model no longer has a complete validated CDS: ' + identifier)
+
+            source_id, gene_id, gene_token, transcript = identifier, identifier, identifier, identifier + '.t1'
+            audit = {**review, 'species': name}
+            if kind:
+                source_id = geometry[0]['gene_id']
+                gene = owners[source_id]
+                gene_id = gene['gene_id']
+                gene_token = gene.get('gene_token', gene_id)
+                originals = [c for c in gene['candidates'] if c['origin'] == 'original']
+                if any(c['quality'].get('annotated_exception') for c in originals):
+                    raise ValueError('Approved model repair targets a protected annotation: ' + identifier)
+                if kind == 'phase_only':
+                    matches = [c for c in originals if
+                               [b[:2] for b in c['blocks']] == [b[:2] for b in blocks]
+                               and c['quality'].get('phase_conflict') and c['cds'] == sequence
+                               and any(row['cds'].upper() == sequence for row in c.get('source_cds', []))]
+                    if len(matches) != 1:
+                        raise ValueError('Phase-only repair requires one conflicting source model with identical CDS: ' + identifier)
+                    transcript = matches[0]['source_transcript_id']
+                audit['previous_candidate_id'] = selected[gene_id]['candidate_id']
+            elif identifier in selected:
+                raise ValueError('Approved split model ID collides with an existing catalog locus: ' + identifier)
+            automatic_adoption = review.get('adoption') == 'automatic'
+            origin = ('automatic_model_repair' if automatic_adoption else 'reviewed_model_repair') if kind else 'split_model_merge'
+            candidate = {'candidate_id': identifier, 'gene_id': gene_id, 'species': name,
+                         'source_gene_id': source_id, 'source_transcript_id': transcript, 'gene_token': gene_token,
+                         'seqid': review['seqid'], 'strand': review['strand'], 'blocks': blocks,
+                         'cds': sequence, 'origin': origin, 'support': {'donors': donors}}
+            if review.get('oriongeno_transcripts'):
+                candidate['support']['oriongeno'] = [
+                    {'native_transcript_id': label} for label in review['oriongeno_transcripts']]
+            candidate['quality'] = validate_candidate(candidate, code)
+            if not candidate['quality']['valid_orf'] or not candidate['protein']:
+                if review.get('adoption') == 'automatic':
+                    continue
+                raise ValueError('Approved model cannot be admitted for translation: ' + identifier)
+            audit.update(gene_id=gene_id, source_transcript_id=transcript)
+            if kind:
+                candidate['repair_kind'] = kind
+                repaired[gene_id] = candidate
+                repair_audit.append(audit)
+            else:
+                new_genes.append({'gene_id': identifier, 'seqid': review['seqid'], 'strand': review['strand'],
+                                  'candidates': [candidate]})
+                audit['replaced_gene_ids'] = [owners[row['gene_id']]['gene_id'] for row in geometry]
+                merge_audit.append(audit)
+            selected[gene_id] = {'species': name, 'gene_id': gene_id, 'candidate_id': identifier,
+                                 'source_transcript_id': transcript,
+                                 'status': 'repaired_model' if kind else 'merged_split_model',
+                                 'reason': ('automatic_model_repair' if kind else 'automatic_split_model_merge')
+                                 if automatic_adoption else
+                                 ('reviewed_rescue_model_repair' if kind else 'reviewed_rescue_split_model')}
+            footprints.append({**coordinates, 'gene_id': identifier})
+        if split_proposals:
+            # New native repairs are selected after the shared search. Their
+            # footprints still take precedence over a competing split.
+            blocked = rescue.OwnershipIndex([{**repair_coordinates(row), 'gene_id': row['candidate_id']}
+                                             for row, _ in native_choices])
+            proposals = {key: candidate for key, candidate in split_proposals.items()
+                         if not refinement_native_splits.fission_overlaps(
+                             candidate, split_originals[candidate['owner']], blocked)}
+            decisions = donor_search.fission_support(name, proposals, parameters, batch=batch)
+            ready = {proposals[key]['owner'] for key, record in decisions.items()
+                     if record['reason'] == 'supported_split'}
+            entries = request.get('rna_bams', {}).get(name, [])
+            rna_available = bool(entries) or any(path[0] == name for path in (rna_counts or {}))
+            counts = native_rna_counts(request, name, [split_originals[owner] for owner in ready],
+                                       donor_search, genome, rna_counts)
+            choices = defaultdict(list)
+            for key, record in decisions.items():
+                proposal = proposals[key]
+                owner = proposal['owner']
+                original = split_originals[owner]
+                witness_key = rna_candidate_key(original, name)
+                record.update(species=name, source_gene_id=owner,
+                              source_transcript_id=original['source_transcript_id'],
+                              replaced_splice=proposal['bridge'],
+                              oriongeno_transcripts=[p['native_transcript_id'] for p in proposal['paths']])
+                if record['reason'] == 'supported_split':
+                    count = counts.get(witness_key, 0)
+                    record['rna_witnesses'] = count
+                    record['target_rna_status'] = ('replicated_full_cds' if count >= 2 else 'one_full_cds_witness'
+                                                   if count == 1 else 'no_full_cds_witness'
+                                                   if rna_available else 'unavailable')
+                    if count:
+                        record['reason'] = ('target_fusion_supported_by_rna' if count >= 2
+                                            else 'possible_target_fusion_one_rna_witness')
+                    else:
+                        choices[owner].append(key)
+            unique = {owner: keys[0] for owner, keys in choices.items() if len(keys) == 1}
+            for keys in choices.values():
+                if len(keys) > 1:
+                    for key in keys:
+                        decisions[key]['reason'] = 'competing_splits'
+            fission_paths = rescue.OwnershipIndex([{**path, 'gene_id': owner}
+                                                 for owner, key in unique.items()
+                                                 for path in proposals[key]['paths']])
+            for owner, key in unique.items():
+                proposal, decision = proposals[key], decisions[key]
+                if any(fission_paths.overlapping(path, owner=owner) for path in proposal['paths']):
+                    decision['reason'] = 'overlapping_splits'
+                    continue
+                decision['reason'] = 'split_applied'
+                loci, audit = adopt_fused_model_split(
+                    name, proposal, decision['support'], owners[owner]['gene_id'], code, selected)
+                new_genes.extend(loci)
+                fission_audit.append({**decision, **audit})
+            if fission_decisions is not None:
+                fission_decisions.extend(decisions.values())
+    approved_paths = rescue.OwnershipIndex(footprints)
+    for path in footprints:
+        if approved_paths.overlapping(path, owner=path['gene_id']):
+            raise ValueError('Approved model coding paths overlap: ' + path['gene_id'])
+    return new_genes, repaired, merge_audit, repair_audit, fission_audit
+
+
+def adopt_fused_model_split(name, proposal, support, original, code, selected):
+    """Publish both validated replacements with new IDs and shared provenance."""
+    donors = [row['species'] for row in support]
+    genes, models = [], []
+    for path, overlap in zip(proposal['paths'], proposal['source_in_frame_bases'], strict=True):
+        key = original, coding_shape(path)
+        identifier = name + '_ggsplit_' + hashlib.sha256(repr(key).encode()).hexdigest()[:16]
+        if identifier in selected:
+            raise ValueError('Fused model split ID collides with an existing catalog locus: ' + identifier)
+        tid = identifier + '.t1'
+        candidate = {
+            'candidate_id': identifier, 'gene_id': identifier, 'species': name,
+            'source_gene_id': identifier, 'source_transcript_id': tid, 'gene_token': identifier,
+            'seqid': path['seqid'], 'strand': path['strand'], 'blocks': path['cds'],
+            'cds': path['sequence'], 'origin': 'fused_model_split', 'support': {
+                'donors': donors, 'oriongeno': [{'native_transcript_id': path['native_transcript_id']}],
+            },
+        }
+        candidate['quality'] = validate_candidate(candidate, code)
+        if not candidate['quality']['valid_orf'] or not candidate['protein']:
+            raise ValueError('Validated fused model split cannot be translated: ' + identifier)
+        genes.append({'gene_id': identifier, 'seqid': path['seqid'], 'strand': path['strand'],
+                      'candidates': [candidate]})
+        models.append({'gene_id': identifier, 'transcript_id': tid, 'seqid': path['seqid'],
+                       'strand': path['strand'], 'cds': path['cds'],
+                       'cds_sha256': hashlib.sha256(path['sequence'].encode()).hexdigest(),
+                       'source_in_frame_bases': overlap, 'oriongeno_transcript': path['native_transcript_id']})
+    for row in models:
+        identifier = row['gene_id']
+        selected[identifier] = {'species': name, 'gene_id': identifier, 'candidate_id': identifier,
+                                'source_transcript_id': row['transcript_id'], 'status': 'split_fused_model',
+                                'reason': 'oriongeno_and_collinear_donor_gene_pairs'}
+    return genes, {'species': name, 'source_gene_id': proposal['owner'], 'replaced_gene_id': original,
+                   'previous_candidate_id': selected[original]['candidate_id'],
+                   'replaced_splice': proposal['bridge'], 'models': models, 'support': support}
+
+
+def apply_reviewed_phase_rows(graph, repairs):
+    """Change only the selected transcript's CDS phase fields in derived views."""
+    expected = {(c['source_transcript_id'], c['seqid'], c['strand'], a, b): phase
+                for c in repairs if c['repair_kind'] == 'phase_only' for a, b, phase in c['blocks']}
+    if not expected:
+        return
+    seen = set()
+    for i, (_, fields, identifier, parents) in enumerate(graph[0]):
+        if fields is None or fields[2] != 'CDS':
+            continue
+        keys = [(p, fields[0], fields[6], int(fields[3]) - 1, int(fields[4])) for p in parents]
+        matches = expected.keys() & set(keys)
+        if not matches:
+            continue
+        if len(matches) != 1 or len(parents) != 1 or matches & seen:
+            raise ValueError('Cannot isolate reviewed phase correction to one transcript: ' + str(matches))
+        seen.update(matches)
+        fields = fields[:]
+        fields[7] = str(expected[next(iter(matches))])
+        graph[0][i] = ('\t'.join(fields) + '\n', fields, identifier, parents)
+    if seen != expected.keys():
+        raise ValueError('Reviewed phase correction did not match source CDS rows: '
+                         + str(sorted(expected.keys() - seen)))
+
+
+def write_sequence_view(tmp, db, request, selected_by_species, retired_by_species, coding_audit):
+    """Publish paired coding sequences for the complete mixed cohort."""
+    output = tmp / 'sequence'
+    for directory in ('species_cds', 'species_protein'):
+        (output / directory).mkdir(parents=True)
+    genome_admission = {(name, gene): status for name, gene, _, status, *_ in coding_audit}
+    transcriptome_sources = request['transcriptome_sources']
+    inputs, decisions = [], []
+    for name in sorted(selected_by_species):
+        rows = selected_by_species[name]
+        cds_path, pep_path = (output / role / (name + '.fa') for role in ('species_cds', 'species_protein'))
+        if name in request['sources']:
+            code = request['sources'][name]['genetic_code']
+            os.link(tmp / 'analysis_cds' / cds_path.name, cds_path)
+            os.link(tmp / 'species_protein' / pep_path.name, pep_path)
+            for row in rows:
+                gene = row['gene_id']
+                if gene not in retired_by_species.get(name, ()):
+                    decisions.append((row, 'genome_annotation', '', genome_admission[name, gene]))
+            kind = 'genome_annotation'
+        else:
+            code = transcriptome_sources[name]['genetic_code']
+            selected = {row['gene_id']: row for row in rows}
+            with cds_path.open('w') as cds, pep_path.open('w') as protein:
+                for locus in iter_loci(db, name):
+                    gene = locus['gene_id']
+                    row = selected[gene]
+                    records = locus['candidates']
+                    candidate = next(c for c in records if c['candidate_id'] == row['candidate_id'])
+                    baseline = _baseline(locus, records)['source_transcript_id']
+                    usable = candidate['quality']['usable']
+                    if usable:
+                        sequence = candidate['cds']
+                        cds.write(f'>{gene}\n{sequence[:len(sequence) // 3 * 3]}\n')
+                        protein.write(f'>{gene}\n{candidate["protein"]}\n')
+                    decisions.append((row, 'transcriptome_assembly', baseline, 'included' if usable else 'excluded'))
+            kind = 'transcriptome_assembly'
+        inputs.append((name, kind, cds_path.relative_to(output), pep_path.relative_to(output), code))
+    rescue.write_tsv(output / 'inputs.tsv', ('species', 'source_kind', 'cds', 'protein', 'genetic_code'), inputs)
+    rescue.write_tsv(output / 'species_genetic_code.tsv', ('species', 'genetic_code'),
+                     [(name, code) for name, _, _, _, code in inputs])
+    rescue.write_tsv(output / 'representative_map.tsv', (*MAP_FIELDS, 'source_kind', 'baseline_transcript_id', 'sequence_admission'),
+                     [[*(row.get(k, '') for k in MAP_FIELDS), kind, baseline, admission]
+                      for row, kind, baseline, admission in decisions])
+    assembly_rows = [row for row, kind, _, _ in decisions if kind == 'transcriptome_assembly']
+    return {'transcriptome_species': len(transcriptome_sources), 'transcriptome_loci': len(assembly_rows),
+            'transcriptome_changed_representatives': sum(row['status'] == 'conserved' for row in assembly_rows)}
+
+
+def finalize(root, value, *, cpus=1):
+    final = select(root, value, predictions=True, cpus=cpus)
+    db = catalog_index(root, value, predictions=True, cpus=cpus)
     dependencies = {'selection': digest(final / 'receipt.json'),
-                    'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
+                    'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     def build(tmp):
-        selections = json.loads((final / 'selection.json').read_text())['selections']
+        targets = set(target_species(value))
+        selections = [row for row in json.loads((final / 'selection.json').read_text())['selections']
+                      if row['species'] in targets]
         selected_by_species = defaultdict(list)
         for selected_row in selections:
             selected_by_species[selected_row['species']].append(selected_row)
+        new_genes_by_species, repaired_by_species, retired_by_species = {}, {}, {}
+        merges, repairs, fissions, fission_decisions = [], [], [], []
+        request = value['request']
+        panel = request.get('native_split_panel')
+        rna_counts = rna_witness_counts(read_table(request['rna'])) if panel and request.get('rna') else {}
+        with tempfile.TemporaryDirectory(prefix='native-split-', dir=tmp) as scratch:
+            donor_search = (refinement_native_splits.DonorSearch(
+                panel, db, Path(scratch) / 'protein_search', cpus, rna_counts) if panel else None)
+            for name in sorted(targets & request['sources'].keys()):
+                if parameters_for(request, name)['mode'] != 'conservative':
+                    continue
+                selected = {row['gene_id']: row for row in selected_by_species[name]}
+                new_genes, repaired, merge_audit, repair_audit, fission_audit = prepare_reviewed_models(
+                    request, name, db, selected, donor_search=donor_search, rna_counts=rna_counts,
+                    fission_decisions=fission_decisions)
+                selected_by_species[name] = list(selected.values())
+                new_genes_by_species[name], repaired_by_species[name] = new_genes, repaired
+                retired_by_species[name] = {gene_id for row in merge_audit for gene_id in row['replaced_gene_ids']}
+                retired_by_species[name].update(row['replaced_gene_id'] for row in fission_audit)
+                merges.extend(merge_audit)
+                repairs.extend(repair_audit)
+                fissions.extend(fission_audit)
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates', 'species_transcript', 'utr_audit'):
             (tmp / role).mkdir()
-        shutil.copyfile(final / 'representative_map.tsv', tmp / 'representative_map.tsv')
+        map_path = tmp / 'representative_map.tsv'
+        if merges or repairs or fissions or request.get('transcriptome_sources') or 'target_species' in request:
+            rescue.write_tsv(map_path, MAP_FIELDS, [[row.get(k, '') for k in MAP_FIELDS]
+                             for name in sorted(targets & request['sources'].keys()) for row in selected_by_species[name]
+                             if row['gene_id'] not in retired_by_species.get(name, ())])
+        else:
+            shutil.copyfile(final / 'representative_map.tsv', map_path)
+        if merges:
+            atomic_json(tmp / 'split_model_merges.json', merges)
+        if repairs:
+            atomic_json(tmp / 'model_repairs.json', repairs)
+        if fissions:
+            atomic_json(tmp / 'fused_model_splits.json', fissions)
+        if fission_decisions:
+            atomic_json(tmp / 'fused_model_split_decisions.json', fission_decisions)
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         unpublished_candidates, utr_summaries = [], []
-        for name in value['species']:
+        for name in sorted(targets & request['sources'].keys()):
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
             source = value['request']['sources'][name]
             selected = {r['gene_id']: r for r in selected_by_species[name]}
+            genome_suffix = '.fa.gz' if Path(source['genome']).suffix.lower() == '.gz' else '.fa'
             paths = {'cds': tmp / 'species_cds' / (name + '.fa'), 'protein': tmp / 'species_protein' / (name + '.fa'),
-                     'gff': tmp / 'species_gff' / (name + '.gff3'), 'genome': tmp / 'species_genome' / (name + '.fa'),
+                     'gff': tmp / 'species_gff' / (name + '.gff3'), 'genome': tmp / 'species_genome' / (name + genome_suffix),
                      'analysis_cds': tmp / 'analysis_cds' / (name + '.fa'), 'analysis_gff': tmp / 'analysis_gff' / (name + '.gff3'),
                      'transcript': tmp / 'species_transcript' / (name + '.fa')}
             # Preserve the exact supplied CDS bytes independently of genomic reconstruction.
             cds_suffix = '.fa.gz' if Path(source['fasta']).name.lower().endswith('.gz') else '.fa'
             shutil.copyfile(source['fasta'], tmp / 'source_cds' / (name + cds_suffix))
-            # Copy to make a self-contained verifiable effective input view.
-            with open_text(Path(source['genome'])) as handle, paths['genome'].open('w') as out:
-                shutil.copyfileobj(handle, out)
+            # Keep the effective view self-contained without expanding compressed inputs.
+            shutil.copyfile(source['genome'], paths['genome'])
             full_path = tmp / 'full_annotation' / (name + '.gff3')
             source_annotation = tmp / 'source_annotation' / (name + '.gff3')
             if Path(source['gff']).name.lower().endswith('.gz'):
@@ -1765,16 +3364,64 @@ def finalize(root, value):
             else:
                 shutil.copyfile(source['gff'], source_annotation)
             original = source_annotation.read_bytes().decode('utf-8')
+            source_graph = _gff_source_graph(original, retain_attributes=False)
+            retired = retired_by_species.get(name, set())
+            new_genes = new_genes_by_species.get(name, [])
+            repaired = repaired_by_species.get(name, {})
+            apply_reviewed_phase_rows(source_graph, repaired.values())
+            new_transcripts = [gene['candidates'][0] for gene in new_genes]
+            new_transcripts.extend(c for c in repaired.values() if c['repair_kind'] == 'coding_path')
+            if new_transcripts:
+                occupied = source_graph[1].keys() | source_graph[2].keys()
+                occupied.update(row['source_transcript_id'] for row in selected_by_species[name]
+                                if row['status'] not in {'merged_split_model', 'repaired_model', 'split_fused_model'})
+                for candidate in new_transcripts:
+                    tid = candidate['source_transcript_id']
+                    identifiers = {tid, *(f'{tid}.{kind}{i}' for kind in ('exon', 'cds')
+                                   for i in range(1, len(candidate['blocks']) + 1))}
+                    if candidate['origin'] in {'split_model_merge', 'fused_model_split'}:
+                        identifiers.add(candidate['gene_id'])
+                    if identifiers & occupied:
+                        raise ValueError('Approved model GFF ID collides: ' + candidate['candidate_id'])
+                    occupied.update(identifiers)
             directive = re.search(r'^##FASTA(?:\r?\n|$)', original, flags=re.MULTILINE)
             sep, embedded = ('##FASTA', original[directive.start() + len('##FASTA'):]) if directive else ('', '')
             additions, predicted_rows, original_transcripts, expanded_bounds, analysis_candidates = [], [], set(), {}, []
             with paths['cds'].open('w') as cds, paths['protein'].open('w') as pep, paths['gff'].open('w') as gff, \
                     paths['analysis_cds'].open('w') as analysis_cds, \
                     (tmp / 'all_candidates' / (name + '.fa')).open('w') as all_cds:
-                for gene in catalog['loci']:
+                for gene in chain(catalog['loci'], new_genes):
                     chosen = selected[gene['gene_id']]
                     candidates = {c['candidate_id']: c for c in gene['candidates']}
+                    if gene['gene_id'] in repaired:
+                        repair = repaired[gene['gene_id']]
+                        if repair['candidate_id'] in candidates:
+                            raise ValueError('Approved model repair ID collides: ' + repair['candidate_id'])
+                        candidates[repair['candidate_id']] = repair
                     candidate = candidates[chosen['candidate_id']]
+                    for c in candidates.values():
+                        if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
+                                and not c.get('same_coordinate_source_repair') and not c['quality'].get('rna_supported')
+                                and chosen['status'] == 'ambiguous_correspondence'):
+                            # Keep copy-unresolved homology in the prediction audit.
+                            unpublished_candidates.append({'species': name, 'gene_id': gene['gene_id'],
+                                'candidate_id': c['candidate_id'], 'reason': chosen['reason']})
+                            continue
+                        all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
+                        if c['origin'] in {'split_model_merge', 'fused_model_split'}:
+                            additions.append(candidate_gff(gene, c, name))
+                        elif (c.get('repair_kind') == 'coding_path' or
+                              (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
+                               and not c.get('same_coordinate_source_repair'))):
+                            # Preserve the original gene and attach only new transcript/CDS rows.
+                            lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
+                                                  gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
+                            start, end = min(b[0] for b in c['blocks']), max(b[1] for b in c['blocks'])
+                            old = expanded_bounds.get(c['source_gene_id'], (start, end))
+                            expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
+                            additions.extend(lines)
+                    if gene['gene_id'] in retired:
+                        continue
                     exportable = bool(candidate['cds']) and bool(candidate['blocks']) and not gene.get('ambiguous_coordinates') and not candidate['quality'].get('sequence_mismatch') and not candidate['quality'].get('structure_problem')
                     if exportable:
                         cds.write(f">{gene['gene_id']}\n{candidate['cds']}\n")
@@ -1785,50 +3432,40 @@ def finalize(root, value):
                     admitted = exportable and candidate['quality'].get('usable', False) and bool(candidate['protein']) and '*' not in candidate['protein']
                     if admitted:
                         pep.write(f">{gene['gene_id']}\n{candidate['protein']}\n")
-                        coding_candidate = analysis_coding_candidate(candidate)
-                        analysis_cds.write(f">{gene['gene_id']}\n{coding_candidate['cds']}\n")
+                        coding_candidate = analysis_coding_candidate(candidate, projection=True)
+                        coding_sequence = coding_candidate.pop('cds')
+                        analysis_cds.write(f">{gene['gene_id']}\n{coding_sequence}\n")
                         analysis_candidates.append(coding_candidate)
                         head = candidate['quality'].get('translation_offset', 0)
-                        tail = len(candidate['cds']) - head - len(coding_candidate['cds'])
+                        tail = len(candidate['cds']) - head - len(coding_sequence)
                         coding_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included', head, tail,
-                                             len(candidate['cds']), len(coding_candidate['cds'])))
+                                             len(candidate['cds']), len(coding_sequence)))
                     else:
                         coding_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'excluded', '', '', len(candidate['cds']), 0))
                     translation_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included' if admitted else 'excluded', json.dumps(candidate['quality'], sort_keys=True)))
                     if not exportable:
                         pass
-                    elif candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path') or candidate.get('same_coordinate_source_repair'):
+                    elif (candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path')
+                          or candidate.get('same_coordinate_source_repair') or candidate.get('repair_kind') == 'phase_only'):
                         original_transcripts.add(candidate['source_transcript_id'])
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
-                    for c in candidates.values():
-                        if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
-                                and not c.get('same_coordinate_source_repair') and not c['quality'].get('rna_supported')
-                                and chosen['status'] == 'ambiguous_correspondence'):
-                            # Keep the proposal in the catalog/prediction audit,
-                            # rather than publishing a copy-unresolved homology
-                            # model in the active paired full GFF/CDS view.
-                            unpublished_candidates.append({'species': name, 'gene_id': gene['gene_id'],
-                                'candidate_id': c['candidate_id'], 'reason': chosen['reason']})
-                            continue
-                        all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
-                        if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
-                            # Preserve the original gene and attach only new transcript/CDS rows.
-                            lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
-                                                  gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
-                            start, end = min(b[0] for b in c['blocks']), max(b[1] for b in c['blocks'])
-                            old = expanded_bounds.get(c['source_gene_id'], (start, end))
-                            expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
-                            additions.extend(lines)
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
-                source_graph = _gff_source_graph(original)
                 gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
+            del original_transcripts, predicted_rows
+            # Both annotation views now have their source rows. Release the
+            # graph before building transcript sequences and the analysis GFF.
+            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
+            del source_graph
+            for identifier in retired:
+                del selected[identifier]
             import transcript_utrs
             native_prediction = value['request'].get('oriongeno', {}).get('predictions', {}).get(name)
             native_models = transcript_utrs.load_models(native_prediction['gff']) if native_prediction else None
             with indexed_genome(source['genome']) as genome:
                 augmented, utr_audit, transcripts = transcript_utrs.complete(
                     paths['gff'].read_text(), original, genome, name, native_models)
+            del original, native_models
             paths['gff'].write_text(augmented)
             with paths['transcript'].open('w') as stream:
                 for tid, sequence in sorted(transcripts.items()):
@@ -1838,25 +3475,29 @@ def finalize(root, value):
                 if chosen['source_transcript_id'] not in audited_transcripts:
                     utr_audit.append(dict(species=name, gene_id=gene_id,
                                           transcript_id=chosen['source_transcript_id'], status='unexportable'))
-            atomic_json(tmp / 'utr_audit' / (name + '.json'), utr_audit)
+            atomic_json(tmp / 'utr_audit' / (name + '.json.gz'), utr_audit)
             utr_summaries.append((name, len(selected), len(transcripts),
                                   sum(bool(r.get('utr5', {}).get('length')) for r in utr_audit),
                                   sum(bool(r.get('utr3', {}).get('length')) for r in utr_audit),
                                   sum(bool(r.get('utr5', {}).get('length')) and bool(r.get('utr3', {}).get('length')) for r in utr_audit)))
+            del transcripts
             paths['analysis_gff'].write_text(analysis_gff_rows(augmented, analysis_candidates))
-            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
+            del analysis_candidates
             gene_bounds_audit.extend(dict(species=name, **row) for row in bound_changes)
             full_path.write_text(derived_original.rstrip() + '\n' + ''.join(additions) + (sep + embedded if sep else ''))
+            del derived_original, additions, embedded
             updates = {}
             selected_models = transcript_utrs.read_models(augmented, strict=False)
+            del augmented
             for record in utr_audit:
                 if 'utr5' not in record:
                     continue
                 tid = record['transcript_id']
                 updates[tid] = dict(model=selected_models[tid], exons=selected_models[tid]['exons'],
                                     choices={'5': record['utr5'], '3': record['utr3']})
+            del selected_models, utr_audit
             full_path.write_text(transcript_utrs.render(full_path.read_text(), updates))
-            del source_graph
+            del updates
             map_hashes = representative_map_proof.read([tmp / 'representative_map.tsv'])
             row = {'species': name, **{k: str((root / 'effective' / p.relative_to(tmp)).resolve()) for k, p in paths.items()},
                    'representative_map': str((root / 'effective' / 'representative_map.tsv').resolve()),
@@ -1868,21 +3509,26 @@ def finalize(root, value):
         atomic_json(tmp / 'gene_bounds_changes.json', gene_bounds_audit)
         atomic_json(tmp / 'unpublished_candidates.json', unpublished_candidates)
         rescue.write_tsv(tmp / 'utr_summary.tsv', ('species', 'representatives', 'exported_transcripts', 'with_5prime_utr', 'with_3prime_utr', 'with_both_utrs'), utr_summaries)
-        rescue.write_tsv(tmp / 'translation_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'quality'), translation_audit)
-        rescue.write_tsv(tmp / 'coding_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'head_bases_removed', 'tail_bases_removed', 'source_cds_length', 'analysis_cds_length'), coding_audit)
+        rescue.write_tsv(tmp / 'translation_admission.tsv.gz', ('species', 'gene_id', 'candidate_id', 'status', 'quality'), translation_audit)
+        rescue.write_tsv(tmp / 'coding_admission.tsv.gz', ('species', 'gene_id', 'candidate_id', 'status', 'head_bases_removed', 'tail_bases_removed', 'source_cds_length', 'analysis_cds_length'), coding_audit)
         rescue.write_tsv(tmp / 'species_genetic_code.tsv', ('species', 'genetic_code'), [(r['species'], r['genetic_code']) for r in rows])
-        fields = list(rows[0])
-        rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
+        if rows:
+            fields = list(rows[0])
+            rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
+        sequence_summary = (write_sequence_view(tmp, db, request, selected_by_species, retired_by_species, coding_audit)
+                            if request.get('transcriptome_sources') else {})
         atomic_json(tmp / 'changes.json', changes)
-        atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(selections),
-                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired'} for r in selections),
-                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in selections),
-                                         'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
+        atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(changes),
+                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired', 'merged_split_model', 'split_fused_model'} for r in changes),
+                                         'fused_models_split': len(fissions),
+                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in changes),
+                                         'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes),
+                                         **sequence_summary})
         representative_map_proof.check()
-    return stage(root, 'effective', {'dependencies': dependencies}, build)
+    return stage(root, 'effective', {'dependencies': dependencies}, build, cpus=cpus)
 
 
-def verify_inputs(inputs, field=None):
+def verify_inputs(inputs, field=None, *, verification=None):
     def parsed_identity(path):
         info = Path(path).stat()
         return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
@@ -1912,7 +3558,7 @@ def verify_inputs(inputs, field=None):
     roles = ('cds', 'protein', 'gff', 'genome', 'representative_map')
     paths = [inputs, receipt_path, *(row[role] for row in rows for role in roles),
              *(root / path for path in receipt['files'])]
-    hashes = digest_paths(paths)
+    hashes = digest_paths(paths) if verification is None else verification.read(paths)
     # Parsing happened before the batch began; bind the parsed rows/receipt to
     # those same bytes even if they changed before their fresh hash was taken.
     if parsed_identity(inputs) != input_identity or parsed_identity(receipt_path) != receipt_identity:
@@ -1947,7 +3593,7 @@ def verify_inputs(inputs, field=None):
     return rows
 
 
-def inspect_stages(root, value):
+def inspect_stages(root, value, cpus=1, *, effective_verification=None):
     """Check the required dependency graph, including absent publications.
 
     A receipt's own key is not evidence that it belongs to this run or its
@@ -1955,6 +3601,14 @@ def inspect_stages(root, value):
     the current dependency receipts without building or repairing anything.
     """
     plan_hash = digest(root / 'plan.json')
+    verify = _receipt_verifier(cpus)
+    verified_view = None
+    if effective_verification is not None:
+        # The genomic QC path reads all effective members once, including the
+        # role paths that can live outside the publication. Reuse that proof
+        # when validating this stage's key below.
+        rows = verify_inputs(root / 'effective' / 'inputs.tsv', verification=effective_verification)
+        verified_view = Path(rows[0]['cds']).parent.parent
 
     def receipt_hash(relative):
         try:
@@ -1962,47 +3616,64 @@ def inspect_stages(root, value):
         except OSError:
             return None
 
-    catalogs = {name: receipt_hash(Path('catalog') / name) for name in value['species']}
-    predictions = {name: receipt_hash(Path('predictions') / name) for name in value['species']}
+    catalog_dirs = {name: catalog_directory(root, value, name) for name in value['species']}
+    catalogs = {name: receipt_hash(path) for name, path in catalog_dirs.items()}
+    predictions = {name: receipt_hash(Path('predictions') / name) for name in target_species(value)}
     initial_index = {'catalog_index': receipt_hash(Path('catalog_index'))}
     final_index = {'catalog_index_final': receipt_hash(Path('catalog_index_final'))}
-    expected = {str(Path('catalog') / name): {} for name in value['species']}
+    fixed = set(value['request'].get('fixed_donors', ()))
+    expected = {str(Path('catalog') / name): {} for name in value['species'] if name not in fixed}
     expected['catalog_index'] = {'dependencies': {'catalog': catalogs}}
     correspondence_dependencies = {'catalog': catalogs, 'index': initial_index}
-    anchors = {}
     request = value['request']
-    if request['rescue_output'] and not request['edges']:
+    anchors = {'donor_catalog/' + name: verify(catalog_dirs[name], donor_catalog_key(request, name))
+               for name in sorted(fixed)}
+    if uses_rescue_correspondence(request):
         anchor_root = Path(request['rescue_output'])
         anchor_plan = rescue.load(anchor_root, inspect_only=True)
-        anchor_hashes = {}
-        for job in anchor_plan['synteny_jobs']:
-            if job['a'] == job['b']:
-                continue
-            directory = anchor_root / 'synteny' / job['id']
-            try:
-                anchor_hashes[job['id']] = digest(directory / 'receipt.json')
-                anchors['anchors/' + job['id']] = rescue.verified(directory, rescue.comparison_key(anchor_root, job))
-            except (OSError, ValueError, KeyError):
-                anchor_hashes[job['id']] = None
-                anchors['anchors/' + job['id']] = False
-        correspondence_dependencies['anchors'] = anchor_hashes
+        jobs = [job for job in anchor_plan['synteny_jobs'] if job['a'] != job['b']]
         prepared_hashes = {}
-        anchor_hash = digest(anchor_root / 'plan.json')
-        for name in value['species']:
-            directory = anchor_root / 'prepared' / name
-            try:
-                prepared_hashes[name] = digest(directory / 'receipt.json')
-                anchors['prepared/' + name] = rescue.verified(directory, {'plan': anchor_hash, 'species': name})
-            except (OSError, ValueError):
-                prepared_hashes[name] = None
-                anchors['prepared/' + name] = False
+        anchor_hash = rescue.plan_digest(anchor_root, anchor_plan)
+        prepared_names = ({job[side] for job in jobs for side in ('a', 'b')}
+                          if 'fixed_donors' in request else request['sources'])
+        with ReceiptSnapshot(verify) as prepared_proof:
+            for name in sorted(prepared_names):
+                directory = anchor_root / 'prepared' / name
+                member = directory / 'receipt.json'
+                try:
+                    valid = rescue.verified_dependency(prepared_proof, directory, {'plan': anchor_hash, 'species': name})
+                    prepared_hashes[name] = digest(member) if valid else None
+                    if valid:
+                        prepared_proof.check({member: prepared_hashes[name]})
+                except (OSError, ValueError, KeyError):
+                    prepared_hashes[name] = None
+                anchors['prepared/' + name] = prepared_hashes[name] is not None
+            anchor_hashes = {}
+            for job in jobs:
+                directory = anchor_root / 'synteny' / job['id']
+                try:
+                    prepared = {name: prepared_hashes[name] for name in {job['a'], job['b']}}
+                    if not all(prepared.values()):
+                        raise ValueError('Prepared comparison inputs are unavailable')
+                    anchor_hashes[job['id']] = digest(directory / 'receipt.json')
+                    key = {'plan': anchor_hash, 'job': job, 'prepared': prepared}
+                    anchors['anchors/' + job['id']] = rescue.verified_dependency(prepared_proof, directory, key)
+                    if anchors['anchors/' + job['id']]:
+                        prepared_proof.check({directory / 'receipt.json': anchor_hashes[job['id']]})
+                except (OSError, ValueError, KeyError):
+                    anchor_hashes[job['id']] = None
+                    anchors['anchors/' + job['id']] = False
+            # Ordinary missing/corrupt results never acquire a proof. A change
+            # to a generation already verified during QC must still fail closed.
+            prepared_proof.check_all()
+        correspondence_dependencies['anchors'] = anchor_hashes
         correspondence_dependencies['prepared'] = prepared_hashes
     expected['correspondence'] = {'dependencies': correspondence_dependencies}
     selection_dependencies = {'correspondence': receipt_hash(Path('correspondence')), 'catalog': catalogs,
                               'index': initial_index}
     expected['selection_initial'] = {'dependencies': selection_dependencies}
     prediction_dependencies = {'initial': receipt_hash(Path('selection_initial')), **selection_dependencies}
-    for name in value['species']:
+    for name in target_species(value):
         dependencies = dict(prediction_dependencies)
         revision_directory = revision_worker(request, name)
         if revision_directory is not None:
@@ -2012,12 +3683,29 @@ def inspect_stages(root, value):
                 worker_hash = None
             dependencies['rescue_workers'] = {name: worker_hash}
         expected[str(Path('predictions') / name)] = {'dependencies': dependencies}
-    expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'predictions': predictions}}
-    expected['selection_final'] = {'dependencies': {**selection_dependencies, 'predictions': predictions, 'index': final_index}}
+    expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'index': initial_index,
+                                                        'predictions': predictions}}
+    final_selection_dependencies = {**selection_dependencies, 'predictions': predictions, 'index': final_index}
+    final_selection_dependencies['initial'] = prediction_dependencies['initial']
+    expected['selection_final'] = {'dependencies': final_selection_dependencies}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
                                             'index': final_index}}
-    return {relative: rescue.verified(root / relative, {'plan': plan_hash, **key})
-            for relative, key in expected.items()} | anchors
+    result = {}
+    for relative, key in expected.items():
+        key = {'plan': plan_hash, **key}
+        if relative == 'effective' and verified_view == root / relative:
+            # verify_inputs has already hashed the full published inventory.
+            # Check its generation again and still require this run's stage key.
+            path = root / relative / 'receipt.json'
+            expected_sha = effective_verification.read([path])[str(path)]
+            receipt = path.read_bytes()
+            effective_verification.check()
+            if hashlib.sha256(receipt).hexdigest() != expected_sha:
+                raise ValueError('Effective receipt changed during QC')
+            result[relative] = json.loads(receipt)['key'] == key
+        else:
+            result[relative] = verify(root / relative, key)
+    return result | anchors
 
 
 def parser():
@@ -2026,14 +3714,35 @@ def parser():
     prep = sub.add_parser('plan')
     prep.add_argument('--output', required=True, type=Path)
     prep.add_argument('--inputs', type=Path)
+    prep.add_argument('--transcriptome-assembly-dir', type=Path, help='Discover assemblies in standard transcriptome generation output')
+    prep.add_argument('--assembly-genetic-codes', type=Path, help='Species genetic code TSV for discovered assemblies')
+    prep.add_argument('--assembly-cpus', type=int, default=1)
+    prep.add_argument('--cpus', type=int, default=1)
+    prep.add_argument('--transcriptome-inputs', type=Path, help='Assembly species TSV: species,cds,transcript_gene_map[,genetic_code]')
     prep.add_argument('--rescue-output', type=Path)
+    prep.add_argument('--donor-plan', type=Path, help='Frozen rescue donor plan for one transcriptome target; genomic targets inherit it from rescue')
+    prep.add_argument('--target', help='Species to discover in a shared transcriptome assembly directory')
     prep.add_argument('--edges', type=Path)
+    prep.add_argument('--species-tree', type=Path, help='Rooted species Newick for direct-input fusion resolution; defaults to the rescue guide tree')
+    prep.add_argument('--rna-bam-dir', type=Path, help='Directory of species-named, genome-aligned RNA BAMs')
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--model-repairs', type=Path, help='Reviewed single-locus rescue candidates TSV: species,candidate_id')
+    prep.add_argument('--split-model-merges', type=Path, help='Reviewed rescue merge candidates TSV: species,candidate_id')
     prep.add_argument('--oriongeno-inputs', type=Path, help='Native OrionGeno TSV: species,gff,receipt; also supplies UTRs')
     prep.add_argument('--annevo-inputs', type=Path, help='Source-bound native ANNEVO candidate TSV: species,gff,receipt')
     prep.add_argument('--species-profiles', type=Path, help='Explicit target-species prediction parameter overrides (TSV)')
     for key, default in DEFAULTS.items():
         prep.add_argument('--' + key.replace('_', '-'), type=type(default), default=default)
+    assembly = sub.add_parser('prepare-transcriptome', help='Extract one CDS per assembled transcript without collapsing isoforms')
+    assembly.add_argument('--assembly', type=Path, required=True)
+    assembly.add_argument('--species', required=True)
+    assembly.add_argument('--output', type=Path, required=True)
+    grouping = assembly.add_mutually_exclusive_group(required=True)
+    grouping.add_argument('--assembler', choices=['trinity', 'rnaspades', 'rna-bloom2'])
+    grouping.add_argument('--gene-map', type=Path, help='Explicit transcript_id, gene_id[,baseline] TSV')
+    assembly.add_argument('--corset-clusters', type=Path)
+    assembly.add_argument('--genetic-code', type=int, default=1)
+    assembly.add_argument('--cpus', type=int, default=1)
     for command in ('catalog', 'correspondence', 'select', 'predict', 'finalize', 'run', 'status', 'qc'):
         s = sub.add_parser(command)
         s.add_argument('--output', type=Path, required=True)
@@ -2051,8 +3760,11 @@ def parser():
     return p
 
 
-def _main():
-    args = parser().parse_args()
+def _main(args):
+    if args.command == 'prepare-transcriptome':
+        transcriptome.prepare(args.assembly, args.species, args.output, args.genetic_code, args.cpus,
+                              args.assembler, args.corset_clusters, args.gene_map)
+        return
     if args.command == 'reproject-utrs':
         import transcript_utr_reassessment
         transcript_utr_reassessment.reproject(args.source_output, args.output, args.source_receipt_sha256, args.species)
@@ -2064,43 +3776,54 @@ def _main():
     if args.command == 'plan':
         plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
              species_profiles=args.species_profiles, annevo_inputs=args.annevo_inputs, oriongeno_inputs=args.oriongeno_inputs,
+             split_model_merges=args.split_model_merges, model_repairs=args.model_repairs,
+             transcriptome_inputs=args.transcriptome_inputs, rna_bam_dir=args.rna_bam_dir,
+             transcriptome_assembly_dir=args.transcriptome_assembly_dir,
+             assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus, donor_plan=args.donor_plan, target=args.target,
+             species_tree=args.species_tree, cpus=args.cpus,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:
         raise ValueError('--cpus must be positive')
     root = args.output.resolve()
     value = load(root)
-    names = value['species']
+    names = target_species(value) if args.command in {'predict', 'run'} else value['species']
     if args.task_index is not None:
         if not 1 <= args.task_index <= len(names):
             raise ValueError('Invalid task index')
         names = [names[args.task_index - 1]]
-    if args.command in {'catalog', 'run'}:
-        for name in names:
-            catalog_species(root, value, name)
+    if args.command == 'catalog':
+        _build_catalogs(root, value, names, args.cpus)
     if args.command in {'correspondence', 'run'}:
         correspondence(root, value, args.cpus, args.comparison_cache)
     if args.command in {'select', 'run'}:
-        select(root, value)
+        select(root, value, cpus=args.cpus)
     if args.command in {'predict', 'run'}:
         for name in names:
             predict_species(root, value, name, args.cpus)
     if args.command in {'finalize', 'run'}:
-        finalize(root, value)
+        finalize(root, value, cpus=args.cpus)
     if args.command in {'status', 'qc'}:
-        if args.command == 'qc':
-            verify_inputs(root / 'effective' / 'inputs.tsv')
-        result = {'species': len(value['species']), 'stages': inspect_stages(root, value)}
+        effective_verification = (FreshDigestBatch()
+                                  if args.command == 'qc' and set(target_species(value)) & value['request']['sources'].keys()
+                                  else None)
+        stages = inspect_stages(root, value, args.cpus, effective_verification=effective_verification)
+        result = {'species': len(target_species(value)), 'stages': stages}
         if args.command == 'qc' and not all(result['stages'].values()):
             invalid = [name for name, valid in result['stages'].items() if not valid]
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))
+        load(root)
+        if effective_verification is not None:
+            effective_verification.check()
         print(json.dumps(result, sort_keys=True))
+        return
     load(root)
 
 
 def main():
-    with invocation_context():
-        _main()
+    args = parser().parse_args()
+    with invocation_context(cpus=max(1, getattr(args, 'cpus', 1))):
+        _main(args)
 
 
 if __name__ == '__main__':

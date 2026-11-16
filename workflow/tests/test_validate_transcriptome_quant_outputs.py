@@ -114,6 +114,22 @@ def test_complete_selected_run_set_passes_and_ignores_unselected_rows(tmp_path: 
     assert json.loads(completed.stdout) == {"run_count": 1, "runs": ["SRR1"], "status": "valid"}
 
 
+def test_reordered_abundance_columns_keep_quoted_ids_and_check_short_rows(tmp_path: Path):
+    metadata = tmp_path / "metadata.tsv"
+    quant_root = tmp_path / "quant"
+    write_metadata(metadata, [{"run": "SRR1", "scientific_name": "Test species"}])
+    header = "tpm\ttarget_id\test_counts\teff_length\tlength\n\n"
+    row = '2.5\t"tx\t1"\t4\t80'
+    write_run(quant_root, "SRR1", abundance=header + row + "\t100\n")
+    completed = run_validator(metadata, quant_root)
+    assert completed.returncode == 0, completed.stderr
+
+    (quant_root / "SRR1" / "SRR1_abundance.tsv").write_text(header + row + "\n")
+    truncated = run_validator(metadata, quant_root)
+    assert truncated.returncode == 1
+    assert "abundance table for SRR1 has invalid length" in truncated.stderr
+
+
 def test_transcriptome_quant_stage_validates_before_reuse_and_before_publish():
     text = CORE.read_text(encoding="utf-8")
     validator = '"${gg_support_dir}/validate_transcriptome_quant_outputs.py"'

@@ -231,7 +231,7 @@ def benchmark(args):
                                           "cpu_count": os.cpu_count(), "cpus_per_prediction": args.cpus,
                                           "miniprot": subprocess.check_output(["miniprot", "--version"], text=True).strip(),
                                           "dependencies": {name: importlib.metadata.version(name)
-                                                           for name in ("biopython", "jcvi", "kfFractBias")},
+                                                           for name in ("biopython", "jcvi", "locuskit")},
                                           "implementation_sha256": {path.name: sha256(path) for path in
                                                                      (SCRIPT, SUPPORT / "gene_model_catalog.py",
                                                                       SUPPORT / "gene_model_selection.py", SUPPORT / "gene_model_store.py",

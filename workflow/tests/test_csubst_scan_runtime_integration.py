@@ -359,11 +359,17 @@ def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
     command_start = core.index('  csubst_scan_dir="csubst_scan"')
     command_end = core.index('\n  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv"', command_start)
     archive_start = core.index('    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json"', command_end)
-    archive_end = core.index('    echo "CSUBST scan was successful."', archive_start)
-    shell = 'csubst_alignment_option="--alignment_file"; csubst_3di_params=()\n' + core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+    archive_end = core.index('    shopt -s nullglob', archive_start)
+    shell = ('source "${gg_support_dir}/gg_util.sh"\n'
+             'csubst_alignment_option="--alignment_file"; csubst_3di_params=()\n'
+             + core[command_start:command_end] + "\n" + core[archive_start:archive_end])
     # Old inherited settings must not override the upstream's compatible defaults.
     for option in ("--scan_rate_event_mode", "--scan_rate_length", "--scan_rate_exposure"):
         assert option not in shell
+    published = tmp_path / "published"
+    sites_path = published / "csubst_scan/OGTEST_csubst_scan.tsv"
+    units_path = published / "csubst_scan_units/OGTEST_csubst_scan_units.tsv"
+    audit_path = published / "csubst_scan_audit/OGTEST_csubst_scan_audit.zip"
     environment = dict(os.environ, csubst_input_base="./input", genetic_code="1", codon_model="GY+FQ",
                        csubst_scan_unit_mode="clade", csubst_scan_match="any2spe",
                        csubst_scan_min_event_pp="0.5", csubst_scan_min_support="2",
@@ -373,13 +379,14 @@ def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
                        csubst_scan_tree_site_plot_format="pdf", csubst_scan_tree_site_plot_max_sites="30",
                        csubst_nonsyn_recode="no", GG_TASK_CPUS="1", og_id="OGTEST",
                        gg_support_dir=str(REPO_ROOT / "workflow/support"),
-                       file_og_csubst_scan_audit=str(tmp_path / "published" / "OGTEST_csubst_scan_audit.zip"))
+                       dir_output_active=str(published), file_og_csubst_scan=str(sites_path),
+                       file_og_csubst_scan_units=str(units_path), file_og_csubst_scan_audit=str(audit_path))
     result = subprocess.run(["bash", "-euo", "pipefail", "-c", shell], cwd=tmp_path,
                             env=environment, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
-    frame = pd.read_csv(tmp_path / "csubst_scan/csubst_scan.tsv", sep="\t")
+    frame = pd.read_csv(sites_path, sep="\t")
     assert not frame.empty
-    with zipfile.ZipFile(environment["file_og_csubst_scan_audit"]) as archive:
+    with zipfile.ZipFile(audit_path) as archive:
         assert archive.testzip() is None
         inference = json.loads(archive.read("csubst_scan/csubst_scan_inference.json"))
         assert inference["calibration"] == "none"
@@ -391,6 +398,20 @@ def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
         assert "csubst_scan/csubst_scan_calibration.json" in archive.namelist()
         assert "csubst_scan/inputs/alignment.fasta" in archive.namelist()
         assert "csubst_scan/inputs/foreground.tsv" in archive.namelist()
+        assert not (tmp_path / "csubst_scan/inputs").exists()
+        assert "csubst_scan/csubst_scan.tsv" not in archive.namelist()
+        assert "csubst_scan/csubst_scan_units.tsv" not in archive.namelist()
+        refs = json.loads(archive.read("csubst_scan/external_members.json"))
+        assert {record["logical_path"] for record in refs["members"]} == {
+            "csubst_scan/OGTEST_csubst_scan.tsv", "csubst_scan_units/OGTEST_csubst_scan_units.tsv",
+        }
+    from workflow.support.diagnostic_archive import materialize
+
+    full_audit_path = tmp_path / "complete.zip"
+    materialize(audit_path, published, full_audit_path)
+    with zipfile.ZipFile(full_audit_path) as archive:
+        assert archive.read("csubst_scan/csubst_scan.tsv") == sites_path.read_bytes()
+        assert archive.read("csubst_scan/csubst_scan_units.tsv") == units_path.read_bytes()
 
 
 @pytest.mark.parametrize("genetic_code", [1, 2])

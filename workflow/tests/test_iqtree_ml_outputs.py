@@ -157,7 +157,7 @@ def test_native_stages_publish_ml_tree_and_invalidate_consensus_contract(
     assert published.read_bytes() == previous
 
 
-def test_summary_contract_invalidates_old_sister_semantics(tmp_path):
+def test_summary_contract_invalidates_older_statistics(tmp_path):
     output_dir = tmp_path / 'output'
     branch = output_dir / 'stat_branch' / 'OG0001_stat.branch.tsv'
     summary = output_dir / 'stat_tree' / 'OG0001_stat.tree.tsv'
@@ -180,4 +180,7 @@ def test_summary_contract_invalidates_old_sister_semantics(tmp_path):
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert (tmp_path / 'legacy-policy.txt').read_text().strip() == 'rebuild'
     assert_contract_requires_regeneration(tmp_path, 'sister_semantics=unique_or_sentinel')
+    assert_contract_requires_regeneration(
+        tmp_path, f'orthogroup_statistics_script={SUPPORT / "orthogroup_statistics.py"}'
+    )
     assert branch.read_text() == summary.read_text() == 'preserve prior statistics\n'

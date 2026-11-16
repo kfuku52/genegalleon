@@ -155,22 +155,26 @@ def read_newick_tip_labels(path):
 
 def _copy_numbers_from_handle(handle, label):
     counts = {}
-    reader = csv.DictReader(handle, delimiter="\t")
-    fieldnames = reader.fieldnames or []
-    if "spnode_coverage" not in fieldnames:
+    reader = csv.reader(handle, delimiter="\t")
+    # The last occurrence of a duplicate header wins, as in DictReader.
+    columns = {name: index for index, name in enumerate(next(reader, ()))}
+    species_column = columns.get("spnode_coverage")
+    if species_column is None:
         raise ValueError(f"stat_branch is missing spnode_coverage: {label}")
+    event_column = columns.get("so_event")
+    leaf_count_column = columns.get("num_leaf")
     for row in reader:
-        is_tip = False
-        if row.get("so_event") == "L":
-            is_tip = True
-        elif row.get("num_leaf") == "1":
-            is_tip = True
-        if not is_tip:
+        width = len(row)
+        if species_column >= width:
             continue
-        species = str(row.get("spnode_coverage") or "").strip()
-        if species == "":
+        if not (
+            (event_column is not None and event_column < width and row[event_column] == "L")
+            or (leaf_count_column is not None and leaf_count_column < width and row[leaf_count_column] == "1")
+        ):
             continue
-        counts[species] = counts.get(species, 0) + 1
+        species = row[species_column].strip()
+        if species:
+            counts[species] = counts.get(species, 0) + 1
     return counts
 
 
@@ -311,6 +315,10 @@ def build_long_table(copy_number, presence, species_order, family_order, query_s
     query_order = {family_id: idx + 1 for idx, family_id in enumerate(family_order)}
     species_order_map = {species: idx + 1 for idx, species in enumerate(species_order)}
     species_displays = {}
+    columns = (
+        "species", "species_display", "species_order", "query", "query_order",
+        "family_id", "family_order", "mode", "copy_number", "presence", "status",
+    )
     # Unique matrix axes can select each column once. Keep scalar lookup for
     # ambiguous or missing labels so its existing values/errors are preserved.
     bulk_rows = isinstance(species_order, (list, tuple, pandas.Index, numpy.ndarray)) and all(
@@ -333,22 +341,12 @@ def build_long_table(copy_number, presence, species_order, family_order, query_s
         for species, copy_value, presence_value in values:
             if species not in species_displays:
                 species_displays[species] = scientific_name_from_label(species)
-            long_rows.append(
-                {
-                    "species": species,
-                    "species_display": species_displays[species],
-                    "species_order": species_order_map[species],
-                    "query": family_id,
-                    "query_order": query_order[family_id],
-                    "family_id": family_id,
-                    "family_order": query_order[family_id],
-                    "mode": mode,
-                    "copy_number": copy_value,
-                    "presence": presence_value,
-                    "status": status,
-                }
-            )
-    return pandas.DataFrame(long_rows)
+            order = query_order[family_id]
+            long_rows.append((
+                species, species_displays[species], species_order_map[species], family_id, order,
+                family_id, order, mode, copy_value, presence_value, status,
+            ))
+    return pandas.DataFrame(long_rows, columns=columns) if long_rows else pandas.DataFrame()
 
 
 def build_matrices(mode, dir_gene_family, species_tree, dir_query_gene="", orthogroup_genecount="", include_incomplete=False):
@@ -398,10 +396,8 @@ def build_matrices(mode, dir_gene_family, species_tree, dir_query_gene="", ortho
 
     copy_number = pandas.DataFrame(count_columns, index=species_order)
     copy_number.index.name = "species"
-    presence = copy_number.copy()
-    for col in presence.columns:
-        presence[col] = pandas.to_numeric(presence[col], errors="coerce")
-    presence = (presence > 0).astype("Int64").where(~copy_number.isna(), pandas.NA)
+    # Counts are integers; incomplete families contribute NaN placeholders.
+    presence = (copy_number > 0).astype("Int64").where(~copy_number.isna(), pandas.NA)
 
     long_df = build_long_table(
         copy_number=copy_number,

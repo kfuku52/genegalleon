@@ -78,3 +78,15 @@ def test_extract_writes_empty_file_when_all_hits_fail_coverage_threshold(tmp_pat
     completed, outfile = run_extract(tmp_path, rows, min_cov=0.25, max_hits=5)
     assert completed.returncode == 0, completed.stderr
     assert outfile.read_text() == ""
+
+
+def test_extract_preserves_literal_subject_ids_and_excludes_empty_ids(tmp_path):
+    rows = [
+        {"sacc": "001", "qjointcov": 0.8, "min_evalue": 1e-10},
+        {"sacc": "NA", "qjointcov": 0.9, "min_evalue": 1e-4},
+        {"sacc": "", "qjointcov": 0.99, "min_evalue": 1e-20},
+        {"sacc": "010", "qjointcov": 0.7, "min_evalue": 1e-3},
+    ]
+    completed, outfile = run_extract(tmp_path, rows)
+    assert completed.returncode == 0, completed.stderr
+    assert outfile.read_text().splitlines() == ["NA", "001", "010"]

@@ -48,6 +48,17 @@ def test_get_df_gc_original_preserves_species_and_gene_order_for_ties():
     assert out.loc[out["Orthogroup"] == "OG2", "geneid_0.5"].iloc[0] == "g4"
 
 
+def test_get_df_gc_original_preserves_gene_positions_for_repeated_families():
+    members = pandas.DataFrame({"Orthogroup": ["OG1", "OG1"], "spA": ["missing,g2", "g1"]})
+    counts = pandas.DataFrame({"Orthogroup": ["OG1"], "Total": [3]})
+    lengths = pandas.DataFrame({"#id": ["g1", "g2"], "length": [100, 100]})
+    args = SimpleNamespace(gene_size_quantiles="0.5")
+
+    result = load_module().get_df_gc_original(members, counts, lengths, args)
+
+    assert result.loc[0, "geneid_0.5"] == "g1"
+
+
 @pytest.mark.parametrize("text", ["", "g1\ng1\n", "g1,g2\n", "g1\tg2\n", "g1 g2\n"])
 def test_gene_exclusion_rejects_ambiguous_id_lists(tmp_path, monkeypatch, text):
     monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))

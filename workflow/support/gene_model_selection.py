@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import OrderedDict, defaultdict
+from dataclasses import replace
 from typing import Any
 
 from Bio.Align import PairwiseAligner
@@ -100,11 +101,23 @@ def _aligner():
                            open_gap_score=-5.0, extend_gap_score=-0.5)
 
 
+def _comparison_signature(candidate, protein):
+    has_structure = not candidate.get("sequence_only", False)
+    junctions = _junction_positions(candidate) if has_structure else ()
+    return protein, junctions, has_structure
+
+
 def _score_signatures(signature_a, signature_b, *, max_alignment_cells, aligner_factory):
     # These experimental ranking rules remain GeneGalleon policy.
-    return _native_score_signatures(signature_a, signature_b,
+    protein_a, junctions_a, has_structure_a = signature_a
+    protein_b, junctions_b, has_structure_b = signature_b
+    compare_junctions = has_structure_a and has_structure_b
+    result = _native_score_signatures((protein_a, junctions_a if compare_junctions else ()),
+        (protein_b, junctions_b if compare_junctions else ()),
         max_alignment_cells=max_alignment_cells, aligner_factory=aligner_factory,
-        identity_weight=0.85, junction_weight=0.15, internal_gap_threshold=9)
+        identity_weight=0.85 if compare_junctions else 1.0,
+        junction_weight=0.15 if compare_junctions else 0.0, internal_gap_threshold=9)
+    return result if compare_junctions else replace(result, junction_similarity=0.0)
 
 
 def pair_score(candidate_a: dict, candidate_b: dict, *, max_alignment_cells: int = 25_000_000) -> PairScore:
@@ -112,8 +125,7 @@ def pair_score(candidate_a: dict, candidate_b: dict, *, max_alignment_cells: int
     protein_a, protein_b = _protein(candidate_a), _protein(candidate_b)
     if not protein_a or not protein_b or len(protein_a) * len(protein_b) > max_alignment_cells:
         return PairScore(0.0, 0.0, 0.0, 0.0, 0.0, 0, False, False, True)
-    return _score_signatures((protein_a, _junction_positions(candidate_a)),
-                             (protein_b, _junction_positions(candidate_b)),
+    return _score_signatures(_comparison_signature(candidate_a, protein_a), _comparison_signature(candidate_b, protein_b),
                              max_alignment_cells=max_alignment_cells, aligner_factory=_aligner)
 
 
@@ -131,7 +143,7 @@ class _PairScores:
     def signature(self, candidate: dict) -> tuple:
         identifier = id(candidate)
         if identifier not in self.signatures:
-            self.signatures[identifier] = (_protein(candidate), _junction_positions(candidate))
+            self.signatures[identifier] = _comparison_signature(candidate, _protein(candidate))
         return self.signatures[identifier]
 
     def get_aligner(self) -> PairwiseAligner:
@@ -196,6 +208,8 @@ def _selection(candidate: dict, node: tuple[str, str], status: str, reason: str,
 def locus_can_vote(locus: dict, candidate_limit: int = 32) -> bool:
     """Admission predicate shared by in-memory and streaming graph selection."""
     records = locus.get("candidates", [])
+    if locus.get("fixed_representative") and records:
+        return len(records) <= candidate_limit and _eligible(_baseline(locus, records))
     return len(records) <= candidate_limit and any(_eligible(candidate) for candidate in records)
 
 
@@ -246,6 +260,29 @@ def prepare_correspondence(node_keys, edges, *, coordinate_ambiguity=(), nonvoti
     return {"edge_by_pair": retained, "ambiguity": ambiguity, "coordinate_ambiguity": coordinates,
             "omitted_edges": [{"a": list(a), "b": list(b), "reason": reason}
                               for (a, b), reason in sorted(omitted.items())]}
+
+
+def isolated_selection(locus, node, policy, candidate_limit, copy_ambiguity):
+    """Produce the ordinary one-locus decision without building a graph."""
+    records = locus["candidates"]
+    baseline = _baseline(locus, records)
+    if policy == "longest":
+        eligible = ([baseline] if locus.get("fixed_representative") else
+                    [candidate for candidate in records
+                     if candidate.get("origin", "original") == "original" or _eligible(candidate)])
+        selected = min(eligible or [baseline], key=lambda candidate: (-_length(candidate), _candidate_id(candidate)))
+        return _selection(selected, node, "longest", "longest_corrected_cds"), False
+    coordinates = locus.get("ambiguous_coordinates", False)
+    if coordinates or copy_ambiguity:
+        reason = "ambiguous_locus_coordinates" if coordinates else "unresolved_paralog_copy"
+        return _selection(baseline, node, "ambiguous_correspondence", reason), True
+    if len(records) > candidate_limit:
+        reason = "candidate_limit_exceeded"
+    elif not locus_can_vote(locus, candidate_limit):
+        reason = "no_eligible_candidate"
+    else:
+        reason = "no_trusted_crossspecies_correspondence"
+    return _selection(baseline, node, "insufficient_evidence", reason), False
 
 
 def select_representatives(catalogs: list[dict], edges: list[dict], policy: str = "conserved", *,
@@ -299,7 +336,7 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
             # scale, retaining its actual length and other quality penalties.
             longest = max((_length(candidate) for candidate in eligible), default=max(1, _length(baselines[node])))
             quality[node] = {_candidate_id(candidate): _quality(candidate, longest) for candidate in records}
-            options[node] = eligible
+            options[node] = ([baselines[node]] if is_eligible(baselines[node]) else []) if locus.get("fixed_representative") else eligible
             if len(records) > candidate_limit:
                 options[node] = []
     nodes = sorted(loci)
@@ -307,8 +344,9 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
         # Preserve the legacy longest contract for source annotations.  New
         # predictions additionally require explicit representative permission;
         # catalog acceptance alone only allows retaining an alternate path.
-        longest_options = {node: [candidate for candidate in candidates[node]
-                                 if candidate.get("origin", "original") == "original" or is_eligible(candidate)]
+        longest_options = {node: ([baselines[node]] if loci[node].get("fixed_representative") else
+                                 [candidate for candidate in candidates[node]
+                                  if candidate.get("origin", "original") == "original" or is_eligible(candidate)])
                            for node in nodes}
         return {"schema": 1, "policy": policy, "selections": [
             _selection(min(longest_options[node] or [baselines[node]],
@@ -532,7 +570,8 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
             if baseline_pair.internal_loss_a:
                 return abstain("possible_species_specific_internal_region")
         result = _selection(proposed, node, "conserved", "supported_crossspecies_coding_isoform", proposed_score, margin)
-        if proposed.get("quality", {}).get("representative_admission") == "conservation_supported":
+        if (proposed.get("sequence_only", False)
+                or proposed.get("quality", {}).get("representative_admission") == "conservation_supported"):
             # An improved length/ORF quality score alone is insufficient when
             # relaxing the RNA gate. Compare both paths against the same final
             # adopted neighbors, keeping the existing copy/span/support gates.

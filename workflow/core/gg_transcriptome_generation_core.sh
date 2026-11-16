@@ -37,6 +37,7 @@ transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"
 transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}"
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+amalgkit_rrna_filter="${amalgkit_rrna_filter:-no}"
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"
 amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"
@@ -96,7 +97,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 try:
     mode = sys.argv[2]
-    if mode not in {'files', 'provenance'}:
+    if mode not in {'files', 'paired', 'provenance'}:
         raise ValueError(f"Unknown FASTQ discovery output mode: {mode}")
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f"FASTQ input directory must be a physical directory: {root}")
@@ -124,12 +125,28 @@ try:
             index = len(selected)
             provenance.extend(('--input', f'fastq_{index}={target}',
                                '--parameter', f'fastq_name_{index}={path.name}'))
+    if mode == 'paired':
+        from amalgkit.integrate import parse_fastq_basename, resolve_run_fastq_layout, validate_paired_fastq_structure
+
+        runs = {}
+        for path in selected:
+            name = Path(path).name
+            run, mate = parse_fastq_basename(name)
+            runs.setdefault(run, []).append(dict(path=path, mate=mate, basename=name))
+        for run, records in runs.items():
+            layout, first, second = resolve_run_fastq_layout(run, records)
+            if layout == 'paired' and not validate_paired_fastq_structure(first, second, run, max_records=4096):
+                raise ValueError(f"Empty paired-end FASTQ input for {run}")
 except (OSError, ValueError) as exc:
     print(f"Native FASTQ input discovery failed: {exc}", file=sys.stderr)
     raise SystemExit(1) from exc
-for value in selected if mode == 'files' else provenance:
+for value in provenance if mode == 'provenance' else selected:
     print(value)
 PY
+}
+
+discover_verified_native_fastq_files() {
+  discover_native_fastq_files "$1" paired
 }
 
 validate_native_fastq_provenance_bindings() {
@@ -1429,10 +1446,11 @@ has_resumable_getfastq_run_state() {
 bind_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local support_dir
+  support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import gzip
 import hashlib
 import json
 import math
@@ -1441,47 +1459,14 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, sys.argv[3])
+from fastq_proof import FastqChanged, proof_fastq
+
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
-
-
-def validate_fastq_gzip(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        return False
-    try:
-        with gzip.open(path, "rb") as handle:
-            record_count = 0
-            while True:
-                header = handle.readline()
-                if not header:
-                    break
-                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
-                    return False
-                sequence_length = 0
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    if line.startswith(b"+"):
-                        break
-                    sequence_length += len(line.rstrip(b"\r\n"))
-                if sequence_length == 0:
-                    return False
-                quality_length = 0
-                while quality_length < sequence_length:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    quality_length += len(line.rstrip(b"\r\n"))
-                if quality_length != sequence_length:
-                    return False
-                record_count += 1
-            return record_count > 0
-    except (EOFError, OSError, ValueError):
-        return False
 
 
 def safe_fastq_path(raw_value):
@@ -1506,17 +1491,15 @@ def safe_fastq_path(raw_value):
 
 def file_contract(raw_value):
     value, path = safe_fastq_path(raw_value)
-    if not validate_fastq_gzip(path):
-        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+    try:
+        complete, size, checksum = proof_fastq(path)
+    except FastqChanged:
         raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(value))
-    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+    except OSError:
+        complete = False
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
+    return {"path": value, "size": size, "sha256": checksum}
 
 
 def positive_number(value):
@@ -3706,6 +3689,22 @@ run_amalgkit_getfastq_or_fallback() {
 
 
 
+require_rnaspades_memory_budget() {
+  if [[ "${GG_SCHEDULER_KIND:-}" == slurm || -n "${SLURM_JOB_ID:-}" ]]; then
+    case "${GG_MEM_TOTAL_SOURCE:-unknown}" in
+      slurm-env|slurm-alloc-tres|explicit) ;;
+      *)
+        echo "rnaSPAdes: Slurm memory could not be verified. Use --mem/--mem-per-cpu or set GG_MEM_TOTAL_GB to the confirmed allocation. Refusing the estimated budget." >&2
+        return 1
+        ;;
+    esac
+  fi
+  if [[ ! "${1:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "rnaSPAdes: no memory remains after the assembly reserve. Increase the allocation or correct the reserve." >&2
+    return 1
+  fi
+}
+
 if [[ "${GG_CORE_SOURCE_ONLY:-0}" == "1" ]]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -3851,7 +3850,7 @@ if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
   dir_species_fastq="${dirs[${id}]}"
   sp_ub="$(basename "${dir_species_fastq}")"
   files_fastq=()
-  native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1
+  native_fastq_listing=$(discover_verified_native_fastq_files "${dir_species_fastq}") || exit 1
   if [[ -n "${native_fastq_listing}" ]]; then
     mapfile -t files_fastq <<< "${native_fastq_listing}"
   fi
@@ -4197,6 +4196,9 @@ assembly_provenance_args+=(
   --parameter "subsample_seed=11"
   --parameter "trinity_min_contig_length=200"
 )
+if [[ "${effective_assembly_method}" == rnaspades && "${protocol_rna_seq}" == mixed ]]; then
+  assembly_provenance_args+=(--parameter "mixed_library_selection=all")
+fi
 gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provenance_args[@]}" || exit $?
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -4228,6 +4230,9 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
     assembly_ram_reserved_gb=${GG_MEM_TOOL_RESERVE_GB}
   fi
   assembly_mem_gb=$((${GG_MEM_TOTAL_GB} - ${assembly_ram_reserved_gb}))
+  if [[ "${effective_assembly_method}" == 'rnaspades' ]]; then
+    require_rnaspades_memory_budget "${assembly_mem_gb}" || exit 1
+  fi
   if [[ ${assembly_cpus} -lt 1 ]]; then
     echo "Adjusted assembly_cpus from ${assembly_cpus} to 1 because it must be >=1."
     assembly_cpus=1
@@ -4303,64 +4308,25 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       echo "Paired-end samples were not detected. SE reads will be used for transcriptome assembly."
       lib_layout='single'
     else
-      echo "Paired-end samples were detected. PE reads and their same-run unpaired companions will be used; independent SE libraries will not be used."
+      echo "Paired-end samples were detected."
       lib_layout='paired'
     fi
 
-    selected_fastq_dir="./tmp_selected_fastq"
-    if [[ -e "${selected_fastq_dir}" ]]; then
-      rm -rf -- "${selected_fastq_dir}"
+    selected_fastq_dir=${dir_amalgkit_getfastq_sp}
+    # A mixed rnaSPAdes dataset also supports independent SE libraries.
+    include_independent_single=0
+    if [[ "${effective_assembly_method}" == rnaspades && "${protocol_rna_seq}" == mixed ]]; then
+      include_independent_single=1
     fi
-    mkdir -p "${selected_fastq_dir}"
-    if [[ "${effective_assembly_method}" == "rnaspades" && ${protocol_rna_seq} == "mixed" ]]; then
-      if [[ ${lib_layout} == 'single' ]]; then
-        mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" | sort)
-      elif [[ ${lib_layout} == 'paired' ]]; then
-        mapfile -t candidate_fastq_files < <(find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
-      fi
-      n_pair=${#candidate_fastq_files[@]}
-      if [[ ${n_pair} -ge 10 ]]; then
-        echo "Selecting top 9 ${lib_layout}-end fastq files by size to fit SPAdes/rnaSPAdes numbered library input slots (--s1..--s9 or --pe1..--pe9)."
-        echo "For details, please refer to the rnaSPAdes manual: https://ablab.github.io/spades/rna.html"
-        echo "Selected fastq files:"
-        if [[ ${lib_layout} == 'single' ]]; then
-          find "${dir_amalgkit_getfastq_sp}" -type f -name "*.amalgkit.fastq.gz" -exec du -b {} + |
-            sort -nr | head -n 9 | cut -f2 | while read -r file; do
-            cp_out "${file}" "${selected_fastq_dir}"
-            echo "${file}"
-          done
-        elif [[ ${lib_layout} == 'paired' ]]; then
-          find "${dir_amalgkit_getfastq_sp}" -type f -name "*_1.amalgkit.fastq.gz" -exec du -b {} + |
-            sort -nr | head -n 9 | cut -f2 | while read -r file1; do
-            file2="${file1/_1.amalgkit.fastq.gz/_2.amalgkit.fastq.gz}"
-            cp_out "${file1}" "${selected_fastq_dir}"
-            echo "${file1}"
-            cp_out "${file2}" "${selected_fastq_dir}"
-            echo "${file2}"
-            while IFS= read -r companion; do
-              cp_out "${companion}" "${selected_fastq_dir}"
-              echo "${companion}"
-            done < <(find_paired_companion_fastqs "${file1}")
-          done
-        fi
-      else
-        echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
-        selected_fastq_dir=${dir_amalgkit_getfastq_sp}
-      fi
-    else
-      echo "All ${lib_layout}-end fastq files will be used for transcriptome assembly."
-      selected_fastq_dir=${dir_amalgkit_getfastq_sp}
-    fi
-
-    if [[ ${lib_layout} == 'single' ]]; then
+    if [[ ${lib_layout} == single || ${include_independent_single} -eq 1 ]]; then
       total_fastq_len=$(get_total_fastq_len "${selected_fastq_dir}" "*.amalgkit.fastq.gz")
-    elif [[ ${lib_layout} == 'paired' ]]; then
+    else
       total_fastq_len1=$(get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz")
       total_fastq_len2=$(get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz")
       mapfile -t selected_left < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
       mapfile -t selected_companions < <(find_paired_companion_fastqs "${selected_left[@]}")
       total_fastq_len_unpaired=$(get_total_fastq_len_from_files "${selected_companions[@]}")
-      total_fastq_len=$((${total_fastq_len1} + ${total_fastq_len2} + ${total_fastq_len_unpaired}))
+      total_fastq_len=$((total_fastq_len1 + total_fastq_len2 + total_fastq_len_unpaired))
     fi
     max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
     if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
@@ -4374,7 +4340,7 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       proportion=$(awk -v max="${max_assembly_input_fastq_size}" -v total="${total_fastq_len}" 'BEGIN {printf "%.3f\n", max/total}')
       echo "Proportion of fastq reads to be used: ${proportion} (${max_assembly_input_fastq_size}/${total_fastq_len})"
       files=()
-      if [[ ${lib_layout} == 'single' ]]; then
+      if [[ ${lib_layout} == 'single' || ${include_independent_single} -eq 1 ]]; then
         mapfile -t files < <(find "${selected_fastq_dir}" -type f -name "*.amalgkit.fastq.gz" | sort)
       elif [[ ${lib_layout} == 'paired' ]]; then
         mapfile -t files1 < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
@@ -4407,10 +4373,21 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
         echo "Detected left/right counts: ${#files_left[@]}/${#files_right[@]}. Exiting."
         exit 1
       fi
+      expected_pair_count=${#files_left[@]}
+      expected_right_count=${#files_right[@]}
       if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then
         exit 1
       fi
-      mapfile -t files_unpaired < <(find_paired_companion_fastqs "${files_left[@]}")
+      if [[ ${include_independent_single} -eq 1 ]]; then
+        if [[ ${#files_left[@]} -ne ${expected_pair_count} || ${#files_right[@]} -ne ${expected_right_count} ]]; then
+          echo "Mixed-library rnaSPAdes requires every selected mate pair to pass validation." >&2
+          exit 1
+        fi
+        mapfile -t files_unpaired < <(find "${assembly_input_fastq_dir}" -type f -name '*.amalgkit.fastq.gz' \
+          ! -name '*_1.amalgkit.fastq.gz' ! -name '*_2.amalgkit.fastq.gz' | sort)
+      else
+        mapfile -t files_unpaired < <(find_paired_companion_fastqs "${files_left[@]}")
+      fi
       files_single=()
       for file in "${files_unpaired[@]}"; do
         if ! companion_count=$(fastq_num_seqs_from_file "${file}"); then
@@ -4418,6 +4395,9 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
         fi
         if [[ ${companion_count} -gt 0 ]]; then
           files_single+=("${file}")
+        elif [[ ${include_independent_single} -eq 1 && ! -f "${file%.amalgkit.fastq.gz}_1.amalgkit.fastq.gz" ]]; then
+          echo "Selected single-end library has no reads after sampling: ${file}" >&2
+          exit 1
         else
           echo "Unpaired companion has no reads after sampling: ${file}"
         fi
@@ -4493,23 +4473,10 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
           done
         fi
       elif [[ ${protocol_rna_seq} == "mixed" ]]; then
-        if [[ ${lib_layout} == 'single' ]]; then
-          for i in "${!files_single[@]}"; do
-            j=$((i + 1))
-            rnaspades_input_args+=("--s${j}" "${files_single[i]}")
-          done
-        elif [[ ${lib_layout} == 'paired' ]]; then
-          for i in "${!files_left[@]}"; do
-            j=$((i + 1))
-            rnaspades_input_args+=("--pe${j}-1" "${files_left[i]}" "--pe${j}-2" "${files_right[i]}")
-            companion="${files_left[i]%_1.amalgkit.fastq.gz}.amalgkit.fastq.gz"
-            for file in "${files_single[@]}"; do
-              if [[ "${file}" == "${companion}" ]]; then
-                rnaspades_input_args+=("--pe${j}-s" "${file}")
-              fi
-            done
-          done
-        fi
+        rnaspades_dataset="${dir_tmp}/rnaspades-dataset.yaml"
+        python "${gg_support_dir}/rnaspades_dataset.py" "${rnaspades_dataset}" \
+          "${#files_left[@]}" "${#files_right[@]}" "${files_left[@]}" "${files_right[@]}" "${files_single[@]}" || exit 1
+        rnaspades_input_args=(--dataset "${rnaspades_dataset}")
       else
         echo "Invalid value for 'protocol_rna_seq'. Please specify either 'same' or 'mixed'."
         echo "Exiting."

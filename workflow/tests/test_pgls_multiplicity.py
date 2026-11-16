@@ -114,6 +114,23 @@ def test_intercepts_invalid_values_and_empty():
     assert adjust_associations(rows().iloc[:0]).empty
 
 
+def test_nullable_missing_p_value_counts_as_represented_but_unusable():
+    frame = rows()
+    frame["p_value"] = frame["p_value"].astype("Float64")
+    frame.loc[1, "p_value"] = pd.NA
+
+    out = adjust_associations(frame)
+
+    assert str(out["p_value"].dtype) == "Float64"
+    assert pd.isna(out.loc[1, "p_value"])
+    assert out.p_value_usable.tolist() == [True, False, True, False, True]
+    assert out.global_n_associations.tolist() == [4, 4, 4, 4, 1]
+    assert out.global_n_usable.tolist() == [2, 2, 2, 2, 1]
+    assert out.p_value_global_bh.tolist() == pytest.approx([.04, float("nan"), .4, float("nan"), .02], nan_ok=True)
+    assert pd.isna(out.loc[1, "p_value_family_holm"])
+    assert pd.isna(out.loc[1, "p_value_family_bh"])
+
+
 def test_database_rebuild_from_comparison_only(tmp_path):
     sqlalchemy = pytest.importorskip("sqlalchemy")
     directory = tmp_path / "pgls_comparison"

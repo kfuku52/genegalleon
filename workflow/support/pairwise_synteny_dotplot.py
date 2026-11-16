@@ -4,7 +4,7 @@ import csv
 import re
 from collections import Counter
 from fractions import Fraction
-from itertools import combinations
+from heapq import heapify, heappop, heappush, nsmallest
 from pathlib import Path
 
 try:
@@ -264,6 +264,33 @@ def homoeolog_order(selected, genomes, anchors):
     for position, a in enumerate(target_track):
         for b in partners[a]:
             target_positions.setdefault(b, set()).add(position)
+    reciprocals = {count: Fraction(1, count) for count in set(counts.values())}
+    used = [set(), set()]
+
+    def best_tile(target):
+        a, b = target
+        available = (partners[a] & partners[b]) - used[1]
+        if len(available) < 2:
+            return None
+
+        def contribution(query):
+            first, second = counts[(a, query)], counts[(b, query)]
+            return reciprocals[first] + reciprocals[second], -(first + second), ranks[1][query], query
+
+        # The harmonic denominator and total support are additive across the
+        # query chromosomes, so the best tile uses the two best contributions.
+        contributions = map(contribution, available)
+        if len(available) == 2:
+            first, second = contributions
+        else:
+            first, second = nsmallest(2, contributions)
+        if first[2] > second[2]:
+            first, second = second, first
+        query = first[3], second[3]
+        score = 4 / (first[0] + second[0])
+        return (-score, first[1] + second[1], (ranks[0][a], ranks[0][b]),
+                (first[2], second[2]), target, query)
+
     candidates = []
     for position, a in enumerate(target_track):
         if len(partners[a]) < 2:
@@ -277,23 +304,27 @@ def homoeolog_order(selected, genomes, anchors):
         for other in sorted(eligible):
             if other <= position:
                 continue
-            b = target_track[other]
-            common = sorted(partners[a] & partners[b], key=ranks[1].__getitem__)
-            for c, d in combinations(common, 2):
-                support = [counts[(x, y)] for x in (a, b) for y in (c, d)]
-                score = 4 / sum((Fraction(1, n) for n in support), Fraction())
-                candidates.append((score, sum(support), (a, b), (c, d), support))
-    candidates.sort(key=lambda item: (-item[0], -item[1],
-                                     tuple(ranks[0][x] for x in item[2]), tuple(ranks[1][x] for x in item[3])))
-    used = [set(), set()]
+            tile = best_tile((a, target_track[other]))
+            if tile is not None:
+                candidates.append(tile)
+    heapify(candidates)
     groups = []
-    for score, total, target, query, support in candidates:
-        if any(used[i].intersection(track) for i, track in enumerate((target, query))):
+    while candidates and len(target_positions) - len(used[1]) >= 2:
+        score, total, _, _, target, query = heappop(candidates)
+        if used[0].intersection(target):
+            continue
+        if used[1].intersection(query):
+            # A stale tile is an upper bound for this target pair. Refresh it
+            # at the head of the queue to preserve the global greedy order.
+            replacement = best_tile(target)
+            if replacement is not None:
+                heappush(candidates, replacement)
             continue
         for i, track in enumerate((target, query)):
             used[i].update(track)
+        support = [counts[(a, b)] for a in target for b in query]
         groups.append({"target": list(target), "query": list(query), "anchor_counts_2x2": support,
-                       "harmonic_support": float(score), "unique_anchor_count": total})
+                       "harmonic_support": float(-score), "unique_anchor_count": -total})
     groups.sort(key=lambda group: min(ranks[0][x] for x in group["target"]))
     ordered = [[x for group in groups for x in group[side]] + [x for x in selected[i] if x not in used[i]]
                for i, side in enumerate(("target", "query"))]

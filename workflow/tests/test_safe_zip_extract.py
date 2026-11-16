@@ -73,6 +73,21 @@ def test_unsafe_members_are_rejected_without_replacing_existing_directory(
     assert not list(destination.parent.glob(".result.extract.*"))
 
 
+def test_file_cannot_be_an_ancestor_of_a_nested_member(tmp_path: Path):
+    archive_path = tmp_path / "file-parent.zip"
+    _write_zip(
+        archive_path,
+        [
+            ("result/first/second/value.txt", b"value"),
+            ("result/first", b"file"),
+        ],
+    )
+    output_root = tmp_path / "output"
+    with pytest.raises(SAFE.SafeZipError, match="nested below a file"):
+        SAFE.extract_expected_prefix(archive_path, output_root, "result")
+    assert list(output_root.iterdir()) == []
+
+
 def test_symlink_member_is_rejected(tmp_path: Path):
     archive_path = tmp_path / "symlink.zip"
     symlink = zipfile.ZipInfo("result/link")
@@ -155,6 +170,27 @@ def test_inode_preflight_treats_zero_as_exhausted(
 
     with pytest.raises(SAFE.SafeZipError, match="available=0"):
         SAFE.extract_expected_prefix(archive_path, tmp_path / "output", "result")
+
+
+def test_inode_preflight_counts_implicit_parents_of_empty_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    archive_path = tmp_path / "result.zip"
+    _write_zip(archive_path, [("result/first/second/", b"")])
+    real_statvfs = SAFE.os.statvfs
+
+    def one_inode_short(path):
+        values = list(real_statvfs(path))
+        values[7] = 3
+        return os.statvfs_result(values)
+
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(SAFE.os, "statvfs", one_inode_short)
+    with pytest.raises(SAFE.SafeZipError, match="required=4, available=3"):
+        SAFE.extract_expected_prefix(archive_path, output_root, "result")
+
+    assert list(output_root.iterdir()) == []
 
 
 def test_inode_preflight_accepts_filesystem_without_inode_accounting(

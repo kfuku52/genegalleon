@@ -657,7 +657,7 @@ def test_core_scripts_use_mkdir_p_for_known_task_directories():
     assert 'mkdir "${sp_ub}.jcvi_dotplot"' not in genome_annotation
     assert 'mkdir -p "${sp_ub}.jcvi_dotplot"' in genome_annotation
     assert 'mkdir "${selected_fastq_dir}"' not in transcriptome
-    assert 'mkdir -p "${selected_fastq_dir}"' in transcriptome
+    assert 'mkdir -p "${selected_fastq_dir}"' not in transcriptome
     assert 'mkdir "${assembly_input_fastq_dir}"' not in transcriptome
     assert 'mkdir -p "${assembly_input_fastq_dir}"' in transcriptome
 
@@ -1883,6 +1883,7 @@ def test_container_ghcr_builds_arm64_on_native_runner_without_qemu():
 
 def test_container_ghcr_resolves_moving_source_branches_once_per_build():
     workflow = _read_text(GITHUB_WORKFLOWS_DIR / "container-ghcr.yml")
+    resolver = _read_text(CONTAINER_SCRIPTS_DIR / "resolve_source_revisions.sh")
 
     source_names = (
         "amalgkit",
@@ -1892,14 +1893,14 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         "busco",
         "paml",
         "iqtree",
-        "kffractbias",
+        "locuskit",
         "kftools",
         "rkftools",
     )
     for output_name in source_names:
         assert f"{output_name}_repo_sha: ${{{{ steps.vars.outputs.{output_name}_repo_sha }}}}" in workflow
 
-    assert "source container/source_branches.env" in workflow
+    assert 'source "${script_dir}/../source_branches.env"' in resolver
     assert "container/scripts/resolve_source_revisions.sh --format env --scope all" in workflow
     assert "GG_PIN_" not in workflow
     for build_arg, output_name in (
@@ -1910,7 +1911,7 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         ("BUSCO_REPO_SHA", "busco_repo_sha"),
         ("PAML_REPO_SHA", "paml_repo_sha"),
         ("IQTREE_REPO_SHA", "iqtree_repo_sha"),
-        ("KFFRACTBIAS_REPO_SHA", "kffractbias_repo_sha"),
+        ("LOCUSKIT_REPO_SHA", "locuskit_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
     ):
@@ -2136,8 +2137,10 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert "--scan_pvalue_calibration none" in core
     assert "--scan_n_permutations 0" in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
-    assert 'mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
-    assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
+    assert '"${gg_support_dir}/diagnostic_archive.py" pack' in core
+    assert '    mv_out_bundle \\\n      "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
+    assert '"${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
+    assert '"${og_id}.csubst_scan_audit.zip" "${file_og_csubst_scan_audit}"' in core
 
 
 def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_chain():

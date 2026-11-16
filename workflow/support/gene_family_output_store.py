@@ -3384,16 +3384,33 @@ def completion_outputs_present(store: GeneFamilyOutputStore, family_id: str) -> 
         return _completion_outputs_present_unchecked(store, family_id)
 
 
-def completed_family_ids(store: GeneFamilyOutputStore, family_ids: Iterable[str]) -> Set[str]:
+def completed_family_ids(
+    store: GeneFamilyOutputStore,
+    family_ids: Iterable[str],
+    *,
+    _completion_locked: bool = False,
+) -> Set[str]:
+    locked_states = None
+    if _completion_locked and store.family_filter is None:
+        # Archival selection owns the candidate family locks and producer
+        # quiescence. The unfiltered state map stays valid for these families.
+        store._refresh_if_index_changed()
+        store._load_family_states()
+        locked_states = store._family_states
     completed: Set[str] = set()
     legacy_candidates: List[str] = []
     for family_id in family_ids:
-        state = store.family_state(family_id)
+        if locked_states is None:
+            state = store.family_state(family_id)
+        else:
+            observation = locked_states.get(family_id)
+            state = None if observation is None else observation[1]
         if state == "complete":
             completed.add(family_id)
         elif state is None:
             legacy_candidates.append(family_id)
-    store._refresh_if_index_changed()
+    if locked_states is None:
+        store._refresh_if_index_changed()
     for family_id in legacy_candidates:
         if _completion_outputs_present_unchecked(store, family_id):
             # Legacy outputs created before the family-state log was introduced.
@@ -4292,7 +4309,9 @@ def archive_completed_outputs(
                     store._write_index()
             live_family_ids = {family_id for potential in potential_by_subdir.values() for _, family_id in potential}
             eligible_family_ids = (
-                live_family_ids if include_incomplete else completed_family_ids(store, live_family_ids)
+                live_family_ids if include_incomplete else completed_family_ids(
+                    store, live_family_ids, _completion_locked=True,
+                )
             )
             if not eligible_family_ids:
                 return []

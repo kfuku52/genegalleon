@@ -27,9 +27,14 @@ gene_model_refinement_policy="${gene_model_refinement_policy:-conserved}"
 gene_model_refinement_isoform_adoption="${gene_model_refinement_isoform_adoption:-rna_required}"
 gene_model_refinement_mode="${gene_model_refinement_mode:-conservative}"
 gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
+gene_model_refinement_assembly_dir="${gene_model_refinement_assembly_dir-auto}"
+gene_model_refinement_rna_bam_dir="${gene_model_refinement_rna_bam_dir-auto}"
+gene_model_refinement_transcriptome_inputs="${gene_model_refinement_transcriptome_inputs:-}"
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
+gene_model_refinement_split_model_merges="${gene_model_refinement_split_model_merges:-}"
+gene_model_refinement_model_repairs="${gene_model_refinement_model_repairs:-}"
 gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
 gene_model_refinement_min_support="${gene_model_refinement_min_support:-2}"
 gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-32}"
@@ -48,6 +53,7 @@ gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
 gene_model_rescue_prediction_cache="${gene_model_rescue_prediction_cache:-}"
 gene_model_rescue_model_storage="${gene_model_rescue_model_storage:-compact}"
+gene_model_rescue_diagnostics="${gene_model_rescue_diagnostics:-}"
 gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs:-0}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
@@ -62,6 +68,7 @@ gene_model_species_profiles="${gene_model_species_profiles:-}"
 gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
+gene_model_rescue_model_repair_targets="${gene_model_rescue_model_repair_targets:-}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
 gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
@@ -128,7 +135,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=33
+format_contract_version=34
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
@@ -174,9 +181,9 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${input_generation_mode}" in
-  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
+  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
   *)
-    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
+    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
     exit 1
     ;;
 esac
@@ -230,6 +237,13 @@ do
     exit 1
   fi
 done
+case "${gene_model_rescue_diagnostics}" in
+  ''|summary|full|legacy) ;;
+  *)
+    echo "Invalid gene_model_rescue_diagnostics=${gene_model_rescue_diagnostics} (expected summary, full, or legacy)" >&2
+    exit 1
+    ;;
+esac
 
 if ! [[ "${download_timeout}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid download_timeout: ${download_timeout}"
@@ -280,6 +294,7 @@ gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-${gene_model_rescue_
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-$(dirname "${gene_model_rescue_dir}")/busco_guide_sketch_cache}"
 case "${gene_model_rescue_guide_dir}" in /*) ;; *) gene_model_rescue_guide_dir="${PWD}/${gene_model_rescue_guide_dir}" ;; esac
 case "${gene_model_rescue_guide_cache}" in /*) ;; *) gene_model_rescue_guide_cache="${PWD}/${gene_model_rescue_guide_cache}" ;; esac
+case "${gene_model_rescue_donor_plan:-}" in ""|/*) ;; *) gene_model_rescue_donor_plan="${PWD}/${gene_model_rescue_donor_plan}" ;; esac
 case "${gene_model_rescue_tree}" in auto|/*) ;; *) gene_model_rescue_tree="${PWD}/${gene_model_rescue_tree}" ;; esac
 case "${gene_model_rescue_gemoma_jar}" in ""|/*) ;; *) gene_model_rescue_gemoma_jar="${PWD}/${gene_model_rescue_gemoma_jar}" ;; esac
 input_generation_tmp_root="${input_generation_root}/tmp"
@@ -1488,10 +1503,11 @@ run_cds_fx2tab_for_one_file() {
 run_cds_fx2tab_stage_all() {
   local task="seqkit fx2tab for species CDS files"
   local source_species_input_fasta=()
-  local input_species_set=()
+  local source_species_names=()
+  local -A input_species_seen=()
   local fx2tab_output_files=()
-  local fx2tab_file fx2tab_base fx2tab_species fx2tab_species_found input_species
-  local seq_full seq_file sp_ub
+  local fx2tab_file fx2tab_species species_name
+  local index seq_full seq_file sp_ub
 
   if [[ ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1504,7 +1520,9 @@ run_cds_fx2tab_stage_all() {
   ensure_dir "${species_cds_fx2tab_dir}"
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
+    sp_ub=$(gg_species_name_from_path_or_dot "${path}")
     source_species_input_fasta+=( "${path}" )
+    source_species_names+=( "${sp_ub}" )
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for fx2tab: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
@@ -1519,32 +1537,25 @@ run_cds_fx2tab_stage_all() {
   fi
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
-    input_species_set+=( "${species_name}" )
-  done < <(gg_species_names_from_fasta_dir "${species_cds_dir}")
+    input_species_seen["${species_name}"]=1
+  done < <(printf '%s\n' "${source_species_names[@]}" | sort -u)
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     fx2tab_output_files+=( "${path}" )
   done < <(find "${species_cds_fx2tab_dir}" -maxdepth 1 -type f -name "*_fx2tab_cds.tsv" 2> /dev/null | sort)
   if [[ ${#fx2tab_output_files[@]} -gt 0 ]]; then
     for fx2tab_file in "${fx2tab_output_files[@]}"; do
-      fx2tab_base=$(basename "${fx2tab_file}")
-      fx2tab_species=$(gg_species_name_from_path_or_dot "${fx2tab_base}")
-      fx2tab_species_found=0
-      for input_species in "${input_species_set[@]}"; do
-        if [[ "${input_species}" == "${fx2tab_species}" ]]; then
-          fx2tab_species_found=1
-          break
-        fi
-      done
-      if [[ ${fx2tab_species_found} -eq 0 ]]; then
+      fx2tab_species=$(gg_species_name_from_path_or_dot "${fx2tab_file}")
+      if [[ -z "${fx2tab_species}" || -z "${input_species_seen[${fx2tab_species}]+present}" ]]; then
         handle_obsolete_input_generation_output "${fx2tab_file}" "fx2tab output for removed species" || return $?
       fi
     done
   fi
 
-  for seq_full in "${source_species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
+  for index in "${!source_species_input_fasta[@]}"; do
+    seq_full=${source_species_input_fasta[index]}
+    seq_file=${seq_full##*/}
+    sp_ub=${source_species_names[index]}
     gg_step_start "${task}: ${seq_file}"
     run_cds_fx2tab_for_one_file "${seq_full}" "${sp_ub}"
   done
@@ -1724,17 +1735,21 @@ run_species_busco_for_one_file() {
 run_species_busco_stage_all() {
   local task="BUSCO analysis of species CDS files"
   local source_species_input_fasta=()
+  local source_species_names=()
   local input_species_set=()
+  local -A input_species_seen=()
   local busco_output_files=()
-  local busco_file busco_base busco_species busco_species_found input_species
-  local seq_full seq_file sp_ub
+  local busco_file busco_species species_name
+  local index seq_full seq_file sp_ub
   local busco_stage_relevant=${run_species_busco}
 
   gg_step_start "${task}"
   stage_species_busco_status="running"
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
+    sp_ub=$(gg_species_name_from_path_or_dot "${path}")
     source_species_input_fasta+=( "${path}" )
+    source_species_names+=( "${sp_ub}" )
   done < <(gg_find_fasta_files "${species_cds_dir}" 1)
   echo "Number of CDS files for BUSCO: ${#source_species_input_fasta[@]}"
   if [[ ${#source_species_input_fasta[@]} -eq 0 ]]; then
@@ -1747,7 +1762,8 @@ run_species_busco_stage_all() {
   while IFS= read -r species_name; do
     [[ -n "${species_name}" ]] || continue
     input_species_set+=( "${species_name}" )
-  done < <(gg_species_names_from_fasta_dir "${species_cds_dir}")
+    input_species_seen["${species_name}"]=1
+  done < <(printf '%s\n' "${source_species_names[@]}" | sort -u)
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     busco_output_files+=( "${path}" )
@@ -1767,16 +1783,8 @@ run_species_busco_stage_all() {
   normalize_busco_table_naming "${species_busco_full_dir}" "${species_busco_short_dir}"
   if [[ ${#busco_output_files[@]} -gt 0 ]]; then
     for busco_file in "${busco_output_files[@]}"; do
-      busco_base=$(basename "${busco_file}")
-      busco_species=$(gg_species_name_from_path_or_dot "${busco_base}")
-      busco_species_found=0
-      for input_species in "${input_species_set[@]}"; do
-        if [[ "${input_species}" == "${busco_species}" ]]; then
-          busco_species_found=1
-          break
-        fi
-      done
-      if [[ ${busco_species_found} -eq 0 ]]; then
+      busco_species=$(gg_species_name_from_path_or_dot "${busco_file}")
+      if [[ -z "${busco_species}" || -z "${input_species_seen[${busco_species}]+present}" ]]; then
         handle_obsolete_input_generation_output "${busco_file}" "BUSCO output for removed species" || return $?
       fi
     done
@@ -1822,9 +1830,10 @@ run_species_busco_stage_all() {
   local busco_threads_per_job=$((GG_TASK_CPUS / busco_jobs))
   [[ ${busco_threads_per_job} -lt 1 ]] && busco_threads_per_job=1
   echo "BUSCO species parallelism: jobs=${busco_jobs}, threads_per_job=${busco_threads_per_job}"
-  for seq_full in "${source_species_input_fasta[@]}"; do
-    seq_file=$(basename "${seq_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${seq_file}")
+  for index in "${!source_species_input_fasta[@]}"; do
+    seq_full=${source_species_input_fasta[index]}
+    seq_file=${seq_full##*/}
+    sp_ub=${source_species_names[index]}
     gg_step_start "${task}: ${seq_file}"
     if [[ ${busco_jobs} -eq 1 ]]; then
       run_species_busco_for_one_file "${seq_full}" "${sp_ub}" "${busco_threads_per_job}"
@@ -2617,9 +2626,46 @@ resolve_oriongeno_candidate_inputs() {
   fi
 }
 
+refinement_assembly_directory() {
+  local directory="${gene_model_refinement_assembly_dir-auto}" path
+  [[ "${directory}" != auto ]] || directory="${gg_workspace_output_dir}/transcriptome_assembly"
+  [[ -n "${directory}" ]] || return 0
+  for path in "${directory}/assembled_transcripts_with_isoforms/"*_isoform.fa \
+              "${directory}/assembled_transcripts_with_isoforms/"*_isoform.fa.gz; do
+    if [[ -f "${path}" ]]; then
+      printf '%s\n' "${directory}"
+      return 0
+    fi
+  done
+}
+
+refinement_has_genomes() {
+  local path
+  for path in "${species_genome_dir}"/*; do
+    case "${path}" in
+      *.fa|*.fa.gz|*.fas|*.fas.gz|*.fasta|*.fasta.gz|*.fna|*.fna.gz)
+        [[ ! -f "${path}" ]] || return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
-  local -a rescue_args=()
+  local -a rescue_args=() guide_assembly_args=()
+  local assembly_dir
+  assembly_dir=$(refinement_assembly_directory)
+  if [[ -n "${assembly_dir}" ]]; then
+    guide_assembly_args=(--transcriptome-assembly-dir "${assembly_dir}" --gff-dir "${species_gff_dir}" --genome-dir "${species_genome_dir}")
+  fi
+  if [[ -n "${gene_model_rescue_donor_plan:-}" ]]; then
+    [[ "${rescue_tree}" != auto ]] || {
+      echo "Fixed donor rescue requires gene_model_rescue_tree with the target and fixed donors." >&2
+      return 1
+    }
+    rescue_args+=(--donor-plan "${gene_model_rescue_donor_plan}")
+  fi
   if [[ "${rescue_tree}" == auto ]]; then
     python "${gg_support_dir}/busco_guide_tree.py" build \
       --cds-dir "${species_cds_dir}" --full-dir "${species_busco_full_dir}" --short-dir "${species_busco_short_dir}" \
@@ -2627,7 +2673,7 @@ prepare_gene_model_rescue() {
       --markers "${gene_model_rescue_guide_markers}" --k "${gene_model_rescue_guide_k}" \
       --sketch-size "${gene_model_rescue_guide_sketch_size}" --occupancy "${gene_model_rescue_guide_occupancy}" \
       --minimum-shared "${gene_model_rescue_guide_minimum_shared}" --nearest "${gene_model_rescue_nearest_references}" \
-      --cpus "${GG_TASK_CPUS}" || return $?
+      --cpus "${GG_TASK_CPUS}" "${guide_assembly_args[@]}" || return $?
     rescue_tree="${gene_model_rescue_guide_dir}/guide_tree.nwk"
     rescue_args+=(--guide-tree-receipt "${gene_model_rescue_guide_dir}/receipt.json")
   fi
@@ -2648,11 +2694,14 @@ prepare_gene_model_rescue() {
     --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
+  [[ -z "${assembly_dir}" ]] || rescue_args+=(--transcriptome-assembly-dir "${assembly_dir}")
+  [[ -z "${gene_model_rescue_model_repair_targets}" ]] || rescue_args+=(--model-repair-targets "${gene_model_rescue_model_repair_targets}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
+  [[ -z "${gene_model_rescue_diagnostics}" ]] || rescue_args+=(--diagnostics "${gene_model_rescue_diagnostics}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
@@ -2718,7 +2767,9 @@ finish_gene_model_rescue() {
 }
 
 prepare_gene_model_refinement() {
-  local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
+  local genomic_inputs=0 assembly_dir rna_bam_dir
+  assembly_dir=$(refinement_assembly_directory)
+  local -a refinement_args=(plan --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
     --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
     --isoform-adoption "${gene_model_refinement_isoform_adoption}"
     --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"
@@ -2727,21 +2778,51 @@ prepare_gene_model_refinement() {
     --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
     --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
+  if [[ -n "${gene_model_rescue_donor_plan:-}" ]]; then
+    refinement_args+=(--donor-plan "${gene_model_rescue_donor_plan}")
+  fi
+  if [[ -n "${gene_model_refinement_target:-}" ]]; then
+    refinement_args+=(--target "${gene_model_refinement_target}")
+  fi
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
-  else
+    [[ "${taxonomy_species_tree}" == auto ]] || refinement_args+=(--species-tree "${taxonomy_species_tree}")
+    genomic_inputs=1
+  elif [[ -n "${gene_model_refinement_rescue_dir}" || ${run_gene_model_rescue} -eq 1 ]] ||
+       { [[ -z "${gene_model_refinement_transcriptome_inputs}" ]] &&
+         { [[ -n "${gene_model_rescue_donor_plan:-}" && -z "${gene_model_refinement_target:-}" ]] ||
+           { [[ -z "${gene_model_rescue_donor_plan:-}" ]] &&
+             { [[ -z "${assembly_dir}" ]] || refinement_has_genomes; }; }; }; }; then
     local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
     if [[ ! -s "${anchor_dir}/plan.json" ]]; then
       [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }
       prepare_gene_model_rescue
     fi
     refinement_args+=(--rescue-output "${anchor_dir}")
+    genomic_inputs=1
   fi
+  if [[ -n "${gene_model_refinement_transcriptome_inputs}" ]]; then
+    refinement_args+=(--transcriptome-inputs "${gene_model_refinement_transcriptome_inputs}")
+  elif [[ -n "${assembly_dir}" ]]; then
+    refinement_args+=(--transcriptome-assembly-dir "${assembly_dir}" --assembly-cpus "${GG_TASK_CPUS}")
+    local genetic_codes="${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv"
+    [[ ! -s "${genetic_codes}" ]] || refinement_args+=(--assembly-genetic-codes "${genetic_codes}")
+  fi
+  rna_bam_dir="${gene_model_refinement_rna_bam_dir-auto}"
+  if [[ "${rna_bam_dir}" == auto ]]; then
+    rna_bam_dir="${gg_workspace_input_dir}/refinement_rna_bam"
+    [[ -d "${rna_bam_dir}" ]] || rna_bam_dir=""
+  fi
+  [[ -z "${rna_bam_dir}" ]] || refinement_args+=(--rna-bam-dir "${rna_bam_dir}")
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
-  local oriongeno_inputs
-  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
-  [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
+  [[ -z "${gene_model_refinement_model_repairs}" ]] || refinement_args+=(--model-repairs "${gene_model_refinement_model_repairs}")
+  if [[ ${genomic_inputs} -eq 1 ]]; then
+    local oriongeno_inputs
+    oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+    [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  fi
   [[ -z "${gene_model_annevo_inputs:-}" ]] || refinement_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"
@@ -2749,7 +2830,11 @@ prepare_gene_model_refinement() {
 
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
-  python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
+  python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
+  if [[ -s "${gene_model_refinement_dir}/effective/sequence/inputs.tsv" ]]; then
+    echo "Selected sequence inputs: ${gene_model_refinement_dir}/effective/sequence/inputs.tsv"
+    [[ -s "${gene_model_refinement_dir}/effective/inputs.tsv" ]] || return 0
+  fi
   local refinement_review_dir="${gene_model_refinement_dir%/}.review"
   local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
   local -a swissprot_plot_args=()
@@ -2796,7 +2881,7 @@ finish_gene_model_refinement() {
 ensure_dir "${input_generation_root}"
 export GG_PERFORMANCE_DIR="${input_generation_root}/tmp/performance/$$"
 array_lock_mode=exclusive
-if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == refinement_catalog || "${input_generation_mode}" == refinement_predict ]]; then
+if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == rescue_predict || "${input_generation_mode}" == rescue_postprocess || "${input_generation_mode}" == refinement_catalog || "${input_generation_mode}" == refinement_predict ]]; then
   array_lock_mode=shared
 fi
 input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
@@ -2913,7 +2998,7 @@ case "${input_generation_mode}" in
     [[ -z "${gene_model_rescue_comparison_cache}" ]] || refinement_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
     python "${gg_support_dir}/gene_model_refinement.py" "${refinement_command}" "${refinement_args[@]}"
     if [[ "${refinement_command}" == correspondence ]]; then
-      python "${gg_support_dir}/gene_model_refinement.py" select --output "${gene_model_refinement_dir}"
+      python "${gg_support_dir}/gene_model_refinement.py" select --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
     fi
     ;;
   refinement_finalize)
@@ -2922,30 +3007,36 @@ case "${input_generation_mode}" in
   rescue_prepare)
     prepare_gene_model_rescue
     ;;
-  rescue_synteny|rescue_models)
+  rescue_synteny|rescue_models|rescue_predict|rescue_postprocess)
     write_run_summary_on_exit=0
-    if [[ "${input_generation_mode}" == rescue_models ]]; then
+    if [[ "${input_generation_mode}" != rescue_synteny ]]; then
       [[ "${GG_ARRAY_TASK_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid rescue worker index" >&2; exit 1; }
       ensure_dir "${gene_model_rescue_dir}/core-worker-locks"
       input_generation_lock "${gene_model_rescue_dir}/core-worker-locks/${GG_ARRAY_TASK_ID}.lock" exclusive
     fi
-    rescue_subcommand=synteny
-    [[ "${input_generation_mode}" != rescue_models ]] || rescue_subcommand=rescue
+    case "${input_generation_mode}" in
+      rescue_synteny) rescue_subcommand=synteny ;;
+      rescue_models) rescue_subcommand=rescue ;;
+      rescue_predict) rescue_subcommand=predict ;;
+      rescue_postprocess) rescue_subcommand=postprocess ;;
+    esac
     rescue_execution_args=()
     if [[ "${rescue_subcommand}" == synteny && -n "${gene_model_rescue_comparison_cache:-}" ]]; then
       rescue_execution_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
     fi
-    if [[ "${rescue_subcommand}" == rescue && "${gene_model_rescue_interval_workers:-0}" != 0 ]]; then
+    if [[ ( "${rescue_subcommand}" == rescue || "${rescue_subcommand}" == predict ) && "${gene_model_rescue_interval_workers:-0}" != 0 ]]; then
       rescue_execution_args+=(--interval-workers "${gene_model_rescue_interval_workers}")
     fi
     python "${gg_support_dir}/rescue_gene_models.py" "${rescue_subcommand}" --output "${gene_model_rescue_dir}" \
       --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
-    if [[ "${input_generation_mode}" == rescue_models ]]; then
-      rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}") || exit $?
+    if [[ "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == rescue_postprocess ]]; then
+      rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" \
+        --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}") || exit $?
       while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
         gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"
       done <<< "${rescue_qc_rows}"
-      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}"
+      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" \
+        --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}"
     fi
     ;;
   rescue_finalize)

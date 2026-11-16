@@ -328,7 +328,8 @@ def attach_context(branches, genes, directory, tree_path):
     files = sorted(Path(directory).glob("*_gene_taxonomy.tsv")) if directory else []
     if not files:
         return branches, genes
-    candidate_keys = {(species_key(g.gene_taxon), str(g.gene_id)) for g in genes.itertuples()}
+    gene_taxa = genes.gene_taxon.map(species_key)
+    candidate_keys = {(taxon, str(gene_id)) for taxon, gene_id in zip(gene_taxa, genes.gene_id, strict=True)}
     lookup, scaffold_metrics, seen_species = {}, {}, set()
     # Genome outputs are per species: never retain all species' full gene tables
     # together. Only candidate identities and candidate-scaffold totals survive.
@@ -360,8 +361,8 @@ def attach_context(branches, genes, directory, tree_path):
                     metrics.update({prefix + k: v for k, v in composition(selected.label, selected.count_unit).items()})
             scaffold_metrics[key] = metrics
     gene_contexts = []
-    for taxon, gene_id in zip(genes.gene_taxon, genes.gene_id, strict=True):
-        record = lookup.get((species_key(taxon), str(gene_id)))
+    for taxon, gene_id in zip(gene_taxa, genes.gene_id, strict=True):
+        record = lookup.get((taxon, str(gene_id)))
         if record is None:
             gene_contexts.append({"host_scaffold_status": "gene_not_mapped"})
             continue
@@ -373,24 +374,28 @@ def attach_context(branches, genes, directory, tree_path):
     _apply_context_rows(genes, gene_contexts, GENE_COLUMNS)
     recipients = recipient_species(tree_path)
     tree_species = set().union(*recipients.values())
-    gene_groups = {key: group for key, group in genes.groupby("orthogroup")}
+    branch_genes = genes[["orthogroup", "gene_id"]].assign(gene_taxon=gene_taxa)
+    gene_groups = {key: group for key, group in branch_genes.groupby("orthogroup")}
+    empty_genes = branch_genes.iloc[:0]
     branch_contexts = []
-    for _, branch in branches.iterrows():
+    for transfer_value, orthogroup, candidate_genes in zip(
+        branches.generax_transfer, branches.orthogroup, branches.candidate_genes, strict=True
+    ):
         context = {}
         branch_contexts.append(context)
-        transfer = str(branch.generax_transfer).split("@")
+        transfer = str(transfer_value).split("@")
         taxa = recipients.get(species_key(transfer[2])) if len(transfer) == 3 and transfer[0] == "Y" else None
         if taxa is None:
             context["host_scaffold_status"] = "recipient_unresolved"
             continue
-        group = gene_groups.get(branch.orthogroup, genes.iloc[:0])
-        ids = {g.strip() for g in str(branch.candidate_genes).split(";")}
+        group = gene_groups.get(orthogroup, empty_genes)
+        ids = {g.strip() for g in str(candidate_genes).split(";")}
         candidates = group.loc[group.gene_id.isin(ids)]
-        unknown_taxa = int((~candidates.gene_taxon.map(species_key).isin(tree_species)).sum())
-        selected = candidates.loc[candidates.gene_taxon.map(species_key).isin(taxa)]
+        unknown_taxa = int((~candidates.gene_taxon.isin(tree_species)).sum())
+        selected = candidates.loc[candidates.gene_taxon.isin(taxa)]
         mapped = []
         for taxon, gene_id in zip(selected.gene_taxon, selected.gene_id, strict=True):
-            record = lookup.get((species_key(taxon), str(gene_id)))
+            record = lookup.get((taxon, str(gene_id)))
             if record is not None:
                 mapped.append(record)
         keys = {(r.species, r.scaffold) for r in mapped}

@@ -120,6 +120,29 @@ def test_donor_aliases_and_native_predictions_are_not_independent_species(tmp_pa
     assert audit['path_status_counts'] == {'not_admitted': 1}
 
 
+def test_validation_during_nomination_preserves_order_and_audit(tmp_path):
+    genome, frozen, protein, _ = fixture(tmp_path, aliases=True, second_locus=True)
+    params = {**refinement.DEFAULTS, 'terminal_max_extension': 300}
+    proteins = {'Donor_one': {'p': protein, 'alias': protein}}
+    baseline, streamed = (tmp_path / name for name in ('baseline', 'streamed'))
+    baseline.mkdir()
+    streamed.mkdir()
+    with catalog.indexed_genome(genome) as sequence:
+        def validate(model):
+            return rescue.check_interval(rescue.validate_model(model, sequence, 1, params))
+
+        ownership = rescue.OwnershipIndex([])
+        raw, baseline_audit = native.nominate(frozen, 'Target_species', proteins, sequence,
+                                              ownership, params, baseline)
+        checked, streamed_audit = native.nominate(frozen, 'Target_species', proteins, sequence,
+                                                   ownership, params, streamed, validate=validate)
+        assert checked == [validate(model) for model in raw]
+    for audit in (baseline_audit, streamed_audit):
+        audit.pop('search_and_alignment_seconds')
+    assert streamed_audit == baseline_audit
+    assert streamed_audit['candidate_pairs'] == len(checked) == 8
+
+
 def test_frozen_gff_change_fails_before_search(tmp_path):
     genome, frozen, protein, _ = fixture(tmp_path)
     Path(frozen['predictions']['Target_species']['gff']).write_text('changed')
@@ -200,18 +223,21 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
     table.write_text(f'species\tgff\treceipt\n{target}\t{native_gff}\t{receipt}\n')
     old = directory / 'previous'
     args = rescue.parser().parse_args(['plan', '--cds-dir', str(directory/'cds'), '--gff-dir', str(directory/'gff'),
-        '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'),
+        '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'), '--genome-fallback', '0',
         '--tree', str(directory/'tree.nwk'), '--output', str(old), '--oriongeno-inputs', str(table)])
     plan = rescue.build_plan(args)
     for name in names:
         rescue.prepared(old, plan, name)
+
+    def build_empty_comparison(tmp, kind):
+        rescue.atomic_json(tmp / 'blocks.json', [])
+        if kind == 'pair':
+            # A completed pair comparison retains its raw alignment even with no hits.
+            (tmp / 'target.query.last').touch()
+
     for job in plan['synteny_jobs']:
         rescue.stage(old, Path('synteny')/job['id'], rescue.comparison_key(old, job),
-                     lambda tmp: rescue.atomic_json(tmp/'blocks.json', []))
-    # This fixture has no original nominated windows. Native rescue therefore
-    # supplies a real missing locus without relying on another search's hit.
-    monkeypatch.setattr(rescue, 'candidates', lambda *_: [])
-    monkeypatch.setattr(rescue, 'nominate_genome_only_candidates', lambda *_: ([], {}))
+                     lambda tmp, kind=job['kind']: build_empty_comparison(tmp, kind))
     for name in names:
         rescue.rescue(old, plan, name, 1)
     original = (old/'rescued'/target/'receipt.json').read_bytes()

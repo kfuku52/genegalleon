@@ -41,46 +41,57 @@ def attributes_text(attrs):
                     for key, values in attrs.items() if values)
 
 
-def source_annotation_path(path, *, repair_locus_ids=False):
+def source_annotation_path(path, *, repair_locus_ids=False, species_prefix=""):
     source = Path(path).resolve()
     stat = source.stat()
     view = _annotation_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
     if repair_locus_ids:
-        return _locus_view(view)[0]
+        return _locus_view(view, species_prefix)[0]
     return view
+
+
+def _task_locus_view(task):
+    source = source_annotation_path(task["gff_path"])
+    if str(task.get("gff_repair_mode", "safe")).strip().lower() == "off":
+        return source, {"version": 1, "status": "off", "mappings": [], "problems": []}
+    return _locus_view(source, task.get("species_prefix", ""))
 
 
 def task_annotation_path(task):
     from .coding_coordinates import coding_view
-    view = source_annotation_path(task["gff_path"],
-        repair_locus_ids=str(task.get("gff_repair_mode", "safe")).strip().lower() != "off")
-    return coding_view(task, view)[0]
+    return coding_view(task, _task_locus_view(task)[0])[0]
 
 
 def coding_coordinate_audit(task):
     from .coding_coordinates import coding_view
-    view = source_annotation_path(task["gff_path"],
-        repair_locus_ids=str(task.get("gff_repair_mode", "safe")).strip().lower() != "off")
-    return coding_view(task, view)[1]
+    return coding_view(task, _task_locus_view(task)[0])[1]
 
 
 def locus_identity_audit(task):
-    if not task.get("gff_path") or str(task.get("gff_repair_mode", "safe")).strip().lower() == "off":
+    if not task.get("gff_path"):
         return {"version": 1, "status": "off", "mappings": [], "problems": []}
-    return _locus_view(source_annotation_path(task["gff_path"]))[1]
+    return _task_locus_view(task)[1]
 
 
-def _locus_view(source):
+def _locus_view(source, species_prefix):
     source = Path(source)
     stat = source.stat()
-    return _cached_locus_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    return _cached_locus_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+                              species_prefix == "Arabidopsis_thaliana")
 
 
 @lru_cache(maxsize=4)
-def _cached_locus_view(source, _size, _mtime, _ctime):
+def _cached_locus_view(source, _size, _mtime, _ctime, is_arabidopsis):
     from .locus_identity import normalise_locus_ids
     try:
-        return normalise_locus_ids(source, _scratch.name)
+        if not is_arabidopsis:
+            return normalise_locus_ids(source, _scratch.name)
+        from .tair12_identity import normalise_tair12_ids
+        view, mappings = normalise_tair12_ids(source, _scratch.name)
+        view, audit = normalise_locus_ids(view, _scratch.name)
+        if mappings:
+            audit = {**audit, "status": "repaired", "tair12_gene_mappings": mappings}
+        return view, audit
     finally:
         stat = Path(source).stat()
         if (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) != (_size, _mtime, _ctime):

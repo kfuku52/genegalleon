@@ -1437,7 +1437,7 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
     assert first.returncode == 0, first.stdout + first.stderr
     tree = workspace / "output/species_tree"
     fasta = tree / "single_copy_cds_fasta"
-    report = tree / "busco_summary_table/busco_copy_selection.tsv"
+    report = tree / "busco_summary_table/busco_copy_selection.tsv.gz"
     summary = tree / "busco_summary_table/busco_summary.tsv"
 
     def marker_text(marker):
@@ -1450,7 +1450,7 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
         return gzip.decompress(path.read_bytes()).decode() if path.exists() else None
 
     assert marker_text("b1") is not None and marker_text("b2") is None
-    assert len(report.read_text().splitlines()) == 1
+    assert not report.exists()
     shared = summary.read_bytes()
 
     best = {**config, "species_tree_busco_duplicate_policy": "best_score"}
@@ -1467,6 +1467,21 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
     assert reused.returncode == 0, reused.stdout + reused.stderr
     assert report.stat().st_mtime_ns == report_mtime
 
+    if storage == "files":
+        receipt_path = workspace / "output/artifact_provenance/genome_evolution/species_tree.extract_fasta.json"
+        receipt = json.loads(receipt_path.read_text())
+        legacy_report = report.with_suffix("")
+        legacy_bytes = gzip.decompress(report.read_bytes())
+        legacy_report.write_bytes(legacy_bytes)
+        report.unlink()
+        audit_entry = next(row for row in receipt["outputs"] if row["label"] == "copy_selection")
+        audit_entry.update(path=audit_entry["path"].removesuffix(".gz"), size_bytes=len(legacy_bytes),
+                           sha256=hashlib.sha256(legacy_bytes).hexdigest())
+        receipt_path.write_text(json.dumps(receipt))
+        reused = _run_core(tmp_path, {**best, "artifact_stale_policy": "stop"})
+        assert reused.returncode == 0, reused.stdout + reused.stderr
+        assert legacy_report.read_bytes() == legacy_bytes and not report.exists()
+
     table = full / "Oryza_sativa.busco.full.tsv"
     table.write_text(table.read_text().replace("_d2\t100", "_d2\t120"))
     rescored = _run_core(tmp_path, best)
@@ -1479,7 +1494,7 @@ def test_busco_copy_policy_changes_rebuild_extraction_and_refresh_persistent_aud
     restored = _run_core(tmp_path, config)
     assert restored.returncode == 0, restored.stdout + restored.stderr
     assert marker_text("b2") is None
-    assert len(report.read_text().splitlines()) == 1
+    assert not report.exists()
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
@@ -1495,7 +1510,7 @@ def test_busco_copy_species_labels_use_input_species_even_for_shared_external_id
             text = gzip.decompress(archive.read(f"single_copy_cds_fasta/{marker}.pep.fa.gz")).decode()
             assert {line for line in text.splitlines() if line.startswith(">")} == {
                 ">Arabidopsis_thaliana", ">Oryza_sativa"}
-    audit = pandas.read_csv(tree / "busco_summary_table/busco_copy_selection.tsv", sep="\t")
+    audit = pandas.read_csv(tree / "busco_summary_table/busco_copy_selection.tsv.gz", sep="\t")
     assert set(audit.loc[audit["selected"] == 1, "gene_id"]) == {"external_d1"}
 
 
@@ -1513,7 +1528,7 @@ def test_busco_copy_failed_regeneration_preserves_previous_fastas_audit_and_rece
     tree = workspace / "output/species_tree"
     fasta = tree / "single_copy_cds_fasta"
     paths = [fasta.with_suffix(".zip")] if storage == "zip" else list(fasta.iterdir())
-    paths += [tree / "busco_summary_table/busco_copy_selection.tsv",
+    paths += [tree / "busco_summary_table/busco_copy_selection.tsv.gz",
               workspace / "output/artifact_provenance/genome_evolution/species_tree.extract_fasta.json"]
     saved = {path: path.read_bytes() for path in paths}
     table = full / "Oryza_sativa.busco.full.tsv"
@@ -1615,8 +1630,8 @@ def test_species_tree_best_score_selection_is_provenance_bound(tmp_path):
     completed = _run_core(tmp_path, {"run_orthofinder": "0", "run_extract_species_tree_fasta": "1",
                                      "species_tree_busco_copy_policy": "best-score"})
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    audit = output / "species_tree/busco_representative_selection.tsv"
-    assert "Arabidopsis_thaliana_high\t20.0\t8\tDuplicated\t1" in audit.read_text()
+    audit = output / "species_tree/busco_representative_selection.tsv.gz"
+    assert b"Arabidopsis_thaliana_high\t20.0\t8\tDuplicated\t1" in gzip.decompress(audit.read_bytes())
     receipt = json.loads((output / "artifact_provenance/genome_evolution/species_tree.extract_fasta.json").read_text())
     assert receipt["parameters"]["copy_policy"] == "best-score"
     assert any(row["label"] == "busco_full_tables" for row in receipt["inputs"])

@@ -151,7 +151,7 @@ transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}" # Maximum f
 # Assembly and quantification parameters
 max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
 assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.
-protocol_rna_seq="mixed" # {same,mixed}; rnaSPAdes library protocol handling. Use "same" when all FASTQ libraries share the same RNA-seq library/preparation protocol, so GeneGalleon passes them as one rnaSPAdes library group. Use "mixed" when libraries may come from different protocols or samples, so GeneGalleon passes each library separately as a numbered SPAdes/rnaSPAdes library (--s1..--s9 or --pe1..--pe9); if 10 or more mixed libraries are detected, GeneGalleon first keeps only the 9 largest libraries to fit those numbered input slots, then applies max_assembly_input_fastq_size by subsampling reads from the retained libraries when their combined FASTQ length exceeds the cap.
+protocol_rna_seq="mixed" # {same,mixed}; mixed preserves distinct libraries using a SPAdes dataset. Set same only when all reads use the same library protocol.
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}" # {auto,kallisto,oarfish}; auto selects kallisto for short-read runs and oarfish for long-read runs.
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}" # {auto,ont-cdna,ont-drna,pac-bio,pac-bio-hifi}; auto infers long-read subtype from metadata for oarfish.
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-style option string forwarded to amalgkit quant --oarfish_options.

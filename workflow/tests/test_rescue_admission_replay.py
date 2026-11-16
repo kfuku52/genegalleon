@@ -1,11 +1,13 @@
 """Real genomic admission from frozen evidence, without another prediction run."""
 import copy
+import csv
 import importlib
 import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -14,6 +16,40 @@ sys.path.insert(0, str(SUPPORT))
 rescue = importlib.import_module('rescue_gene_models')
 replay = importlib.import_module('rescue_admission_replay')
 store = importlib.import_module('rescue_model_store')
+
+
+def test_rewrite_table_preserves_csv_records_and_logical_ordinals(tmp_path):
+    source = tmp_path / 'audit.tsv'
+    source.write_bytes(
+        'query\tnote\r\nunchanged\t植物\r\n\rquoted\t"tab\tand\r\nnewline"\r'
+        'updated\t"old ""quote"""\nsummary\tbare"quote'.encode()
+    )
+    result = tmp_path / 'replayed.tsv'
+    updates = {3: {'query': 'updated', 'note': 'new\ttext'}}
+    appended = [{'query': 'appended', 'note': 'more'}]
+
+    def make_row(model):
+        return model['query'], model['note']
+
+    replay._rewrite_table(source, result, updates, appended, make_row, 4, allow_tail=True)
+    assert result.read_bytes() == (
+        'query\tnote\nunchanged\t植物\n\nquoted\t"tab\tand\r\nnewline"\n'
+        'updated\t"new\ttext"\nappended\tmore\nsummary\t"bare""quote"\n'.encode()
+    )
+    with pytest.raises(ValueError, match='audit order changed'):
+        replay._rewrite_table(source, tmp_path / 'bad-order.tsv', {2: updates[3]}, appended, make_row, 5)
+
+
+def test_rewrite_table_still_enforces_csv_field_limit(tmp_path):
+    source = tmp_path / 'audit.tsv'
+    limit = 16
+    source.write_text('query\tnote\n' + 'x' * (limit + 1) + '\tnote\n')
+    previous = csv.field_size_limit(limit)
+    try:
+        with pytest.raises(csv.Error, match='field larger than field limit'):
+            replay._rewrite_table(source, tmp_path / 'too-large.tsv', {}, [], tuple, 1)
+    finally:
+        csv.field_size_limit(previous)
 
 
 @pytest.fixture
@@ -47,14 +83,15 @@ def completed(tmp_path, request):
         files.update({str(p): rescue.digest(p) for p in directory.iterdir()})
     defaults = {a.dest: a.default for a in rescue.parser()._subparsers._group_actions[0].choices['plan']._actions}
     params = {key: defaults[key] for key in rescue.PARAMETERS}
-    plan = {'output': str(root), 'species': names, 'common_references': [names[1]],
+    history_case = getattr(request, 'param', None)
+    targets = names[:1] if history_case == 'donor-only' else names
+    plan = {'output': str(root), 'species': targets, 'common_references': [names[1]],
             'donors': {names[0]: [names[1]], names[1]: [names[0]]},
             'nearest_references': {names[0]: [names[1]], names[1]: [names[0]]},
             'synteny_jobs': [{'id': 'comparison_000001', 'index': 1, 'a': names[0], 'b': names[1], 'kind': 'pair'}],
             'request': {'schema': rescue.SCHEMA, 'sources': sources, 'files': files, 'parameters': params,
                         'tools': tools, 'species_profiles': {}, 'gemoma_jar': None,
                         'output_storage': {'format': 'compact', 'retain_search_inputs': False}}}
-    history_case = getattr(request, 'param', None)
     if history_case in {'separate-history', 'separate-code', 'duplicate-history'}:
         ancestor = tmp_path / 'separate-annotation-history'
         ancestor.mkdir()
@@ -99,24 +136,33 @@ def completed(tmp_path, request):
     rejected = copy.deepcopy(intact)
     rejected.update(query='strict-rejection', seqid='disrupted', sequence='ATGTAATAA', problems=['internal_stop'])
     rows = [intact, rejected]
-    for name in names:
+    diagnostics = getattr(request, 'param', 'legacy')
+    diagnostic = rescue.rescue_diagnostics
+    if diagnostics == 'summary':
+        for model in rows:
+            model['quality_evidence'] = rescue.model_quality(model, 1)
+    for name in targets:
         records = rows if name == names[0] else []
         def build(tmp, records=records, name=name):
             store.write_model_store(tmp, records, shard_bytes=400, codec='gzip')
             rescue.atomic_json(tmp / 'candidates.json', [])
             rescue.atomic_json(tmp / 'search_inputs.json', {'prepared_receipts': {}, 'schema': 1})
-            rescue.write_tsv(tmp / 'audit.tsv', ['candidate', 'donor_gene', 'status', 'reasons', 'coverage', 'identity', 'model_id'],
-                             [(m['query'], m['evidence']['query'], m['status'], ','.join(m['problems']), 1, 1, '') for m in records]
-                             + [('no-result', donor, 'unresolved', 'no_alignment', '', '', '')])
-            rescue.write_tsv(tmp / 'quality_flags.tsv', ['candidate', 'model_id', 'status', 'start_codon',
-                             'donor_n_terminus_aligned', 'donor_c_terminus_aligned', 'donor_species', 'flags',
-                             'donor_aligned_query_fraction', 'donor_internal_unaligned_query_fraction'],
-                             [(m['query'], '', m['status'], '', '', '', '', '', '', '') for m in records])
+            if diagnostics == 'summary':
+                rescue.atomic_json(tmp / diagnostic.SUMMARY,
+                    {'schema': 1, **diagnostic.summarize(records), 'unresolved_queries': 1})
+                diagnostic.write_table(tmp / diagnostic.UNRESOLVED, ('candidate', 'donor_gene'),
+                                       [('no-result', donor)])
+            else:
+                diagnostic.write_table(tmp / diagnostic.detail_name('audit.tsv', diagnostics), diagnostic.AUDIT,
+                    [diagnostic.audit_row(m) for m in records] + [diagnostic.unresolved_row('no-result', donor)])
+                diagnostic.write_table(tmp / diagnostic.detail_name('quality_flags.tsv', diagnostics), diagnostic.QUALITY,
+                    [(m['query'], '', m['status'], '', '', '', '', '', '', '') for m in records])
             (tmp / 'unknown.txt').write_text('complete original publication\n')
         rescue.stage(root, Path('rescued') / name, rescue.rescue_key(root, plan, name), build)
     return root, source, plan, rows
 
 
+@pytest.mark.parametrize('completed', ['legacy', 'full', 'summary'], indirect=True)
 def test_standard_replay_reuses_evidence_rechecks_admission_and_retains_rejections(completed, tmp_path, monkeypatch):
     previous, producer, old, rows = completed
     before = {str(p): p.read_bytes() for p in previous.rglob('*') if p.is_file()}
@@ -142,13 +188,104 @@ def test_standard_replay_reuses_evidence_rechecks_admission_and_retains_rejectio
     assert current[0]['unknown'] == rows[0]['unknown']
     assert calls == ['transfer']
     assert list(store.iter_accepted_models(result)) == [current[0]]
-    audit = (result / 'audit.tsv').read_text().splitlines()
-    assert audit[-1].startswith('no-result\t') and len(audit) == 4
+    diagnostic = rescue.rescue_diagnostics
+    if (result / diagnostic.SUMMARY).exists():
+        summary = json.loads((result / diagnostic.SUMMARY).read_text())
+        assert summary['status_counts'] == {'accepted': 1, 'unresolved': 1}
+        assert summary['reason_counts'] == {'internal_stop': 1}
+        assert list(diagnostic.unresolved_rows(result))[0][0] == 'no-result'
+        assert diagnostic.legacy_table(result, 'audit.tsv') is None
+    else:
+        with diagnostic.text_open(diagnostic.legacy_table(result, 'audit.tsv'), 'r') as stream:
+            audit = stream.read().splitlines()
+        assert audit[-1].startswith('no-result\t') and len(audit) == 4
     assert (result / 'unknown.txt').read_text() == 'complete original publication\n'
     proof = json.loads((result / 'admission_replay.json').read_text())
     assert proof['full_stream_verified'] and proof['admitted_cds_freshly_validated']
     assert proof['counts'] == {'raw_records': 2, 'admission_rechecked': 1, 'unchanged_strict_rejections': 1}
     assert {str(p): p.read_bytes() for p in previous.rglob('*') if p.is_file()} == before
+
+
+def test_replay_refuses_a_corrupt_parallel_sidecar_copy(completed, tmp_path, monkeypatch):
+    previous, producer, _old, _rows = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    replay.prepare(output, plan, 2)
+    copyfileobj = replay.shutil.copyfileobj
+
+    def corrupt(source, target, *args, **kwargs):
+        copyfileobj(source, target, *args, **kwargs)
+        if Path(source.name).name == 'unknown.txt':
+            target.write(b'changed')
+
+    monkeypatch.setattr(replay.shutil, 'copyfileobj', corrupt)
+    with pytest.raises(ValueError, match='Admission sidecar changed during copying'):
+        rescue.rescue(output, plan, 'Target_species', 4)
+    assert not (output / 'rescued/Target_species').exists()
+
+
+def test_parallel_prepare_can_resume_after_one_donor_copy_fails(completed, tmp_path, monkeypatch):
+    previous, producer, _, _ = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    copy_verified = rescue.copy_verified_comparison
+    target = output / 'prepared/Target_species/receipt.json'
+    target_published = Event()
+    stage = rescue.stage
+
+    def fail_donor(source, destination, key, workers):
+        if source.name == 'Relative_species':
+            assert target_published.wait(timeout=30)
+            raise OSError('failed donor copy')
+        return copy_verified(source, destination, key, workers)
+
+    def record_publication(root, relative, *args, **kwargs):
+        directory = stage(root, relative, *args, **kwargs)
+        if directory == target.parent:
+            target_published.set()
+        return directory
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, 'copy_verified_comparison', fail_donor)
+        patch.setattr(rescue, 'stage', record_publication)
+        with pytest.raises(OSError, match='failed donor copy'):
+            replay.prepare(output, plan, 2)
+    inode = target.stat().st_ino
+    assert not (output / 'prepared/Relative_species').exists()
+    assert not (output / 'synteny').exists()
+
+    replay.prepare(output, plan, 2)
+    assert target.stat().st_ino == inode
+    assert (output / 'prepared/Relative_species/receipt.json').is_file()
+    assert (output / 'synteny/comparison_000001/receipt.json').is_file()
+
+
+@pytest.mark.parametrize('member', ['prepared', 'genome', 'producer', 'plan'])
+def test_replay_checks_verified_inputs_after_hashing_outputs(completed, tmp_path, monkeypatch, member):
+    previous, producer, _, _ = completed
+    output = tmp_path / 'new-generation'
+    plan = replay.build_plan(previous, producer, output)
+    replay.prepare(output, plan, 2)
+    if member == 'prepared':
+        path = output / 'prepared/Target_species/genes.pep'
+    elif member == 'genome':
+        path = Path(plan['request']['sources']['Target_species']['genome'])
+    elif member == 'producer':
+        path = previous / 'rescued/Target_species/unknown.txt'
+    else:
+        path = output / 'plan.json'
+    hash_outputs = rescue.hash_outputs
+
+    def change_after_hashing(directory, **kwargs):
+        hashes = hash_outputs(directory, **kwargs)
+        with path.open('ab') as handle:
+            handle.write(b'changed')
+        return hashes
+
+    monkeypatch.setattr(rescue, 'hash_outputs', change_after_hashing)
+    with pytest.raises((ValueError, OSError), match='changed'):
+        rescue.rescue(output, plan, 'Target_species', 2)
+    assert not (output / 'rescued/Target_species').exists()
 
 
 @pytest.mark.parametrize('fault', ['validator', 'raw-module', 'runtime', 'unbound-source', 'native-confirmation'])
@@ -217,9 +354,11 @@ def test_native_unconfirmed_and_structural_failures_are_not_cleared():
                    'frameshift', 'internal_stop', 'invalid_phase', 'assembly_gap_within_model_span'):
         row = {'problems': [reason, 'competing_new_models'], 'status': 'unresolved'}
         assert not replay.eligible(row)
-        assert replay.reset_admission(row)['problems'] == [reason]
+        replay.reset_admission(row)
+        assert row == {'problems': [reason]}
 
 
+@pytest.mark.parametrize('completed', [None, 'donor-only'], indirect=True)
 def test_standard_cli_owns_plan_import_worker_and_resume(completed, tmp_path):
     previous, source, _, _ = completed
     output = tmp_path / 'cli'

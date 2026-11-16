@@ -43,6 +43,31 @@ points = as.numeric(system2('python', c('-c',shQuote(read_width),shQuote(file)),
 stopifnot(abs(points * 25.4/72 - a$width_mm) < 25.4/72)
 cat('Physical layout tests passed. Output:',file,'\n')
 
+# Display text does not change the IDs used to align annotation panels.
+taxon <- 'Pityrogramma_trifoliata'
+scaffold <- 'scaffold-UJTT-2002501'
+long <- paste0(taxon, '_', taxon, '_', scaffold, '-', taxon, '-A')
+ids <- c(long, 'REF_MF417642.1', 'Alsophila_spinulosa_Alsophila_spinulosa_Aspi01Gene06912',
+         'Arabidopsis_thaliana_AT1G08465.1')
+tips <- list(tree=list(data=data.frame(isTip=TRUE, label=ids, y=seq_along(ids), tiplab_color='black')))
+opts <- list(font_size=6, font_size_factor=0.352777778, margins=rep(0,4))
+aliases <- tempfile(fileext='.tsv')
+writeLines(c('tip_id\tdisplay_label', 'REF_MF417642.1\tAnthoceros agrestis MTPSL3 (MF417642.1)'), aliases)
+pdf(NULL)
+annotated <- add_tiplabel_column(tips, c(opts, list(tip_label_table=aliases)))[['tiplabel']]
+expected <- c(paste0(taxon, '_', scaffold, '-A'), 'Anthoceros agrestis MTPSL3 (MF417642.1)',
+              'Alsophila_spinulosa_Aspi01Gene06912', ids[4L])
+stopifnot(identical(as.character(annotated$data$label), ids),
+          identical(ggplot_build(annotated)$data[[1]]$label, expected))
+writeLines(c('tip_id\tdisplay_label', paste(long, ids[4L], sep='\t')), aliases)
+collision <- add_tiplabel_column(tips, c(opts, list(tip_label_table=aliases)))[['tiplabel']]
+stopifnot(identical(collision$data$display_label[c(1L,4L)], ids[c(1L,4L)]))
+writeLines(c('tip_id\tdisplay_label', 'missing\tUnknown'), aliases)
+stopifnot(inherits(try(add_tiplabel_column(tips, c(opts, list(tip_label_table=aliases))),
+                      silent=TRUE), 'try-error'))
+dev.off()
+unlink(aliases)
+
 # Compact annotation columns and independent legend filtering.
 pdf(NULL)
 keys <- sprintf('motif%02d', 1:30)

@@ -105,7 +105,7 @@ def gene_ranks(genes, track):
 
 
 def ordered_bed(path):
-    """Validate with kfFractBias while preserving the native JCVI display ranks."""
+    """Validate with LOCUSKIT while preserving the native JCVI display ranks."""
     from jcvi.formats.bed import Bed
 
     genes = {gene.gene_id: gene for gene in read_bed(path)}

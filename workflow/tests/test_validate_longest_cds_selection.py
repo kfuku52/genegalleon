@@ -111,6 +111,27 @@ def test_validate_longest_cds_selection_passes_for_raw_cds_inputs(tmp_path):
     assert stats["multi_isoform_genes_total"] == 1
 
 
+def test_longest_cds_comparison_uses_first_record_for_duplicate_id(tmp_path):
+    raw = tmp_path / "source.fa"
+    raw.write_text(">gene1.t1 gene=gene1\nATGAAATTT\n")
+    cds_dir = tmp_path / "species_cds"
+    cds_dir.mkdir()
+    output = cds_dir / "Test_species.fa.gz"
+    write_gzip_text(output, ">Test_species_gene1\natgaaa ttt\n>Test_species_gene1 duplicate\nCAT\n")
+    summary = tmp_path / "summary.tsv"
+    write_species_summary(summary, [{
+        "provider": "direct", "species_key": "Test_species", "species_prefix": "Test_species",
+        "cds_input_path": str(raw), "cds_output_path": str(output),
+        "cds_sequences_before": "1", "cds_sequences_after": "1", "aggregated_cds_removed": "0",
+    }])
+    result = run_script("--species-cds-dir", str(cds_dir), "--species-summary", str(summary), "--nthreads", "1")
+
+    assert result.returncode == 1
+    assert "duplicate_output_ids=1 sample=Test_species_gene1" in result.stderr
+    assert "sequence_mismatch=" not in result.stderr
+    assert "length_mismatch=" not in result.stderr
+
+
 def test_cli_retains_and_reports_unresolved_source_gene_coverage(tmp_path):
     raw, gff, formatted = tmp_path / "raw.fa", tmp_path / "source.gff", tmp_path / "species_cds/Test_species.fa.gz"
     formatted.parent.mkdir()

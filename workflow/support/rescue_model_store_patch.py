@@ -7,12 +7,18 @@ import math
 import os
 import shutil
 import tempfile
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import ExitStack
+from multiprocessing import get_context
 from pathlib import Path
 
 try:
     import rescue_model_store as store
+    from stage_output_hashes import hash_paths
 except ImportError:
     from . import rescue_model_store as store
+    from .stage_output_hashes import hash_paths
 
 
 def _copy(source, destination, expected):
@@ -42,15 +48,90 @@ def _same_json_value(a, b):
     return store._json(a) == store._json(b)
 
 
+def _patch_shard(source_store, temporary, shard, expected, codec, level, changes):
+    normalized = set()
+    with ExitStack() as resources:
+        source_bodies = None
+        name = shard['path']
+        seen = 0
+        with store._writer(temporary / name, codec, level) as out:
+            for envelope in store._lines(source_store / name, codec, expected):
+                ordinal = shard['first'] + seen
+                if envelope.get('ordinal') != ordinal:
+                    raise ValueError('Patch source candidate order changed')
+                if ordinal in changes:
+                    # Serialize only the current record. A cohort can have
+                    # millions of changed candidates with large DNA bodies.
+                    # The final write validates the envelope once, with
+                    # its ordinal, before publishing any candidate bytes.
+                    replacement_body, replacement = store._pack(changes[ordinal], _validate_envelope=False)
+                    replacement['ordinal'] = ordinal
+                    if replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence'):
+                        raise ValueError('Admission patch changed predictor/DNA or partial evidence')
+                    if replacement['body'] != envelope['body']:
+                        # Earlier v1 producers put donor metrics in shared
+                        # bodies. Prove the same predictor values before
+                        # normalizing just the changed candidate's layout.
+                        if source_bodies is None:
+                            db = store._readonly(source_store / 'bodies.sqlite')
+                            resources.callback(db.close)
+                            source_bodies = store._Bodies(db, codec)
+                        raw_body = source_bodies.read(envelope['body'])
+                        original = store._unpack(envelope, raw_body)
+                        body_keys = json.loads(raw_body)
+                        if (store._pack(original)[0] != replacement_body
+                                or any(k not in changes[ordinal]
+                                       or not _same_json_value(original[k], changes[ordinal][k])
+                                       for k in body_keys)):
+                            raise ValueError('Admission patch changed predictor/DNA values')
+                        normalized.add(ordinal)
+                    else:
+                        immutable = ('coverage', 'identity', 'query_span_coverage', 'query_start', 'query_end',
+                                     'query_length', 'query', 'id', 'paf', 'raw_prediction', 'genetic_code')
+                        a, b = envelope['context'], replacement['context']
+                        if any((k in a) != (k in b) or (k in a and not _same_json_value(a[k], b[k]))
+                               for k in immutable):
+                            raise ValueError('Admission patch changed predictor/DNA values')
+                    envelope = replacement
+                out.write(store._json(envelope) + b'\n')
+                seen += 1
+        if seen != shard['count']:
+            raise ValueError('Patch source shard count changed')
+    return normalized
+
+
+def _patch_shards(source, output, shards, manifest, ordered_changes, changes, workers):
+    def args(shard, first, last):
+        name = shard['path']
+        return (source, output, shard, manifest['files'][name], manifest['codec'],
+                manifest['compression_level'], {i: changes[i] for i in ordered_changes[first:last]})
+
+    if workers == 1 or len(shards) < workers * 2:
+        for shard, first, last in shards:
+            yield from _patch_shard(*args(shard, first, last))
+        return
+    pending = deque()
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as pool:
+        for shard, first, last in shards:
+            pending.append(pool.submit(_patch_shard, *args(shard, first, last)))
+            if len(pending) >= workers * 2:
+                yield from pending.popleft().result()
+        while pending:
+            yield from pending.popleft().result()
+
+
 def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,
-                      append_partial_evidence=False):
+                      append_partial_evidence=False, publication_workers=1):
     """Amend decisions without rewriting unselected DNA bodies or candidates.
 
     Existing coordinates, sequences, predictor values and partial evidence must
     remain exact. New independently validated records may only be appended.
     Unknown fields and original shard/partial ordering survive unchanged. The
     enclosing ordinary rescue stage supplies the new producer receipt.
+    Independent changed shards are encoded in bounded worker batches.
     """
+    if type(publication_workers) is not int or publication_workers < 1:
+        raise ValueError('Model-store publication workers must be a positive integer')
     root, source_store = store._layout(source)
     destination = Path(destination)
     if (destination.resolve() == root.resolve() or root.resolve() in destination.resolve().parents
@@ -84,9 +165,6 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             if store._digest(source_store / name) != manifest['files'][name]:
                 raise ValueError('Model-store overlay changed before patching')
         accepted = dict(store._iter(source, 'accepted', with_ordinals=True))
-        source_db = store._readonly(source_store / 'bodies.sqlite')
-        databases.append(source_db)
-        source_bodies = store._Bodies(source_db, manifest['body_codec'])
         for ordinal in changes:
             accepted.pop(ordinal, None)
         for ordinal, model in changes.items():
@@ -98,56 +176,24 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         output = copy.deepcopy(manifest)
         normalized = set()
         ordered_changes = sorted(changes)
+        unchanged, affected_shards = [], []
         for shard in manifest['shards']:
-            name = shard['path']
             first = bisect.bisect_left(ordered_changes, shard['first'])
             last = bisect.bisect_left(ordered_changes, shard['first'] + shard['count'], lo=first)
-            affected = set(ordered_changes[first:last])
-            if not affected:
-                _copy(source_store / name, temporary / name, manifest['files'][name])
-                continue
-            seen = 0
-            with store._writer(temporary / name, manifest['codec'], manifest['compression_level']) as out:
-                for envelope in store._lines(source_store / name, manifest['codec'], manifest['files'][name]):
-                    ordinal = shard['first'] + seen
-                    if envelope.get('ordinal') != ordinal:
-                        raise ValueError('Patch source candidate order changed')
-                    if ordinal in affected:
-                        # Serialize only the current record. A cohort can have
-                        # millions of changed candidates with large DNA bodies.
-                        # The final write validates the envelope once, with
-                        # its ordinal, before publishing any candidate bytes.
-                        replacement_body, replacement = store._pack(changes[ordinal], _validate_envelope=False)
-                        replacement['ordinal'] = ordinal
-                        if replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence'):
-                            raise ValueError('Admission patch changed predictor/DNA or partial evidence')
-                        if replacement['body'] != envelope['body']:
-                            # Earlier v1 producers put donor metrics in shared
-                            # bodies. Prove the same predictor values before
-                            # normalizing just the changed candidate's layout.
-                            raw_body = source_bodies.read(envelope['body'])
-                            original = store._unpack(envelope, raw_body)
-                            body_keys = json.loads(raw_body)
-                            if (store._pack(original)[0] != replacement_body
-                                    or any(k not in changes[ordinal]
-                                           or not _same_json_value(original[k], changes[ordinal][k])
-                                           for k in body_keys)):
-                                raise ValueError('Admission patch changed predictor/DNA values')
-                            normalized.add(ordinal)
-                        else:
-                            immutable = ('coverage', 'identity', 'query_span_coverage', 'query_start', 'query_end',
-                                         'query_length', 'query', 'id', 'paf', 'raw_prediction', 'genetic_code')
-                            a, b = envelope['context'], replacement['context']
-                            if any((k in a) != (k in b) or (k in a and not _same_json_value(a[k], b[k]))
-                                   for k in immutable):
-                                raise ValueError('Admission patch changed predictor/DNA values')
-                        envelope = replacement
-                    out.write(store._json(envelope) + b'\n')
-                    seen += 1
-            if seen != shard['count']:
-                raise ValueError('Patch source shard count changed')
-        source_db.close()
-        databases.remove(source_db)
+            if first == last:
+                unchanged.append(source_store / shard['path'])
+            else:
+                affected_shards.append((shard, first, last))
+
+        def copy_shard(path):
+            name = str(path.relative_to(source_store))
+            expected = manifest['files'][name]
+            _copy(path, temporary / name, expected)
+            return expected
+
+        hash_paths(source_store, unchanged, workers=publication_workers, hash_function=copy_shard)
+        normalized.update(_patch_shards(source_store, temporary, affected_shards, manifest,
+                                        ordered_changes, changes, publication_workers))
         _copy(source_store / 'bodies.sqlite', temporary / 'bodies.sqlite', manifest['files']['bodies.sqlite'])
         body_db = store.sqlite3.connect(temporary / 'bodies.sqlite')
         databases.append(body_db)
@@ -215,17 +261,15 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             databases.remove(db)
         output['counts'].update(models=count + len(appended), **overlay_counts)
         output['scopes']['models'] = ['bodies.sqlite', *[s['path'] for s in output['shards']]]
-        output['files'] = {str(p.relative_to(temporary)): store._digest(p)
-                           for p in sorted(temporary.rglob('*')) if p.is_file()}
+        files = (p for p in temporary.rglob('*') if p.is_file())
+        hashes = hash_paths(temporary, files, workers=publication_workers, hash_function=store._digest)
+        output['files'] = dict(sorted(hashes.items()))
         (temporary / 'manifest.json').write_bytes(store._json(output) + b'\n')
         store._check_key(source, key, 'models')
         if (store._receipt(root)[1] != receipt_sha
                 or any(store._stat(store._member(root, name)) != before for name, before in stats.items())):
             raise ValueError('Patch source generation changed during publication')
-        for path in temporary.rglob('*'):
-            if path.is_file():
-                with path.open('rb') as handle:
-                    os.fsync(handle.fileno())
+        store._sync_files((p for p in temporary.rglob('*') if p.is_file()), publication_workers)
         os.rename(temporary, target)
         store._sync_directory(target.parent)
         return output

@@ -16,8 +16,8 @@ def load_module():
     return module
 
 
-def _write_alignment_stats(path: Path, no_of_taxa: int):
-    pandas.DataFrame(
+def _write_alignment_stats(path: Path, no_of_taxa: int, *, reverse_columns=False):
+    frame = pandas.DataFrame(
         [
             {
                 "No_of_taxa": no_of_taxa,
@@ -30,7 +30,10 @@ def _write_alignment_stats(path: Path, no_of_taxa: int):
                 "GC_content": 0.4,
             }
         ]
-    ).to_csv(path, sep="\t", index=False)
+    )
+    if reverse_columns:
+        frame = frame.iloc[:, ::-1]
+    frame.to_csv(path, sep="\t", index=False)
 
 
 def test_extract_orthogroup_id_accepts_prefixed_filenames():
@@ -234,7 +237,7 @@ def test_run_reads_orthogroup_artifacts_from_zip_shards(tmp_path):
         path.write_text(f"{subdir}\n", encoding="utf-8")
     alignment_stats_path = dir_og / "alignment_stats_original" / f"{family_id}_alignment_stats.original.tsv"
     alignment_stats_path.parent.mkdir(parents=True)
-    _write_alignment_stats(alignment_stats_path, 13)
+    _write_alignment_stats(alignment_stats_path, 13, reverse_columns=True)
     family_ids, family_from_name = family_context("orthogroup", genecount=genecount)
     archive_completed_outputs(dir_og, "orthogroup", family_ids, family_from_name)
 
@@ -252,6 +255,7 @@ def test_run_reads_orthogroup_artifacts_from_zip_shards(tmp_path):
     assert out.loc[family_id, "cds_fasta"] == 1
     assert out.loc[family_id, "tree_plot"] == 1
     assert out.loc[family_id, "No_of_taxa_original"] == 13
+    assert out.loc[family_id, "GC_content_original"] == 0.4
 
 
 def test_run_reads_current_statistics_with_legacy_other_members_from_zip(tmp_path):

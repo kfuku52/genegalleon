@@ -253,7 +253,7 @@ selection. Changed inputs/settings/tools require a new output directory.
 ## Candidate and model evidence
 
 Pair comparisons use JCVI/DIAMOND; self comparisons use JCVI/LAST alignment and
-raw `kffractbias.selfscan`, with no quota screening. Self alignment removes
+the LOCUSKIT self-scan with no quota screening. Self alignment removes
 same-ID hits, preserves high-identity paralogs and disables tandem collapsing.
 Pair alignment also disables tandem collapsing. The selfscan dependency uses
 four anchors and chaining distance 20; `--min-anchors` and `--distance` tune
@@ -348,8 +348,58 @@ Original ownership uses strand and coding overlap; intron-only or opposite-stran
 overlap does not by itself veto an intact coding model. A single existing owner
 receives revision nominations (direct compact access or legacy
 `revision_candidates.json`) for the refinement stage's normal donor,
-structure and representative-adoption checks. Multi-owner split/merge ambiguity
-is withheld. Same-locus alternative paths require shared coding bases in the
+structure and representative-adoption checks.
+
+For [reviewed single-locus repairs](gene-model-refinement.md#reviewed-single-locus-model-repairs),
+`rescued/<species>/model_repair_candidates.json` includes complete paths that
+cover at least two-thirds of the sole owner's coding bases and share at least
+three-quarters of their own coding bases with that owner. Paths with unchanged
+coordinates are included only when their declared phases conflict. These
+publications are available for review even when the prediction has an
+unresolved placement flag.
+
+Rescue also searches automatically at existing loci when two or more
+reference species have longer, unambiguous internal anchors in their syntenic
+blocks. The reference proteins must exceed the target by at least 15 amino acids
+and 10 percent. These local searches reuse the existing synteny comparisons.
+Their candidates enter the single-locus publication with the anchored owner
+recorded alongside the donor alignment. Where the target lacks a resolved
+syntenic anchor, reciprocal protein matches from the existing comparison can
+nominate the same search. These matches must cover at least 90% of the shorter
+target and 75% of the donor, and both proteins must have a unique best partner.
+Refinement can adopt a reciprocal-match extension only when it preserves the
+source CDS in full and in frame.
+
+To revisit a particular annotation even when donor screening considers it
+represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
+Set `gene_model_rescue_model_repair_targets` for the input-generation workflow.
+The table contains `species`, `gene_id` (the original GFF locus ID), `donor`
+(a selected reference species) and `query` (its prepared protein ID). Multiple
+rows can support the same locus. Rescue aligns these proteins in the locus
+window with at least 2 kb of flanking sequence on each side where available,
+bounded by `--max-interval`. Results from this targeted search only enter the
+review publication. They never enter the automatic rescue model set.
+
+Rescue publishes candidates for
+[split-model merging](gene-model-refinement.md#automatic-split-model-merges)
+in `rescued/<species>/split_model_candidates.json`. A candidate is a validated
+donor-guided genomic coding path spanning two or more consecutive, same-strand
+coding owners. It must cover at least two-thirds of each owner's distinct
+coding bases. Together the owners must cover at least three-quarters of the
+predicted CDS. In a two-owner merge, each owner must also cover at least
+one-fifth of the predicted CDS. Source coding spans must be disjoint, and an
+intervening locus on the same or unknown strand blocks the merge.
+The publication records the predicted CDS blocks and phases, all owner IDs,
+overlap counts, the CDS checksum and donor alignment metrics and placement flags.
+If a predicted exon retains the entire interval between two fragment CDSs,
+rescue tests the splice at those exact boundaries. It uses a spliced path for
+that donor when genomic checks confirm a complete CDS with canonical splices
+and the full protein alignment improves by more than the configured terminal
+alignment margin while preserving donor coverage. The candidate records both
+alignment scores and the original path. Rescue retains the original prediction
+in its model audit.
+Rescue keeps the original models in its augmented outputs. Same-locus
+alternative paths require shared coding bases in the
 same frame. At least 80% overlap of the shorter CDS remains a sufficient
 structural condition. Lower overlap can qualify when a whole-protein alignment
 has at least 90% coverage on both sides and 50% identity, and every shared
@@ -447,6 +497,28 @@ standard genetic code 1 for this optional refinement. Ambiguous reference
 transcript mappings and references requiring complementary phase normalisation
 are recorded and skipped by GeMoMa; miniprot evidence remains.
 
+### Fixed donor panel
+
+Create a rescue plan using only the donor CDS, GFF, genome and comparable
+BUSCO inputs, then run `prepare --output /path/to/panel` once. This prepares
+the donor BED and proteins without running rescue or synteny. Target plans
+bind the receipts for those prepared donors. Keep the panel and its sources
+at their original paths.
+
+For each target, point `plan` at its own input directories and supply
+`--donor-plan /path/to/panel` and a tree containing the target and all donor
+tips. Set the same `--common-references` count as the panel. Rescue uses all
+panel members except the target itself; common references and the ranking of
+nearby donors remain available for the existing rescue evidence rules. The
+target and panel must use comparable BUSCO results. If the target itself is in
+the panel, use the same frozen input paths and settings for that species.
+
+Input generation exposes this as
+`GG_INPUT_GENE_MODEL_RESCUE_DONOR_PLAN=/path/to/panel`. Use an explicit
+`GG_INPUT_GENE_MODEL_RESCUE_TREE`, since the automatic guide only sees inputs
+in the target workspace. Use the resulting augmented publication directly in
+[fixed-panel refinement](gene-model-refinement.md#use-the-same-fixed-donors-for-rescue-and-refinement).
+
 ## Commands and outputs
 
 ```bash
@@ -492,10 +564,14 @@ three arrays explicitly. Input generation forwards these choices through
 
 Successful predictor input FASTAs and expanded genome GFF are omitted by
 default. Small records retain coordinates, input-sequence hashes, donor/query
-mappings and search flags. Raw predictor GFF and logs remain. Failed searches
-retain their actual inputs. `--retain-search-inputs` (input generation:
-`GG_INPUT_GENE_MODEL_RESCUE_RETAIN_SEARCH_INPUTS=1`) preserves successful inputs
-and the combined diagnostic FASTAs too. The following commands create new,
+mappings and search flags. Compact rescue writes interval GFF and logs into
+`intervals.zip`, and its receipt verifies the ZIP. Only the bounded set of
+pending windows uses directories in the process temporary area. On a cluster,
+place the temporary area on node-local storage. Failed searches retain the
+failed window's actual inputs with its diagnostics. `--retain-search-inputs`
+(input generation: `GG_INPUT_GENE_MODEL_RESCUE_RETAIN_SEARCH_INPUTS=1`) keeps the
+traditional interval directory layout, including successful inputs and the
+combined diagnostic FASTAs. Existing directory-based receipts remain valid. The following commands create new,
 verified exports without changing a completed producer or its receipt:
 
 ```bash
@@ -542,7 +618,8 @@ completion, placement and donor support are evaluated independently.
 | `prepared/SPECIES/genes.anchor_admission.json`, `.tsv` | Existing-model decisions, evidence and counts |
 | `synteny/comparison_NNNNNN/` | Raw anchors, all blocks, commands and logs |
 | `rescued/SPECIES/candidates.json` | Donor gene, flanks, interval, orientation and comparison |
-| `rescued/SPECIES/model_store/`, `audit.tsv` | Complete ordered models, direct accepted/revision access and partial references; legacy mode writes three JSON arrays |
+| `rescued/SPECIES/model_store/`, `diagnostics.json` | Complete ordered models, direct accepted/revision access, partial references and counts of statuses, rejection reasons and quality flags |
+| `rescued/SPECIES/unresolved_queries.tsv.gz` | Candidate IDs and donor queries for searches that returned no alignment, when present |
 | `rescued/SPECIES/local_search_inputs.jsonl.gz`, `genome_search_inputs.jsonl.gz`, `search_inputs.json` | Reversible successful-search input descriptions, source hashes and expanded GFF hash |
 | `rescued/SPECIES/genome_search_nomination.json`, `placement_audit.json`, `prediction_reuse.json` | Extra-query limits, unassigned placement decisions and verified search reuse |
 | `effective/SPECIES/` | Validated per-species augmented inputs, ready for BUSCO workers |
@@ -598,7 +675,7 @@ Completed comparisons additionally use a shared content cache, defaulting to
 Cache keys bind both BED/protein files, species/direction, pair/self mode,
 comparison settings, comparison implementation and relevant upstream sources
 and binaries, including both `lastdb` and `lastal`. The complete JCVI and
-kfFractBias Python implementation and compiled extensions are hashed, so an
+LOCUSKIT Python implementation and compiled extensions are hashed, so an
 editable support-module change invalidates reuse even without a version bump.
 Python and the numerical/sorting dependency versions also form part of the key.
 Plan IDs, reference-selection changes and unrelated rescue
@@ -653,6 +730,74 @@ even when the container uses different mount paths. The rescue output location
 has its own phase lock, including when multiple workspaces share a custom path.
 The helper previews submissions without `--submit`. UGE/PBS users can submit
 these same core modes manually with their usual one-based task IDs.
+
+### Separate miniprot and postprocessing jobs
+
+Use `--rescue-split-miniprot` to schedule prediction and postprocessing
+separately. The existing `--rescue-cpus`, `--rescue-memory` and
+`--rescue-max-running` settings apply to postprocessing. Prediction defaults
+to those settings and accepts its own overrides:
+
+```bash
+python workflow/gg_input_generation_array.py --task-plan /path/to/task_plan.json \
+  --rescue --rescue-split-miniprot \
+  --rescue-predict-cpus 8 --rescue-predict-memory 64G \
+  --rescue-cpus 2 --rescue-memory 32G --submit
+```
+
+### Rescue diagnostic retention
+
+New compact-storage plans write a small diagnostic summary. Model-level
+diagnostics are already part of the model store, whose compressed shards now
+target 32 MiB of uncompressed model-envelope data. Requests for full tables
+can use `--diagnostics full` to write both TSVs with gzip compression, or
+`--diagnostics legacy` for the historical plain TSVs. Set
+`gene_model_rescue_diagnostics` for the same override in the input-generation
+entrypoint. Older frozen plans retain their original diagnostic scheme.
+
+Export detailed audit and quality tables from a completed worker with
+`rescue_gene_models.py export-diagnostics --output RESCUE_ROOT --task-index N
+--destination NEW_DIRECTORY`. Repeat `--candidate` to limit the export to
+particular candidate IDs. Reclassification reads old plain/compressed tables
+or updates the compact summary from the affected model records.
+
+Prediction evaluates local alignments to determine which queries still need
+a whole-genome search. It then saves the raw whole-genome GFF with embedded
+PAF, query mappings, validated local models and targeted repair evidence under
+`miniprot_predictions/SPECIES/`. It also saves a receipt for species without
+search work. The checkpoint excludes the temporary genome index. Its receipt
+binds the files to the frozen plan and prepared/comparison inputs.
+
+Large immutable predictor files are shared as hard links on the same
+filesystem. The postprocessing and prediction paths both remain available
+with their own verified receipts. When the filesystem cannot link the files,
+postprocessing copies and verifies them as before. To retire separate copies
+from a closed run, use `rescue_checkpoint_storage.py --output RESCUE_ROOT`
+to inventory eligible duplicates and repeat with `--apply` after writers
+and dependent jobs are idle. Each replacement is checked against both
+receipts and keeps the original logical path. Exporting one stage copies
+ordinary file contents, including files shared by hard links.
+
+Postprocessing verifies the checkpoint and uses it for genome-wide model
+validation, placement, consolidation and effective CDS/GFF export. The array
+worker then runs post-rescue BUSCO. With `--retry --rescue-split-miniprot`,
+species with valid checkpoints can resume postprocessing without a prediction
+job. A missing or corrupt checkpoint fails a direct postprocessing request.
+On a mixed Slurm retry, species with valid checkpoints can start postprocessing
+while other species run prediction. The postprocessing arrays share the
+configured rescue concurrency limit.
+For UGE/PBS use `rescue_predict` and `rescue_postprocess` as the input-generation
+modes. The standalone CLI also exposes the two phases for one frozen species:
+
+```bash
+python workflow/support/rescue_gene_models.py predict --output /path/to/rescue --task-index 1 --cpus 8
+python workflow/support/rescue_gene_models.py postprocess --output /path/to/rescue --task-index 1 --cpus 2
+```
+
+The standalone commands stop at the effective CDS/GFF export. The array
+entrypoint also handles BUSCO and the worker completion receipt. The split
+applies to ordinary miniprot rescue. Use the existing routes for GeMoMa,
+native genome-wide structure transfer and admission replay.
 
 This stage recovers supported models and records unresolved evidence. Orthology,
 copy-specific loss and ancestral-copy reconciliation belong to downstream gene
@@ -795,3 +940,25 @@ Separately declared annotation ancestors in older integration publications are
 retained through frozen plan/worker receipts and matching genome/code identity.
 Their accepted CDS nominate historical paths only; current QC, donor support and
 admission still apply. They cannot supply reusable native support or extra donors.
+
+### Rerun split candidate discovery
+
+For a completed rescue with OrionGeno predictions, rerun split candidate
+discovery separately when the missing-gene predictions and genomic annotation
+are already available.
+
+```bash
+python workflow/support/rescue_gene_models.py split-candidates \
+  --output /previous/rescue --cpus 4
+```
+
+Use `--task-index` for one species in the frozen plan order. The command
+reads the verified augmented annotation, or the completed per-species effective
+annotation, plus the frozen OrionGeno GFF and prepared donor proteins. It writes
+a restartable `native_split_candidates/SPECIES/` publication. A matching
+publication is reused on later calls. This step runs the split-specific
+protein search and does not rerun the original Miniprot mappings, synteny or
+OrionGeno prediction. The current `run` and `finalize` commands also publish
+these candidates. A newly created refinement plan for the same rescue uses the
+published protein evidence and rechecks the selected source models before
+adopting a merge.

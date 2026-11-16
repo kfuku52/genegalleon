@@ -83,7 +83,7 @@ from format_species_writers import (
 from genome_sequence_identity import mask_genome_sequence
 from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 17
+CDS_GFF_GROUPING_AUDIT_VERSION = 18
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")

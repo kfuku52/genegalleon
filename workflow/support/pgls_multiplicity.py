@@ -36,15 +36,11 @@ def adjust_associations(frame):
             raise ValueError(f"Missing PGLS association identity: {column}")
     raw = pd.to_numeric(out["p_value"], errors="coerce")
     usable = out.index.isin(_usable_association_rows(out).index)
-    valid = usable & np.isfinite(raw) & raw.between(0, 1)
+    valid = (usable & np.isfinite(raw) & raw.between(0, 1)).fillna(False)
     out["p_value"] = raw
     out["p_value_usable"] = valid
-    for column in ("p_value_family_holm", "p_value_family_bh", "p_value_global_bh"):
-        out[column] = np.nan
-    out["family_multiplicity_scope"] = "all_usable_family_associations_for_method"
-    out["global_multiplicity_scope"] = PAIR_SCOPE
-    out["global_n_associations"] = 0
-    out["global_n_usable"] = 0
+    raw_values = raw.to_numpy()
+    valid_values = valid.to_numpy(dtype=bool)
     family_holm = np.full(len(out), np.nan)
     family_bh = np.full(len(out), np.nan)
     global_bh = np.full(len(out), np.nan)
@@ -52,24 +48,30 @@ def adjust_associations(frame):
     global_n_usable = np.zeros(len(out), dtype=np.int64)
     # Wide model diagnostics need not be copied into every family group.
     # Positions in the filtered key table map back to the reset output index.
-    usable_positions = out.index[valid]
+    usable_positions = np.flatnonzero(valid_values)
     family_groups = out.loc[valid, ["tree_id", "analysis_method"]].groupby(
         ["tree_id", "analysis_method"], sort=False,
     ).indices
     for positions in family_groups.values():
         idx = usable_positions[positions]
-        holm, bh = _adjust_association_p_values(raw.iloc[idx])
+        holm, bh = _adjust_association_p_values(raw_values[idx])
         family_holm[idx] = holm
         family_bh[idx] = bh
     for idx in out.groupby(["response", "source_term"], sort=False).indices.values():
-        values = raw.loc[idx].where(valid.loc[idx], 1.0)
-        _, bh = _adjust_association_p_values(values)
-        global_bh[idx] = np.where(valid.loc[idx], bh, np.nan)
         global_n_associations[idx] = len(idx)
-        global_n_usable[idx] = int(valid.loc[idx].sum())
+        group_valid = valid_values[idx]
+        usable_count = np.count_nonzero(group_valid)
+        if not usable_count:
+            continue
+        values = np.where(group_valid, raw_values[idx], 1.0)
+        _, bh = _adjust_association_p_values(values)
+        global_bh[idx] = np.where(group_valid, bh, np.nan)
+        global_n_usable[idx] = usable_count
     out["p_value_family_holm"] = family_holm
     out["p_value_family_bh"] = family_bh
     out["p_value_global_bh"] = global_bh
+    out["family_multiplicity_scope"] = "all_usable_family_associations_for_method"
+    out["global_multiplicity_scope"] = PAIR_SCOPE
     out["global_n_associations"] = global_n_associations
     out["global_n_usable"] = global_n_usable
     return out

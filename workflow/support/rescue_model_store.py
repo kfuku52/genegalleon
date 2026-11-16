@@ -16,8 +16,19 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import closing
+from itertools import batched, chain, islice
+from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
+
+if __package__:
+    from .filesystem_io import scratch_build_directory
+    from .stage_output_hashes import hash_paths
+else:
+    from filesystem_io import scratch_build_directory
+    from stage_output_hashes import hash_paths
 
 FORMAT = "gg_rescue_model_store_v1"
 KINDS = {"models", "accepted", "partial", "revision"}
@@ -31,11 +42,13 @@ BODY_FIELDS = frozenset({
 MAX_RECORD_BYTES = 64 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PAF = re.compile(r"\A(##?PAF\t)?([^\t\r\n]+)(\t[^\r\n]*)(\r?\n)?\Z")
+_JSON = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+_SORTED_JSON = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
 
 
 def _json(value, *, sort=False):
-    return json.dumps(value, ensure_ascii=False, allow_nan=False,
-                      separators=(",", ":"), sort_keys=sort).encode("utf-8")
+    encoder = _SORTED_JSON if sort else _JSON
+    return encoder.encode(value).encode("utf-8")
 
 
 def _codec(value):
@@ -59,14 +72,29 @@ def _compress(value, codec, level):
     return zstandard.ZstdCompressor(level=level, write_checksum=True).compress(value)
 
 
-def _decompress(value, codec):
+def _decompress(value, codec, *, expected_size=None):
+    limit = MAX_RECORD_BYTES if expected_size is None else min(MAX_RECORD_BYTES, expected_size)
     if codec == "gzip":
         reader = gzip.GzipFile(fileobj=io.BytesIO(value), mode="rb")
     else:
         import zstandard
-        reader = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(value))
+        decoder = zstandard.ZstdDecompressor()
+        try:
+            # SQLite bodies and overlays written here are single frames with
+            # a declared size. Keep the streaming path for older encodings
+            # and require the same bounds before allocating output.
+            size = zstandard.frame_content_size(value)
+            if 0 < size <= limit:
+                return decoder.decompress(value, allow_extra_data=False)
+        except zstandard.ZstdError:
+            # The streaming reader retains its existing behavior for frames
+            # with extra data and reports errors on undecodable content.
+            decoder = zstandard.ZstdDecompressor()
+        reader = decoder.stream_reader(io.BytesIO(value))
     with reader:
-        result = reader.read(MAX_RECORD_BYTES + 1)
+        # A writer comparing a stored body to known bytes needs at most one
+        # extra byte to reject unequal bodies. Readers keep the full bound.
+        result = reader.read(limit + 1)
     if len(result) > MAX_RECORD_BYTES:
         raise ValueError("Model-store record exceeds bounded buffer")
     return result
@@ -93,6 +121,21 @@ def _sync_directory(path):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _sync_file(path):
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _sync_files(paths, workers):
+    if workers == 1:
+        for path in paths:
+            _sync_file(path)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for batch in batched(paths, workers * 16):
+                list(executor.map(_sync_file, batch))
 
 
 def _safe_member(value):
@@ -222,8 +265,8 @@ def _database(path):
     return db
 
 
-def _insert_body(db, body, level, codec, cache=None):
-    sha = hashlib.sha256(body).hexdigest()
+def _insert_body(db, body, level, codec, cache=None, *, packed_sha=None):
+    sha = hashlib.sha256(body).hexdigest() if packed_sha is None else packed_sha
     if cache is not None and sha in cache.cache:
         if cache.cache[sha] != body:
             raise ValueError("Model-store body hash collision")
@@ -232,7 +275,7 @@ def _insert_body(db, body, level, codec, cache=None):
     found = db.execute("SELECT data FROM bodies WHERE sha=?", (sha,)).fetchone()
     if found is None:
         db.execute("INSERT INTO bodies VALUES (?,?)", (sha, _compress(body, codec, level)))
-    elif _decompress(found[0], codec) != body:
+    elif _decompress(found[0], codec, expected_size=len(body)) != body:
         raise ValueError("Model-store body hash collision")
     if cache is not None:
         cache.remember(sha, body)
@@ -246,20 +289,26 @@ def _overlay(path):
 
 
 def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None, *, _encoded_envelope=None):
-    _insert_body(db, body, level, codec, cache)
-    if _encoded_envelope is None:
-        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_json(envelope), codec, level)))
-    else:
-        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_encoded_envelope, codec, level)))
+    encoded = _json(envelope) if _encoded_envelope is None else _encoded_envelope
+    _add_packed_overlay(db, ordinal, body, envelope["body"], encoded, level, codec, cache)
+
+
+def _add_packed_overlay(db, ordinal, body, sha, encoded, level, codec, cache):
+    _insert_body(db, body, level, codec, cache, packed_sha=sha)
+    db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(encoded, codec, level)))
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
-                      shard_bytes=8 * 1024 * 1024, codec="auto", compression_level=1):
+                      shard_bytes=32 * 1024 * 1024, codec="auto", compression_level=1,
+                      publication_workers=1, packing_workers=1):
     """Atomically publish into ``directory/model_store`` without replacing data.
 
     ``partial_models=None`` records references for ``partial_evidence.partial``.
     Explicit partial records must be exact members of models. Revision records
     can differ from models and are stored in an independent, small overlay.
+    ``publication_workers`` bounds concurrent checksums and file syncs.
+    Parallel packing requires stable, picklable input records and is used only
+    when the main stream supplies its own partial references.
     Publication is immutable; the enclosing stage subsequently hashes all files
     into its normal receipt. No receipt is fabricated by this writer.
     """
@@ -268,12 +317,85 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         raise ValueError("Unsupported model-store compression")
     if type(shard_bytes) is not int or shard_bytes < 1:
         raise ValueError("Invalid model-store shard bound")
+    if type(publication_workers) is not int or publication_workers < 1:
+        raise ValueError("Model-store publication workers must be a positive integer")
+    if type(packing_workers) is not int or packing_workers < 1:
+        raise ValueError("Model-store packing workers must be a positive integer")
     directory = Path(directory)
     target = directory if directory.name == "model_store" else directory / "model_store"
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         raise ValueError("Model-store publication already exists")
-    tmp = Path(tempfile.mkdtemp(prefix=".model-store-", dir=target.parent))
+    with tempfile.TemporaryDirectory(prefix=".model-store-", dir=target.parent) as directory:
+        staging = Path(directory)
+        with scratch_build_directory(staging) as work:
+            manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
+                                          codec, codec_version, compression_level, publication_workers, packing_workers)
+            if work != staging:
+                def copy_member(path):
+                    target_path = staging / path.name
+                    shutil.copyfile(path, target_path)
+                    copied = _digest(target_path)
+                    if copied != manifest["files"][path.name]:
+                        raise OSError(f"Copied model-store member differs: {path.name}")
+                    return copied
+
+                hash_paths(work, (work / name for name in manifest["files"]),
+                           workers=publication_workers, hash_function=copy_member)
+        (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
+        _sync_files(staging.iterdir(), publication_workers)
+        os.rename(staging, target)
+        _sync_directory(target.parent)
+        return manifest
+
+
+def _encode_model(record, ordinal, *, track_fingerprint=False):
+    body, envelope = _pack(record, _validate_envelope=False)
+    fingerprint = hashlib.sha256(_json(envelope)).digest() if track_fingerprint else None
+    envelope["ordinal"] = ordinal
+    packed = _json(envelope) + b"\n"
+    if len(packed) > MAX_RECORD_BYTES:
+        raise ValueError("Model-store record exceeds bounded buffer")
+    return body, envelope["body"], packed, fingerprint
+
+
+def _encode_model_batch(batch, first):
+    return [_encode_model(record, ordinal) for ordinal, record in enumerate(batch, first)]
+
+
+def _encoded_models(models, track_fingerprint, workers):
+    batch_size = 128
+    minimum_records = 512
+    models = iter(models)
+    if workers > 1 and not track_fingerprint:
+        first = list(islice(models, minimum_records))
+        models = chain(first, models)
+        if len(first) < minimum_records:
+            workers = 1
+        del first
+    if workers == 1 or track_fingerprint:
+        for ordinal, record in enumerate(models):
+            yield record, _encode_model(record, ordinal, track_fingerprint=track_fingerprint)
+        return
+
+    pending = deque()
+    ordinal = 0
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        def consume():
+            batch, future = pending.popleft()
+            yield from zip(batch, future.result(), strict=True)
+
+        for batch in batched(models, batch_size):
+            pending.append((batch, pool.submit(_encode_model_batch, batch, ordinal)))
+            ordinal += len(batch)
+            if len(pending) >= workers * 2:
+                yield from consume()
+        while pending:
+            yield from consume()
+
+
+def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level,
+                       hash_workers, packing_workers):
     dbs, shard_handle = [], None
     try:
         body_db = _database(tmp / "bodies.sqlite")
@@ -300,38 +422,32 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         revision_cache = _Bodies(revision_db, codec)
         shards, shard_size, line, count, accepted_count, partial_count = [], 0, 0, 0, 0, 0
         partial_ordered, last_partial_ordinal = True, -1
-        for ordinal, record in enumerate(models):
-            body, envelope = _pack(record, _validate_envelope=False)
-            if lookup_db is not None:
-                fingerprint = hashlib.sha256(_json(envelope)).digest()
-            envelope["ordinal"] = ordinal
-            packed = _json(envelope) + b"\n"
-            if len(packed) > MAX_RECORD_BYTES:
-                raise ValueError("Model-store record exceeds bounded buffer")
-            if shard_handle is None or (shard_size and shard_size + len(packed) > shard_bytes):
-                if shard_handle is not None:
-                    shard_handle.close()
-                extension = "gz" if codec == "gzip" else "zst"
-                shard = f"models-{len(shards):06d}.jsonl.{extension}"
-                shards.append({"path": shard, "first": ordinal, "count": 0})
-                shard_handle = _writer(tmp / shard, codec, compression_level)
-                shard_size, line = 0, 0
-            shard_handle.write(packed)
-            _insert_body(body_db, body, compression_level, codec, body_cache)
-            if lookup_db is not None:
-                lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
-                                  (fingerprint, ordinal, len(shards) - 1, line))
-            if record.get("status") == "accepted":
-                _add_overlay(accepted_db, ordinal, body, envelope, compression_level, codec, accepted_cache,
-                             _encoded_envelope=memoryview(packed)[:-1])
-                accepted_count += 1
-            if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
-                partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
-                partial_count += 1
-            shard_size += len(packed)
-            line += 1
-            shards[-1]["count"] += 1
-            count += 1
+        with closing(_encoded_models(models, lookup_db is not None, packing_workers)) as encoded:
+            for ordinal, (record, (body, sha, packed, fingerprint)) in enumerate(encoded):
+                if shard_handle is None or (shard_size and shard_size + len(packed) > shard_bytes):
+                    if shard_handle is not None:
+                        shard_handle.close()
+                    extension = "gz" if codec == "gzip" else "zst"
+                    shard = f"models-{len(shards):06d}.jsonl.{extension}"
+                    shards.append({"path": shard, "first": ordinal, "count": 0})
+                    shard_handle = _writer(tmp / shard, codec, compression_level)
+                    shard_size, line = 0, 0
+                shard_handle.write(packed)
+                _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=sha)
+                if lookup_db is not None:
+                    lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
+                                      (fingerprint, ordinal, len(shards) - 1, line))
+                if record.get("status") == "accepted":
+                    _add_packed_overlay(accepted_db, ordinal, body, sha, memoryview(packed)[:-1],
+                                        compression_level, codec, accepted_cache)
+                    accepted_count += 1
+                if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
+                    partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
+                    partial_count += 1
+                shard_size += len(packed)
+                line += 1
+                shards[-1]["count"] += 1
+                count += 1
         if shard_handle is not None:
             shard_handle.close()
             shard_handle = None
@@ -343,7 +459,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
                 if match is None:
                     raise ValueError("Partial record is not an exact model-store member")
                 # Verify equal body bytes, not only equal SHA, before referencing.
-                _insert_body(body_db, body, compression_level, codec, body_cache)
+                _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=envelope["body"])
                 if match[0] < last_partial_ordinal:
                     partial_ordered = False
                 last_partial_ordinal = match[0]
@@ -368,34 +484,26 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
             db.commit()
             db.close()
         dbs = []
-        files = {p.name: _digest(p) for p in sorted(tmp.iterdir())}
+        hashes = hash_paths(tmp, tmp.iterdir(), workers=hash_workers, hash_function=_digest)
+        files = dict(sorted(hashes.items()))
         scopes = {
             "models": ["bodies.sqlite", *(s["path"] for s in shards)],
             "accepted": ["accepted.sqlite"],
             "revision": ["revision.sqlite"],
             "partial": ["partial.sqlite", *(["bodies.sqlite", *partial_shards] if partial_count else [])],
         }
-        manifest = {"schema": 1, "format": FORMAT, "codec": codec, "body_codec": codec,
-                    "codec_version": codec_version,
-                    "compression_level": compression_level, "files": files, "scopes": scopes,
-                    "shards": shards, "partial_ordered": partial_ordered,
-                    "counts": {"models": count, "accepted": accepted_count,
-                                                 "partial": partial_count, "revision": revision_count,
-                                                 "bodies": body_count}}
-        (tmp / "manifest.json").write_bytes(_json(manifest) + b"\n")
-        for path in tmp.iterdir():
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
-        os.rename(tmp, target)
-        _sync_directory(target.parent)
-        return manifest
-    except BaseException:
+        return {"schema": 1, "format": FORMAT, "codec": codec, "body_codec": codec,
+                "codec_version": codec_version,
+                "compression_level": compression_level, "files": files, "scopes": scopes,
+                "shards": shards, "partial_ordered": partial_ordered,
+                "counts": {"models": count, "accepted": accepted_count,
+                                             "partial": partial_count, "revision": revision_count,
+                                             "bodies": body_count}}
+    finally:
         if shard_handle is not None:
             shard_handle.close()
         for db in dbs:
             db.close()
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
 
 
 def _manifest(store):
@@ -418,20 +526,22 @@ def _manifest(store):
             raise ValueError("Malformed model-store count")
     _codec(manifest["codec"])
     ordinal = 0
-    shard_names = []
+    shard_names, seen = [], set()
     for shard in manifest["shards"]:
         if (not isinstance(shard, dict) or set(shard) != {"path", "first", "count"}
-                or shard["path"] not in manifest["files"] or shard["path"] in shard_names
+                or shard["path"] not in manifest["files"] or shard["path"] in seen
                 or type(shard["first"]) is not int or shard["first"] != ordinal
                 or type(shard["count"]) is not int or shard["count"] < 1):
             raise ValueError("Malformed model-store shard index")
         shard_names.append(shard["path"])
+        seen.add(shard["path"])
         ordinal += shard["count"]
+    partial_members = seen | {"partial.sqlite", "bodies.sqlite"}
     if (ordinal != manifest["counts"]["models"] or manifest["scopes"]["models"] != ["bodies.sqlite", *shard_names]
             or manifest["scopes"]["accepted"] != ["accepted.sqlite"]
             or manifest["scopes"]["revision"] != ["revision.sqlite"]
             or not manifest["scopes"]["partial"] or manifest["scopes"]["partial"][0] != "partial.sqlite"
-            or any(p not in {"partial.sqlite", "bodies.sqlite", *shard_names} for p in manifest["scopes"]["partial"])):
+            or not partial_members.issuperset(manifest["scopes"]["partial"])):
         raise ValueError("Malformed model-store scope dependencies")
     return manifest, sha
 
@@ -620,7 +730,7 @@ class _HashReader:
         self.handle.close()
 
 
-def _lines(path, codec, expected=None):
+def _record_lines(path, codec, expected=None):
     with Path(path).open("rb") as raw:
         reader = _HashReader(raw)
         if codec == "gzip":
@@ -632,12 +742,71 @@ def _lines(path, codec, expected=None):
             while line := handle.readline(MAX_RECORD_BYTES + 1):
                 if len(line) > MAX_RECORD_BYTES or not line.endswith(b"\n"):
                     raise ValueError("Malformed or oversized model-store JSONL record")
-                try:
-                    yield json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise ValueError("Malformed model-store JSONL record") from error
+                yield line
         if expected is not None and reader.hash.hexdigest() != expected:
             raise ValueError("Model-store shard checksum changed")
+
+
+def _decode_line(line):
+    try:
+        return json.loads(line)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Malformed model-store JSONL record") from error
+
+
+def _lines(path, codec, expected=None):
+    for line in _record_lines(path, codec, expected):
+        yield _decode_line(line)
+
+
+def _selection_context(envelope):
+    if (not isinstance(envelope, dict) or set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
+            or not _SHA.fullmatch(str(envelope.get("body", "")))
+            or not isinstance(envelope.get("context"), dict)):
+        raise ValueError("Malformed model-store envelope")
+    return envelope["context"]
+
+
+def _filter_shard(source, codec, expected, first, count, predicate, destination):
+    seen = 0
+    with destination.open("xb") as output:
+        for line in _record_lines(source, codec, expected):
+            envelope = _decode_line(line)
+            context = _selection_context(envelope)
+            if envelope.get("ordinal") != first + seen:
+                raise ValueError("Model-store candidate order changed")
+            if predicate(context):
+                output.write(line)
+            seen += 1
+    if seen != count:
+        raise ValueError("Model-store shard count changed")
+
+
+def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
+    """Verify each complete shard and consume its selected lines in source order."""
+    codec = manifest["codec"]
+    pending = deque()
+    with tempfile.TemporaryDirectory(prefix="gg-model-selection-") as directory, \
+            ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+        def consume():
+            path, future = pending.popleft()
+            future.result()
+            with path.open("rb") as handle:
+                while line := handle.readline(MAX_RECORD_BYTES + 1):
+                    if len(line) > MAX_RECORD_BYTES or not line.endswith(b"\n"):
+                        raise ValueError("Malformed model-store selection scratch record")
+                    yield _decode_line(line)
+            path.unlink()
+
+        for index, shard in enumerate(manifest["shards"]):
+            member = f"{prefix}/{shard['path']}"
+            output = Path(directory) / str(index)
+            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected[member],
+                                                shard["first"], shard["count"], predicate, output)))
+            if len(pending) >= workers * 2:
+                yield from consume()
+        while pending:
+            yield from consume()
 
 
 def _stat(path):
@@ -646,7 +815,7 @@ def _stat(path):
 
 
 def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None, model_ids=None,
-          context_filter=None, with_ordinals=False):
+          context_filter=None, with_ordinals=False, scan_workers=1):
     if model_ids is not None:
         if isinstance(model_ids, (str, bytes)):
             raise ValueError("Model IDs must be a collection of strings")
@@ -712,6 +881,14 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 db.close()
         elif kind == "partial":
             yield from _partials(root, store, manifest, key)
+        elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
+              and len(manifest["shards"]) >= scan_workers * 2):
+            with closing(_readonly(store / "bodies.sqlite")) as db:
+                bodies = _DecodedBodies(db, manifest["body_codec"])
+                for envelope in _selected_shard_rows(prefix, manifest, paths, key["files"], context_filter, scan_workers):
+                    record = bodies.unpack(envelope, context_owned=True)
+                    if statuses is None or record.get("status") in statuses:
+                        yield (envelope["ordinal"], record) if with_ordinals else record
         else:
             db = _readonly(store / "bodies.sqlite")
             try:
@@ -733,13 +910,10 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                             # complete body DB. Only selected body payloads need
                             # decompression/reassembly; the full reader remains
                             # available for validating every record's layout.
-                            if (set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
-                                    or not _SHA.fullmatch(str(envelope.get("body", "")))
-                                    or not isinstance(envelope.get("context"), dict)):
-                                raise ValueError("Malformed model-store envelope")
-                            if model_ids is not None and envelope["context"].get("model_id") not in model_ids:
+                            context = _selection_context(envelope)
+                            if model_ids is not None and context.get("model_id") not in model_ids:
                                 continue
-                            if context_filter is not None and not context_filter(envelope["context"]):
+                            if context_filter is not None and not context_filter(context):
                                 continue
                         record = bodies.unpack(envelope, context_owned=True)
                         if statuses is None or record.get("status") in statuses:
@@ -771,11 +945,11 @@ def _partials(root, store, manifest, key):
         bodies = _DecodedBodies(body_db, manifest["body_codec"])
         if manifest.get("partial_ordered") is True:
             position = 0
-            for found_position, envelope in _partial_entries(root, store, manifest, key, refs):
+            for found_position, envelope, context_owned in _partial_entries(root, store, manifest, key, refs):
                 if found_position != position:
                     raise ValueError("Model-store partial order changed")
                 position += 1
-                yield bodies.unpack(envelope)
+                yield bodies.unpack(envelope, context_owned=context_owned)
             if position != count:
                 raise ValueError("Missing model-store partial reference")
             return
@@ -785,13 +959,13 @@ def _partials(root, store, manifest, key):
             spool = sqlite3.connect(Path(tmp) / "partial.sqlite")
             try:
                 spool.execute("CREATE TABLE entries (position INTEGER PRIMARY KEY,envelope BLOB)")
-                for position, envelope in _partial_entries(root, store, manifest, key, refs):
+                for position, envelope, _ in _partial_entries(root, store, manifest, key, refs):
                     spool.execute("INSERT INTO entries VALUES (?,?)", (position, _json(envelope)))
                 if spool.execute("SELECT COUNT(*) FROM entries").fetchone()[0] != count:
                     raise ValueError("Missing model-store partial reference")
                 for (_, blob) in spool.execute("SELECT position,envelope FROM entries ORDER BY position"):
                     envelope = json.loads(blob)
-                    yield bodies.unpack(envelope)
+                    yield bodies.unpack(envelope, context_owned=True)
             finally:
                 spool.close()
     finally:
@@ -824,8 +998,9 @@ def _partial_entries(root, store, manifest, key, refs):
                 if (type(position) is not int or position < 0 or type(ordinal) is not int
                         or envelope["ordinal"] != ordinal):
                     raise ValueError("Model-store partial reference changed")
-                yield position, envelope
                 reference = next(references, None)
+                # Earlier references to the same envelope must leave it intact.
+                yield position, envelope, reference is None or reference[0] != line
         if count != manifest["shards"][shard_index]["count"]:
             raise ValueError("Model-store partial shard count changed")
         if reference is not None:
@@ -844,15 +1019,19 @@ def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model
                  model_ids=model_ids)
 
 
-def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None):
+def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None, scan_workers=1):
     """Yield original ordinals and selected models after full stream verification.
 
     The predicate reads candidate context only and must not mutate it. Unselected
     DNA bodies need not be restored, but every raw shard and body database is
     freshly hashed. Exhaust before consuming decisions or publishing a result.
+    Parallel scans require a picklable predicate without side effects and use
+    bounded batches of private scratch files for selected rows.
     """
+    if type(scan_workers) is not int or scan_workers < 1:
+        raise ValueError("Model-store scan workers must be a positive integer")
     return _iter(directory, "models", context_filter=context_filter,
-                 frozen_key=frozen_key, verification=verification, with_ordinals=True)
+                 frozen_key=frozen_key, verification=verification, with_ordinals=True, scan_workers=scan_workers)
 
 
 def iter_accepted_models(directory, *, verify=True, frozen_key=None, verification=None):

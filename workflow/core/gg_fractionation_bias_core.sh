@@ -34,23 +34,23 @@ if [[ -n "${kffractbias_report_config}" ]]; then
     exit 1
   fi
   if [[ ${run_kffractbias} -eq 0 ]]; then
-    gg_step_skip "kfFractBias shared-reference report"
+    gg_step_skip "LOCUSKIT shared-reference report"
     exit 0
   fi
-  gg_step_start "kfFractBias shared-reference report"
+  gg_step_start "LOCUSKIT shared-reference report"
   python "${gg_support_dir}/fractionation_report.py" \
     --config "${kffractbias_report_config}" \
     --output-dir "${gg_workspace_output_dir}/kffractbias_reports"
-  echo "kfFractBias shared-reference report completed."
+  echo "LOCUSKIT shared-reference report completed."
   exit 0
 fi
 
 if [[ ! -s "${kffractbias_pairs_file}" ]]; then
   if [[ ${run_kffractbias} -eq 0 ]]; then
-    gg_step_skip "kfFractBias pairwise comparison (pair table not configured)"
+    gg_step_skip "LOCUSKIT pairwise comparison (pair table not configured)"
     exit 0
   fi
-  echo "kfFractBias pair table not found or empty: ${kffractbias_pairs_file}" >&2
+  echo "LOCUSKIT pair table not found or empty: ${kffractbias_pairs_file}" >&2
   exit 1
 fi
 if [[ ! "${GG_ARRAY_TASK_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
@@ -351,9 +351,9 @@ fi
 gg_artifact_prepare_stage needs_update run_kffractbias "${kffractbias_provenance_args[@]}" || exit $?
 
 if [[ "${analysis_mode}" == "compare" ]]; then
-  task="kfFractBias ${target_species} vs ${query_species} (${quota})"
+  task="LOCUSKIT ${target_species} vs ${query_species} (${quota})"
 else
-  task="kfFractBias self-synteny retention for ${target_species} (${quota})"
+  task="LOCUSKIT self-synteny retention for ${target_species} (${quota})"
 fi
 if [[ ${needs_update} -eq 1 && ${run_kffractbias} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -419,7 +419,7 @@ if [[ ${needs_update} -eq 1 && ${run_kffractbias} -eq 1 ]]; then
     kffractbias_args+=(--query-feature "${query_feature}" --query-attribute "${query_attribute}")
   fi
 
-  kffractbias "${kffractbias_args[@]}"
+  locuskit fractbias "${kffractbias_args[@]}"
 
   source_genes="${dir_task_tmp}/result/${analysis_id}.genes.tsv"
   source_windows="${dir_task_tmp}/result/${analysis_id}.windows.tsv"
@@ -430,12 +430,12 @@ if [[ ${needs_update} -eq 1 && ${run_kffractbias} -eq 1 ]]; then
   source_synteny_archive="${dir_task_tmp}/${analysis_id}.synteny.zip"
   for expected_file in "${source_genes}" "${source_windows}" "${source_summary}" "${source_pdf}" "${source_png}"; do
     if [[ ! -s "${expected_file}" ]]; then
-      echo "kfFractBias did not create the expected output: ${expected_file}" >&2
+      echo "LOCUSKIT did not create the expected output: ${expected_file}" >&2
       exit 1
     fi
   done
   if [[ ! -d "${source_synteny_dir}" ]]; then
-    echo "kfFractBias did not create the expected synteny directory: ${source_synteny_dir}" >&2
+    echo "LOCUSKIT did not create the expected synteny directory: ${source_synteny_dir}" >&2
     exit 1
   fi
   (
@@ -491,4 +491,4 @@ else
   gg_step_skip "${task}"
 fi
 
-echo "kfFractBias outputs: ${dir_result}"
+echo "LOCUSKIT outputs: ${dir_result}"

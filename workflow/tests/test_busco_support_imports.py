@@ -19,7 +19,7 @@ import sys
 
 class RejectSynteny(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[-1] in {'rescue_gene_models', 'pairwise_synteny'} or fullname.split('.')[0] in {'kffractbias', 'jcvi'}:
+        if fullname.split('.')[-1] in {'rescue_gene_models', 'pairwise_synteny'} or fullname.split('.')[0] in {'locuskit', 'kffractbias', 'jcvi'}:
             raise ImportError('BUSCO imported an unrelated synteny dependency: ' + fullname)
 
 sys.meta_path.insert(0, RejectSynteny())
