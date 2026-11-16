@@ -12,13 +12,13 @@ from Bio.Seq import Seq
 try:
     from fasta_sequence_store import fasta_records
     from gene_model_store import iter_loci
-    from rescue_coding_paths import coding_overlap, coding_shape
+    from rescue_coding_paths import OwnershipIndex, coding_overlap, coding_shape
     from rescue_gene_models import run, validate_model
     from rescue_homology_policy import homology_supported
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .gene_model_store import iter_loci
-    from .rescue_coding_paths import coding_overlap, coding_shape
+    from .rescue_coding_paths import OwnershipIndex, coding_overlap, coding_shape
     from .rescue_gene_models import run, validate_model
     from .rescue_homology_policy import homology_supported
 
@@ -245,6 +245,7 @@ def nominate_fissions(groups, originals, genome, code, params, blocked):
                 'owner': owner, 'source_protein': original['protein'], 'source_windows': windows,
                 'proteins': (a_protein, b_protein), 'paths': (first, second),
                 'bridge': bridges[0], 'source_in_frame_bases': (a_size, b_size),
+                'source_span': {k: source[k] for k in ('seqid', 'start', 'end', 'strand')},
             })
     return candidates
 
@@ -288,30 +289,63 @@ def fission_decision(sister_groups, split, fused, minimum_species):
         reason = 'closest_donor_fusion_supported_by_rna'
     elif not set(closest) & split.keys():
         reason = 'closest_informative_donors_support_fusion'
+    elif any(name in fused for name in closest):
+        reason = 'mixed_closest_donor_architectures'
     else:
         reason = 'supported_split'
     return {'reason': reason, 'closest_informative_species': closest, 'split_support_groups': split_groups}
 
 
-def _paired_positions(traceback, start):
-    """Read DIAMOND BTOP and omit query residues aligned to donor gaps."""
-    paired = set()
+def _paired_runs(traceback, start):
+    """Yield query spans paired to donor residues in a DIAMOND BTOP."""
     for token in re.findall(r'\d+|[^\d]{2}', traceback):
         if token.isdecimal():
             count = int(token)
-            paired.update(range(start, start + count))
+            yield start, count
             start += count
         elif token[0] != '-':
             if token[1] != '-':
-                paired.add(start)
+                yield start, 1
             start += 1
+
+
+def _paired_positions(traceback, start):
+    paired = set()
+    for offset, count in _paired_runs(traceback, start):
+        paired.update(range(offset, offset + count))
     return paired
+
+
+def flanking_anchor_index(blocks, target_positions, donor_positions, max_interval):
+    """Index bounded inter-anchor intervals in both genomes, including inversions."""
+    def interval(left, right):
+        if left is None or right is None or left[1] != right[1]:
+            return None
+        a, b = sorted((left, right), key=lambda x: x[3])
+        return (a[1], a[4], b[3]) if 0 < b[3] - a[4] <= max_interval else None
+
+    bounds = set()
+    for block in blocks:
+        for (ta, da), (tb, db) in pairwise(block):
+            target = interval(target_positions.get(ta), target_positions.get(tb))
+            donor = interval(donor_positions.get(da), donor_positions.get(db))
+            if target and donor:
+                bounds.add((target, donor))
+    return OwnershipIndex({'seqid': seqid, 'start': start, 'end': end,
+                           'gene_id': ((seqid, start, end), donor), 'donor': donor}
+                          for (seqid, start, end), donor in bounds)
+
+
+def uniquely_flanked_locus(index, span):
+    windows = {row['donor'] for row in index.overlapping(span)
+               if row['start'] <= span['start'] and span['end'] <= row['end']}
+    return next(iter(windows)) if len(windows) == 1 else None
 
 
 class DonorSearch:
     """Share one lazily built protein database across the finalization targets."""
 
-    def __init__(self, panel, db, directory, cpus, rna_counts=None):
+    def __init__(self, panel, db, directory, cpus, rna_counts=None, *, flanking_blocks=None):
         self.panel = panel
         self.db = db
         self.directory = Path(directory)
@@ -325,6 +359,7 @@ class DonorSearch:
         self.observed_fusions = {}
         self.database = self.directory / 'donors.dmnd'
         self._queries = ()
+        self.flanking_blocks = flanking_blocks
 
     def _proteins(self, name):
         path = self.panel.get('proteins', {}).get(name)
@@ -433,9 +468,7 @@ class DonorSearch:
             positions = {}
             if bed:
                 with Path(bed).open() as handle:
-                    for line in handle:
-                        seqid, a, b, identifier, _, strand = line.rstrip().split('\t')
-                        positions[identifier] = (identifier, seqid, strand, int(a), int(b))
+                    positions = read_positions(handle)
             else:
                 for locus in iter_loci(self.db, donor):
                     for model in locus['candidates']:
@@ -481,27 +514,36 @@ class DonorSearch:
                     for protein in (candidate['source_protein'], *candidate['proteins'])}
         source_windows = defaultdict(dict)
         for key, candidate in candidates.items():
-            source_windows[candidate['source_protein']][key] = candidate['source_windows']
+            source_windows[candidate['source_protein']][key] = [
+                (sum(1 << i for i in window), .80 * len(window)) for window in candidate['source_windows']]
         best = defaultdict(dict)
         spanning = defaultdict(dict)
+        spanning_loci = defaultdict(lambda: defaultdict(set))
         spanning_rna_donors = defaultdict(lambda: defaultdict(set))
         for protein, hit, traceback, start, length in self.alignments(species, proteins, batch=batch):
             if hit['identity'] < .45 or hit['coverage'] < .65:
                 continue
-            paired = _paired_positions(traceback, start)
-            proportion = len(paired) / length
+            windows_by_candidate = source_windows.get(protein) if hit['identity'] >= .50 else None
+            count = mask = 0
+            for offset, size in _paired_runs(traceback, start):
+                count += size
+                if windows_by_candidate:
+                    mask |= ((1 << size) - 1) << offset
+            proportion = count / length
             if proportion < .60:
                 continue
-            for key, windows in source_windows.get(protein, {}).items():
-                if hit['identity'] >= .50 and proportion >= .80 and all(
-                        len(paired & window) >= .80 * len(window) for window in windows):
-                    donor = hit['donor']
+            donor = hit['donor']
+            if windows_by_candidate and proportion >= .80:
+                for key, windows in windows_by_candidate.items():
+                    if not all((mask & window).bit_count() >= minimum for window, minimum in windows):
+                        continue
+                    if self.flanking_blocks:
+                        spanning_loci[key][donor].add(hit['query'])
                     if donor in self.rna_counts:
                         spanning_rna_donors[key][donor].add(hit['query'])
                     previous = spanning[key].get(donor)
                     if previous is None or (hit['bitscore'], hit['query']) > (previous['bitscore'], previous['query']):
                         spanning[key][donor] = {**hit, 'paired_coverage': proportion}
-            donor = hit['donor']
             previous = best[protein].get(donor)
             if previous is None or hit['bitscore'] > previous['bitscore']:
                 best[protein][donor] = {**hit, 'paired_coverage': proportion, 'tied': False}
@@ -509,6 +551,7 @@ class DonorSearch:
                 previous['tied'] = True
 
         result = {}
+        flank_indices = {}
         groups = self.panel.get('sister_clades', {}).get(species, [])
         minimum = max(2, params['min_support'])
         for key, candidate in candidates.items():
@@ -528,7 +571,31 @@ class DonorSearch:
             # Treat donor species with both architectures as ambiguous at this locus.
             unambiguous = {name: hit for name, hit in support.items() if name not in opposed}
             decision = fission_decision(groups, unambiguous, opposed, minimum)
-            rna_donors = set(decision['closest_informative_species']) & spanning_rna_donors[key].keys()
+            excluded = []
+            if self.flanking_blocks and decision['reason'] in ('mixed_closest_donor_architectures',
+                                                               'closest_informative_donors_support_fusion'):
+                for donor in decision['closest_informative_species']:
+                    if donor not in opposed:
+                        continue
+                    if donor not in flank_indices:
+                        inputs = self.flanking_blocks(species, donor)
+                        flank_indices[donor] = (flanking_anchor_index(*inputs, self._positions(donor), params['max_interval'])
+                                                if inputs else None)
+                    flank = flank_indices[donor]
+                    if not flank:
+                        continue
+                    region = uniquely_flanked_locus(flank, candidate['source_span'])
+                    positions = self._positions(donor)
+                    if region and outside_flanks(region, positions, spanning_loci[key][donor]):
+                        excluded.append(donor)
+                        del opposed[donor]
+                        if donor in support and all(within_flanks(region, positions[h['query']])
+                                                    for h in (support[donor]['first'], support[donor]['second'])):
+                            unambiguous[donor] = support[donor]
+                if excluded:
+                    decision = fission_decision(groups, unambiguous, opposed, minimum)
+                    decision['off_locus_fusion_donors'] = excluded
+            rna_donors = set(decision['closest_informative_species']) & opposed.keys() & spanning_rna_donors[key].keys()
             for donor in rna_donors:
                 representative = opposed[donor]['query']
                 verified = self._rna_supported_donor_models(donor)
@@ -548,8 +615,27 @@ class DonorSearch:
                 if witness != representative:
                     opposed[donor]['rna_supported_query'] = witness
             if rna_donors:
-                decision = fission_decision(groups, unambiguous, opposed, minimum)
+                decision.update(fission_decision(groups, unambiguous, opposed, minimum))
             result[key] = {**decision, 'support': list(unambiguous.values()),
                            'fusion_annotation_support': [opposed[donor] for donor in sorted(opposed)],
                            'ambiguous_donor_species': sorted(support.keys() & opposed.keys())}
         return result
+
+
+def read_positions(lines):
+    positions = {}
+    for line in lines:
+        seqid, a, b, identifier, _, strand = line.rstrip().split('\t')
+        positions[identifier] = (identifier, seqid, strand, int(a), int(b))
+    return positions
+
+
+def outside_flanks(region, positions, hits):
+    seqid, start, end = region
+    return all((pos := positions.get(hit)) is not None
+               and (pos[1] != seqid or pos[4] <= start or pos[3] >= end) for hit in hits)
+
+
+def within_flanks(region, position):
+    seqid, start, end = region
+    return position[1] == seqid and start <= position[3] and position[4] <= end

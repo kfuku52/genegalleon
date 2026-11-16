@@ -312,6 +312,7 @@ Important settings:
 | `gene_model_refinement_transcriptome_inputs` | blank | Assembly coding isoforms and their gene assignments, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
+| `gene_model_refinement_accession_rna` | `auto` | Discover `refinement_accession_rna/inputs.tsv` under workspace inputs, or use the configured manifest. Blank disables discovery. |
 | `gene_model_refinement_rna_bam_dir` | `auto` | Discover RNA BAMs under the workspace input directory, or use the configured directory. Blank disables discovery. |
 | `gene_model_refinement_assembly_dir` | `auto` | Discover standard transcriptome assembly output. Blank disables discovery. |
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
@@ -416,8 +417,17 @@ the same chromosome and strand, in the same transcriptional order, within 10 kb.
 The eligible donors must occupy at least two different sister branches along
 the target lineage. At the nearest ancestor with informative donors, at least
 one donor must support the split. A source-like full-length donor annotation
-is recorded as opposing evidence. Donors with both architectures do not count
-towards split support. A nearest donor whose fusion model is supported by at
+is recorded as opposing evidence. Donors with unresolved support for both
+architectures do not count towards split support. If the nearest informative group contains both
+architectures, refinement holds the candidate for review. For runs with
+rescue synteny, it examines the existing flanks only for these calls and for
+calls with fusion-only nearest donors. A fusion hit can be excluded if two
+conserved flanks identify a unique corresponding interval and every qualifying
+fusion hit from that donor is demonstrably outside it. Unresolved flanks or
+fusion hits leave that donor's opposing evidence in place. More distant
+fusion annotations alone do not prevent a supported split.
+
+A nearest donor whose fusion model is supported by at
 least two matching whole-CDS RNA witnesses in `--rna` holds the candidate for
 review. A qualifying lower-scoring isoform of the same donor locus can
 also supply this RNA evidence. RNA from a different paralog cannot veto
@@ -435,13 +445,50 @@ configured `taxonomy_species_tree` for direct genomic inputs. A run lacking a
 species tree reports candidates for review. Competing splits or model edits
 also leave the locus unresolved.
 
-If target RNA is available, refinement checks only fusion candidates that pass
-the comparative screen. RNA BAM queries require a primary, strand-matched
-read spanning the intact CDS, including its fusion splice. Duplicate read
-names across BAMs count once. The same path can be supplied via `--rna` with
+If target RNA is available, refinement checks candidates supported by
+comparative evidence or held for conflicting nearest donors. The same indexed
+BAM pass checks for a primary, strand-matched read spanning the intact CDS,
+including its fusion splice, and for reads spanning the exact diagnostic
+junction. Duplicate read names across BAMs count once.
+The same path can be supplied via `--rna` with
 counts from independent molecules. One whole-CDS witness holds the split for
-review and two or more support retaining the fused model. A missing RNA input
-or zero validated witnesses contributes no evidence to the decision.
+review and two or more support retaining the fused model. Two primary
+RNA fragments with distinct alignment extents, MAPQ of at least 30 and at
+least 16 aligned bases on each side of the exact splice also hold the split
+for review. A missing RNA input or zero validated witnesses contributes no
+evidence to the decision.
+
+#### RNA evidence from another accession
+
+Supply `--accession-rna inputs.tsv` to the refinement planner, or configure
+`gene_model_refinement_accession_rna`. The tab-separated manifest has one row
+per evidence accession and uses the target's existing species identifier.
+Each row configures the data files and provenance for the entire accession.
+
+```tsv
+species	target_accession	evidence_accession	gtf	protein	rna_sources
+Solanum_lycopersicum	Heinz 1706	M82	TomatoRTD_transfix.gtf.zip	TomatoRTD_transfeat_coding_pep.zip	SJ:isoseq&rnaseq
+```
+
+Paths are relative to the manifest or absolute. The GTF needs exon rows with
+quoted `gene_id` and `transcript_id` attributes. Each protein FASTA ID must
+identify the corresponding GTF transcript. Files can be plain text, gzip,
+or ZIP with a single GTF or FASTA inside. The comma-separated `rna_sources`
+values name the GTF column-2 labels that document independent RNA support.
+Use transcript-supported sources, with accession identity and labels checked
+against the provider's metadata.
+
+This input is used only for a split already supported on different sister
+branches and held because the nearest donor group contains both architectures.
+Both validated replacement proteins must match full-length proteins exactly
+at a unique pair of loci in the other accession. The matching RNA-supported
+transcripts must be nonoverlapping, on the same contig and strand, and in the
+same transcriptional order within 10 kb. An RNA-supported transcript with
+exons in both matched models, or a full-length supported fusion, leaves the
+conflict unresolved. Target RNA retains priority. Donor species remain the
+units of comparative support. Refinement reads the accession files only for
+eligible conflicts and records the accession and transcript IDs in the existing
+split decision and adoption records.
 
 The representative CDS, protein, and GFF views publish the two new genes.
 `effective/fused_model_split_decisions.json` records split and fusion support,
@@ -450,6 +497,13 @@ the nearest informative donors, and the decision for each tested candidate.
 coordinates (zero-based, half-open), OrionGeno transcripts, and CDS hashes.
 Source views retain the input annotation. The check reuses rescue protein and
 coordinate inputs without rerunning whole-genome Miniprot.
+
+A completed rescue run can supply its augmented annotation, existing native
+predictions, and verified synteny comparisons to a fresh refinement plan.
+Refinement verifies comparison receipts and member bytes under the frozen
+rescue plan before consulting its own comparison backend. A comparison
+missing from an older rescue backend can be restored with the source and
+plan that produced that run.
 
 ### Reviewed split-model merges
 

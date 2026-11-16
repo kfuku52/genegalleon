@@ -38,6 +38,7 @@ from cdskit.translate import translate_sequence_string
 try:
     import annevo_gene_models
     import gene_model_transcriptome as transcriptome
+    import refinement_accession_rna
     import refinement_native_splits
     import refinement_rna
     import refinement_transcriptome_edges
@@ -70,6 +71,7 @@ try:
 except ImportError:
     from . import (
         annevo_gene_models,
+        refinement_accession_rna,
         refinement_native_splits,
         refinement_rna,
         refinement_transcriptome_edges,
@@ -171,7 +173,8 @@ def implementation():
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
                     'refinement_input_snapshot.py', 'refinement_native_splits.py', 'rescue_split_replay.py', 'annevo_gene_models.py', 'oriongeno_runtime.py', 'oriongeno_model_profiles.py', 'transcript_utrs.py', 'genome_sequence_identity.py',
                     'gene_model_source_retention.py', 'gene_model_transcriptome.py', 'rename_rnabloom_transcripts.py',
-                    'model_protein_correspondence.py', 'refinement_rna.py', 'refinement_transcriptome_edges.py')
+                    'model_protein_correspondence.py', 'refinement_rna.py', 'refinement_accession_rna.py',
+                    'refinement_transcriptome_edges.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -322,7 +325,8 @@ def freeze_native_split_panel(oriongeno, sources, anchor_root, anchor_sha, rescu
 
 
 def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, oriongeno_inputs=None, *, split_model_merges=None, model_repairs=None, transcriptome_inputs=None, rna_bam_dir=None, transcriptome_assembly_dir=None,
-         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, species_tree=None, cpus=1, **parameters):
+         assembly_genetic_codes=None, assembly_cpus=1, donor_plan=None, target=None, species_tree=None, accession_rna=None,
+         cpus=1, **parameters):
     if type(cpus) is not int or cpus < 1:
         raise ValueError('--cpus must be positive')
     root = Path(output).resolve()
@@ -596,6 +600,18 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                         tree, native_split_panel['donors'], midpoint_root=bool(guide))
                     native_split_panel['tree_rooting'] = 'midpoint' if guide else 'as_supplied'
                     files.append(str(tree))
+        accession_evidence = {}
+        if accession_rna:
+            manifest = Path(accession_rna).resolve(strict=True)
+            transcriptome_proof.read([manifest])
+            accession_evidence = refinement_accession_rna.read_manifest(manifest, prediction_sources)
+            uncovered = set(accession_evidence) - native_split_panel.get('sister_clades', {}).keys()
+            if uncovered:
+                raise ValueError('Accession RNA requires conservative OrionGeno split assessment with a species tree: '
+                                 + ', '.join(sorted(uncovered)))
+            files.append(str(manifest))
+            files.extend(row[role] for rows in accession_evidence.values() for row in rows
+                         for role in refinement_accession_rna.ROLES)
         request = {'schema': SCHEMA, 'sources': sources, 'files': transcriptome_proof.read(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
@@ -619,6 +635,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             request['split_merge_same_species_loci'] = split_same_species_loci
         if rna_bams:
             request['rna_bams'] = rna_bams
+        if accession_evidence:
+            request['accession_rna'] = accession_evidence
         if annevo:
             request['annevo'] = annevo
         if oriongeno:
@@ -704,12 +722,16 @@ def load(root, names=None):
     species_paths.update(prediction[k] for native in native_groups for prediction in native.values() for k in ('gff', 'receipt'))
     bam_paths = {n: {path for entry in entries for path in entry.values() if path}
                  for n, entries in request.get('rna_bams', {}).items()}
-    species_paths.update(path for paths in bam_paths.values() for path in paths)
+    accession_paths = {n: {entry[role] for entry in entries for role in refinement_accession_rna.ROLES}
+                       for n, entries in request.get('accession_rna', {}).items()}
+    species_paths.update(chain.from_iterable(bam_paths.values()))
+    species_paths.update(chain.from_iterable(accession_paths.values()))
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
         files.update({path: request['files'][path] for name in names for path in source_paths[name]})
         files.update({native[n][k]: request['files'][native[n][k]] for native in native_groups for n in names if n in native for k in ('gff', 'receipt')})
         files.update({path: request['files'][path] for n in names for path in bam_paths.get(n, ())})
+        files.update({path: request['files'][path] for n in names for path in accession_paths.get(n, ())})
     if _INPUT_SNAPSHOT is None:
         if digest_paths(files) != files:
             raise ValueError('Frozen refinement input changed')
@@ -727,7 +749,7 @@ def load(root, names=None):
     return value
 
 
-def stage(root, relative, key, builder, names=None, prepared_snapshot=None, *, cpus=1):
+def stage(root, relative, key, builder, names=None, prepared_snapshot=None, *, cpus=1, dependency_check=None):
     dependencies = key.get('dependencies', {})
     catalog_deps = dependencies.get('catalog', {})
     value = json.loads((root / 'plan.json').read_text()) if catalog_deps else None
@@ -799,8 +821,11 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None, *, c
                 prepared_snapshot.check_all()
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
+        if dependency_check is not None:
+            dependency_check()
 
-    options = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
+    options = ({'publication_guard': publication_guard}
+               if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT or dependency_check else {})
     if receipt_snapshot is not None:
         options['verify'] = receipt_snapshot.verify_reusable
     if cpus > 1:
@@ -1071,6 +1096,30 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
     return _correspondence(root, value, db, cpus, comparison_cache)
 
 
+def refinement_comparison(anchor_root, plan, job, prepared, cpus, comparison_cache, *, rebuild):
+    """Consume a complete comparison under its producer's frozen input key."""
+    directory = anchor_root / 'synteny' / job['id']
+    key = rescue.comparison_key(anchor_root, job, prepared)
+    proof = _RECEIPT_SNAPSHOT
+    verify = (proof.verify_reusable if proof is not None else
+              functools.partial(rescue.verified, hash_workers=min(cpus, 4)))
+    if not verify(directory, key):
+        if not rebuild or 'locuskit' not in plan['request']['tools']:
+            raise ValueError('Missing or corrupt frozen rescue comparison: ' + job['id']
+                             + '. Restore it using the original rescue plan.')
+        rescue.synteny(anchor_root, plan, job['index'], cpus, comparison_cache, prepared_snapshot=prepared)
+        if not verify(directory, key):
+            raise ValueError('Unverified synteny comparison: ' + job['id'])
+    path = directory / 'receipt.json'
+    receipt = path.read_bytes()
+    expected = hashlib.sha256(receipt).hexdigest()
+    if proof is not None:
+        proof.check({path: expected})
+    if json.loads(receipt).get('key') != key:
+        raise ValueError('Unverified synteny comparison: ' + job['id'])
+    return expected
+
+
 def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, prepared_snapshot=None):
     request = value['request']
     dependencies = {'catalog': catalog_hashes(root, value),
@@ -1079,16 +1128,10 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
     jobs = []
     if anchor_plan is not None:
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
-        dependencies['anchors'] = {}
-        for job in jobs:
-            directory = anchor_root / 'synteny' / job['id']
-            if 'fixed_donors' not in request:
-                rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
-                               prepared_snapshot=prepared_snapshot)
-            receipt = (directory / 'receipt.json').read_bytes()
-            if json.loads(receipt).get('key') != rescue.comparison_key(anchor_root, job, prepared_snapshot):
-                raise ValueError('Unverified synteny comparison: ' + job['id'])
-            dependencies['anchors'][job['id']] = hashlib.sha256(receipt).hexdigest()
+        dependencies['anchors'] = {
+            job['id']: refinement_comparison(anchor_root, anchor_plan, job, prepared_snapshot, cpus,
+                                             comparison_cache, rebuild='fixed_donors' not in request)
+            for job in jobs}
         dependencies['prepared'] = {}
         anchor_species = sorted({job[side] for job in jobs for side in ('a', 'b')})
         if 'fixed_donors' not in request:
@@ -2841,7 +2884,7 @@ def adopt_published_native_splits(rows, originals, ownership, genome, code, para
     return choices
 
 
-def native_rna_counts(request, name, paths, donor_search, genome, supplied):
+def native_rna_counts(request, name, paths, donor_search, genome, supplied, *, bridge_witnesses=None):
     """Check complete coding paths in the indexed target RNA, when present."""
     entries = request.get('rna_bams', {}).get(name, [])
     if not entries or not paths:
@@ -2849,7 +2892,8 @@ def native_rna_counts(request, name, paths, donor_search, genome, supplied):
     scratch = donor_search.directory.parent / (name + '.rna')
     scratch.mkdir(exist_ok=True)
     evidence = refinement_rna.evidence_rows(
-        name, request['sources'][name]['genome'], entries, paths, scratch, limit=2, genome=genome)
+        name, request['sources'][name]['genome'], entries, paths, scratch, limit=2, genome=genome,
+        bridge_witnesses=bridge_witnesses)
     bam = rna_witness_counts(evidence)
     # An explicit path table and BAM may describe the same molecules.
     return {**(supplied or {}), **{key: max(count, (supplied or {}).get(key, 0)) for key, count in bam.items()}}
@@ -3121,12 +3165,24 @@ def _prepare_reviewed_models(request, name, db, selected, *, donor_search=None,
                          if not refinement_native_splits.fission_overlaps(
                              candidate, split_originals[candidate['owner']], blocked)}
             decisions = donor_search.fission_support(name, proposals, parameters, batch=batch)
-            ready = {proposals[key]['owner'] for key, record in decisions.items()
-                     if record['reason'] == 'supported_split'}
             entries = request.get('rna_bams', {}).get(name, [])
             rna_available = bool(entries) or any(path[0] == name for path in (rna_counts or {}))
+            checked = {key for key, record in decisions.items()
+                       if record['reason'] in ('supported_split', 'mixed_closest_donor_architectures')}
+            ready = {proposals[key]['owner'] for key in checked}
+            bridge_keys = {key: (proposals[key]['source_span']['seqid'], proposals[key]['source_span']['strand'],
+                                 *proposals[key]['bridge']) for key in checked} if entries else {}
+            bridge_witnesses = {bridge: {} for bridge in bridge_keys.values()}
             counts = native_rna_counts(request, name, [split_originals[owner] for owner in ready],
-                                       donor_search, genome, rna_counts)
+                                       donor_search, genome, rna_counts, bridge_witnesses=bridge_witnesses)
+            junction_counts = {key: len(bridge_witnesses[bridge]) for key, bridge in bridge_keys.items()}
+            accession_entries = request.get('accession_rna', {}).get(name)
+            accession_matches = {}
+            if accession_entries:
+                eligible = {key for key in checked if decisions[key]['reason'] == 'mixed_closest_donor_architectures'
+                            and not counts.get(rna_candidate_key(split_originals[proposals[key]['owner']], name), 0)
+                            and junction_counts.get(key, 0) < 2}
+                accession_matches = refinement_accession_rna.accession_support(accession_entries, proposals, eligible)
             choices = defaultdict(list)
             for key, record in decisions.items():
                 proposal = proposals[key]
@@ -3137,16 +3193,26 @@ def _prepare_reviewed_models(request, name, db, selected, *, donor_search=None,
                               source_transcript_id=original['source_transcript_id'],
                               replaced_splice=proposal['bridge'],
                               oriongeno_transcripts=[p['native_transcript_id'] for p in proposal['paths']])
-                if record['reason'] == 'supported_split':
+                if key in checked:
                     count = counts.get(witness_key, 0)
+                    local = junction_counts.get(key, 0)
                     record['rna_witnesses'] = count
+                    if local:
+                        record['fusion_junction_rna_witnesses'] = local
                     record['target_rna_status'] = ('replicated_full_cds' if count >= 2 else 'one_full_cds_witness'
-                                                   if count == 1 else 'no_full_cds_witness'
+                                                   if count == 1 else 'replicated_fusion_junction'
+                                                   if local >= 2 else 'one_fusion_junction_witness'
+                                                   if local == 1 else 'no_full_cds_witness'
                                                    if rna_available else 'unavailable')
                     if count:
                         record['reason'] = ('target_fusion_supported_by_rna' if count >= 2
                                             else 'possible_target_fusion_one_rna_witness')
-                    else:
+                    elif local >= 2:
+                        record['reason'] = 'possible_target_fusion_replicated_junction'
+                    elif key in accession_matches:
+                        record['accession_rna_support'] = accession_matches[key]
+                        choices[owner].append(key)
+                    elif record['reason'] == 'supported_split':
                         choices[owner].append(key)
             unique = {owner: keys[0] for owner, keys in choices.items() if len(keys) == 1}
             for keys in choices.values():
@@ -3286,12 +3352,65 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
             'transcriptome_changed_representatives': sum(row['status'] == 'conserved' for row in assembly_rows)}
 
 
+def native_fission_blocks(root, request, selection, selection_sha, proof, used_receipts=None):
+    """Load only receipted comparisons needed to adjudicate a split conflict."""
+    anchor_root = Path(request['rescue_output'])
+    comparisons = dependencies = target_cache = None
+    used = {} if used_receipts is None else used_receipts
+
+    def load_pair(target, donor):
+        nonlocal comparisons, dependencies, target_cache
+        if comparisons is None:
+            selected_receipt = selection / 'receipt.json'
+            proof.verify({selected_receipt: selection_sha})
+            selected_raw = selected_receipt.read_bytes()
+            proof.check({selected_receipt: hashlib.sha256(selected_raw).hexdigest()})
+            correspondence_receipt = root / 'correspondence' / 'receipt.json'
+            expected = json.loads(selected_raw)['key']['dependencies']['correspondence']
+            proof.verify({correspondence_receipt: expected})
+            raw = correspondence_receipt.read_bytes()
+            proof.check({correspondence_receipt: hashlib.sha256(raw).hexdigest()})
+            used.update({selected_receipt: selection_sha, correspondence_receipt: expected})
+            dependencies = json.loads(raw)['key']['dependencies']
+            anchor_plan = rescue.load(anchor_root, inspect_only=True)
+            comparisons = {(min(job['a'], job['b']), max(job['a'], job['b'])): job
+                           for job in anchor_plan['synteny_jobs'] if job['id'] in dependencies['anchors']}
+        job = comparisons.get(tuple(sorted((target, donor))))
+        if job is None:
+            return None
+        block_receipt = anchor_root / 'synteny' / job['id'] / 'receipt.json'
+        block_sha = dependencies['anchors'][job['id']]
+        present, blocks = proof.read_json_member(block_receipt, block_sha, 'blocks.json')
+        if not present:
+            raise ValueError('Synteny comparison has no receipted blocks')
+        used[block_receipt] = block_sha
+        if not blocks:
+            return None
+        if target_cache is None or target_cache[0] != target:
+            receipt = anchor_root / 'prepared' / target / 'receipt.json'
+            prepared_sha = dependencies['prepared'][target]
+            bed = proof.read_member(receipt, prepared_sha, 'genes.bed')
+            if bed is None:
+                raise ValueError('Prepared anchor target has no receipted BED: ' + target)
+            used[receipt] = prepared_sha
+            target_cache = target, refinement_native_splits.read_positions(bed.decode().splitlines())
+        if job['a'] != target:
+            blocks = ([(b, a) for a, b in block] for block in blocks)
+        return blocks, target_cache[1]
+
+    return load_pair
+
+
 def finalize(root, value, *, cpus=1):
     final = select(root, value, predictions=True, cpus=cpus)
     db = catalog_index(root, value, predictions=True, cpus=cpus)
     dependencies = {'selection': digest(final / 'receipt.json'),
                     'catalog': catalog_hashes(root, value),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
+    request = value['request']
+    panel = request.get('native_split_panel')
+    flanking_blocks = None
+
     def build(tmp):
         targets = set(target_species(value))
         selections = [row for row in json.loads((final / 'selection.json').read_text())['selections']
@@ -3301,12 +3420,11 @@ def finalize(root, value, *, cpus=1):
             selected_by_species[selected_row['species']].append(selected_row)
         new_genes_by_species, repaired_by_species, retired_by_species = {}, {}, {}
         merges, repairs, fissions, fission_decisions = [], [], [], []
-        request = value['request']
-        panel = request.get('native_split_panel')
         rna_counts = rna_witness_counts(read_table(request['rna'])) if panel and request.get('rna') else {}
         with tempfile.TemporaryDirectory(prefix='native-split-', dir=tmp) as scratch:
             donor_search = (refinement_native_splits.DonorSearch(
-                panel, db, Path(scratch) / 'protein_search', cpus, rna_counts) if panel else None)
+                panel, db, Path(scratch) / 'protein_search', cpus, rna_counts,
+                flanking_blocks=flanking_blocks) if panel else None)
             for name in sorted(targets & request['sources'].keys()):
                 if parameters_for(request, name)['mode'] != 'conservative':
                     continue
@@ -3525,7 +3643,19 @@ def finalize(root, value, *, cpus=1):
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes),
                                          **sequence_summary})
         representative_map_proof.check()
-    return stage(root, 'effective', {'dependencies': dependencies}, build, cpus=cpus)
+    with contextlib.ExitStack() as stack:
+        check_flanking_dependencies = None
+        if panel and uses_rescue_correspondence(request):
+            proof = _RECEIPT_SNAPSHOT or stack.enter_context(ReceiptSnapshot(_receipt_verifier(cpus)))
+            used_anchor_receipts = {}
+            flanking_blocks = native_fission_blocks(root, request, final, dependencies['selection'],
+                                                   proof, used_anchor_receipts)
+
+            def check_flanking_dependencies():
+                proof.check(used_anchor_receipts)
+
+        return stage(root, 'effective', {'dependencies': dependencies}, build, cpus=cpus,
+                     dependency_check=check_flanking_dependencies)
 
 
 def verify_inputs(inputs, field=None, *, verification=None):
@@ -3726,6 +3856,7 @@ def parser():
     prep.add_argument('--species-tree', type=Path, help='Rooted species Newick for direct-input fusion resolution; defaults to the rescue guide tree')
     prep.add_argument('--rna-bam-dir', type=Path, help='Directory of species-named, genome-aligned RNA BAMs')
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--accession-rna', type=Path, help='Manifest of RNA-backed GTF and protein data from other accessions')
     prep.add_argument('--model-repairs', type=Path, help='Reviewed single-locus rescue candidates TSV: species,candidate_id')
     prep.add_argument('--split-model-merges', type=Path, help='Reviewed rescue merge candidates TSV: species,candidate_id')
     prep.add_argument('--oriongeno-inputs', type=Path, help='Native OrionGeno TSV: species,gff,receipt; also supplies UTRs')
@@ -3780,7 +3911,7 @@ def _main(args):
              transcriptome_inputs=args.transcriptome_inputs, rna_bam_dir=args.rna_bam_dir,
              transcriptome_assembly_dir=args.transcriptome_assembly_dir,
              assembly_genetic_codes=args.assembly_genetic_codes, assembly_cpus=args.assembly_cpus, donor_plan=args.donor_plan, target=args.target,
-             species_tree=args.species_tree, cpus=args.cpus,
+             species_tree=args.species_tree, accession_rna=args.accession_rna, cpus=args.cpus,
              **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:

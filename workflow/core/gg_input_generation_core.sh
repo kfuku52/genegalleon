@@ -33,6 +33,7 @@ gene_model_refinement_transcriptome_inputs="${gene_model_refinement_transcriptom
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
+gene_model_refinement_accession_rna="${gene_model_refinement_accession_rna-auto}"
 gene_model_refinement_split_model_merges="${gene_model_refinement_split_model_merges:-}"
 gene_model_refinement_model_repairs="${gene_model_refinement_model_repairs:-}"
 gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
@@ -2816,6 +2817,15 @@ prepare_gene_model_refinement() {
   [[ -z "${rna_bam_dir}" ]] || refinement_args+=(--rna-bam-dir "${rna_bam_dir}")
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  local accession_rna="${gene_model_refinement_accession_rna-auto}"
+  if [[ "${accession_rna}" == auto ]]; then
+    accession_rna="${gg_workspace_input_dir}/refinement_accession_rna/inputs.tsv"
+    if [[ ${genomic_inputs} -eq 1 && "${gene_model_refinement_mode}" == conservative && -f "${accession_rna}" ]]; then
+      refinement_args+=(--accession-rna "${accession_rna}")
+    fi
+  elif [[ -n "${accession_rna}" ]]; then
+    refinement_args+=(--accession-rna "${accession_rna}")
+  fi
   [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
   [[ -z "${gene_model_refinement_model_repairs}" ]] || refinement_args+=(--model-repairs "${gene_model_refinement_model_repairs}")
   if [[ ${genomic_inputs} -eq 1 ]]; then

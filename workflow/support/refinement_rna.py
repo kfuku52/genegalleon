@@ -3,9 +3,12 @@ import contextlib
 import hashlib
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
+from itertools import pairwise
 from pathlib import Path
 
 import pysam
+
+FUSION_JUNCTION_ANCHOR = 16
 
 try:
     from gene_model_catalog import indexed_genome
@@ -108,25 +111,74 @@ def overlapping_windows(paths):
             yield seqid, window, end
 
 
-def bam_witnesses(bam, genome, windows, limit):
+def observe_fusion_bridges(read, declared, genome, seqid, sites, witnesses, inferred):
+    """Collect independent, well-anchored reads at exact diagnostic splice sites."""
+    name = read.query_name.removesuffix('/1').removesuffix('/2')
+    extent = (read.reference_start, read.reference_end)
+    cigar = read.cigartuples or ()
+    pos = read.reference_start
+    for i, (op, size) in enumerate(cigar):
+        if op == 3 and (site := (pos, pos + size)) in sites and 0 < i < len(cigar) - 1:
+            left, right = cigar[i - 1], cigar[i + 1]
+            if (left[0] in (0, 7, 8) and right[0] in (0, 7, 8)
+                    and min(left[1], right[1]) >= FUSION_JUNCTION_ANCHOR):
+                if declared in ('+', '-'):
+                    observed = declared
+                else:
+                    key = (seqid, *site)
+                    if key not in inferred:
+                        inferred[key] = splice_strand(genome, seqid, ((0, pos), (pos + size, pos + size + 1)))
+                    observed = inferred[key]
+                key = (seqid, observed, *site)
+                seen = witnesses.get(key)
+                if seen is not None and len(seen) < 2 and name not in seen and extent not in seen.values():
+                    seen[name] = extent
+                    if all(len(witnesses[(seqid, strand, *site)]) >= 2 for strand in sites[site]):
+                        del sites[site]
+        if op in (0, 2, 3, 7, 8):
+            pos += size
+
+
+def bam_witnesses(bam, genome, windows, limit, bridge_witnesses=None):
     """Find up to limit distinct complete spanning reads per candidate."""
     witnesses, inferred = defaultdict(dict), {}
     for seqid, models, window_end in windows:
         starts = [model[0] for model in models]
         min_span = min(end - start for start, end, _, _ in models)
         remaining = len(models)
+        sites = defaultdict(set)
+        if bridge_witnesses:
+            for _, _, path, blocks in models:
+                strand = path[1]
+                for (_, left), (right, _) in pairwise(blocks):
+                    key = (seqid, strand, left, right)
+                    if key in bridge_witnesses and len(bridge_witnesses[key]) < 2:
+                        sites[left, right].add(strand)
+        min_bridge_span = min((b - a for a, b in sites), default=0) + 2 * FUSION_JUNCTION_ANCHOR
         for read in bam.fetch(seqid, starts[0], window_end):
             if (read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_duplicate
                     or read.is_qcfail or read.mapping_quality < 20):
                 continue
             read_start, read_end = read.reference_start, read.reference_end
-            if read_end is None or read_end - read_start < min_span:
+            if read_end is None:
+                continue
+            span = read_end - read_start
+            declared = None
+            if sites and span >= min_bridge_span and read.mapping_quality >= 30 and read.query_name:
+                declared = read.get_tag('XS') if read.has_tag('XS') else None
+                observe_fusion_bridges(read, declared, genome, seqid, sites, bridge_witnesses, inferred)
+            if not remaining:
+                if not sites:
+                    break
+                continue
+            if span < min_span:
                 continue
             first = bisect_left(starts, read_start)
             last = bisect_right(starts, read_end - min_span)
             if first >= last:
                 continue
-            declared = read.get_tag('XS') if read.has_tag('XS') else None
+            if declared is None and read.has_tag('XS'):
+                declared = read.get_tag('XS')
             for i in range(first, last):
                 start, end, path, genomic = models[i]
                 seen = witnesses.get(path, {})
@@ -143,12 +195,13 @@ def bam_witnesses(bam, genome, windows, limit):
                     witnesses[path][read.query_name] = None
                     if len(witnesses[path]) == limit:
                         remaining -= 1
-            if not remaining:
+            if not remaining and not sites:
                 break
     return witnesses
 
 
-def evidence_rows(species, genome_path, entries, candidates, scratch, *, limit=1, genome=None):
+def evidence_rows(species, genome_path, entries, candidates, scratch, *, limit=1, genome=None,
+                  bridge_witnesses=None):
     """Each evidence row represents one complete primary read on the same strand."""
     if not entries:
         return []
@@ -172,7 +225,7 @@ def evidence_rows(species, genome_path, entries, candidates, scratch, *, limit=1
                 name = item['bam']
             with pysam.AlignmentFile(item['bam'], 'rb', index_filename=index) as bam:
                 verified_reference(bam, genome, checked)
-                for path, reads in bam_witnesses(bam, genome, windows, limit).items():
+                for path, reads in bam_witnesses(bam, genome, windows, limit, bridge_witnesses).items():
                     seqid, strand, blocks = path
                     for read in reads:
                         row = {'species': species, 'seqid': seqid, 'strand': strand,

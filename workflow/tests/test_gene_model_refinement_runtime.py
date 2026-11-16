@@ -546,10 +546,14 @@ def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_pa
     target = 'Species_target'
     donors = [f'Species_donor{i:02}' for i in range(1, 13)]
     names = [target, *donors]
-    cases = ('recover', 'ten_split_two_fused', 'closest_fusion_only', 'close_donor_rna',
-             'one_collinear_pair', 'one_sister_branch', 'intact_rna', 'one_rna', 'junction_only')
+    accession_cases = ('accession_supported', 'accession_target_fusion', 'accession_crossing', 'accession_paralog')
+    cases = ('recover', 'ten_split_two_fused', 'closest_fusion_only', 'close_donor_rna', 'close_mixed',
+             *accession_cases,
+             'one_collinear_pair', 'one_sister_branch', 'intact_rna', 'one_rna', 'junction_only', 'weak_junction',
+             'duplicate_junction')
     fused_donors = {'ten_split_two_fused': donors[-2:], 'closest_fusion_only': donors[:2],
-                    'close_donor_rna': donors[:1]}
+                    'close_donor_rna': donors[:1], 'close_mixed': donors[:1],
+                    **{locus: donors[:1] for locus in accession_cases}}
     linked_donors = {'one_collinear_pair': donors[:1], 'one_sister_branch': donors[:2]}
     desired, source_paths, sources = {}, {}, []
     native_gff = ['##gff-version 3\n']
@@ -605,21 +609,51 @@ def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_pa
     subtrees = ['(' + ','.join(donors[a:b]) + ')' for a, b in ((0, 2), (2, 4), (4, 8), (8, 12))]
     tree.write_text('((((' + target + ',' + '),'.join(subtrees) + ');\n')
 
+    gtf, protein, accessions = (tmp_path / name for name in ('accession.gtf', 'accession.faa', 'accessions.tsv'))
+    exons, proteins = [], []
+    for locus in accession_cases:
+        for side, cds in enumerate(desired[locus]):
+            start, end = 100 + side * 1000, 99 + side * 1000 + len(cds)
+            gene = f'{locus}_{side}'
+            attrs = f'gene_id "{gene}"; transcript_id "{gene}.t1";'
+            exons.append(f'{locus}\tIsoSeq\texon\t{start}\t{end}\t.\t+\t.\t{attrs}\n')
+            peptide = str(Seq(cds).translate()).removesuffix('*')
+            proteins.append(f'>{gene}.t1\n{peptide}\n')
+            if locus in ('accession_crossing', 'accession_supported'):
+                crossed = f'gene_id "{locus}_both"; transcript_id "{locus}_both.t1";'
+                label = 'IsoSeq' if locus == 'accession_crossing' else 'AbInitio'
+                exons.append(f'{locus}\t{label}\texon\t{start}\t{end}\t.\t+\t.\t{crossed}\n')
+            if locus == 'accession_paralog' and side == 0:
+                exons.append(f'other\tIsoSeq\texon\t{start}\t{end}\t.\t+\t.\t'
+                             'gene_id "paralog"; transcript_id "paralog.t1";\n')
+                proteins.append(f'>paralog.t1\n{peptide}\n')
+    gtf.write_text(''.join(exons))
+    protein.write_text(''.join(proteins))
+    write_tsv(accessions, refinement.refinement_accession_rna.FIELDS, [{
+        'species': target, 'target_accession': 'Primary', 'evidence_accession': 'Secondary',
+        'gtf': gtf.name, 'protein': protein.name, 'rna_sources': 'IsoSeq'}])
     rna_bams = tmp_path / 'rna_bam'
     rna_bams.mkdir()
     header = {'HD': {'VN': '1.6', 'SO': 'coordinate'}, 'SQ': [
         {'SN': contig, 'LN': len(seq)} for contig, _, seq in fasta_records(sources[0]['genome'])]}
-    entries = {'intact_rna': ('molecule_a', 'molecule_b'), 'one_rna': ('one_molecule',),
-               'junction_only': ('local_read1', 'local_read2')}
+    entries = {'accession_target_fusion': ('target_fusion_a', 'target_fusion_b'),
+               'intact_rna': ('molecule_a', 'molecule_b'), 'one_rna': ('one_molecule',),
+               'junction_only': ('local_read1', 'local_read2', 'pcr_copy'),
+               'weak_junction': ('short_anchor1', 'short_anchor2'),
+               'duplicate_junction': ('same_extent_a', 'same_extent_b')}
     for library in ('a', 'b'):
         bam = rna_bams / f'{target}.{library}.bam'
         with pysam.AlignmentFile(bam, 'wb', header=header) as stream:
             for locus, ids in entries.items():
                 (a, b, _), (c, d, _) = source_paths[locus]
-                for identifier in ids:
+                for i, identifier in enumerate(ids):
                     read = pysam.AlignedSegment(stream.header)
                     read.reference_id = stream.get_tid(locus)
-                    left, right = (15, 15) if locus == 'junction_only' else (b - a, d - c)
+                    left, right = (b - a, d - c)
+                    if locus in ('junction_only', 'duplicate_junction'):
+                        left, right = 20, 20 + (locus == 'junction_only' and i == 1)
+                    elif locus == 'weak_junction':
+                        left, right = 12, 8 + i
                     read.reference_start = b - left
                     read.cigartuples = [(0, left), (3, c - b), (0, right)]
                     read.query_name, read.query_sequence = identifier, 'A' * (left + right)
@@ -632,13 +666,14 @@ def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_pa
                                            ''.join(native_gff), engine='oriongeno')
     output = tmp_path / 'refinement'
     cli('plan', '--inputs', inputs, '--edges', edges, '--rna', rna, '--rna-bam-dir', rna_bams,
-        '--species-tree', tree, '--oriongeno-inputs', native, '--output', output)
+        '--species-tree', tree, '--oriongeno-inputs', native, '--accession-rna', accessions, '--output', output)
     cli('run', '--output', output, '--cpus', 2)
     cli('qc', '--output', output)
     effective = output / 'effective'
     published_splits = json.loads((effective / 'fused_model_splits.json').read_text())
     by_source = {row['source_gene_id']: row for row in published_splits}
-    assert set(by_source) == {'recover', 'ten_split_two_fused', 'junction_only'}
+    assert set(by_source) == {'recover', 'ten_split_two_fused', 'weak_junction', 'duplicate_junction',
+                              'accession_supported'}
     accepted = by_source['recover']
     assert accepted['replaced_gene_id'] == target + '_recover'
     assert accepted['replaced_splice'] == [source_paths['recover'][1][1], source_paths['recover'][0][0]]
@@ -654,7 +689,18 @@ def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_pa
     assert decisions['intact_rna']['rna_witnesses'] == 2
     assert decisions['one_rna']['reason'] == 'possible_target_fusion_one_rna_witness'
     assert decisions['one_rna']['rna_witnesses'] == 1
+    assert decisions['junction_only']['reason'] == 'possible_target_fusion_replicated_junction'
     assert decisions['junction_only']['rna_witnesses'] == 0
+    assert decisions['junction_only']['fusion_junction_rna_witnesses'] == 2
+    assert decisions['duplicate_junction']['fusion_junction_rna_witnesses'] == 1
+    assert decisions['close_mixed']['reason'] == 'mixed_closest_donor_architectures'
+    assert decisions['accession_target_fusion']['reason'] == 'target_fusion_supported_by_rna'
+    for locus in ('accession_crossing', 'accession_paralog'):
+        assert decisions[locus]['reason'] == 'mixed_closest_donor_architectures'
+    witness, = by_source['accession_supported']['accession_rna_support']
+    assert witness['evidence_accession'] == 'Secondary'
+    assert witness['transcripts'] == ['accession_supported_0.t1', 'accession_supported_1.t1']
+    assert {hit['species'] for hit in by_source['accession_supported']['support']} == set(donors[1:])
     assert decisions['closest_fusion_only']['reason'] == 'closest_informative_donors_support_fusion'
     assert decisions['close_donor_rna']['reason'] == 'closest_donor_fusion_supported_by_rna'
     assert decisions['one_collinear_pair']['reason'] == 'insufficient_collinear_donor_species'
@@ -678,7 +724,11 @@ def test_native_oriongeno_splits_fused_models_only_with_collinear_support(tmp_pa
     assert archived == sources[0]['gff'].read_text()
     review = import_module('plot_gene_model_refinement').collect(output)
     assert review['fused_model_splits'] == published_splits
-    assert review['species'][target]['fused_models_split'] == 3
+    assert review['species'][target]['fused_models_split'] == len(by_source)
+    with protein.open('a') as handle:
+        handle.write('\n')
+    with pytest.raises(ValueError, match='Frozen refinement input changed'):
+        refinement.load(output)
 
 
 def test_native_terminal_repairs_and_complete_fragment_merges_use_distinct_evidence(tmp_path):

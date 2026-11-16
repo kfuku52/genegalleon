@@ -110,6 +110,7 @@ gene_model_refinement_transcriptome_inputs="" # Optional assembly CDS and transc
 gene_model_refinement_edges="" # Trusted gene correspondence TSV, required for transcriptome inputs.
 gene_model_refinement_rescue_dir="" # Existing frozen rescue plan; blank uses gene_model_rescue_dir.
 gene_model_refinement_rna="" # Optional complete coding RNA paths TSV, with zero-based half-open CDS blocks.
+gene_model_refinement_accession_rna="auto" # Discover an optional RNA evidence manifest for other accessions.
 gene_model_refinement_split_model_merges="" # Optional reviewed rescue merge TSV (species and candidate_id).
 gene_model_refinement_model_repairs="" # Optional reviewed single-locus rescue TSV (species and candidate_id).
 gene_model_oriongeno_inputs="auto" # auto discovers completed OrionGeno cohort predictions; or explicit TSV/directory; blank disables native import.

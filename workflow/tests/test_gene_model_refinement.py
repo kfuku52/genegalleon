@@ -1645,6 +1645,37 @@ def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, mo
     assert not (root / 'correspondence' / 'receipt.json').exists()
 
 
+def test_refinement_reuses_verified_comparisons_from_an_older_rescue_backend(tmp_path, monkeypatch):
+    job = {'a': 'A', 'b': 'B', 'index': 1, 'id': 'comparison_000001'}
+    plan = {'request': {'tools': {'kfFractBias': 'legacy'}}, 'synteny_jobs': [job]}
+    refinement.atomic_json(tmp_path / 'plan.json', plan)
+    plan_hash = refinement.digest(tmp_path / 'plan.json')
+    for name in ('A', 'B'):
+        prepared = tmp_path / 'prepared' / name
+        prepared.mkdir(parents=True)
+        bed = prepared / 'genes.bed'
+        bed.write_text('chr1\t0\t3\tx\t0\t+\n')
+        refinement.atomic_json(prepared / 'receipt.json', {
+            'key': {'plan': plan_hash, 'species': name}, 'files': {'genes.bed': refinement.digest(bed)}})
+    comparison = tmp_path / 'synteny' / job['id']
+    comparison.mkdir(parents=True)
+    blocks = comparison / 'blocks.json'
+    refinement.atomic_json(blocks, [])
+    receipt = comparison / 'receipt.json'
+    refinement.atomic_json(receipt, {'key': refinement.rescue.comparison_key(tmp_path, job),
+                                     'files': {'blocks.json': refinement.digest(blocks)}})
+
+    def unexpected_search(*_args, **_kwargs):
+        pytest.fail('Refinement must consume the frozen comparison')
+
+    monkeypatch.setattr(refinement.rescue, 'synteny', unexpected_search)
+    with refinement.invocation_context(2):
+        assert refinement.refinement_comparison(tmp_path, plan, job, None, 2, None, rebuild=True) == refinement.digest(receipt)
+    refinement.atomic_json(blocks, [[['changed', 'payload']]])
+    with refinement.invocation_context(2), pytest.raises(ValueError, match='Restore it using the original rescue plan'):
+        refinement.refinement_comparison(tmp_path, plan, job, None, 2, None, rebuild=True)
+
+
 def test_analysis_view_clips_only_known_partial_bases_and_retains_raw_cds(tmp_path):
     inputs, edges, rows = tiny_inputs(tmp_path)
     target = rows[0]
@@ -1968,7 +1999,61 @@ def test_nearest_donor_fusion_uses_rna_from_a_qualifying_isoform_of_same_locus(t
         'source_protein': original, 'proteins': (left, right),
         'source_windows': (set(range(4)), set(range(4, 8))),
     }}, {'min_support': 2}).values()
-    assert decision['reason'] == ('closest_donor_fusion_supported_by_rna' if same_locus else 'supported_split')
+    assert decision['reason'] == ('closest_donor_fusion_supported_by_rna' if same_locus
+                                  else 'mixed_closest_donor_architectures')
     assert decision['fusion_annotation_support'][0]['query'] == 'best'
     assert decision['fusion_annotation_support'][0]['rna_witnesses'] == (2 if same_locus else 0)
     assert decision['fusion_annotation_support'][0].get('rna_supported_query') == ('rna_isoform' if same_locus else None)
+
+
+@pytest.mark.parametrize('conflict', ['off_locus', 'off_locus_with_local_split', 'second_fusion_hit', 'duplicated_block'])
+def test_fission_resolves_only_a_uniquely_flanked_conflict(tmp_path, monkeypatch, conflict):
+    splits = refinement.refinement_native_splits
+    panel = {'sister_clades': {'target': [[['fusion', 'split1']], [['split2']]]}}
+    flanks = {'a': ('a', 'chr', '+', 0, 10), 'b': ('b', 'chr', '+', 100, 110)}
+    split_positions = {'left': ('left', 'chr', '+', 20, 32), 'right': ('right', 'chr', '+', 40, 52)}
+    fused_positions = {**flanks, 'best': ('best', 'other', '+', 20, 52),
+                       'alternative': ('alternative', 'chr', '+', 20, 52),
+                       'a2': ('a2', 'other', '+', 0, 10), 'b2': ('b2', 'other', '+', 100, 110)}
+    calls = []
+
+    def flanking_blocks(target, donor):
+        calls.append((target, donor))
+        blocks = [[('a', 'b'), ('b', 'a')]]
+        if conflict == 'duplicated_block':
+            blocks.append([('a', 'a2'), ('b', 'b2')])
+        return blocks, flanks
+
+    search = splits.DonorSearch(panel, None, tmp_path, 1,
+                               {('fusion', 'other', '+', ((20, 32), (40, 52))): 2},
+                               flanking_blocks=flanking_blocks)
+    search.observed_fusions['fusion'] = {'best': 2} if conflict.startswith('off_locus') else {}
+    search.positions = {'split1': split_positions, 'split2': split_positions, 'fusion': fused_positions}
+    original, left, right = 'MMMMKKKK', 'MMMM', 'KKKK'
+    hits = [('fusion', original, 'best', 100)]
+    if conflict == 'second_fusion_hit':
+        hits.append(('fusion', original, 'alternative', 90))
+    if conflict == 'off_locus_with_local_split':
+        search.positions['fusion'].update(split_positions)
+        hits.extend(('fusion', protein, gene, 100) for protein, gene in ((left, 'left'), (right, 'right')))
+    hits += [(donor, protein, gene, 100)
+             for donor in ('split1', 'split2') for protein, gene in ((left, 'left'), (right, 'right'))]
+    alignments = [(protein, {'donor': donor, 'query': identifier, 'bitscore': score,
+                             'identity': 1., 'coverage': 1.}, str(len(protein)), 0, len(protein))
+                  for donor, protein, identifier, score in hits]
+    monkeypatch.setattr(search, 'alignments', lambda *args, **kwargs: iter(alignments))
+    candidate = {'source_protein': original, 'proteins': (left, right),
+                 'source_windows': (set(range(4)), set(range(4, 8))),
+                 'source_span': {'seqid': 'chr', 'strand': '+', 'start': 20, 'end': 52}}
+    decisions = search.fission_support('target', {1: candidate, 2: candidate},
+                                       {'min_support': 2, 'max_interval': 1000})
+    assert calls == [('target', 'fusion')]
+    for decision in decisions.values():
+        if conflict.startswith('off_locus'):
+            assert decision['reason'] == 'supported_split'
+            assert decision['off_locus_fusion_donors'] == ['fusion']
+            assert ('fusion' in {hit['species'] for hit in decision['support']}) == (
+                conflict == 'off_locus_with_local_split')
+        else:
+            assert decision['reason'] == 'mixed_closest_donor_architectures'
+            assert 'off_locus_fusion_donors' not in decision
