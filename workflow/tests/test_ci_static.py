@@ -760,7 +760,6 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     jobs = workflow["jobs"]
     prepare = jobs["prepare-build"]
     decision = step_run(prepare, "Decide whether a scheduled build is needed")
-    runtime_contracts = step_run(jobs["build-and-push"], "Validate repository-owned runtime contracts")
 
     assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
     assert workflow["on"]["schedule"] == [{"cron": "0 19 * * *"}]
@@ -784,12 +783,88 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "container/scripts/check_published_build_input.py" in decision
     assert jobs["build-and-push"]["if"] == "needs.prepare-build.outputs.should_build == '1'"
     assert jobs["build-and-push"]["strategy"]["fail-fast"] == "true"
-    assert set(jobs["publish-manifest"]["needs"]) == {"prepare-build", "build-and-push"}
-    assert "needs.build-and-push.result == 'success'" in jobs["publish-manifest"]["if"]
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
-    assert "workflow/tests/run_checks.py runtime --workers=4" in runtime_contracts
-    assert '"${IMAGE}@${DIGEST}"' in runtime_contracts
+
+
+def test_daily_publish_waits_for_both_platform_runtime_checks():
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    build = jobs["build-and-push"]
+    validation = jobs["validate-platform"]
+    publish = jobs["publish-manifest"]
+    assert set(validation["needs"]) == {"prepare-build", "build-and-push"}
+    assert validation["permissions"] == {"contents": "read", "packages": "read"}
+    assert validation["strategy"]["fail-fast"] == "false"
+    assert validation["strategy"]["matrix"] == build["strategy"]["matrix"]
+    assert {entry["platform"] for entry in validation["strategy"]["matrix"]["include"]} == {
+        "linux/amd64", "linux/arm64",
+    }
+    export = named_step(build, "Export platform digest")
+    assert export["env"]["DIGEST_OUTPUT"] == "${{ matrix.digest_output }}"
+    for entry in build["strategy"]["matrix"]["include"]:
+        output = entry["digest_output"]
+        assert build["outputs"][output] == f"${{{{ steps.{export['id']}.outputs.{output} }}}}"
+    validate_step = named_step(validation, "Validate repository-owned runtime contracts")
+    assert validate_step["env"]["DIGEST"] == "${{ needs.build-and-push.outputs[matrix.digest_output] }}"
+    assert set(publish["needs"]) == {"prepare-build", "build-and-push", "validate-platform"}
+    assert "needs.validate-platform.result == 'success'" in publish["if"]
+    assert "needs.publish-manifest.result == 'success'" in jobs["prime-sif-cache"]["if"]
+
+
+@pytest.mark.parametrize("digest", ["", "bad-digest", "sha256:" + "a" * 64])
+def test_daily_runtime_validation_requires_an_exact_digest(tmp_path, digest):
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    command = step_run(jobs["validate-platform"], "Validate repository-owned runtime contracts")
+    fake_docker = 'docker() { printf "%s\\n" "$@"; }\n'
+    result = subprocess.run(["bash", "-c", fake_docker + command], capture_output=True, text=True, env={
+        **os.environ,
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "IMAGE": "ghcr.io/example/genegalleon",
+        "PLATFORM": "linux/arm64",
+        "DIGEST": digest,
+    })
+    if digest.startswith("sha256:"):
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines()[-7:] == [
+            "ghcr.io/example/genegalleon@" + digest,
+            "python", "workflow/tests/run_checks.py", "runtime", "--workers=4",
+            "--durations=25", "--durations-min=0.5",
+        ]
+        assert "--platform\nlinux/arm64\n" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "digest" in result.stdout
+        assert "ghcr.io/" not in result.stdout
+
+
+@pytest.mark.parametrize("arm64_digest", ["", "sha256:" + "b" * 64, "sha256:" + "a" * 64])
+def test_daily_manifest_uses_two_distinct_validated_digests(arm64_digest):
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    step = named_step(jobs["publish-manifest"], "Create and push multi-arch manifest")
+    amd64_digest = "sha256:" + "b" * 64
+    image = "ghcr.io/example/genegalleon"
+    fake_docker = """
+docker() {
+    if [[ "$3" == inspect ]]; then return 1; fi
+    printf '%s\\n' "$@"
+}
+"""
+    assert step["env"]["AMD64_DIGEST"] == "${{ needs.build-and-push.outputs.amd64_digest }}"
+    assert step["env"]["ARM64_DIGEST"] == "${{ needs.build-and-push.outputs.arm64_digest }}"
+    result = subprocess.run(["bash", "-c", fake_docker + step["run"]], capture_output=True, text=True, env={
+        **os.environ,
+        "IMAGE": image,
+        "SHA_TAG": "sha-abcdef0",
+        "IMMUTABLE_TAG": "20261117-abcdef0-fedcba987654",
+        "AMD64_DIGEST": amd64_digest,
+        "ARM64_DIGEST": arm64_digest,
+    })
+    if arm64_digest and arm64_digest != amd64_digest:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines()[-2:] == [f"{image}@{arm64_digest}", f"{image}@{amd64_digest}"]
+    else:
+        assert result.returncode != 0
+        assert result.stdout.splitlines() == ["Expected two distinct platform digests."]
 
 
 @pytest.mark.parametrize(("event", "published", "should_build"), [

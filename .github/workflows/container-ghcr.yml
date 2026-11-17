@@ -250,18 +250,21 @@ jobs:
     runs-on: ${{ matrix.runner }}
     outputs:
       runtime_input: ${{ steps.build-input.outputs.runtime_value }}
+      amd64_digest: ${{ steps.digest.outputs.amd64_digest }}
+      arm64_digest: ${{ steps.digest.outputs.arm64_digest }}
     permissions:
       contents: read
       packages: write
     strategy:
-      # Publication requires both platforms, so stop the other build on failure.
       fail-fast: true
-      matrix:
+      matrix: &platforms
         include:
           - platform: linux/amd64
             runner: ubuntu-24.04
+            digest_output: amd64_digest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+            digest_output: arm64_digest
 
     steps:
       - name: Checkout
@@ -374,64 +377,76 @@ jobs:
           # Ship the cache metadata with the image layers already being pushed.
           cache-to: type=inline
 
+      - name: Export platform digest
+        id: digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST_OUTPUT: ${{ matrix.digest_output }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "docker/build-push-action did not return a valid image digest."
+            exit 1
+          fi
+          printf '%s=%s\n' "${DIGEST_OUTPUT}" "${DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  validate-platform:
+    needs: [prepare-build, build-and-push]
+    name: validate-platform (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      # Keep the other platform's result for a failed-job rerun.
+      fail-fast: false
+      matrix: *platforms
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Validate repository-owned runtime contracts
         shell: bash
         env:
           IMAGE: ${{ needs.prepare-build.outputs.image }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          DIGEST: ${{ needs.build-and-push.outputs[matrix.digest_output] }}
         run: |
           set -euo pipefail
-          if [[ -z "${DIGEST}" ]]; then
-            echo "docker/build-push-action did not return an image digest."
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Expected a valid digest for ${PLATFORM}."
             exit 1
           fi
-          docker run --rm \
+          docker run --rm --platform "${PLATFORM}" \
             --env PYTHONDONTWRITEBYTECODE=1 \
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -w "${GITHUB_WORKSPACE}" \
             "${IMAGE}@${DIGEST}" \
             python workflow/tests/run_checks.py runtime --workers=4 --durations=25 --durations-min=0.5
 
-      - name: Export digest
-        shell: bash
-        run: |
-          set -euo pipefail
-          digest="${{ steps.build.outputs.digest }}"
-          if [[ -z "${digest}" ]]; then
-            echo "docker/build-push-action did not return an image digest."
-            exit 1
-          fi
-          mkdir -p "${RUNNER_TEMP}/digests"
-          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: digests-${{ steps.platform.outputs.pair }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
   publish-manifest:
     needs:
       - prepare-build
       - build-and-push
+      - validate-platform
     if: |
       needs.prepare-build.result == 'success' &&
-      needs.build-and-push.result == 'success'
+      needs.validate-platform.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Download digests
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-*
-          merge-multiple: true
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -448,18 +463,19 @@ jobs:
           IMAGE: ${{ needs.prepare-build.outputs.image }}
           IMMUTABLE_TAG: ${{ needs.prepare-build.outputs.immutable_tag }}
           SHA_TAG: ${{ needs.prepare-build.outputs.sha_tag }}
+          AMD64_DIGEST: ${{ needs.build-and-push.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ needs.build-and-push.outputs.arm64_digest }}
         run: |
           set -euo pipefail
-          mapfile -t digests < <(find "${RUNNER_TEMP}/digests" -maxdepth 1 -type f -printf '%f\n' | sort)
-          if [[ "${#digests[@]}" -ne 2 ]]; then
-            echo "Expected two platform digests, found ${#digests[@]}."
+          if [[ ! "${AMD64_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ || \
+                ! "${ARM64_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ || \
+                "${AMD64_DIGEST}" == "${ARM64_DIGEST}" ]]; then
+            echo "Expected two distinct platform digests."
             exit 1
           fi
 
-          refs=()
-          for digest in "${digests[@]}"; do
-            refs+=("${IMAGE}@sha256:${digest}")
-          done
+          # Keep the manifest order stable for existing immutable tags.
+          mapfile -t refs < <(printf '%s\n' "${IMAGE}@${AMD64_DIGEST}" "${IMAGE}@${ARM64_DIGEST}" | sort)
 
           immutable_exists=0
           if existing_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}:${IMMUTABLE_TAG}" 2>/dev/null)"; then

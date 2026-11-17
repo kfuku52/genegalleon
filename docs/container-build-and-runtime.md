@@ -85,7 +85,10 @@ This repository now includes CI workflows that publish container images to GHCR:
     security-refresh epoch with both published platform images
   - the new daily epoch forces a small final Ubuntu package refresh even when
     the earlier, expensive image layers remain cached
-  - tags: `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, `latest`
+  - publishes `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`, and `latest` after both
+    platform runtime suites pass against the built image digests
+  - passes digests as build job outputs so `Re-run failed jobs` can reuse
+    successful builds and retry a failed platform validation
   - after publication, validates an amd64 SIF from the immutable tag and primes
     the exact SIF cache used by subsequent commit checks
 - release publish + SIF build/upload workflow: `.github/workflows/release-sif.yml`
