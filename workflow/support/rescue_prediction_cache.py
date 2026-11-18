@@ -395,11 +395,14 @@ class VerifiedPredictionCache:
         self.batch.check()
 
     def iter_models(self):
-        self.check()
-        hasher = hashlib.sha256()
         stored = self.frozen.get("model_store")
-        rows = (iter_stored_models(self.directory, frozen_key=stored, verify=False) if stored is not None
-                else stream_json_array(self.directory / "models.json", hasher=hasher))
+        if stored is None:
+            self.check()
+            hasher = hashlib.sha256()
+            rows = stream_json_array(self.directory / "models.json", hasher=hasher)
+        else:
+            # The compact reader checks the whole live batch on entry and exhaustion.
+            rows = iter_stored_models(self.directory, frozen_key=stored, verification=self.batch)
         for model in rows:
             if isinstance(model, dict) and model.get("search") == "genome_fallback":
                 if not self.genome_search_compatible:
@@ -433,9 +436,10 @@ class VerifiedPredictionCache:
                 raw = _raw_prediction(model, self.regions)
                 if raw is not None:
                     yield raw
-        if stored is None and hasher.hexdigest() != self.frozen["files"]["models.json"]:
-            raise ValueError("Prediction model content changed after verification")
-        self.check()
+        if stored is None:
+            if hasher.hexdigest() != self.frozen["files"]["models.json"]:
+                raise ValueError("Prediction model content changed after verification")
+            self.check()
 
     def candidate_ids(self):
         """Queries with no old alignment are reused as verified empty results."""

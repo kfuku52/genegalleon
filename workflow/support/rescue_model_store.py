@@ -616,7 +616,7 @@ def _readonly(path):
 
 @contextmanager
 def _open_body_database(path, expected=None):
-    """Open a private, byte-verified copy for selective replay on shared storage."""
+    """Use a private, byte-verified SQLite copy for random reads on shared storage."""
     with ExitStack() as resources:
         readable = path
         if expected is not None:
@@ -916,7 +916,8 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
         else:
-            checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and context_filter is not None else None
+            stage_bodies = context_filter is not None or verification is not None
+            checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and stage_bodies else None
             with _open_body_database(store / "bodies.sqlite", checksum) as db:
                 bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
@@ -1031,16 +1032,18 @@ def _partial_entries(root, store, manifest, key, refs):
             raise ValueError("Missing model-store partial line reference")
 
 
-def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model_ids=None):
+def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model_ids=None, verification=None):
     """Read ordered candidates, optionally materializing only given model IDs.
 
     ID selection preserves repeated matches and still consumes/checksums every
-    source shard and the complete body database. As with every streaming reader,
-    exhaust it to finish the generation fence. Unselected bodies are not decoded
+    source shard and the complete body database. A caller can share its live
+    verification batch when it has already hashed those members. This also
+    enables a verified scratch copy for body lookups. Exhaust the iterator
+    to finish the generation fence. Unselected bodies are not decoded
     or layout-validated; use the default full reader for a complete layout audit.
     """
     return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key,
-                 model_ids=model_ids)
+                 model_ids=model_ids, verification=verification)
 
 
 def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None, scan_workers=1):

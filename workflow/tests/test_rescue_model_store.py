@@ -64,9 +64,11 @@ def even_candidate(context):
     return int(context["query"].removeprefix("query")) % 2 == 0
 
 
-@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("reader", ["raw_cache", "selective", "parallel_selective"])
 @pytest.mark.parametrize("fault", [None, "full", "corrupt", "source_replaced"])
-def test_selective_body_database_uses_verified_scratch(tmp_path, monkeypatch, workers, fault):
+def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reader, fault):
+    from workflow.support.input_generation_array_state import FreshDigestBatch
+
     records = [model(i) for i in range(8)]
     directory, _ = published(tmp_path, records)
     original = directory / "model_store/bodies.sqlite"
@@ -101,13 +103,19 @@ def test_selective_body_database_uses_verified_scratch(tmp_path, monkeypatch, wo
     monkeypatch.setattr(store.tempfile, "gettempdir", lambda: str(scratch))
     monkeypatch.setattr(store.shutil, "copyfile", copy_body)
     monkeypatch.setattr(store, "_readonly", traced)
-    rows = store.iter_model_items(directory, context_filter=even_candidate, scan_workers=workers)
+    if reader == "raw_cache":
+        rows = store.iter_models(directory, verification=FreshDigestBatch())
+        expected = records
+    else:
+        workers = 2 if reader == "parallel_selective" else 1
+        rows = store.iter_model_items(directory, context_filter=even_candidate, scan_workers=workers)
+        expected = [(i, records[i]) for i in range(0, len(records), 2)]
     if fault in {"corrupt", "source_replaced"}:
         with pytest.raises(ValueError, match="changed during scratch copy"):
             list(rows)
         assert not opened
     else:
-        assert list(rows) == [(i, records[i]) for i in range(0, len(records), 2)]
+        assert list(rows) == expected
         assert len(opened) == 1
         assert opened[0] == original if fault == "full" else scratch in opened[0].parents
     assert not any(scratch.iterdir())

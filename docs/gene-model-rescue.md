@@ -65,11 +65,13 @@ shards in ordinal order. Use `native-genomewide-plan --diagnostics summary` to
 convert retained legacy diagnostic tables into counters and exportable
 unresolved-query records.
 
-During selective replay of a verified compact store, the reader uses a private
+During raw prediction replay and selective scans of a verified compact store, the reader uses a private
 copy of the SQLite body database in the job's temporary directory when that
 directory is on a different filesystem and has enough free space. It compares
 the copied bytes to the frozen receipt before opening SQLite and removes the
-copy on close. If temporary storage fills, the reader continues from the
+copy on close. Raw prediction replay shares its current input verification with the
+store reader so previously hashed source members need only identity checks during the replay.
+If temporary storage fills, the reader continues from the
 verified source database. During admission patching, unchanged copied files
 are checked against their source digests as part of the final manifest scan.
 

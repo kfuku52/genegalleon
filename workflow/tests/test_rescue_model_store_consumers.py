@@ -91,7 +91,7 @@ def test_revision_generation_change_is_not_silently_imported(tmp_path):
 
 
 @pytest.mark.parametrize('sharded', [False, True])
-def test_prediction_reuse_keeps_query_context_and_discards_old_acceptance(tmp_path, sharded):
+def test_prediction_reuse_keeps_query_context_and_discards_old_acceptance(tmp_path, sharded, monkeypatch):
     old, new, plan, region = cache_fixture(tmp_path)
     directory = old / 'rescued/T'
     rows = json.loads((directory / 'models.json').read_text())
@@ -101,11 +101,42 @@ def test_prediction_reuse_keeps_query_context_and_discards_old_acceptance(tmp_pa
     publish(directory, rows, sharded=sharded, key=old_key)
     frozen = frozen_prediction_cache_key(old, ['T'])
     cache = verify_prediction_cache(old, new, plan, 'T', [region], PARAMS, frozen=frozen)
+    checked = set()
+    read = cache.batch.read
+
+    def already_verified(paths):
+        paths = set(paths)
+        assert paths <= cache.batch.paths.keys()
+        checked.update(paths)
+        return read(paths)
+
+    monkeypatch.setattr(cache.batch, 'read', already_verified)
     reused = list(cache.iter_models())
+    if sharded:
+        members = frozen['species']['T']['model_store']['files']
+        assert checked == {str(directory / name) for name in (*members, 'receipt.json')}
     assert len(reused) == 2
     assert all(row['query'] == 'region1' and row['evidence'] == region for row in reused)
     assert all('status' not in row and 'model_id' not in row and 'sequence' not in row
                and 'problems' not in row and 'support' not in row for row in reused)
+
+
+@pytest.mark.parametrize('when', ['before_read', 'during_read'])
+def test_prediction_replay_checks_donor_even_outside_store(tmp_path, when):
+    old, new, plan, region = cache_fixture(tmp_path)
+    directory = old / 'rescued/T'
+    rows = json.loads((directory / 'models.json').read_text())
+    key = json.loads((directory / 'receipt.json').read_text())['key']
+    publish(directory, rows, key=key)
+    cache = verify_prediction_cache(old, new, plan, 'T', [region], PARAMS)
+    stream = cache.iter_models()
+    if when == 'during_read':
+        assert next(stream)['query'] == 'region1'
+    donor = Path(plan['request']['sources']['D']['genome'])
+    with donor.open('ab') as handle:
+        handle.write(b'changed')
+    with pytest.raises(OSError, match='File changed'):
+        next(stream)
 
 
 @pytest.mark.parametrize('fault', ['member', 'manifest', 'receipt', 'omitted_shard', 'accepted_scope', 'boolean_schema'])
