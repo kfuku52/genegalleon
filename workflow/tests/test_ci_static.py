@@ -731,7 +731,8 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
     for workflow_name, build_job_name, prepare_job_name in cases:
         jobs = load_workflow(workflow_name)["jobs"]
         build_job = jobs[build_job_name]
-        hash_step = named_step(build_job, "Compute build input hash")
+        hash_job = jobs[prepare_job_name] if workflow_name == "container-ghcr.yml" else build_job
+        hash_step = named_step(hash_job, "Compute build input hash")
         build_step = next(
             step for step in build_job["steps"] if str(step.get("uses", "")).startswith("docker/build-push-action@")
         )
@@ -746,8 +747,15 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
         assert 'echo "value=$(' not in hash_step["run"]
         assert 'echo "runtime_value=$(' not in hash_step["run"]
         assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
-        assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
-        assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args
+        if workflow_name == "container-ghcr.yml":
+            assert "GG_BUILD_PLATFORMS" not in hash_step["env"]
+            assert hash_job["outputs"]["build_input"] == "${{ steps.build-input.outputs.value }}"
+            assert hash_job["outputs"]["runtime_input"] == "${{ steps.build-input.outputs.runtime_value }}"
+            assert "BUILD_INPUT_HASH=${{ needs.prepare-build.outputs.build_input }}" in build_args
+            assert "RUNTIME_INPUT_HASH=${{ needs.prepare-build.outputs.runtime_input }}" in build_args
+        else:
+            assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
+            assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args
         assert (
             "SECURITY_REFRESH_EPOCH=${{ needs."
             + prepare_job_name
@@ -766,10 +774,8 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert prepare["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     for name in ("Set up Docker Buildx", "Login to GHCR"):
         assert named_step(prepare, name)["if"] == "github.event_name == 'schedule'"
-    for name in ("Preflight env coverage check", "Resolve image tags"):
+    for name in ("Preflight env coverage check", "Resolve image tags", "Compute build input hash"):
         assert named_step(prepare, name)["if"] == "steps.decision.outputs.should_build == '1'"
-    assert "GG_BUILD_PLATFORMS=linux/amd64" in decision
-    assert "GG_BUILD_PLATFORMS=linux/arm64" in decision
     assert decision.count("--print-common-revision") == 2
     assert 'GG_BUILD_VCS_REF="${published_revision}"' in decision
     assert 'security_refresh_epoch="$(date -u +%F)"' in decision
@@ -825,9 +831,9 @@ def test_daily_runtime_validation_requires_an_exact_digest(tmp_path, digest):
     })
     if digest.startswith("sha256:"):
         assert result.returncode == 0, result.stderr
-        assert result.stdout.splitlines()[-7:] == [
+        assert result.stdout.splitlines()[-8:] == [
             "ghcr.io/example/genegalleon@" + digest,
-            "python", "workflow/tests/run_checks.py", "runtime", "--workers=4",
+            "python", "workflow/tests/run_checks.py", "runtime", "--workers=4", "-x",
             "--durations=25", "--durations-min=0.5",
         ]
         assert "--platform\nlinux/arm64\n" in result.stdout
@@ -883,31 +889,31 @@ def test_container_build_decision_uses_resolved_inputs(tmp_path, event, publishe
                     scripts / "check_published_build_input.py")
     snapshot = "a" * 40
     revision = "b" * 40
-    hashes = {"linux/amd64": "1" * 64, "linux/arm64": "2" * 64}
+    expected_hash = "1" * 64
     (scripts / "compute_build_input_hash.sh").write_text(
         '[[ "$KFU52_NWKIT_REPO_SHA" == "$SNAPSHOT_REVISION" ]] || exit 1\n'
         '[[ "$GG_BUILD_VCS_REF" == "$PUBLISHED_REVISION" ]] || exit 1\n'
-        'case "$GG_BUILD_PLATFORMS" in\n'
-        + "".join(f"{platform}) echo {digest} ;;\n" for platform, digest in hashes.items())
-        + '*) exit 1 ;;\nesac\n'
+        'echo "$GG_BUILD_VCS_REF" >> "$HASH_CALLS"\n'
+        f'echo "{expected_hash}"\n'
     )
     (tmp_path / "VERSION").write_text("1.2.3\n")
     metadata = {
         platform: {"config": {"Labels": {
             "org.opencontainers.image.revision": revision,
-            "io.genegalleon.build-input": digest,
+            "io.genegalleon.build-input": expected_hash,
         }}}
-        for platform, digest in hashes.items()
+        for platform in ("linux/amd64", "linux/arm64")
     }
     if published == "outdated":
         metadata["linux/arm64"]["config"]["Labels"]["io.genegalleon.build-input"] = "old"
     output = tmp_path / "outputs"
     docker_calls = tmp_path / "docker_calls"
+    hash_calls = tmp_path / "hash_calls"
     env = {
         **os.environ,
         "EVENT_NAME": event, "REPOSITORY": "example/genegalleon",
         "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
-        "DOCKER_CALLS": str(docker_calls), "IMAGE_METADATA": json.dumps(metadata),
+        "DOCKER_CALLS": str(docker_calls), "HASH_CALLS": str(hash_calls), "IMAGE_METADATA": json.dumps(metadata),
         "IMAGE_AVAILABLE": str(int(published != "unavailable")),
         "SNAPSHOT_REVISION": snapshot, "KFU52_NWKIT_REPO_SHA": snapshot, "PUBLISHED_REVISION": revision,
     }
@@ -924,6 +930,10 @@ docker() {
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert outputs["should_build"] == should_build, result.stderr
     assert docker_calls.exists() == (event == "schedule")
+    if event == "schedule" and published != "unavailable":
+        assert hash_calls.read_text().splitlines() == [revision]
+    else:
+        assert not hash_calls.exists()
 
 
 def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks():
@@ -933,9 +943,9 @@ def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks()
     prepared = named_step(prime, "Prepare validated SIF for subsequent commit checks")
     assert prepared["uses"] == "./.github/actions/validate-sif"
     assert "immutable_tag" in prepared["with"]["image-ref"]
-    assert prepared["with"]["runtime-input"] == "${{ needs.build-and-push.outputs.runtime_input }}"
+    assert prepared["with"]["runtime-input"] == "${{ needs.prepare-build.outputs.runtime_input }}"
     assert prepared["with"]["workers"] == "4"
-    assert "steps.build-input.outputs.runtime_value" in daily["build-and-push"]["outputs"]["runtime_input"]
+    assert "steps.build-input.outputs.runtime_value" in daily["prepare-build"]["outputs"]["runtime_input"]
     assert named_step(prime, "Restore exact validation SIF")["with"] == named_step(
         commit, "Restore exact validation SIF"
     )["with"]
