@@ -46,7 +46,7 @@ def _write_marked_archive(
     return archive_path
 
 
-def test_pack_and_materialize_visible_named_archive(tmp_path: Path):
+def test_pack_and_materialize_visible_named_archive(tmp_path: Path, monkeypatch):
     root = tmp_path / "species_tree"
     raw = root / "single_copy_iqtree_dna"
     raw.mkdir(parents=True)
@@ -73,7 +73,16 @@ def test_pack_and_materialize_visible_named_archive(tmp_path: Path):
         ]
         assert archive.comment.startswith(STORE.COMMENT_PREFIX)
 
+    inventories = []
+    validate = STORE._validated_members
+
+    def count_inventory(archive, path, name):
+        inventories.append(path)
+        return validate(archive, path, name)
+
+    monkeypatch.setattr(STORE, "_validated_members", count_inventory)
     restored = STORE.materialize_directory(root, "single_copy_iqtree_dna")
+    assert inventories == [archive_path]
 
     assert restored["state"] == "raw"
     assert not archive_path.exists()
@@ -95,6 +104,27 @@ def test_materialize_quota_preflight_preserves_archive(tmp_path: Path):
     assert not raw.exists()
     assert (root / f"{name}.zip").is_file()
     assert STORE.verify_archive(root, name)["state"] == "archived"
+
+
+def test_archive_replaced_during_extraction_is_preserved(tmp_path, monkeypatch):
+    name = "single_copy_iqtree_dna"
+    root = tmp_path / "species_tree"
+    archive = _write_marked_archive(root, name, [(f"{name}/one.nwk", b"(A,B);")])
+    replacement = _write_marked_archive(tmp_path / "other", name, [(f"{name}/two.nwk", b"(C,D);")])
+    extract = STORE._extract_members
+
+    def replace_after_read(*args, **kwargs):
+        result = extract(*args, **kwargs)
+        replacement.replace(archive)
+        return result
+
+    monkeypatch.setattr(STORE, "_extract_members", replace_after_read)
+    with pytest.raises(STORE.SpeciesTreeArchiveError, match="changed during materialization"):
+        STORE.materialize_directory(root, name)
+    with zipfile.ZipFile(archive) as stored:
+        assert stored.read(f"{name}/two.nwk") == b"(C,D);"
+    assert not (root / name).exists()
+    assert not list(root.glob(f".{name}.materialize.partial.*"))
 
 
 def test_materialize_inode_preflight_treats_zero_as_exhausted(
