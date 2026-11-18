@@ -815,6 +815,7 @@ def test_finalize_exports_alternatives_under_one_gene_and_keeps_original_ids(tmp
     plan = {'species': [name], 'common_references': [], 'request': {'sources': {name: {
         'species': name, 'fasta': str(cds), 'gff': str(gff), 'genome': str(genome), 'genetic_code': 1,
         'quality': {'complete_pct': 90}}}}}
+    plan['request']['files'] = {str(path): rescue.digest(path) for path in (cds, gff, genome)}
     monkeypatch.setattr(rescue, 'plan_digest', lambda *_: 'frozen-plan')
     original_stage = rescue.stage
     def stage(output, destination, key, builder, guard, **kwargs):
