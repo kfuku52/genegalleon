@@ -159,15 +159,16 @@ def read_rules(path):
     return rules, hashlib.sha256(raw).hexdigest()
 
 
-def validate_options(direction_filter, direction_rules='', taxonomy_path=''):
+def load_direction_rules(direction_filter, direction_rules='', taxonomy_path=''):
     if direction_filter not in DIRECTION_CHOICES:
         raise ValueError('Invalid focused HGT direction filter')
     if direction_filter == 'custom':
         if not direction_rules:
             raise ValueError('Custom direction filtering requires direction_rules')
-        rules, _ = read_rules(direction_rules)
+        rules, rules_sha = read_rules(direction_rules)
         if any(rules[side]['kind'] == 'taxonomy' for side in ('donor', 'recipient')) and not taxonomy_path:
             raise ValueError('Focused direction filtering requires existing species taxonomy')
+        return rules, rules_sha
     elif direction_rules:
         raise ValueError('direction_rules requires the explicit custom direction filter')
     elif direction_filter not in DISABLED and not taxonomy_path:
@@ -209,7 +210,11 @@ def _custom_branch(name, tips, rule, taxonomy):
 
 def filter_events(events, nodes, taxonomy_path='', direction_filter='off', direction_rules=''):
     """Opt-in endpoint rules; legacy names remain explicit compatibility presets."""
-    validate_options(direction_filter, direction_rules, taxonomy_path)
+    rules = load_direction_rules(direction_filter, direction_rules, taxonomy_path)
+    return filter_with_rules(events, nodes, taxonomy_path, direction_filter, rules)
+
+
+def filter_with_rules(events, nodes, taxonomy_path, direction_filter, loaded_rules):
     if direction_filter not in DISABLED and direction_filter != 'custom':
         return _filter_legacy_events(events, nodes, taxonomy_path, direction_filter)
     if direction_filter in DISABLED:
@@ -219,7 +224,7 @@ def filter_events(events, nodes, taxonomy_path='', direction_filter='off', direc
                 raise ValueError('Event transfer token disagrees with donor/recipient branch IDs')
             audit.append(dict(event, direction_filter_status='passed', direction_filter_reason='direction_filter_disabled'))
         return audit, audit, [], ''
-    rules, rules_sha = read_rules(direction_rules)
+    rules, rules_sha = loaded_rules
     tips = {tip for descendants in nodes.values() for tip in descendants}
     for side in ('donor', 'recipient'):
         rule = rules[side]

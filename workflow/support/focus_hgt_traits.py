@@ -222,7 +222,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
                 context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
                 mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='off', species_taxonomy='', taxonomy_dbfile='',
-                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules='', uniprot_fasta=''):
+                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, loaded_rules=None, uniprot_fasta=''):
     from focus_hgt_pfam import (
         binary_option,
         validate_length_ratio,
@@ -235,9 +235,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
     min_length_ratio = validate_length_ratio(min_length_ratio)
     pair_filter_enabled = require_shared_pfam or require_length_ratio
-    from focus_hgt_direction import DISABLED, validate_options
+    from focus_hgt_direction import DISABLED, filter_with_rules
     from focus_hgt_direction import EVENT_FIELDS as DIRECTION_FIELDS
-    validate_options(direction_filter, direction_rules, species_taxonomy)
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -324,10 +323,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     pfam_cohort = cohort
     direction_report = {}
     if direction_filter not in DISABLED:
-        from focus_hgt_direction import filter_events as filter_direction
-        direction_args = dict(direction_rules=direction_rules) if direction_filter == 'custom' else {}
-        cohort, direction_events, branch_audit, taxonomy_sha = filter_direction(
-            cohort, nodes, species_taxonomy, direction_filter, **direction_args)
+        cohort, direction_events, branch_audit, taxonomy_sha = filter_with_rules(
+            cohort, nodes, species_taxonomy, direction_filter, loaded_rules)
         output_fields = output_fields + DIRECTION_FIELDS
         write_tsv(stage / 'direction_events.tsv', output_fields, cohort)
         write_tsv(stage / 'direction_event_audit.tsv', output_fields, direction_events)
@@ -337,9 +334,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                                 excluded_event_count=sum(r['direction_filter_status'] == 'excluded_direction' for r in direction_events),
                                 withheld_event_count=sum(r['direction_filter_status'] == 'withheld' for r in direction_events),
                                 species_taxonomy_sha256=taxonomy_sha, scope='after_pfam_before_trait_selection')
-        if direction_rules:
-            from focus_hgt_direction import read_rules
-            rules, rules_sha = read_rules(direction_rules)
+        if loaded_rules is not None:
+            rules, rules_sha = loaded_rules
             direction_report['rules_sha256'] = rules_sha
             (stage / 'direction_rules.json').write_text(json.dumps(rules, indent=2) + '\n')
     output_fields = output_fields + FOCUS_FIELDS
@@ -529,10 +525,11 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     min_length_ratio = validate_length_ratio(min_length_ratio)
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
-    from focus_hgt_direction import validate_options
-    validate_options(direction_filter, direction_rules, species_taxonomy)
-    if direction_rules:
-        inputs.append(Path(direction_rules).resolve())
+    from focus_hgt_direction import load_direction_rules
+    rules_path = Path(direction_rules).resolve() if direction_rules else None
+    loaded_rules = load_direction_rules(direction_filter, rules_path, species_taxonomy)
+    if rules_path is not None:
+        inputs.append(rules_path)
     if species_taxonomy:
         inputs.append(Path(species_taxonomy).resolve())
     if filter_audit and plots:
@@ -568,7 +565,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
         manifest = output / "manifest.json"
         if not manifest.is_file() or json.loads(manifest.read_text()).get("schema_version") != VERSION:
             raise ValueError("Refusing to replace an unmanaged focused-results directory")
-    before = {str(path): digest(path) for path in inputs}
+    before = {str(path): loaded_rules[1] if path == rules_path else digest(path) for path in inputs}
     code_before = {path.name: digest(path) for path in code}
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".hgt-trait-focus-", dir=output.parent))
@@ -581,7 +578,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                min_shared_pfam_coverage=min_shared_pfam_coverage,
                                require_length_ratio=require_length_ratio, min_length_ratio=min_length_ratio,
                                scaffold_taxonomy_dir=scaffold_taxonomy_dir, direction_filter=direction_filter,
-                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile, direction_rules=direction_rules,
+                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile, loaded_rules=loaded_rules,
                                uniprot_fasta=uniprot_fasta)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
