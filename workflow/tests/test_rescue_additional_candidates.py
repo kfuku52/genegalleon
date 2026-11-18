@@ -443,6 +443,21 @@ def test_verified_cache_reuses_predictions_not_acceptance(tmp_path):
     assert {"sequence", "status", "support", "quality_evidence", "problems", "model_id"}.isdisjoint(rows[0])
 
 
+def test_prediction_replay_only_needs_proteins_from_bound_prepared_receipts(tmp_path):
+    old, new, _, region = cache_fixture(tmp_path)
+    positions = old / "prepared" / "D" / "positions.json"
+    positions.write_text("{}")
+    plan = rebind_fixture_plan(old, lambda plan: None)
+    key = frozen_prediction_cache_key(old)
+    positions.unlink()
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+    assert cache.candidate_ids() == {"region1"}
+    assert len(list(cache.iter_models())) == 1
+    (old / "prepared" / "D" / "genes.pep").write_text(">D_q\nMAD\n")
+    with pytest.raises(ValueError, match="content changed"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+
+
 def test_frozen_cache_metadata_reads_plan_and_selected_receipt_once(tmp_path, monkeypatch):
     from workflow.support import rescue_prediction_cache as implementation
     old, _, _, _ = cache_fixture(tmp_path)

@@ -16,7 +16,7 @@ from workflow.support import rescue_model_store as store
 def receipt(directory):
     files = {p.relative_to(directory).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in directory.rglob("*") if p.is_file() and p.name != "receipt.json"}
-    (directory / "receipt.json").write_text(json.dumps({"key": {"species": "test"}, "files": files}))
+    (directory / "receipt.json").write_text(json.dumps({"key": {"species": "test"}, "files": files}, sort_keys=True))
 
 
 def model(i=0, status="proposal"):
@@ -39,6 +39,32 @@ def published(tmp_path, records, *, partial=None, revisions=None, codec="gzip"):
                                        revisions=revisions, shard_bytes=900, codec=codec)
     receipt(directory)
     return directory, manifest
+
+
+@pytest.mark.parametrize("token", [b"NaN", b"-Infinity", b"1e999", b'"\\ud800"', b'{"\\udfff":0}'])
+def test_model_envelope_rejects_invalid_nested_values(token):
+    with pytest.raises(ValueError):
+        store._decode_line(b'{"context":{"nested":[' + token + b']}}\n')
+
+
+def test_model_envelope_preserves_unicode_and_float_values():
+    text = '{"context":{"literal":"植物","escaped":"\\ud83c\\udf31","x":-2.5e-10}}'
+    for encoding in ("utf-8", "utf-16"):
+        assert store._decode_line(text.encode(encoding)) == json.loads(text)
+
+
+@pytest.mark.parametrize("codec", ["gzip", "zstd"])
+def test_externally_verified_shards_skip_only_the_second_digest(tmp_path, monkeypatch, codec):
+    if codec == "zstd":
+        pytest.importorskip("zstandard")
+    path = tmp_path / "shard"
+    path.write_bytes(store._compress(b'{"context":{}}\n', codec, 1))
+    with pytest.raises(ValueError, match="checksum changed"):
+        list(store._lines(path, codec, "0" * 64))
+    def redundant_digest(*args):
+        pytest.fail("unexpected second shard hash")
+    monkeypatch.setattr(store, "_HashReader", redundant_digest)
+    assert list(store._lines(path, codec)) == [{"context": {}}]
 
 
 @pytest.mark.parametrize("codec", ["gzip", "auto", "zstd"])

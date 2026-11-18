@@ -10,7 +10,9 @@ import json
 import math
 import os
 import stat
+from collections import defaultdict
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path, PurePosixPath
 
 try:
@@ -444,9 +446,13 @@ class VerifiedPredictionCache:
 
     def candidate_ids(self):
         """Queries with no old alignment are reused as verified empty results."""
+        self._load_candidate_ids()
+        return set(self._candidate_ids)
+
+    def _load_candidate_ids(self):
         self.check()
         if self._candidate_ids is not None:
-            return set(self._candidate_ids)
+            return
         ids = set()
         seen = set()
         self._read_genome_mapping()
@@ -469,7 +475,6 @@ class VerifiedPredictionCache:
             raise ValueError("Cached genome mapping references absent candidate evidence")
         self._candidate_ids = ids
         self.check()
-        return set(ids)
 
     def genome_candidate_ids(self):
         """Old genome-search coverage, independently of its acceptance outcome."""
@@ -507,31 +512,32 @@ class VerifiedPredictionCache:
 
     def bind_exact_genome_sequences(self):
         """Rebind only genome searches whose full prepared protein is identical."""
-        self.candidate_ids()
+        self._load_candidate_ids()
         if not self.genome_search_compatible:
             self.genome_reuse = {"covered_current_queries": 0, "covered_unique_sequences": 0,
                                  "new_genome_only_queries": 0, "policy": "search_contract_mismatch"}
             return
-        required = {}
-        for row in [*self._old_genome_regions.values(), *self.regions.values()]:
-            required.setdefault(row["donor"], set()).add(row["query"])
+        required = defaultdict(set)
+        for row in chain(self._old_genome_regions.values(), self.regions.values()):
+            required[row["donor"]].add(row["query"])
         sequences = {}
         for donor, genes in required.items():
-            for identifier, _, sequence in fasta_records(self.old_root / "prepared" / donor / "genes.pep"):
-                if identifier in genes:
-                    sequences[donor, identifier] = sequence
-            if any((donor, gene) not in sequences for gene in genes):
+            path = self.old_root / "prepared" / donor / "genes.pep"
+            selected = {identifier: sequence for identifier, _, sequence in fasta_records(path)
+                        if identifier in genes}
+            if selected.keys() != genes:
                 raise ValueError("Cached genome query lacks verified prepared protein")
+            sequences[donor] = selected
         sources = {}
         for identifier, row in self._old_genome_regions.items():
-            sequence = sequences[row["donor"], row["query"]]
+            sequence = sequences[row["donor"]][row["query"]]
             representative = self._genome_mapping[identifier]
             source_row = self._old_genome_regions[representative]
-            if sequences[source_row["donor"], source_row["query"]] != sequence:
+            if sequences[source_row["donor"]][source_row["query"]] != sequence:
                 raise ValueError("Cached genome representative protein differs")
             sources[sequence] = representative
         for candidate, row in self.regions.items():
-            source = sources.get(sequences[row["donor"], row["query"]])
+            source = sources.get(sequences[row["donor"]][row["query"]])
             if source is not None:
                 self._genome_bindings.setdefault(source, []).append(candidate)
         self.genome_reuse = {"covered_current_queries": sum(map(len, self._genome_bindings.values())),
@@ -563,7 +569,6 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
     old_plan = json.loads((old_root / "plan.json").read_text())
     directory = old_root / "rescued" / name
     worker = frozen["species"][name]
-    _model_result_files(worker)
     expect(directory / "receipt.json", worker["receipt_sha256"])
     receipt = _receipt(directory)
     if (receipt["key"].get("plan") != frozen["plan_sha256"] or receipt["key"].get("species") != name
@@ -607,9 +612,10 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
         if (old_receipt["key"] != {"plan": frozen["plan_sha256"], "species": donor}
                 or receipt["key"].get("prepared", {}).get(donor) != prepared_hashes[str(old_prepared / "receipt.json")]):
             raise ValueError("Prediction cache prepared producer changed")
-        prepared_checks.extend((_safe_member(old_prepared, member), expected)
-                               for member, expected in old_receipt["files"].items())
+        # The frozen worker receipt binds the prepared generation. Replay reads
+        # only its proteins; the candidate intervals themselves are compared below.
         expected_protein = old_receipt["files"]["genes.pep"]
+        prepared_checks.append((_safe_member(old_prepared, "genes.pep"), expected_protein))
         prepared_checks.append((new_root / "prepared" / donor / "genes.pep", expected_protein))
     expect_many(prepared_checks)
     mapping = {row["id"]: row for row in regions}
@@ -621,7 +627,7 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
                                      local_search_compatible=old_contract["local"] == expected_contract["local"],
                                      genome_search_compatible=old_contract["genome"] == expected_contract["genome"],
                                      search_contract=old_contract)
-    result.candidate_ids()  # Validate every intersecting empty/aligned query.
+    # Binding also validates every intersecting empty/aligned query.
     result.bind_exact_genome_sequences()
     result.check()
     return result

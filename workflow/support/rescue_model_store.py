@@ -11,6 +11,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -242,13 +243,9 @@ def _unpack(envelope, body, *, _context_owned=False, _body_decoded=False):
     # Copies must be independent: callers routinely modify CDS/evidence/status.
     shared = body if _body_decoded else json.loads(body)
     context = envelope["context"]
-    if _context_owned:
-        # Streaming readers decoded this envelope exclusively for this record.
-        # Retain finite-number/UTF-8 validation without decoding its context a
-        # second time. Mutable shared-body containers are already private to this
-        # record, including when its immutable DNA strings came from the cache.
-        _json(context)
-    else:
+    # Owned contexts were decoded by _decode_line or written to our private
+    # partial spool with _json. Other callers still need a validated private copy.
+    if not _context_owned:
         context = json.loads(_json(context))
     if "raw_order" in envelope:
         if "raw_prediction" not in shared or "raw_prediction" not in context:
@@ -758,7 +755,7 @@ class _HashReader:
 
 def _record_lines(path, codec, expected=None):
     with Path(path).open("rb") as raw:
-        reader = _HashReader(raw)
+        reader = raw if expected is None else _HashReader(raw)
         if codec == "gzip":
             handle = gzip.GzipFile(fileobj=reader, mode="rb")
         else:
@@ -773,11 +770,27 @@ def _record_lines(path, codec, expected=None):
             raise ValueError("Model-store shard checksum changed")
 
 
+def _finite_float(token):
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("Nonfinite number in model-store record")
+    return value
+
+
+_ENVELOPE_DECODER = json.JSONDecoder(parse_float=_finite_float, parse_constant=_finite_float)
+
+
 def _decode_line(line):
     try:
-        return json.loads(line)
+        text = line.decode(json.detect_encoding(line))
+        envelope = _ENVELOPE_DECODER.decode(text)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Malformed model-store JSONL record") from error
+    # Literal text has already passed Unicode decoding. Escapes can introduce a
+    # lone surrogate; validate those uncommon records before handing off ownership.
+    if "\\u" in text:
+        _json(envelope)
+    return envelope
 
 
 def _lines(path, codec, expected=None):
@@ -827,7 +840,7 @@ def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
         for index, shard in enumerate(manifest["shards"]):
             member = f"{prefix}/{shard['path']}"
             output = Path(directory) / str(index)
-            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected[member],
+            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected.get(member),
                                                 shard["first"], shard["count"], predicate, output)))
             if len(pending) >= workers * 2:
                 yield from consume()
@@ -850,10 +863,10 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
             raise ValueError("Model IDs must be a collection of strings")
     root, store = _layout(directory)
     key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify or verification is not None else None)
-    if key is not None:
+    if frozen_key:
         _check_key(directory, key, kind)
     paths = {p: _member(root, p) for p in key["files"]} if key is not None else {}
-    stats = {p: _stat(path) for p, path in paths.items()}
+    stats = {p: _stat(path) for p, path in paths.items()} if verification is None else {}
     if verification is not None:
         expected = {str(path): key["files"][member] for member, path in paths.items()}
         expected[str(root / "receipt.json")] = key["producer_receipt_sha256"]
@@ -892,7 +905,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 bodies = _DecodedBodies(db, manifest["body_codec"])
                 count = 0
                 for ordinal, blob in db.execute("SELECT ordinal,envelope FROM entries ORDER BY ordinal"):
-                    envelope = json.loads(_decompress(blob, manifest["codec"]))
+                    envelope = _decode_line(_decompress(blob, manifest["codec"]))
                     if envelope.get("ordinal") != ordinal:
                         raise ValueError("Model-store overlay order changed")
                     record = bodies.unpack(envelope, context_owned=True)
@@ -911,7 +924,8 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
               and len(manifest["shards"]) >= scan_workers * 2):
             with _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
-                for envelope in _selected_shard_rows(prefix, manifest, paths, key["files"], context_filter, scan_workers):
+                checksums = key["files"] if verification is None else {}
+                for envelope in _selected_shard_rows(prefix, manifest, paths, checksums, context_filter, scan_workers):
                     record = bodies.unpack(envelope, context_owned=True)
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
@@ -951,7 +965,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                     raise ValueError("Model-store candidate count changed")
     if key is not None:
         _check_key(directory, key, kind)
-        if any(_stat(path) != stats[member] for member, path in paths.items()):
+        if any(_stat(paths[member]) != identity for member, identity in stats.items()):
             raise ValueError("Model-store member changed during consumption")
     if verification is not None:
         verification.check()
