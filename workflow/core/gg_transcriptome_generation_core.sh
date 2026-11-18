@@ -1451,16 +1451,14 @@ bind_amalgkit_getfastq_completion_manifest() {
 
   python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import hashlib
 import json
-import math
 import os
 import pathlib
 import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastq
+from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
@@ -1502,14 +1500,6 @@ def file_contract(raw_value):
     return {"path": value, "size": size, "sha256": checksum}
 
 
-def positive_number(value):
-    try:
-        numeric = float(value)
-        return math.isfinite(numeric) and numeric > 0
-    except (TypeError, ValueError):
-        return False
-
-
 def stats_contract(run):
     value = "{}/getfastq_stats.tsv".format(run)
     relative = pathlib.PurePosixPath(value)
@@ -1526,29 +1516,11 @@ def stats_contract(run):
         or path.stat().st_size == 0
     ):
         raise SystemExit("Completed amalgkit run has unsafe getfastq statistics: {}".format(run))
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
-    matching_rows = [
-        row for row in rows
-        if str(row.get("run", "") or "").strip() == run
-    ]
-    if len(matching_rows) != 1:
-        raise SystemExit("Completed amalgkit run has ambiguous getfastq statistics: {}".format(run))
-    row = matching_rows[0]
-    if not positive_number(row.get("num_written")) or not any(
-        positive_number(row.get(column_name))
-        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
-    ):
-        raise SystemExit("Completed amalgkit run has unusable getfastq statistics: {}".format(run))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("getfastq statistics changed while binding: {}".format(run))
-    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+    try:
+        size, checksum = quant_stats_digest(path, run)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    return {"path": value, "size": size, "sha256": checksum}
 
 
 def quarantine_unbound_fastqs(bound_paths):
@@ -1673,16 +1645,19 @@ validate_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  local support_dir
+  support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
+
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import gzip
-import hashlib
 import json
-import math
 import os
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, sys.argv[3])
+from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
@@ -1706,42 +1681,6 @@ if not (
 ):
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
-
-
-def validate_fastq_gzip(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        return False
-    try:
-        with gzip.open(path, "rb") as handle:
-            record_count = 0
-            while True:
-                header = handle.readline()
-                if not header:
-                    break
-                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
-                    return False
-                sequence_length = 0
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    if line.startswith(b"+"):
-                        break
-                    sequence_length += len(line.rstrip(b"\r\n"))
-                if sequence_length == 0:
-                    return False
-                quality_length = 0
-                while quality_length < sequence_length:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    quality_length += len(line.rstrip(b"\r\n"))
-                if quality_length != sequence_length:
-                    return False
-                record_count += 1
-            return record_count > 0
-    except (EOFError, OSError, ValueError):
-        return False
 
 
 def validate_file_contract(contract, run, seen_paths):
@@ -1774,27 +1713,17 @@ def validate_file_contract(contract, run, seen_paths):
         or not path.is_file()
     ):
         raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
-    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+    if path.stat().st_size != expected_size:
         raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
-    if not validate_fastq_gzip(path):
-        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
-    seen_paths.add(value)
-
-
-def positive_number(value):
     try:
-        numeric = float(value)
-        return math.isfinite(numeric) and numeric > 0
-    except (TypeError, ValueError):
-        return False
+        complete, size, checksum = proof_fastq(path)
+    except FastqChanged:
+        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
+    if size != expected_size or checksum != expected_sha256:
+        raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
+    seen_paths.add(value)
 
 
 def validate_stats_contract(contract, run, seen_paths):
@@ -1824,24 +1753,14 @@ def validate_stats_contract(contract, run, seen_paths):
         or not path.is_file()
     ):
         raise SystemExit("Completion manifest getfastq statistics path changed: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256(path.read_bytes())
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("Completion manifest getfastq statistics changed while validating: {}".format(value))
-    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+    if path.stat().st_size != expected_size:
         raise SystemExit("Completion manifest getfastq statistics content contract changed: {}".format(value))
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
-    matching_rows = [row for row in rows if str(row.get("run", "") or "").strip() == run]
-    if len(matching_rows) != 1:
-        raise SystemExit("Completion manifest getfastq statistics are ambiguous for run: {}".format(run))
-    row = matching_rows[0]
-    if not positive_number(row.get("num_written")) or not any(
-        positive_number(row.get(column_name))
-        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
-    ):
-        raise SystemExit("Completion manifest getfastq statistics are unusable for quant: {}".format(run))
+    try:
+        size, checksum = quant_stats_digest(path, run)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    if size != expected_size or checksum != expected_sha256:
+        raise SystemExit("Completion manifest getfastq statistics content contract changed: {}".format(value))
     seen_paths.add(value)
 
 
@@ -2210,12 +2129,13 @@ if manifest.get("schema_version") in {2, 3, 4} and isinstance(manifest.get("runs
                 continue
             if path.is_symlink() or not path.is_file() or path.resolve(strict=True) != path:
                 raise SystemExit("Refusing to preserve an unsafe drifted FASTQ path: {}".format(value))
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            if path.stat().st_size == expected_size and digest.hexdigest() == expected_sha256:
-                continue
+            if path.stat().st_size == expected_size:
+                digest = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if path.stat().st_size == expected_size and digest.hexdigest() == expected_sha256:
+                    continue
             backup = next_backup(path, ".pre_integrity_recovery")
             os.replace(path, backup)
             print("Preserved drifted FASTQ before bounded recovery: {}".format(backup))
@@ -3168,7 +3088,7 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
 
     last_exc = None
     for attempt in range(1, 6):
-        source_digest = hashlib.md5()
+        source_digest = hashlib.md5() if expected_md5 else None
         source_bytes = 0
         retain_resumable_part = False
         try:
@@ -3267,7 +3187,8 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                         with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
                             chunk = first_chunk
                             while chunk:
-                                source_digest.update(chunk)
+                                if source_digest is not None:
+                                    source_digest.update(chunk)
                                 source_bytes += len(chunk)
                                 gzip_out.write(chunk)
                                 chunk = response.read(DOWNLOAD_CHUNK_BYTES)
@@ -3292,25 +3213,17 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
 
             if source_is_gzip:
                 source_bytes = part.stat().st_size
-                actual_md5 = file_md5(part)
-            else:
-                actual_md5 = source_digest.hexdigest()
-            if expected_md5 and actual_md5 != expected_md5:
-                retain_resumable_part = False
-                raise ValueError(
-                    "checksum mismatch expected={} actual={} bytes={}".format(
-                        expected_md5,
-                        actual_md5,
-                        source_bytes,
+            if expected_md5:
+                actual_md5 = file_md5(part) if source_is_gzip else source_digest.hexdigest()
+                if actual_md5 != expected_md5:
+                    retain_resumable_part = False
+                    raise ValueError(
+                        "checksum mismatch expected={} actual={} bytes={}".format(
+                            expected_md5, actual_md5, source_bytes,
+                        )
                     )
-                )
             if not is_valid_fastq_gzip(part):
-                raise ValueError(
-                    "incomplete FASTQ gzip actual_md5={} bytes={}".format(
-                        actual_md5,
-                        source_bytes,
-                    )
-                )
+                raise ValueError("incomplete FASTQ gzip bytes={}".format(source_bytes))
             publish_partial()
             return
         except Exception as exc:  # pragma: no cover - network retry integration

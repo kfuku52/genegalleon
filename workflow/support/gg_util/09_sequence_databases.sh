@@ -63,35 +63,6 @@ _download_uniprot_sprot_pep_to_file() {
   rm -rf -- "${tmp_dir}"
 }
 
-_download_uniprot_sprot_dat_to_file() {
-  local output_file=$1
-  local output_dir
-  output_dir=$(dirname "${output_file}")
-  local tmp_dir
-  tmp_dir=$(mktemp -d "${output_dir}/tmp.uniprot_sprot_dat.XXXXXX")
-  local dat_tmp="${tmp_dir}/uniprot_sprot.dat.gz"
-  local uniprot_dat_url="${GG_UNIPROT_SPROT_DAT_URL:-https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz}"
-
-  if ! curl -fsSL "${uniprot_dat_url}" -o "${dat_tmp}"; then
-    echo "Failed to download UniProt Swiss-Prot DAT from: ${uniprot_dat_url}" >&2
-    rm -rf -- "${tmp_dir}"
-    return 1
-  fi
-  if [[ ! -s "${dat_tmp}" ]]; then
-    echo "Downloaded UniProt Swiss-Prot DAT is empty: ${uniprot_dat_url}" >&2
-    rm -rf -- "${tmp_dir}"
-    return 1
-  fi
-  if ! gzip -t -- "${dat_tmp}" >/dev/null 2>&1; then
-    echo "Downloaded UniProt Swiss-Prot DAT failed gzip validation: ${uniprot_dat_url}" >&2
-    rm -rf -- "${tmp_dir}"
-    return 1
-  fi
-
-  mv -- "${dat_tmp}" "${output_file}"
-  rm -rf -- "${tmp_dir}"
-}
-
 _build_uniprot_sprot_metadata_from_dat() {
   local dat_path=$1
   local out_path=$2
@@ -106,10 +77,6 @@ _build_uniprot_sprot_metadata_from_dat() {
     util_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
   fi
   local script_path="${util_dir}/build_uniprot_metadata_from_dat.py"
-  if [[ ! -s "${script_path}" ]]; then
-    echo "UniProt metadata builder script was not found: ${script_path}" >&2
-    return 1
-  fi
   local out_tmp="${out_path}.tmp.$$"
   if [[ "${out_path}" == *.gz ]]; then
     out_tmp="${out_tmp}.gz"
@@ -118,17 +85,7 @@ _build_uniprot_sprot_metadata_from_dat() {
     rm -f -- "${out_tmp}"
     return 1
   fi
-  if [[ ! -s "${out_tmp}" ]]; then
-    echo "UniProt metadata builder produced an empty file: ${out_tmp}" >&2
-    rm -f -- "${out_tmp}"
-    return 1
-  fi
   mv -- "${out_tmp}" "${out_path}"
-}
-
-_uniprot_sprot_dat_is_readable() {
-  local dat_path=$1
-  [[ -s "${dat_path}" ]] && gzip -t -- "${dat_path}" >/dev/null 2>&1
 }
 
 _prepare_uniprot_sprot_meta_to_file() {
@@ -148,30 +105,30 @@ _prepare_uniprot_sprot_meta_to_file() {
     return 0
   fi
 
-  local tmp_dir=""
-  tmp_dir=$(mktemp -d "$(dirname "${output_meta}")/tmp.uniprot_sprot_meta.XXXXXX")
-  local dat_source=""
-
-  if _uniprot_sprot_dat_is_readable "${runtime_prefix}.dat.gz"; then
-    dat_source="${runtime_prefix}.dat.gz"
-  elif _uniprot_sprot_dat_is_readable "${sys_prefix}.dat.gz"; then
-    dat_source="${sys_prefix}.dat.gz"
-  else
-    dat_source="${tmp_dir}/uniprot_sprot.dat.gz"
-    if ! _download_uniprot_sprot_dat_to_file "${dat_source}"; then
-      rm -rf -- "${tmp_dir}"
+  local dat_source
+  for dat_source in "${runtime_prefix}.dat.gz" "${sys_prefix}.dat.gz"; do
+    [[ -s "${dat_source}" ]] || continue
+    if _build_uniprot_sprot_metadata_from_dat "${dat_source}" "${output_meta}"; then
+      return 0
+    fi
+    # Only a damaged gzip is recoverable by trying another source. A parser
+    # or output error on an intact DAT must still fail the build.
+    if gzip -t -- "${dat_source}" >/dev/null 2>&1; then
       return 1
     fi
-    if ! _uniprot_sprot_dat_is_readable "${runtime_prefix}.dat.gz"; then
-      if ! cp_out "${dat_source}" "${runtime_prefix}.dat.gz"; then
-        echo "Could not cache the downloaded UniProt Swiss-Prot DAT; continuing with the validated temporary copy." >&2
-      fi
-    fi
-  fi
+  done
 
-  if ! _build_uniprot_sprot_metadata_from_dat "${dat_source}" "${output_meta}"; then
+  local tmp_dir
+  tmp_dir=$(mktemp -d "$(dirname "${output_meta}")/tmp.uniprot_sprot_meta.XXXXXX") || return 1
+  dat_source="${tmp_dir}/uniprot_sprot.dat.gz"
+  local dat_url="${GG_UNIPROT_SPROT_DAT_URL:-https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.dat.gz}"
+  if ! curl -fsSL "${dat_url}" -o "${dat_source}" ||
+    ! _build_uniprot_sprot_metadata_from_dat "${dat_source}" "${output_meta}"; then
     rm -rf -- "${tmp_dir}"
     return 1
+  fi
+  if ! cp_out "${dat_source}" "${runtime_prefix}.dat.gz"; then
+    echo "Could not cache the downloaded UniProt Swiss-Prot DAT; metadata generation succeeded." >&2
   fi
   rm -rf -- "${tmp_dir}"
 }

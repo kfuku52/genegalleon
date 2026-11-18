@@ -15,6 +15,17 @@ import cds_resolution as resolution
 pytestmark = pytest.mark.fast
 
 
+@pytest.mark.parametrize('headers', [[], ['Alpha_one_'], ['Beta_two_g1'], ['Alpha_one_g|1'],
+                                     ['Alpha_one_g1 description'], ['Alpha_one_g1', 'Alpha_one_g1']])
+def test_selected_species_headers_checked_before_publication(tmp_path, headers):
+    cds = tmp_path / 'Alpha_one.fa'
+    cds.write_text(''.join(f'>{header}\nATGAAATAA\n' for header in headers))
+    output = tmp_path / 'results'
+    with pytest.raises(ValueError, match='No CDS|Invalid CDS header|Duplicate CDS'):
+        resolution.resolve(cds, None, None, output, species='Alpha_one')
+    assert not (output / cds.name).exists()
+
+
 def resolved_view_fixture(tmp_path):
     sources = tmp_path / 'sources'
     sources.mkdir()

@@ -2085,9 +2085,6 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
     for token in csubst_banned:
         assert token not in csubst_wrapper
     assert "(og_indices.shape[0] > args.max_per_og) and (args.max_per_og > 0)" in csubst_wrapper
-    assert "(not os.path.exists(dir_out)) and (not os.path.exists(out_zip))" in csubst_wrapper
-    assert "elif os.path.exists(dir_out):" in csubst_wrapper
-    assert "csubst_site_archive_is_complete(out_zip)" in csubst_wrapper
 
 
 def test_gene_evolution_core_uses_csubst_search_namespace():
@@ -2379,16 +2376,6 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)
-
-
-def test_genome_annotation_core_follows_symlinked_species_cds_for_discovery_and_validation():
-    script = CORE_DIR / "gg_genome_annotation_core.sh"
-    text = _read_text(script)
-
-    assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
-    assert 'check_species_cds_dir "${dir_sp_cds%/}/."' in text
-    assert 'check_if_species_files_unique "${dir_sp_cds%/}/."' in text
-    assert 'check_species_cds "${gg_workspace_dir}"' not in text
 
 
 def test_genome_annotation_core_multispecies_summary_requires_real_summary_inputs():

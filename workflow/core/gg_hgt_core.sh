@@ -633,11 +633,6 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       echo "Focused species-branch direction filtering requires existing species taxonomy: ${hgt_focus_taxonomy_path}" >&2
       exit 1
     fi
-    if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
-      PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python -c \
-        'import sys; from pathlib import Path; from focus_hgt_direction import validate_options; validate_options(sys.argv[1], sys.argv[2], sys.argv[3] if Path(sys.argv[3]).is_file() else "")' \
-        "${hgt_focus_direction_filter}" "${hgt_focus_direction_rules}" "${hgt_focus_taxonomy_path}"
-    fi
     gg_artifact_contract_init hgt_focus_provenance_args "hgt_trait_focus" "all_category1_targets" \
       "${dir_hgt_provenance}/hgt_trait_focus.json"
     hgt_focus_provenance_args+=(
@@ -668,6 +663,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --parameter "direction_filter=${hgt_focus_direction_filter}"
     )
     if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
+      if [[ -z "${hgt_focus_direction_rules}" ]]; then
+        echo "Custom direction filtering requires direction_rules." >&2
+        exit 1
+      fi
       hgt_focus_provenance_args+=(--input "direction_rules=${hgt_focus_direction_rules}")
     fi
     if [[ "${hgt_focus_direction_filter}" != "off" && "${hgt_focus_direction_filter}" != "any" && -s "${hgt_focus_taxonomy_path}" ]]; then

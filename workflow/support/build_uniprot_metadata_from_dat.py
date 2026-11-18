@@ -428,8 +428,6 @@ def main():
         raise SystemExit(f"Input DAT file was not found or empty: {args.uniprot_dat}")
 
     parse_uniprot_dat(dat_path=args.uniprot_dat, out_path=args.outfile)
-    if (not os.path.exists(args.outfile)) or (os.path.getsize(args.outfile) == 0):
-        raise SystemExit(f"Output metadata file was not created: {args.outfile}")
 
 
 if __name__ == "__main__":

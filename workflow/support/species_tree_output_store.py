@@ -13,6 +13,7 @@ import os
 import shutil
 import stat
 import sys
+import tempfile
 import time
 import uuid
 import zipfile
@@ -210,11 +211,10 @@ def _raw_to_zip_peak_bytes(files: Sequence[Path]) -> int:
 
 
 def _zip_to_raw_requirements(
-    root: Path,
+    filesystem_stats: os.statvfs_result,
     file_members: Sequence[zipfile.ZipInfo],
     directory_members: Sequence[zipfile.ZipInfo],
 ) -> tuple[int, int]:
-    filesystem_stats = os.statvfs(root)
     block_size = int(filesystem_stats.f_frsize or filesystem_stats.f_bsize or 4096)
     allocated_file_bytes = sum(
         ((int(info.file_size) + block_size - 1) // block_size) * block_size for info in file_members
@@ -276,8 +276,6 @@ def _validated_members(
     archive: zipfile.ZipFile,
     path: Path,
     expected_name: str,
-    *,
-    check_crc: bool = True,
 ) -> tuple[list[zipfile.ZipInfo], list[zipfile.ZipInfo]]:
     payload = _read_archive_metadata(archive, path)
     if payload.get("directory") != expected_name:
@@ -330,10 +328,6 @@ def _validated_members(
             f"Archive directory count differs from its metadata in {path}: "
             f"metadata={expected_directory_count!r}, actual={len(directory_members)}"
         )
-    if check_crc:
-        bad_member = archive.testzip()
-        if bad_member is not None:
-            raise SpeciesTreeArchiveError(f"CRC verification failed in {path}: {bad_member}")
     return file_members, directory_members
 
 
@@ -412,7 +406,6 @@ def verify_archive(
                 archive,
                 path,
                 name,
-                check_crc=False,
             )
             verified_payload_bytes = (
                 _verify_member_payloads(
@@ -427,7 +420,7 @@ def verify_archive(
     except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
         raise SpeciesTreeArchiveError(f"Failed to verify {path}: {exc}") from exc
     required_bytes, required_inodes = _zip_to_raw_requirements(
-        root,
+        os.statvfs(root),
         members,
         directory_members,
     )
@@ -570,7 +563,6 @@ def pack_directory(
                     archive,
                     partial_path,
                     name,
-                    check_crc=False,
                 )
                 _verify_member_payloads(
                     archive,
@@ -630,84 +622,128 @@ def _safe_destination(base: Path, member_name: str) -> Path:
     return destination
 
 
-def _extract_archive_to(
-    archive_path: Path,
+def _check_materialization_space(
+    root: Path,
+    members: Sequence[zipfile.ZipInfo],
+    directory_members: Sequence[zipfile.ZipInfo],
+    available_bytes: int | None,
+) -> dict[str, int]:
+    filesystem_stats = os.statvfs(root)
+    required_bytes, required_inodes = _zip_to_raw_requirements(
+        filesystem_stats,
+        members,
+        directory_members,
+    )
+    filesystem_free_bytes = filesystem_stats.f_bavail * filesystem_stats.f_frsize
+    effective_available_bytes = filesystem_free_bytes
+    if available_bytes is not None:
+        if int(available_bytes) < 0:
+            raise SpeciesTreeArchiveError("available_bytes must be non-negative")
+        effective_available_bytes = min(
+            effective_available_bytes,
+            int(available_bytes),
+        )
+    if required_bytes > effective_available_bytes:
+        raise SpeciesTreeArchiveError(
+            "Insufficient temporary space for ZIP-to-raw conversion: "
+            f"allocated_required={required_bytes}, "
+            f"effective_available_bytes={effective_available_bytes}. "
+            "Pass quota remaining as --available-bytes for a quota-aware "
+            "preflight."
+        )
+    total_inodes = int(filesystem_stats.f_files)
+    available_inodes = int(filesystem_stats.f_favail)
+    if (
+        total_inodes > 0
+        and available_inodes >= 0
+        and required_inodes > available_inodes
+    ):
+        raise SpeciesTreeArchiveError(
+            "Insufficient filesystem inodes for ZIP-to-raw conversion: "
+            f"required={required_inodes}, available={available_inodes}"
+        )
+    return {
+        "required_peak_new_bytes": required_bytes,
+        "required_inodes": required_inodes,
+        "filesystem_free_bytes": filesystem_free_bytes,
+        "effective_available_bytes": effective_available_bytes,
+    }
+
+
+def _extract_members(
+    archive: zipfile.ZipFile,
     name: str,
     destination: Path,
+    members: Sequence[zipfile.ZipInfo],
+    directory_members: Sequence[zipfile.ZipInfo],
     *,
     progress_callback: Callable[..., None] | None = None,
-) -> int:
-    try:
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            members, directory_members = _validated_members(archive, archive_path, name, check_crc=False)
-            directory_metadata: list[tuple[Path, int, tuple[int, ...]]] = []
-            total_bytes = sum(int(info.file_size) for info in members)
-            completed_bytes = 0
-            completed_files = 0
-            if progress_callback is not None:
-                progress_callback(
-                    force=True,
-                    phase="materializing",
-                    directory=name,
-                    files_completed=0,
-                    files_total=len(members),
-                    bytes_completed=0,
-                    bytes_total=total_bytes,
-                )
-            for info in sorted(
-                directory_members,
-                key=lambda item: len(PurePosixPath(item.filename).parts),
-            ):
-                target = _safe_destination(destination, info.filename)
-                target.mkdir(parents=True, exist_ok=True)
-                directory_metadata.append((target, info.external_attr >> 16, info.date_time))
-            for info in members:
-                target = _safe_destination(destination, info.filename)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info, "r") as source, target.open("wb") as output:
+) -> None:
+    directory_metadata: list[tuple[Path, int, tuple[int, ...]]] = []
+    total_bytes = sum(int(info.file_size) for info in members)
+    completed_bytes = 0
+    completed_files = 0
+    if progress_callback is not None:
+        progress_callback(
+            force=True,
+            phase="materializing",
+            directory=name,
+            files_completed=0,
+            files_total=len(members),
+            bytes_completed=0,
+            bytes_total=total_bytes,
+        )
+    for info in sorted(
+        directory_members,
+        key=lambda item: len(PurePosixPath(item.filename).parts),
+    ):
+        target = _safe_destination(destination, info.filename)
+        target.mkdir(parents=True, exist_ok=True)
+        directory_metadata.append((target, info.external_attr >> 16, info.date_time))
+    for info in members:
+        target = _safe_destination(destination, info.filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info, "r") as source, target.open("wb") as output:
 
-                    class ProgressOutput:
-                        def write(
-                            self,
-                            chunk: bytes,
-                            *,
-                            _completed_files: int = completed_files,
-                        ) -> int:
-                            nonlocal completed_bytes
-                            written = output.write(chunk)
-                            completed_bytes += int(written)
-                            if progress_callback is not None:
-                                progress_callback(
-                                    phase="materializing",
-                                    directory=name,
-                                    files_completed=_completed_files,
-                                    files_total=len(members),
-                                    bytes_completed=completed_bytes,
-                                    bytes_total=total_bytes,
-                                )
-                            return int(written)
+            class ProgressOutput:
+                def write(
+                    self,
+                    chunk: bytes,
+                    *,
+                    _completed_files: int = completed_files,
+                ) -> int:
+                    nonlocal completed_bytes
+                    written = output.write(chunk)
+                    completed_bytes += int(written)
+                    if progress_callback is not None:
+                        progress_callback(
+                            phase="materializing",
+                            directory=name,
+                            files_completed=_completed_files,
+                            files_total=len(members),
+                            bytes_completed=completed_bytes,
+                            bytes_total=total_bytes,
+                        )
+                    return int(written)
 
-                    shutil.copyfileobj(
-                        source,
-                        ProgressOutput(),
-                        length=1024 * 1024,
-                    )
-                    output.flush()
-                    os.fsync(output.fileno())
-                mode = info.external_attr >> 16
-                if mode:
-                    target.chmod(stat.S_IMODE(mode))
-                modified = time.mktime((*info.date_time, 0, 0, -1))
-                os.utime(target, (modified, modified))
-                completed_files += 1
-            for target, mode, date_time in reversed(directory_metadata):
-                if mode:
-                    target.chmod(stat.S_IMODE(mode))
-                modified = time.mktime((*date_time, 0, 0, -1))
-                os.utime(target, (modified, modified))
-            return len(members)
-    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-        raise SpeciesTreeArchiveError(f"Failed to extract {archive_path}: {exc}") from exc
+            shutil.copyfileobj(
+                source,
+                ProgressOutput(),
+                length=1024 * 1024,
+            )
+            output.flush()
+            os.fsync(output.fileno())
+        mode = info.external_attr >> 16
+        if mode:
+            target.chmod(stat.S_IMODE(mode))
+        modified = time.mktime((*info.date_time, 0, 0, -1))
+        os.utime(target, (modified, modified))
+        completed_files += 1
+    for target, mode, date_time in reversed(directory_metadata):
+        if mode:
+            target.chmod(stat.S_IMODE(mode))
+        modified = time.mktime((*date_time, 0, 0, -1))
+        os.utime(target, (modified, modified))
 
 
 def materialize_directory(
@@ -721,7 +757,7 @@ def materialize_directory(
     name = _directory_name(name)
     raw_path = _raw_path(root, name)
     archive_path = _archive_path(root, name)
-    with _store_lock(root):
+    with _store_lock(root), contextlib.ExitStack() as cleanup:
         _cleanup_stale_partials(root, name)
         _assert_regular_path(raw_path, "managed directory")
         _assert_regular_path(archive_path, "ZIP archive")
@@ -738,59 +774,20 @@ def materialize_directory(
         if not archive_path.is_file():
             raise SpeciesTreeArchiveError(f"Archive path is not a file: {archive_path}")
 
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            members, directory_members = _validated_members(
-                archive,
-                archive_path,
-                name,
-                check_crc=False,
-            )
-        required_bytes, required_inodes = _zip_to_raw_requirements(
-            root,
-            members,
-            directory_members,
-        )
-        filesystem_free_bytes = int(shutil.disk_usage(root).free)
-        effective_available_bytes = filesystem_free_bytes
-        if available_bytes is not None:
-            if int(available_bytes) < 0:
-                raise SpeciesTreeArchiveError("available_bytes must be non-negative")
-            effective_available_bytes = min(
-                effective_available_bytes,
-                int(available_bytes),
-            )
-        if required_bytes > effective_available_bytes:
-            raise SpeciesTreeArchiveError(
-                "Insufficient temporary space for ZIP-to-raw conversion: "
-                f"allocated_required={required_bytes}, "
-                f"effective_available_bytes={effective_available_bytes}. "
-                "Pass quota remaining as --available-bytes for a quota-aware "
-                "preflight."
-            )
-        filesystem_stats = os.statvfs(root)
-        total_inodes = int(filesystem_stats.f_files)
-        available_inodes = int(filesystem_stats.f_favail)
-        if (
-            total_inodes > 0
-            and available_inodes >= 0
-            and required_inodes > available_inodes
-        ):
-            raise SpeciesTreeArchiveError(
-                "Insufficient filesystem inodes for ZIP-to-raw conversion: "
-                f"required={required_inodes}, available={available_inodes}"
-            )
-
-        temporary = root / f".{name}.materialize.partial.{os.getpid()}.{uuid.uuid4().hex}"
-        temporary.mkdir()
+        archive_signature = _signature(archive_path)
         try:
-            (temporary / name).mkdir()
-            file_count = _extract_archive_to(
-                archive_path,
-                name,
-                temporary,
-                progress_callback=progress_callback,
-            )
-            extracted = temporary / name
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                members, directory_members = _validated_members(archive, archive_path, name)
+                space = _check_materialization_space(root, members, directory_members, available_bytes)
+                staging = tempfile.TemporaryDirectory(
+                    prefix=f".{name}.materialize.partial.", dir=root, ignore_cleanup_errors=True,
+                )
+                temporary = Path(cleanup.enter_context(staging))
+                extracted = temporary / name
+                extracted.mkdir()
+                _extract_members(archive, name, temporary, members, directory_members, progress_callback=progress_callback)
+            if _signature(archive_path) != archive_signature:
+                raise SpeciesTreeArchiveError(f"Archive changed during materialization: {archive_path}")
             if raw_path.exists():
                 if not raw_path.is_dir():
                     raise SpeciesTreeArchiveError(f"Managed path is not a directory: {raw_path}")
@@ -821,22 +818,15 @@ def materialize_directory(
             else:
                 os.replace(extracted, raw_path)
             _fsync_directory(raw_path)
+            if _signature(archive_path) != archive_signature:
+                raise SpeciesTreeArchiveError(f"Archive changed during materialization: {archive_path}")
             archive_path.unlink()
             _fsync_directory(root)
-        except OSError as exc:
+        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
             raise SpeciesTreeArchiveError(f"Failed to materialize {archive_path}: {exc}") from exc
-        finally:
-            shutil.rmtree(temporary, ignore_errors=True)
-    result = {"directory": name, "state": "raw", "files": file_count}
+    result = {"directory": name, "state": "raw", "files": len(members)}
     if include_metrics:
-        result.update(
-            {
-                "required_peak_new_bytes": required_bytes,
-                "required_inodes": required_inodes,
-                "filesystem_free_bytes": filesystem_free_bytes,
-                "effective_available_bytes": effective_available_bytes,
-            }
-        )
+        result.update(space)
     return result
 
 
@@ -923,7 +913,7 @@ def count_matching_files(root: Path, name: str, pattern: str) -> int:
                 raise SpeciesTreeArchiveError(f"Archive path is not a file: {archive_path}")
             try:
                 with zipfile.ZipFile(archive_path, "r") as archive:
-                    members, _ = _validated_members(archive, archive_path, name, check_crc=False)
+                    members, _ = _validated_members(archive, archive_path, name)
                     for info in members:
                         relative = PurePosixPath(info.filename).relative_to(name)
                         if (

@@ -834,7 +834,10 @@ It contains manifests, candidate source rows, raw `csubst sites` outputs,
 focused tree/site plots and combined reports. Shared candidate analyses are
 cached once across thresholds; source summaries, selection parameters and
 required input signatures govern archive reuse. Missing report inputs are
-recorded as skipped candidates. With a lineage bound enabled, ZIPs and run
+recorded as skipped candidates. Candidate and per-trait site ZIPs receive a
+full CRC check when created. Reuse reads ZIP metadata and, for candidate
+reports, the manifests. To check every stored file after archival or transfer,
+run `python -m zipfile -t ARCHIVE.zip`. With a lineage bound enabled, ZIPs and run
 manifests also carry `_min_lineage_support_<S>` in their names. Both bounds are
 recorded in package metadata, candidate TSVs/manifests and PDF annotations;
 archive reuse verifies them even when the surviving candidates are identical.

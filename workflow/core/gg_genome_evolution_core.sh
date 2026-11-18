@@ -6609,32 +6609,42 @@ run_orthogroup_copy_number_stage=0
 if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 || ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
-if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
-  # Validate current raw counts even when a prepared matrix is being reused.
-  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
-    --genecount "${file_orthogroup_genecount_selected}" \
-    --dated_species_tree "${file_dated_species_tree}" \
-    --validate-only || exit $?
-fi
+copy_number_manifest="${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
 copy_number_needs_update=0
-gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
+gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${copy_number_manifest}"
 copy_number_provenance_args+=(
   --input "selected_gene_counts=${file_orthogroup_genecount_selected}"
   --input "dated_species_tree=${file_dated_species_tree}"
   --output "copy_number=${file_orthogroup_copy_number}"
   --parameter "max_size_differential=${orthogroup_copy_number_max_size_differential}"
 )
-gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage "${copy_number_provenance_args[@]}" || exit $?
+if [[ ${run_orthogroup_copy_number_stage} -eq 1 || -e "${copy_number_manifest}" ||
+  "${artifact_stale_policy:-stop}" == rebuild || "${artifact_legacy_policy:-adopt}" != adopt ]]; then
+  # gg-cache-guard: audited - preflight for adoption or explicit stale reuse; provenance decides reuse below.
+  if [[ -e "${file_orthogroup_copy_number}" && (
+    ( ! -e "${copy_number_manifest}" && "${artifact_legacy_policy:-adopt}" == adopt ) ||
+    ( ${run_orthogroup_copy_number_stage} -eq 1 && -e "${copy_number_manifest}" && "${artifact_stale_policy:-stop}" == reuse )
+  ) ]]; then
+    python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+      --genecount "${file_orthogroup_genecount_selected}" \
+      --dated_species_tree "${file_dated_species_tree}" \
+      --validate-only || exit $?
+  fi
+  gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage "${copy_number_provenance_args[@]}" || exit $?
+fi
 if [[ ${copy_number_needs_update} -eq 1 && ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
   gg_step_start "${task}"
-  if [[ -d "${dir_orthogroup_copy_number}" ]]; then
-    rm -rf -- "${dir_orthogroup_copy_number}"
-  fi
-  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
-    --genecount "${file_orthogroup_genecount_selected}" \
-    --dated_species_tree "${file_dated_species_tree}" \
-    --output_dir "${dir_orthogroup_copy_number}" \
-    --max_size_differential "${orthogroup_copy_number_max_size_differential}"
+  (
+    ensure_parent_dir "${dir_orthogroup_copy_number}" || exit $?
+    copy_number_work_dir=$(mktemp -d "${dir_orthogroup_copy_number}.work.XXXXXX") || exit $?
+    trap 'rm -rf -- "${copy_number_work_dir}"' EXIT
+    python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+      --genecount "${file_orthogroup_genecount_selected}" \
+      --dated_species_tree "${file_dated_species_tree}" \
+      --output_dir "${copy_number_work_dir}/results" \
+      --max_size_differential "${orthogroup_copy_number_max_size_differential}" || exit $?
+    mv_out_replace_dir "${copy_number_work_dir}/results" "${dir_orthogroup_copy_number}"
+  ) || exit $?
   gg_artifact_record "${copy_number_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
@@ -6660,20 +6670,12 @@ cafe_provenance_args+=(
 # Keep the native inference contract separate from rendering. A failed plot
 # must not delete a completed CAFE fit or force the optimizer to run again.
 # Existing aggregate manifests are still checked before adopting a substage.
-# A manifest-free native fit must also match this input before it can be
-# adopted. Generic artifact adoption alone establishes no scientific identity.
-# gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
-if [[ ${run_cafe} -eq 1 && "${artifact_legacy_policy:-adopt}" != rebuild && ! -s "${genome_evolution_provenance_dir}/cafe.inference.json" && -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" && -s "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
-  python "${gg_support_dir}/validate_cafe_outputs.py" \
-    --copy-number "${file_orthogroup_copy_number}" \
-    --tree "${file_dated_species_tree}" \
-    --output-dir "${dir_cafe_output}" || exit $?
-fi
 if [[ -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
   gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
 fi
+cafe_inference_manifest="${genome_evolution_provenance_dir}/cafe.inference.json"
 cafe_inference_needs_update=0
-gg_artifact_contract_init cafe_inference_provenance_args "cafe_inference" "all_orthogroups" "${genome_evolution_provenance_dir}/cafe.inference.json"
+gg_artifact_contract_init cafe_inference_provenance_args "cafe_inference" "all_orthogroups" "${cafe_inference_manifest}"
 cafe_inference_provenance_args+=(
   --input "copy_number=${file_orthogroup_copy_number}"
   --input "dated_species_tree=${file_dated_species_tree}"
@@ -6685,7 +6687,22 @@ cafe_inference_provenance_args+=(
   --parameter "gamma_categories=${n_gamma_cats_cafe}"
   --parameter "pvalue=0.05"
 )
-gg_artifact_prepare_stage cafe_inference_needs_update run_cafe "${cafe_inference_provenance_args[@]}" || exit $?
+if [[ ${run_cafe} -eq 1 || -e "${cafe_inference_manifest}" ||
+  "${artifact_stale_policy:-stop}" == rebuild || "${artifact_legacy_policy:-adopt}" != adopt ]]; then
+  # A manifest-free native fit must also match this input before it can be
+  # adopted. Generic artifact adoption alone establishes no scientific identity.
+  # gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
+  if [[ (
+    ( ! -e "${cafe_inference_manifest}" && "${artifact_legacy_policy:-adopt}" == adopt ) ||
+    ( ${run_cafe} -eq 1 && -e "${cafe_inference_manifest}" && "${artifact_stale_policy:-stop}" == reuse )
+  ) && -e "${dir_cafe_output}/Gamma_asr.tre" && -e "${dir_cafe_output}/Gamma_count.tab" && -e "${dir_cafe_output}/Gamma_change.tab" && -e "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -e "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
+  fi
+  gg_artifact_prepare_stage cafe_inference_needs_update run_cafe "${cafe_inference_provenance_args[@]}" || exit $?
+fi
 if [[ ${run_cafe} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_cafe}"
@@ -6706,11 +6723,7 @@ if [[ ${run_cafe} -eq 1 ]]; then
       --output-dir "${dir_cafe_output}" || exit $?
     gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
-    python "${gg_support_dir}/validate_cafe_outputs.py" \
-      --copy-number "${file_orthogroup_copy_number}" \
-      --tree "${file_dated_species_tree}" \
-      --output-dir "${dir_cafe_output}" || exit $?
-    echo "CAFE inference outputs verified. Skipping CAFE run."
+    echo "Reusing saved CAFE inference. Skipping CAFE run."
   fi
 
   cafe_plots_needs_update=0
