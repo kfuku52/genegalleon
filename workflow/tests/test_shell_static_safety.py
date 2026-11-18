@@ -2378,16 +2378,6 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert text.index(guard) < text.index(task_index)
 
 
-def test_genome_annotation_core_follows_symlinked_species_cds_for_discovery_and_validation():
-    script = CORE_DIR / "gg_genome_annotation_core.sh"
-    text = _read_text(script)
-
-    assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
-    assert 'check_species_cds_dir "${dir_sp_cds%/}/."' in text
-    assert 'check_if_species_files_unique "${dir_sp_cds%/}/."' in text
-    assert 'check_species_cds "${gg_workspace_dir}"' not in text
-
-
 def test_genome_annotation_core_multispecies_summary_requires_real_summary_inputs():
     script = CORE_DIR / "gg_genome_annotation_core.sh"
     text = _read_text(script)

@@ -195,13 +195,16 @@ print(digest.hexdigest())
 PY
 }
 
-gg_check_annevo_cds_directory() {
+gg_resolve_formatted_cds() {
+  local directory=$1
+  local species=$2
   local files=()
-  mapfile -t files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
-  if [[ ${#files[@]} -ne 1 || "${files[0]:-}" != "${file_sp_cds}" ]]; then
+  mapfile -t files < <(gg_find_fasta_files "${directory}" 1)
+  if [[ ${#files[@]} -ne 1 ]] || ! gg_species_file_matches_label "${files[0]}" "${species}"; then
     echo "ANNEVO formatted CDS directory must contain exactly the selected species FASTA." >&2
     return 1
   fi
+  printf '%s\n' "${files[0]}"
 }
 
 gg_generate_annevo_annotation() {
@@ -395,16 +398,14 @@ PY
         --species-genome-dir "${format_dir}/species_genome" --genetic-code "${genetic_code}" \
         --species-summary-output "${format_dir}/species.tsv" --stats-output "${format_dir}/format.stats.json" \
         --resolved-manifest-output "${format_dir}/source.resolved.tsv" --strict --jobs 1 || exit $?
-      # Check all three outputs before recording a complete formatting artifact.
-      resolve_species_file "${format_dir}/species_cds" "${sp_ub}" "predicted CDS" 1 fasta >/dev/null || exit 1
-      resolve_species_file "${format_dir}/species_gff" "${sp_ub}" "predicted GFF" 1 gff >/dev/null || exit 1
-      resolve_species_file "${format_dir}/species_genome" "${sp_ub}" "formatted genome" 1 fasta >/dev/null || exit 1
-      gg_artifact_record "${format_provenance_args[@]}" || exit $?
     fi
     local selected_cds selected_gff selected_genome
-    selected_cds=$(resolve_species_file "${format_dir}/species_cds" "${sp_ub}" "predicted CDS" 1 fasta) || exit 1
+    selected_cds=$(gg_resolve_formatted_cds "${format_dir}/species_cds" "${sp_ub}") || exit 1
     selected_gff=$(resolve_species_file "${format_dir}/species_gff" "${sp_ub}" "predicted GFF" 1 gff) || exit 1
     selected_genome=$(resolve_species_file "${format_dir}/species_genome" "${sp_ub}" "formatted genome" 1 fasta) || exit 1
+    if [[ ${format_needs_update} -eq 1 ]]; then
+      gg_artifact_record "${format_provenance_args[@]}" || exit $?
+    fi
     printf '%s\t%s\t%s\n' "${selected_cds}" "${selected_gff}" "${selected_genome}" > "${selected_inputs}" || exit 1
   ) || return $?
   IFS=$'\t' read -r file_sp_cds file_sp_gff file_sp_genome extra < "${selected_inputs}" || return 1
@@ -412,7 +413,6 @@ PY
     echo "ANNEVO formatting did not produce a complete genome/GFF/CDS bundle." >&2
     return 1
   fi
-  dir_sp_cds=$(dirname "${file_sp_cds}")
 }
 
 gg_genome_annotation_main() {
@@ -489,7 +489,20 @@ fi
 file_annotation_input="${infiles[${task_index}]}"
 file_sp_cds="${file_annotation_input}"
 [[ "${genome_annotation_backend}" == "none" ]] || file_sp_cds=""
-sp_ub=$(gg_species_name_from_path "${file_annotation_input}")
+# The discovery list already identifies every candidate. Check the selected
+# species for filename collisions before opening or publishing its data.
+sp_ub=$(printf '%s\0' "${infiles[@]}" | PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python -c '
+import os
+import sys
+from species_labeling import extract_species_label
+
+labels = [extract_species_label(os.fsdecode(path), strip_extension=True)
+          for path in sys.stdin.buffer.read().split(b"\0") if path]
+species = labels[int(sys.argv[1])]
+if labels.count(species) != 1:
+    sys.exit(f"Multiple input FASTAs matched species label {species!r}.")
+print(species)
+' "${task_index}") || exit 1
 if [[ -n "${file_representative_genetic_code}" ]]; then
   genetic_code=$(python - "${file_representative_genetic_code}" "${sp_ub}" <<'PY'
 import csv
@@ -566,51 +579,8 @@ gff_info_provenance_file="${annotation_provenance_dir}/${sp_ub}.gff_info.json"
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
 ensure_dir "${dir_tmp}"
-species_cds_validation_inputs=("${infiles[@]}")
 if [[ "${genome_annotation_backend}" != "none" ]]; then
   gg_generate_annevo_annotation || exit $?
-  species_cds_validation_inputs=("${file_sp_cds}")
-fi
-species_cds_validation_signature=$(
-  python - "${species_cds_validation_inputs[@]}" <<'PY'
-import hashlib
-import sys
-from pathlib import Path
-
-digest = hashlib.sha256()
-for path in sorted((Path(value) for value in sys.argv[1:]), key=lambda value: value.name):
-    digest.update(path.name.encode("utf-8"))
-    digest.update(b"\0")
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-print(digest.hexdigest())
-PY
-)
-species_cds_validation_stamp="${dir_tmp}/species_cds_validation.${species_cds_validation_signature}.ok"
-species_cds_validation_lock="${species_cds_validation_stamp}.lock"
-if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-  (
-    if ! gg_shared_lock_acquire "${species_cds_validation_lock}" "species CDS validation stamp"; then
-      exit 1
-    fi
-    gg_shared_lock_start_heartbeat "${species_cds_validation_lock}"
-    heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}
-    cleanup_species_cds_validation_lock() {
-      gg_shared_lock_stop_heartbeat "${heartbeat_pid}"
-      gg_shared_lock_release "${species_cds_validation_lock}"
-    }
-    trap cleanup_species_cds_validation_lock EXIT
-    if [[ ! -s "${species_cds_validation_stamp}" ]]; then
-      check_species_cds_dir "${dir_sp_cds%/}/."
-      if [[ "${genome_annotation_backend}" != "none" ]]; then
-        gg_check_annevo_cds_directory || exit 1
-      else
-        check_if_species_files_unique "${dir_sp_cds%/}/." fasta
-      fi
-      printf '%s\n' "${species_cds_validation_signature}" > "${species_cds_validation_stamp}"
-    fi
-  ) || exit 1
 fi
 
 # Preserve previous manifest-bound results before an explicitly requested rebuild.
@@ -622,7 +592,7 @@ file_sp_cds_catalogue="${file_sp_cds}"
 cds_resolution_dir="${gg_workspace_output_dir}/species_cds_resolved"
 [[ -z "${representative_annotation_cache}" ]] || \
   cds_resolution_dir="${representative_annotation_cache}/species_cds_resolved"
-cds_resolution_args=(--cds "${file_sp_cds}" --output-dir "${cds_resolution_dir}" --genetic-code "${genetic_code}")
+cds_resolution_args=(--cds "${file_sp_cds}" --species "${sp_ub}" --output-dir "${cds_resolution_dir}" --genetic-code "${genetic_code}")
 if [[ -s "${file_sp_gff}" ]]; then cds_resolution_args+=(--gff "${file_sp_gff}"); fi
 if [[ -s "${file_sp_genome}" ]]; then cds_resolution_args+=(--genome "${file_sp_genome}"); fi
 if [[ -n "${representative_map}" ]]; then cds_resolution_args+=(--representative-map "${representative_map}"); fi
