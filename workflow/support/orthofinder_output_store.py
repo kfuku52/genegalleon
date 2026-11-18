@@ -152,6 +152,16 @@ def _hash(handle):
     return digest.hexdigest(), size
 
 
+def _same_inventory(first, second):
+    for before, after in zip(first, second, strict=True):
+        if len(before) != len(after):
+            return False
+        for (old_path, old_stat), (path, value) in zip(before, after, strict=True):
+            if old_path != path or _signature(old_stat) != _signature(value):
+                return False
+    return True
+
+
 @contextlib.contextmanager
 def _source(path, expected):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -275,9 +285,8 @@ def archive_records(root, name, *, deep=False, progress_callback=None):
     return data
 
 
-def _retire(raw, data, *, recovery=None):
-    """Resume a partial deletion only if every remaining file matches the ZIP."""
-    directories, files = _inventory(raw)
+def _verify_remaining_sources(raw, data, directories, files):
+    """On restart, the only evidence of the original bytes is in the ZIP."""
     records = {row["path"]: row for row in data["files"]}
     known_directories = {row["path"]: row for row in data["directories"]}
     for path, value in directories:
@@ -294,9 +303,18 @@ def _retire(raw, data, *, recovery=None):
         )
         with _source(path, value) as handle:
             _require(_hash(handle) == (record["sha256"], record["size"]), f"Source differs from ZIP: {path}")
-    if recovery is not None:
-        archive, expected_signature = recovery
-        _require(_signature(archive.lstat()) == expected_signature, f"Recovery archive changed: {archive}")
+
+
+def _retire(raw, data, *, recovery, packed_inventory=None):
+    inventory = _inventory(raw)
+    directories, files = inventory
+    if packed_inventory is None:
+        _verify_remaining_sources(raw, data, directories, files)
+    else:
+        # These exact files were hashed during this pack and the ZIP was read back.
+        _require(_same_inventory(packed_inventory, inventory), f"Source inventory or metadata differs: {raw}")
+    archive, expected_signature = recovery
+    _require(_signature(archive.lstat()) == expected_signature, f"Recovery archive changed: {archive}")
     for path, value in files:
         _require(_signature(path.lstat()) == _signature(value), f"Source changed before deletion: {path}")
         path.unlink()
@@ -356,18 +374,13 @@ def _pack(
             for record in data["files"]:
                 with archive.open(raw.name + "/" + record["path"]) as handle:
                     _require(_hash(handle) == (record["sha256"], record["size"]), "New ZIP payload mismatch")
-        current_directories, current_files = _inventory(raw)
-        _require(
-            [(p, _signature(s)) for p, s in current_directories + current_files]
-            == [(p, _signature(s)) for p, s in directories + files],
-            f"Source inventory changed: {raw}",
-        )
+        _require(_same_inventory((directories, files), _inventory(raw)), f"Source inventory changed: {raw}")
         with partial.open("rb") as handle:
             os.fsync(handle.fileno())
         _require(not path.exists(), f"Archive appeared during conversion: {path}")
         os.replace(partial, path)
         _sync_directory(path.parent)
-        _retire(raw, data, recovery=(path, _signature(path.stat())))
+        _retire(raw, data, recovery=(path, _signature(path.stat())), packed_inventory=(directories, files))
         _sync_directory(path.parent)
     finally:
         partial.unlink(missing_ok=True)
@@ -396,6 +409,49 @@ def _restore_failure_cleanup(raw, data, *, was_raw):
                 except OSError:
                     pass
         raise
+
+
+def _extract_file(archive, member, record, target):
+    try:
+        with archive.open(member) as source, target.open("xb") as destination:
+            digest = hashlib.sha256()
+            copied = 0
+            while chunk := source.read(CHUNK):
+                destination.write(chunk)
+                digest.update(chunk)
+                copied += len(chunk)
+            _require((digest.hexdigest(), copied) == (record["sha256"], record["size"]),
+                     f"ZIP payload mismatch during restoration: {member}")
+            destination.flush()
+            os.fchmod(destination.fileno(), record["mode"])
+            os.utime(destination.fileno(), ns=(record["mtime_ns"], record["mtime_ns"]))
+    except zipfile.BadZipFile as exc:
+        raise OrthoFinderStorageError(f"Invalid ZIP payload during restoration: {member}: {exc}") from exc
+
+
+def _extract_tree(archive, raw, data, *, private):
+    for record in data["directories"]:
+        (raw / record["path"]).mkdir(parents=True, exist_ok=True)
+    for record in data["files"]:
+        target = raw / record["path"]
+        member = raw.name + "/" + record["path"]
+        if private:
+            _extract_file(archive, member, record, target)
+        elif not target.exists():
+            partial = raw.parent / ("." + raw.name + ".restore." + uuid.uuid4().hex)
+            try:
+                _extract_file(archive, member, record, partial)
+                # A concurrent producer's file must survive publication.
+                try:
+                    os.link(partial, target)
+                except FileExistsError as exc:
+                    raise OrthoFinderStorageError(f"Raw/ZIP publication conflict; target appeared: {target}") from exc
+            finally:
+                partial.unlink(missing_ok=True)
+    for record in reversed(data["directories"]):
+        target = raw / record["path"]
+        os.chmod(target, record["mode"])
+        os.utime(target, ns=(record["mtime_ns"], record["mtime_ns"]))
 
 
 def _materialize(root, name, *, available_bytes=None, progress_callback=None, **_unused):
@@ -434,40 +490,7 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
         raw.mkdir(parents=True)
     with _restore_failure_cleanup(raw, data, was_raw=was_raw):
         with zipfile.ZipFile(path) as archive:
-            for record in data["directories"]:
-                (raw / record["path"]).mkdir(parents=True, exist_ok=True)
-            for record in data["files"]:
-                target = raw / record["path"]
-                if target.exists():
-                    continue
-                partial = raw.parent / ("." + raw.name + ".restore." + uuid.uuid4().hex)
-                try:
-                    with archive.open(raw.name + "/" + record["path"]) as source, partial.open("xb") as destination:
-                        digest = hashlib.sha256()
-                        copied = 0
-                        while chunk := source.read(CHUNK):
-                            destination.write(chunk)
-                            digest.update(chunk)
-                            copied += len(chunk)
-                        _require((digest.hexdigest(), copied) == (record["sha256"], record["size"]),
-                                 f"ZIP payload mismatch during restoration: {target}")
-                        destination.flush()
-                        os.fchmod(destination.fileno(), record["mode"])
-                        os.utime(destination.fileno(), ns=(record["mtime_ns"], record["mtime_ns"]))
-                    # Unlike replace(), linking a verified temporary file cannot
-                    # overwrite a file another producer created after our inventory.
-                    try:
-                        os.link(partial, target)
-                    except FileExistsError as exc:
-                        raise OrthoFinderStorageError(f"Raw/ZIP publication conflict; target appeared: {target}") from exc
-                except zipfile.BadZipFile as exc:
-                    raise OrthoFinderStorageError(f"Invalid ZIP payload during restoration: {path}: {exc}") from exc
-                finally:
-                    partial.unlink(missing_ok=True)
-            for record in reversed(data["directories"]):
-                target = raw / record["path"]
-                os.chmod(target, record["mode"])
-                os.utime(target, ns=(record["mtime_ns"], record["mtime_ns"]))
+            _extract_tree(archive, raw, data, private=False)
         # Read every restored byte before removing its recovery ZIP.
         restored_directories, files = _inventory(raw)
         _require(
@@ -490,10 +513,8 @@ def _materialize(root, name, *, available_bytes=None, progress_callback=None, **
         for directory, _ in sorted(restored_directories, key=lambda row: len(row[0].parts), reverse=True):
             _sync_directory(directory)
         _sync_directory(raw.parent)
-        final_directories, final_files = _inventory(raw)
         _require(
-            [(p, _signature(s)) for p, s in final_directories + final_files]
-            == [(p, _signature(s)) for p, s in restored_directories + files],
+            _same_inventory((restored_directories, files), _inventory(raw)),
             "Restored inventory changed before commit",
         )
         _require(_signature(path.stat()) == archive_signature, "Archive changed before restoration commit")
@@ -741,14 +762,19 @@ def materialized_directory(root, name, scratch, *, namespace="orthofinder"):
             yield raw
             return
         _require(not raw.exists(), f"Incomplete conversion: {raw}")
-        archive_records(root, name)
+        _require(path.is_file(), f"Archive is not a regular file: {path}")
+        before = _signature(path.stat())
         with tempfile.TemporaryDirectory(prefix="gg-orthofinder-", dir=scratch) as temporary:
-            stage = Path(temporary)
-            target = stage / (name + ".zip")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
-            _materialize(stage, name)
-            yield stage / name
+            native = Path(temporary) / name
+            _physical(native)
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    data = _manifest(archive, path, name)
+                    _extract_tree(archive, native, data, private=True)
+            except (KeyError, ValueError, TypeError, zipfile.BadZipFile) as exc:
+                raise OrthoFinderStorageError(f"Invalid OrthoFinder archive {path}: {exc}") from exc
+            _require(before == _signature(path.stat()), f"Archive changed during read: {path}")
+            yield native
 
 
 @contextlib.contextmanager

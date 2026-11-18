@@ -156,10 +156,12 @@ Use repeated `--orthofinder-directory NAME` options for a partial migration.
 
 New archives contain a versioned manifest of every file's relative path, size,
 SHA256, mode and modification time, plus empty-directory metadata. Conversion
-reads back every ZIP member (CRC and SHA256), checks source membership/identity,
-and rereads source contents before deleting only verified files. Interrupted
-deletion can resume from an equal remaining subset. Changed or extra files stop
-conversion and retain both forms. Publication is atomic; a project-local
+hashes each source while writing the ZIP and reads back each member to verify its
+CRC and SHA256. Before deleting the originals, it checks the source inventory,
+including inode, size, mode, mtime and ctime. After an interruption, it hashes
+each remaining source against the published manifest before resuming deletion.
+Changed or extra files stop conversion and retain both forms. The ZIP is
+published atomically. A project-local
 OrthoFinder namespace lock excludes participating producers/converters without
 blocking other projects. Native invalidation also takes this fence, and native
 publication hands it directly to its child converter without an unlocked gap.
@@ -184,14 +186,15 @@ hide a storage change. Incomplete mixed raw/ZIP trees fail the logical audit.
 `convert --target orthofinder --to raw` restores all managed directories and checks
 every restored file before removing each ZIP. Native tools need real paths;
 the Python `materialized_directory(root, name, scratch)` context restores one
-directory into caller-owned scratch and removes that temporary copy afterward.
-It preserves the source ZIP. `open_binary(root, relative)` reads a member without
+directory directly from the source ZIP into caller-owned scratch. It verifies
+each member during extraction and removes the temporary directory afterward.
+`open_binary(root, relative)` reads a member without
 creating expanded files. Existing WorkingDirectory deletion policy is unchanged:
 these archives preserve retained results and cannot recreate a previously
 deleted native restart checkpoint. Check the native restart's required files
 before using `--assign`, `-b`, `-fg`, or `-ft`.
 
-Restoration checks each extracted member's CRC/SHA256 while writing its temporary
+Permanent restoration checks each extracted member's CRC/SHA256 while writing its temporary
 file, then publishes it with an exclusive hard link so a concurrently created
 file cannot be overwritten. Every restored file is independently reread before
 commit. This removes a separate full ZIP-payload pre-read while preserving the

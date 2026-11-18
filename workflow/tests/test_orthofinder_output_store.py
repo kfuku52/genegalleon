@@ -55,7 +55,10 @@ def test_lossless_all_og_roundtrip_and_logical_provenance(tmp_path, workers):
         data = STORE.archive_records(root, name, deep=True)
         assert len(data["files"]) == 2
     with STORE.materialized_directory(root, "core/Orthogroup_Sequences", tmp_path) as native:
-        assert (native / "OG9999999.fa").read_bytes() == b">Species_gene\nACGT--ACGT\n"
+        member = native / "OG9999999.fa"
+        assert (member.read_bytes(), stat.S_IMODE(member.stat().st_mode), member.stat().st_mtime_ns) == original[
+            "core/Orthogroup_Sequences/OG9999999.fa"
+        ]
         assert (native / "empty").is_dir()
     assert not native.exists()
     STORE.convert(root, to="raw", workers=workers)
@@ -122,7 +125,10 @@ def test_changed_source_after_zip_publication_preserves_raw_and_zip(tmp_path, mo
     retire = STORE._retire
 
     def changed(raw, data, **kwargs):
-        (raw / "OG9999999.fa").write_bytes(b"changed")
+        source = raw / "OG9999999.fa"
+        before = source.stat()
+        source.write_bytes(b"x" * before.st_size)
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
         return retire(raw, data, **kwargs)
 
     with monkeypatch.context() as scoped:
@@ -176,6 +182,10 @@ def test_zip_payload_and_manifest_validation(tmp_path, problem):
         archive.comment = STORE.MARKER + b"Orthogroup_Sequences"
     with pytest.raises(STORE.OrthoFinderStorageError):
         STORE.archive_records(root, "Orthogroup_Sequences", deep=True)
+    with pytest.raises(STORE.OrthoFinderStorageError):
+        with STORE.materialized_directory(root, "Orthogroup_Sequences", tmp_path):
+            pytest.fail("invalid archive was exposed to the caller")
+    assert not list(tmp_path.glob("gg-orthofinder-*"))
     with pytest.raises(STORE.OrthoFinderStorageError):
         STORE.convert(root, to="raw", directories=["Orthogroup_Sequences"])
     assert path.exists() and not (root / "Orthogroup_Sequences").exists()
