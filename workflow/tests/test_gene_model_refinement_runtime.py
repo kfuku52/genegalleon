@@ -298,7 +298,7 @@ def test_single_exon_split_merge_revalidates_same_species_copy(tmp_path, strand,
     assert support['coding_bridge']['candidate_interval'] == [bridge_start // 3, bridge_end // 3]
 
 
-@pytest.mark.parametrize('case', ['partial', 'intact', 'reciprocal', 'manual'])
+@pytest.mark.parametrize('case', ['partial', 'intact', 'reciprocal', 'manual', 'transcript', 'existing_transcript'])
 def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
     manual = case == 'manual'
     fixture = import_module('test_rescue_gene_models_runtime')
@@ -327,8 +327,20 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
         source_blocks = [[start, start + len(source_cds), 0]]
     with coding_cds.open('a') as handle:
         handle.write(f'>{coding_target}_g8\n{source_cds}\n')
+    rows = annotation(contig, 'g8', 'g8.t1', source_blocks).splitlines()
+    if case in {'transcript', 'existing_transcript'}:
+        # Two mRNAs encode the same CDS but have different annotated UTRs.
+        alt = annotation(contig, 'g8', 'g8.copy', source_blocks).splitlines()[1:]
+        extended = []
+        for line in [rows[0], *alt]:
+            fields = line.split('\t')
+            if fields[2] in {'gene', 'mRNA', 'exon'}:
+                fields[3] = str(start - 5)
+            extended.append('\t'.join(fields))
+        rows = [extended[0], *rows[1:], *extended[1:],
+                f'{contig}\tsynthetic\tfive_prime_UTR\t{start - 5}\t{start}\t.\t+\t.\tParent=g8.copy']
     with coding_gff.open('a') as handle:
-        handle.write(annotation(contig, 'g8', 'g8.t1', source_blocks))
+        handle.write('\n'.join(rows) + '\n')
     phase_start = 11 * period
     first_exon = 241
     intron = 'GT' + 'C' * 40 + 'AG'
@@ -374,6 +386,10 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
         approvals = tmp_path / 'repairs.tsv'
         write_tsv(approvals, ['species', 'candidate_id'], approved)
         refine_args = ('--model-repairs', approvals)
+    if case == 'transcript':
+        # The bounded prediction pass defers this locus. The frozen genome-wide
+        # rescue projection still supports the completed CDS of both transcripts.
+        refine_args = ('--candidate-limit', '1')
     cli('plan', '--rescue-output', anchor, '--output', output, *refine_args)
     cli('run', '--output', output, '--cpus', 2)
     cli('qc', '--output', output)
@@ -386,7 +402,8 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
             sequence = str(Seq(truth[i]).translate()).removesuffix('*') if role == 'protein' else truth[i]
             assert records[target + f'_g{i}'] == sequence
             assert not any('ggrepair' in gene for gene in records)
-        assert mapping[target + f'_g{i}']['status'] == 'repaired_model'
+        status = 'conserved' if case == 'existing_transcript' and target == coding_target else 'repaired_model'
+        assert mapping[target + f'_g{i}']['status'] == status
     assert mapping[phase_target + '_g11']['source_transcript_id'] == 'g11.t1'
     def phases(path):
         rows = (line.split('\t') for line in path.read_text().splitlines() if not line.startswith('#'))
@@ -395,7 +412,24 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
     assert phases(effective / 'full_annotation' / (phase_target + '.gff3')) == ['0', '2']
     assert phases(effective / 'source_annotation' / (phase_target + '.gff3')) == ['0', '0']
     audit = json.loads((effective / 'model_repairs.json').read_text())
-    assert {row['gene_id'] for row in audit} == {coding_target + '_g8', phase_target + '_g11'}
+    expected_audit = {phase_target + '_g11'}
+    if case != 'existing_transcript':
+        expected_audit.add(coding_target + '_g8')
+    assert {row['gene_id'] for row in audit} == expected_audit
+    if case == 'existing_transcript':
+        tid = mapping[coding_target + '_g8']['source_transcript_id']
+        full = (effective/'full_annotation'/(coding_target+'.gff3')).read_text()
+        models = import_module('transcript_utrs').read_models(full, strict=False)
+        assert {t for t,m in models.items() if m['gene'] == 'g8'} == {'g8.copy', 'g8.t1', tid}
+    if case == 'transcript':
+        record, = [x for x in audit if x['gene_id'] == coding_target + '_g8']
+        assert record['derived_from_transcripts'] == ['g8.copy', 'g8.t1']
+        assert record['representative']
+        full = (effective/'full_annotation'/(coding_target+'.gff3')).read_text()
+        for tid in ('g8.copy', 'g8.t1', record['source_transcript_id']):
+            assert 'ID=' + tid + ';Parent=g8;' in full or 'ID=' + tid + ';Parent=g8\n' in full
+        assert 'derived_from_transcript=g8.copy,g8.t1' in full
+        assert 'five_prime_UTR' in full and 'Parent=g8.copy' in full
     if case == 'reciprocal':
         rescue = refinement.rescue
         replay = import_module('rescue_admission_replay')
@@ -416,7 +450,10 @@ def test_single_locus_repairs_from_real_rescue(tmp_path, case, monkeypatch):
         assert len({hit['donor'] for hit in match['support'] if hit.get('reciprocal_locus') == 'g8'}) >= 2
     if not manual:
         coding_basis = 'reciprocal_cds_extension' if case == 'reciprocal' else 'syntenic_cds_gain'
-        assert {row['basis'] for row in audit} == {coding_basis, 'exact_source_cds'}
+        if case == 'transcript':
+            coding_basis = 'comparative_transcript_repair'
+        expected_bases = {'exact_source_cds'} if case == 'existing_transcript' else {coding_basis, 'exact_source_cds'}
+        assert {row['basis'] for row in audit} == expected_bases
         assert {row['adoption'] for row in audit} == {'automatic'}
     review = import_module('plot_gene_model_refinement').collect(output)
     assert review['model_repairs'] == audit

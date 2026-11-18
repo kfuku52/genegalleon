@@ -23,11 +23,19 @@ except ImportError:
     from .rescue_homology_policy import homology_supported
 
 
+def complete_source_orf(model):
+    quality = model['quality']
+    return quality['valid_orf'] or (quality.get('usable') and quality.get('has_start')
+            and quality.get('has_stop') and not quality.get('translation_offset')
+            and not quality.get('incomplete_codon'))
+
+
 def _in_frame_codons(fragment, path, protein_length):
     """Project complete source codons onto the native translated path."""
     reverse = path['strand'] == '-'
-    bases = defaultdict(int)
-    offset = 0
+    boundaries = defaultdict(int)
+    codons = set()
+    offset = -path.get('quality', {}).get('translation_offset', 0)
     for start, end, phase in path['cds']:
         for a, b, source_phase in fragment['blocks']:
             left, right = max(start, a), min(end, b)
@@ -36,13 +44,20 @@ def _in_frame_codons(fragment, path, protein_length):
             if (end - b - phase + source_phase if reverse else a - start - phase + source_phase) % 3:
                 continue
             begin = offset + (end - right if reverse else left - start)
-            for position in range(begin, begin + right - left):
-                bases[position // 3] |= 1 << (position % 3)
+            limit = min(3 * protein_length, begin + right - left)
+            begin = max(0, begin)
+            first, stop = (begin + 2) // 3, limit // 3
+            codons.update(range(first, stop))
+            for position in range(begin, min(first * 3, limit)):
+                boundaries[position // 3] |= 1 << (position % 3)
+            for position in range(max(first * 3, stop * 3, begin), limit):
+                boundaries[position // 3] |= 1 << (position % 3)
         offset += end - start
-    return {i for i, mask in bases.items() if mask == 7 and i < protein_length}
+    codons.update(i for i, mask in boundaries.items() if mask == 7)
+    return codons
 
 
-def nominate(paths, originals, ownership, genome, code, params, species, excluded_shapes, *, rna_available=False, intact_only=False):
+def nominate(paths, originals, ownership, genome, code, params, species, excluded_shapes, *, rna_available=False, intact_only=False, comparative=False, projected_shapes=()):
     """Validate native CDS and unambiguous source geometry before protein search."""
     candidates = {}
     for path in paths:
@@ -54,9 +69,10 @@ def nominate(paths, originals, ownership, genome, code, params, species, exclude
                                     or owner['gene_id'] not in originals for owner in existing):
             continue
         fragments = [originals[owner['gene_id']] for owner in existing]
-        intact = [fragment for fragment in fragments if fragment['quality']['valid_orf']]
+        intact = [fragment for fragment in fragments if complete_source_orf(fragment)]
         needs_rna = len(intact) > 1
-        if (needs_rna and not rna_available) or (intact_only and not needs_rna):
+        confirmed = comparative and shape in projected_shapes
+        if needs_rna and not (rna_available or confirmed):
             continue
         bounds = sorted((min(a for a, _, _ in fragment['blocks']), max(b for _, b, _ in fragment['blocks']))
                         for fragment in fragments)
@@ -69,15 +85,21 @@ def nominate(paths, originals, ownership, genome, code, params, species, exclude
                 break
         else:
             geometry = []
+            low_retention = False
             for fragment in fragments:
                 overlap, frame = coding_overlap({**fragment, 'cds': fragment['blocks']}, path)
                 size = len(fragment['cds'])
-                if frame < size * (.80 if needs_rna else 2 / 3):
+                low_retention |= frame < .80 * size
+                if frame < size * (2 / 3 if confirmed or not needs_rna else .80):
                     break
                 geometry.append({'gene_id': fragment['source_gene_id'], 'cds_bases': size, 'overlap_bases': overlap})
             else:
+                assess = comparative and (confirmed and needs_rna or low_retention and not needs_rna)
+                if (intact_only and not (needs_rna or assess)) or (low_retention and not comparative):
+                    continue
                 if shape in candidates:
-                    candidates[shape]['review']['oriongeno_transcripts'].append(path['native_transcript_id'])
+                    if 'native_transcript_id' in path:
+                        candidates[shape]['review']['oriongeno_transcripts'].append(path['native_transcript_id'])
                     continue
                 checked = validate_model({**path, 'coverage': 1., 'identity': 1., 'frameshift': False},
                                          genome, code, params)
@@ -94,11 +116,20 @@ def nominate(paths, originals, ownership, genome, code, params, species, exclude
                     'candidate_id': identifier, 'seqid': path['seqid'], 'strand': path['strand'], 'cds': checked['cds'],
                     'cds_sha256': hashlib.sha256(checked['sequence'].encode()).hexdigest(),
                     'owner_overlap': sorted(geometry, key=lambda row: row['gene_id']),
-                    'oriongeno_transcripts': [path['native_transcript_id']], 'adoption': 'automatic',
+                    'oriongeno_transcripts': ([path['native_transcript_id']] if 'native_transcript_id' in path else []),
+                    'adoption': 'automatic',
                     'basis': ('oriongeno_cross_fragment_homology_and_target_rna' if needs_rna else
                               'oriongeno_and_cross_fragment_protein_homology')},
                     'checked': checked, 'protein': protein, 'windows': windows,
                     'protect_rna_paths': intact if needs_rna else []}
+                if assess:
+                    candidate = candidates[shape]
+                    candidate['source_fragments'] = [
+                        (f['source_gene_id'], f['protein'], _in_frame_codons(
+                            {'blocks': path['cds']}, {**f, 'cds': f['blocks']}, len(f['protein'])))
+                        for f in sorted(fragments, key=lambda f: min(windows[f['source_gene_id']]))]
+                    candidate['protect_rna_paths'] = fragments
+                    candidate['review']['basis'] = 'conserved_coding_bridge_and_complementary_fragments'
     return candidates
 
 
@@ -110,7 +141,7 @@ def nominate_extensions(groups, originals, genome, code, params, species, *, rna
         if not original:
             continue
         quality, source_cds = original['quality'], original['blocks']
-        intact = quality['valid_orf']
+        intact = complete_source_orf(original)
         if (intact and not rna_available) or (not intact and not quality['partial']):
             continue
         old_size = len(original['cds'])
@@ -166,7 +197,7 @@ def collinear_gap(first, second):
     return gap if gap >= 0 else None
 
 
-def native_paths_by_ownership(paths, ownership, *, include_merges, extensions=None):
+def native_paths_by_ownership(paths, ownership, *, include_merges, extensions=None, single_paths=None):
     merge_paths = []
     singles = defaultdict(list)
     source_sizes = {}
@@ -184,6 +215,8 @@ def native_paths_by_ownership(paths, ownership, *, include_merges, extensions=No
                 old = source_sizes[key]
                 if old and sum(b - a for a, b, _ in path['cds']) - old >= max(90, .20 * old):
                     extensions[key].append(path)
+    if single_paths is not None:
+        single_paths.update(singles)
     return merge_paths, {owner: paths for owner, paths in singles.items()
                          if len({path['native_gene_id'] for path in paths}) >= 2}
 
@@ -287,10 +320,14 @@ def fission_decision(sister_groups, split, fused, minimum_species):
         reason = 'split_support_on_one_sister_branch'
     elif any(fused[name].get('rna_witnesses', 0) >= 2 for name in closest if name in fused):
         reason = 'closest_donor_fusion_supported_by_rna'
+    elif any(hit.get('syntenic_rna_witnesses', 0) >= 2 for hit in fused.values()):
+        reason = 'syntenic_donor_fusion_supported_by_rna'
     elif not set(closest) & split.keys():
         reason = 'closest_informative_donors_support_fusion'
     elif any(name in fused for name in closest):
         reason = 'mixed_closest_donor_architectures'
+    elif len(split) == 2 and any(hit.get('within_syntenic_flanks') for hit in fused.values()):
+        reason = 'syntenic_fusion_with_minimal_split_support'
     else:
         reason = 'supported_split'
     return {'reason': reason, 'closest_informative_species': closest, 'split_support_groups': split_groups}
@@ -342,6 +379,67 @@ def uniquely_flanked_locus(index, span):
     return next(iter(windows)) if len(windows) == 1 else None
 
 
+def outer_anchor_blocks(blocks, target, donor):
+    """Index collinear blocks even when a candidate itself contains an anchor."""
+    features = []
+    for block in blocks:
+        groups = defaultdict(list)
+        for t, d in block:
+            if t in target and d in donor:
+                a, b = target[t], donor[d]
+                groups[a[1], b[1]].append((a[3], a[4], b[3], b[4]))
+        for (chrom, other), anchors in groups.items():
+            if len(anchors) > 1:
+                features.append({'seqid': chrom, 'start': min(x[0] for x in anchors),
+                                 'end': max(x[1] for x in anchors), 'gene_id': len(features)+1,
+                                 'other': other, 'anchors': anchors})
+    return OwnershipIndex(features)
+
+
+def outer_regions(index, span, limit):
+    regions = set()
+    for block in index.overlapping(span):
+        anchors = block['anchors']
+        left = [a for a in anchors if 0 <= span['start']-a[1] <= limit]
+        right = [a for a in anchors if 0 <= a[0]-span['end'] <= limit]
+        if not left or not right:
+            continue
+        lo, hi = max(a[1] for a in left), min(a[0] for a in right)
+        for a in left:
+            if a[1] != lo:
+                continue
+            for b in right:
+                if b[0] != hi:
+                    continue
+                if a[3] <= b[2]:
+                    start, end, strand = a[3], b[2], span['strand']
+                elif b[3] <= a[2]:
+                    start, end, strand = b[3], a[2], '-' if span['strand'] == '+' else '+'
+                else:
+                    continue
+                if 0 < end-start <= 2*limit:
+                    regions.add((block['other'], start, end, strand))
+    return regions
+
+
+def merge_query_proteins(candidates):
+    for candidate in candidates.values():
+        yield candidate['protein']
+        for _, protein, _ in candidate.get('source_fragments', ()):
+            yield protein
+
+
+def bridges_paired(windows, paired):
+    spans = sorted((min(window), max(window)) for window in windows.values())
+    for (_, left), (right, _) in pairwise(spans):
+        if left >= right:
+            return False
+        bridge = range(max(0, left - 2), right + 3)
+        if left not in paired or right not in paired or sum(i in paired for i in bridge) < .8 * len(bridge):
+            return False
+    return True
+
+
 class DonorSearch:
     """Share one lazily built protein database across the finalization targets."""
 
@@ -360,6 +458,9 @@ class DonorSearch:
         self.database = self.directory / 'donors.dmnd'
         self._queries = ()
         self.flanking_blocks = flanking_blocks
+        self.outer_target = None
+        self.outer_blocks = {}
+        self.ranks = {}
 
     def _proteins(self, name):
         path = self.panel.get('proteins', {}).get(name)
@@ -408,7 +509,7 @@ class DonorSearch:
         self._queries = sequences
         return sequences
 
-    def alignments(self, species, proteins, *, batch=None):
+    def alignments(self, species, proteins, *, batch=None, subject_intervals=False):
         if not proteins:
             return
         sequences = self.search(proteins) if batch is None else batch
@@ -435,9 +536,14 @@ class DonorSearch:
                     'donor': donor, 'query': identifier, 'identity': float(identity) / 100,
                     'coverage': min(query_coverage, donor_coverage), 'query_coverage': query_coverage,
                     'donor_coverage': donor_coverage, 'bitscore': float(bitscore),
+                    **({'subject_start': sstart - 1, 'subject_end': send} if subject_intervals else {}),
                 }, traceback, qstart - 1, max(qlen, slen)
 
     def support(self, species, candidates, params, *, batch=None):
+        guarded = {shape: c for shape, c in candidates.items() if c.get('source_fragments')}
+        if guarded and batch is None:
+            batch = self.search(merge_query_proteins(candidates))
+
         queries = defaultdict(list)
         for shape, candidate in candidates.items():
             queries[candidate['protein']].append((shape, candidate['windows']))
@@ -455,12 +561,74 @@ class DonorSearch:
                 fragment_coverage = {gene: len(window & paired) / len(window) for gene, window in windows.items()}
                 if min(fragment_coverage.values()) < .80:
                     continue
+                if shape in guarded and not bridges_paired(windows, paired):
+                    continue
                 previous = best[shape].get(donor)
                 if previous is None or (hit['bitscore'], hit['query']) > (previous['bitscore'], previous['query']):
                     best[shape][donor] = {**hit, 'paired_coverage': paired_coverage,
                                          'fragment_coverage': fragment_coverage, 'flags': []}
+        if guarded:
+            self._check_source_architecture(species, guarded, best, batch)
         return {shape: [hits[donor] for donor in sorted(hits)] for shape, hits in best.items()
                 if len(hits) >= max(2, params['min_support'])}
+
+    def _check_source_architecture(self, species, candidates, best, batch):
+        fragments = defaultdict(list)
+        for shape, candidate in candidates.items():
+            if best.get(shape):
+                for gene, protein, retained in candidate['source_fragments']:
+                    fragments[protein].append((shape, gene, retained))
+        aligned, separate = {}, defaultdict(dict)
+        for protein, hit, traceback, start, _ in self.alignments(species, fragments, batch=batch, subject_intervals=True):
+            if hit['identity'] < .50 or hit['query_coverage'] < 2 / 3:
+                continue
+            donor, query = hit['donor'], hit['query']
+            paired = _paired_positions(traceback, start)
+            for shape, gene, retained in fragments[protein]:
+                if hit['coverage'] >= .85 and len(paired) >= .80 * len(protein):
+                    rank = separate[shape, donor]
+                    if gene not in rank or hit['bitscore'] > rank[gene][0]:
+                        rank[gene] = (hit['bitscore'], {query})
+                    elif hit['bitscore'] == rank[gene][0]:
+                        rank[gene][1].add(query)
+                if query != best[shape].get(donor, {}).get('query'):
+                    continue
+                kept = len(paired & retained)
+                if kept >= .90 * len(paired) and kept >= 15:
+                    aligned[shape, donor, gene] = hit['subject_start'], hit['subject_end']
+        for shape, candidate in candidates.items():
+            genes = [gene for gene, _, _ in candidate['source_fragments']]
+            for donor in list(best[shape]):
+                spans = [aligned.get((shape, donor, gene)) for gene in genes]
+                if not all(spans) or any(left[1] > right[0] for left, right in pairwise(spans)):
+                    del best[shape][donor]
+            for donor in self.panel['donors'][species]:
+                ranks = separate.get((shape, donor), {})
+                if not all(gene in ranks for gene in genes):
+                    continue
+                positions = self._positions(donor)
+                # Tied paralogs cannot establish a separate, ordered architecture.
+                if any(len(ranks[g][1]) != 1 for g in genes):
+                    continue
+                loci = [positions.get(next(iter(ranks[g][1]))) for g in genes]
+                if all((gap := collinear_gap(a, b)) is not None and gap <= 10_000
+                       for a, b in pairwise(loci)):
+                    # An adjacent paralogue pair outside every flanked interval is
+                    # informative only when the fused orthologue itself is localized.
+                    projections = candidate.get('projected_queries', {})
+                    span = candidate.get('checked')
+                    if projections and span and self.relative_locus(
+                            species, donor, span, [next(iter(ranks[g][1])) for g in genes]) == 'outside':
+                        corroborated = [d for d, h in best[shape].items() if
+                                        h['query'] in projections.get(d, ()) and self.relative_locus(
+                                            species, d, span, [h['query']]) == 'inside']
+                        if len(corroborated) >= 2 and sum(
+                                h['query'] in projections.get(d, ()) for d, h in best[shape].items()) >= 3:
+                            for d in corroborated:
+                                best[shape][d]['flags'].append('separate_paralogs_outside_flanks:' + donor)
+                            continue
+                    best[shape].clear()
+                    break
 
     def _positions(self, donor):
         if donor not in self.positions:
@@ -479,6 +647,37 @@ class DonorSearch:
                                 min(b[0] for b in blocks), max(b[1] for b in blocks))
             self.positions[donor] = positions
         return self.positions[donor]
+
+    def relative_locus(self, species, donor, span, queries):
+        """Locate homologues between two outer anchors within 500 kb of each target edge."""
+        if not self.flanking_blocks:
+            return None
+        if self.outer_target != species:
+            self.outer_blocks.clear()
+            self.outer_target = species
+        positions = self._positions(donor)
+        if donor not in self.outer_blocks:
+            pair = self.flanking_blocks(species, donor)
+            self.outer_blocks[donor] = outer_anchor_blocks(*pair, positions) if pair else None
+        blocks = self.outer_blocks[donor]
+        regions = outer_regions(blocks, span, 500_000) if blocks else ()
+        if not regions or not queries or any(q not in positions for q in queries):
+            return None
+        if all(all(within_flanks(r[:3], positions[q]) and positions[q][2] == r[3] for q in queries)
+               for r in regions):
+            return 'inside'
+        if all(outside_flanks(r[:3], positions, queries) for r in regions):
+            return 'outside'
+        return None
+
+    def _consecutive(self, donor, a, b):
+        if donor not in self.ranks:
+            chromosomes = defaultdict(list)
+            for key, (_, chrom, _, start, end) in self._positions(donor).items():
+                chromosomes[chrom].append((start, end, key))
+            self.ranks[donor] = {key: i for loci in chromosomes.values()
+                                 for i, (_, _, key) in enumerate(sorted(loci))}
+        return abs(self.ranks[donor][a] - self.ranks[donor][b]) == 1
 
     def _rna_supported_donor_models(self, donor):
         if donor not in self.observed_fusions:
@@ -509,7 +708,7 @@ class DonorSearch:
             self.observed_fusions[donor] = direct
         return self.observed_fusions[donor]
 
-    def fission_support(self, species, candidates, params, *, batch=None):
+    def fission_support(self, species, candidates, params, *, batch=None, accession_keys=()):
         proteins = {protein for candidate in candidates.values()
                     for protein in (candidate['source_protein'], *candidate['proteins'])}
         source_windows = defaultdict(dict)
@@ -557,26 +756,44 @@ class DonorSearch:
         for key, candidate in candidates.items():
             opposed = spanning[key]
             first, second = (best[protein] for protein in candidate['proteins'])
-            support = {}
+            support, extended = {}, {}
             for donor in sorted(first.keys() & second.keys()):
                 a, b = first[donor], second[donor]
                 if a['tied'] or b['tied']:
                     continue
                 positions = self._positions(donor)
                 gap = collinear_gap(positions.get(a['query']), positions.get(b['query']))
-                if gap is not None and gap <= 10_000:
-                    support[donor] = {'species': donor, 'gap_bases': gap,
+                if gap is None or gap > 100_000:
+                    continue
+                bucket = support
+                if gap > 10_000:
+                    if not self.flanking_blocks or not self._consecutive(donor, a['query'], b['query']):
+                        continue
+                    bucket = extended
+                bucket[donor] = {'species': donor, 'gap_bases': gap,
                                       'first': {k: v for k, v in a.items() if k != 'tied'},
                                       'second': {k: v for k, v in b.items() if k != 'tied'}}
             # Treat donor species with both architectures as ambiguous at this locus.
             unambiguous = {name: hit for name, hit in support.items() if name not in opposed}
             decision = fission_decision(groups, unambiguous, opposed, minimum)
+            if (extended and not opposed and len(support) + len(extended) >= max(3, minimum)
+                    and decision['reason'] in ('insufficient_collinear_donor_species', 'split_support_on_one_sister_branch')):
+                combined = {**support, **extended}
+                revised = fission_decision(groups, combined, opposed, minimum)
+                if revised['reason'] == 'supported_split':
+                    localized_pairs = []
+                    for d, h in combined.items():
+                        a, b = h['first']['query'], h['second']['query']
+                        if self._consecutive(d, a, b) and self.relative_locus(
+                                species, d, candidate['source_span'], [a, b]) == 'inside':
+                            localized_pairs.append(d)
+                    if len(localized_pairs) >= 2:
+                        support = unambiguous = combined
+                        decision = {**revised, 'syntenic_adjacent_pairs': sorted(localized_pairs)}
             excluded = []
-            if self.flanking_blocks and decision['reason'] in ('mixed_closest_donor_architectures',
-                                                               'closest_informative_donors_support_fusion'):
-                for donor in decision['closest_informative_species']:
-                    if donor not in opposed:
-                        continue
+            localized = {}
+            if self.flanking_blocks and (len(support) >= minimum or key in accession_keys) and opposed:
+                for donor in sorted(opposed):
                     if donor not in flank_indices:
                         inputs = self.flanking_blocks(species, donor)
                         flank_indices[donor] = (flanking_anchor_index(*inputs, self._positions(donor), params['max_interval'])
@@ -586,14 +803,25 @@ class DonorSearch:
                         continue
                     region = uniquely_flanked_locus(flank, candidate['source_span'])
                     positions = self._positions(donor)
+                    if region:
+                        localized[donor] = {q for q in spanning_loci[key][donor] if q in positions
+                                            and within_flanks(region, positions[q])}
+                        if localized[donor]:
+                            opposed[donor]['within_syntenic_flanks'] = True
+                    if region and donor in spanning_rna_donors[key]:
+                        observed = self._rna_supported_donor_models(donor)
+                        count, query = max(((observed[q], q) for q in spanning_rna_donors[key][donor] & observed.keys()
+                                             if q in positions and within_flanks(region, positions[q])), default=(0, ''))
+                        if count >= 2:
+                            opposed[donor].update(syntenic_rna_witnesses=count, syntenic_rna_query=query)
                     if region and outside_flanks(region, positions, spanning_loci[key][donor]):
                         excluded.append(donor)
                         del opposed[donor]
                         if donor in support and all(within_flanks(region, positions[h['query']])
                                                     for h in (support[donor]['first'], support[donor]['second'])):
                             unambiguous[donor] = support[donor]
+                decision = fission_decision(groups, unambiguous, opposed, minimum)
                 if excluded:
-                    decision = fission_decision(groups, unambiguous, opposed, minimum)
                     decision['off_locus_fusion_donors'] = excluded
             rna_donors = set(decision['closest_informative_species']) & opposed.keys() & spanning_rna_donors[key].keys()
             for donor in rna_donors:
@@ -601,7 +829,10 @@ class DonorSearch:
                 verified = self._rna_supported_donor_models(donor)
                 witness = representative
                 count = verified.get(representative, 0)
-                if count < 2 and verified:
+                if donor in localized:
+                    count, witness = max(((verified[q], q) for q in localized[donor] & verified.keys()),
+                                         default=(0, representative))
+                elif count < 2 and verified:
                     # A lower-scoring isoform of the same locus can supply the
                     # RNA witness. Evidence from other paralogous loci cannot.
                     positions = self._positions(donor)

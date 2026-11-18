@@ -169,7 +169,7 @@ def render(text, updates):
         return text
     directive = re.search(r'^##FASTA(?:\r?\n|$)', text, flags=re.MULTILINE)
     text, marker, embedded = (text[:directive.start()], '##FASTA', text[directive.start()+7:]) if directive else (text, '', '')
-    lines, gene_bounds, retained_features = [], defaultdict(list), set()
+    lines, gene_bounds, retained_features, used = [], defaultdict(list), set(), set()
     groups = TranscriptGroups(updates)
     for value in updates.values():
         gene_bounds[value['model']['gene']].extend(value['exons'])
@@ -211,9 +211,8 @@ def render(text, updates):
                 f[3], f[4] = str(value['exons'][0][0]+1), str(value['exons'][-1][1])
             f[8] = ';'.join(p for p in f[8].split(';') if not p.startswith('utr_policy=')) + ';utr_policy=projected_longest_per_side'
         lines.append('\t'.join(f)+'\n')
+        used.add(tid)
     groups.close(None)
-    used = {next(iter(parse_gff_attributes(line.split('\t')[8]).get('ID', ())), '')
-            for line in lines if line.strip() and not line.startswith('#')}
     additions = defaultdict(list)
     for tid, value in updates.items():
         model = value['model']

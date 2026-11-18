@@ -385,14 +385,28 @@ publication when the annotation, OrionGeno input and homology settings match.
 The rescue `split-candidates` command can recreate that publication from
 existing rescue outputs.
 
-The genomic ownership, splice and ORF checks apply to all routes. A native
-OrionGeno path bridging two or more complete source ORFs requires at least
-80% in-frame retention of every fragment, full cross-fragment protein support
-from at least two external donor species, and at least two distinct
-whole-CDS RNA witnesses from the target species. A whole-CDS RNA witness for
-any original complete path holds the candidate. Competing paths and protected
-annotations remain unresolved. Target RNA checks query shortlisted paths in
-indexed BAMs or use the supplied whole-CDS RNA table.
+Genomic ownership, splice and ORF checks apply to every route. An original CDS
+with usable translation, a start, an in-frame stop and no initial phase offset
+counts as complete even if its GFF record carries a partial flag.
+
+Two or more complete source ORFs can be joined when two external donor species
+project the same genomic coding path. A full-length donor alignment must cover
+the junction between consecutive fragments. Each source peptide must align to a
+distinct, ordered part of that donor, and at least 90% of its aligned residues
+must survive in the joined CDS. At least two species must pass these protein
+checks. Unique full-length fragment hits to separate collinear genes within
+10 kb in a donor hold the join. Refinement can disregard such a pair when
+all corresponding intervals place both hits elsewhere, at least three species
+project the joined CDS from the same protein that supports both source fragments,
+and two of those proteins lie within conserved flanks. For competing joins
+of exactly the same source genes, these positive checks can identify one path
+when all qualifying projections for every rival come from outside its flanks. The same residue checks apply to joins
+retaining less than 80% of any source CDS in frame. Every fragment must retain
+at least two-thirds of its coding bases. In the absence of matching projections,
+OrionGeno joins of complete ORFs require at least 80% in-frame retention and
+two distinct target RNA molecules spanning the joined CDS. An observed complete
+original transcript holds the join in either route. Competing paths and protected
+annotations remain unresolved.
 
 `effective/split_model_merges.json` records the adoption basis and the matching
 OrionGeno transcripts or source reference locus. RNA-supported merges also
@@ -414,18 +428,24 @@ least 45% identity, 65% coverage on both proteins and 60% of the longer protein
 paired to a residue. In at least two donor species (or the configured
 independent-species minimum, if greater), the hits must be to distinct genes on
 the same chromosome and strand, in the same transcriptional order, within 10 kb.
-The eligible donors must occupy at least two different sister branches along
+A pair 10–100 kb apart can also contribute when both genes are consecutive
+in the representative annotation. This route requires at least three donor species,
+no opposing fusion hit, and consecutive pairs inside conserved flanks in at least
+two species. Each outer anchor is within 500 kb of its target boundary and the
+corresponding donor interval spans at most 1 Mb. The eligible donors must occupy at least two different sister branches along
 the target lineage. At the nearest ancestor with informative donors, at least
 one donor must support the split. A source-like full-length donor annotation
 is recorded as opposing evidence. Donors with unresolved support for both
 architectures do not count towards split support. If the nearest informative group contains both
 architectures, refinement holds the candidate for review. For runs with
-rescue synteny, it examines the existing flanks only for these calls and for
-calls with fusion-only nearest donors. A fusion hit can be excluded if two
-conserved flanks identify a unique corresponding interval and every qualifying
-fusion hit from that donor is demonstrably outside it. Unresolved flanks or
-fusion hits leave that donor's opposing evidence in place. More distant
-fusion annotations alone do not prevent a supported split.
+rescue synteny, refinement examines the existing flanks of opposing hits when
+enough donor species have collinear split copies. Two conserved flanks must
+identify a unique corresponding interval to classify a hit. A donor with all
+spanning hits outside the interval can be excluded as opposing evidence. Two
+split-supporting species and a fusion annotation within the corresponding
+interval trigger review. Independent accession RNA can confirm the split in
+this case. Two whole-CDS RNA witnesses for a fusion within that interval hold
+the split even when the donor is more distant.
 
 A nearest donor whose fusion model is supported by at
 least two matching whole-CDS RNA witnesses in `--rna` holds the candidate for
@@ -478,17 +498,32 @@ values name the GTF column-2 labels that document independent RNA support.
 Use transcript-supported sources, with accession identity and labels checked
 against the provider's metadata.
 
-This input is used only for a split already supported on different sister
-branches and held because the nearest donor group contains both architectures.
+RNA from another accession can resolve a split supported on different sister
+branches when donor annotations conflict.
 Both validated replacement proteins must match full-length proteins exactly
 at a unique pair of loci in the other accession. The matching RNA-supported
 transcripts must be nonoverlapping, on the same contig and strand, and in the
 same transcriptional order within 10 kb. An RNA-supported transcript with
 exons in both matched models, or a full-length supported fusion, leaves the
 conflict unresolved. Target RNA retains priority. Donor species remain the
-units of comparative support. Refinement reads the accession files only for
-eligible conflicts and records the accession and transcript IDs in the existing
-split decision and adoption records.
+units of comparative support.
+
+When comparative split support is sparse or confined to one sister branch,
+the accession evidence also requires two flanking genes. Among the nearest ten
+representatives on each side, the closest qualifying protein must be unique in
+the target and map to a single RNA-supported accession locus. The two accession
+flanks must bracket the candidate on one chromosome within 1 Mb, in either order.
+The same check can identify a projected join or a longer CDS. Each join needs
+two independent donor projections and at least two-thirds in-frame retention per
+fragment. A longer CDS requires projections from two species assigned to the source
+locus by synteny or reciprocal protein matching, at least 90%
+in-frame retention and a gain of at least 15 residues and 10% of the source protein.
+A supported original protein at the corresponding accession locus, a target RNA
+witness for the original CDS, or replicated target reads at a lost splice hold
+the repair. Competing CDS paths for identical source loci can be resolved if
+exactly one path matches. Distinct CDS paths encoding the same matched protein
+remain ambiguous. Existing adoption records include the accession transcripts
+and the flanking genes used for these decisions.
 
 The representative CDS, protein, and GFF views publish the two new genes.
 `effective/fused_model_split_decisions.json` records split and fusion support,
@@ -556,6 +591,36 @@ It preserves that transcript ID and CDS coordinates. Automatic changes are
 recorded with their evidence in `effective/model_repairs.json`. The standard
 rescue and conservative refinement commands use this behavior without target
 or approval tables.
+
+#### Repairing individual coding isoforms
+
+Default conservative refinement compares each proposed CDS with the source
+transcripts at its genomic locus. It considers shared splice junctions,
+in-frame coding overlap and matching termini. A revision must match one
+source coding path unambiguously. Transcripts with identical CDS coordinates
+and phases can share a revision while keeping their own IDs and UTRs.
+Protected source annotations and proposals that overlap a conflicting locus
+remain unresolved. A phase-only correction applies to an individual
+transcript only when its CDS rows can be edited independently.
+
+An accepted new coding path gets a transcript ID under the original gene in
+`effective/full_annotation/`. The original transcripts remain there.
+Admission requires a verified genomic ORF and qualifying homology from at
+least two other species (or the configured minimum if higher). The evidence
+must also support the change through a conserved CDS gain, a donor-supported
+native extension of a partial transcript, whole-CDS target RNA, or a matching
+RNA-derived translation at a uniquely anchored locus in another accession.
+
+The representative map and downstream FASTAs keep one sequence per gene.
+A unique repair of the current transcript can become representative when
+the source is partial or the revised path has direct RNA evidence.
+RNA evidence for both paths preserves the original representative.
+For unresolved paralog correspondence, promotion of that transcript requires
+whole-CDS target RNA or accession RNA together with independent syntenic
+projections. A directly supported revision of a different transcript can
+replace the current representative when it wins the configured representative
+comparison. The existing `model_repairs.json` records the original transcript
+IDs, changed CDS blocks and whether the repaired transcript became representative.
 
 ### Reviewed single-locus model repairs
 

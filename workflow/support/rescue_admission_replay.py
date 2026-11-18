@@ -68,6 +68,34 @@ ALLOWED_TOOL_CHANGES = frozenset({'implementation', 'model_store_implementation'
                                 'admission_replay_implementation', 'admission_patch_implementation', 'model_protein_correspondence'})
 
 
+def replay_repair_targets(r, worker, files, tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
+    """Reuse receipted local projections and align only newly nominated donor/locus pairs."""
+    def key(row):
+        return row['species'], row['gene_id'], row['donor'], row['query']
+
+    pending = {key(row): row for row in targets}
+    checked = []
+    archives = sorted({Path(member).parent for member in files if member.startswith('model_repair_search/')
+                       and Path(member).name in ('targets.json', r.LOCAL_RECORDS, r.INTERVAL_ARCHIVE)})
+    for archive in archives:
+        if not all((archive / item).as_posix() in files for item in ('targets.json', r.LOCAL_RECORDS, r.INTERVAL_ARCHIVE)):
+            raise ValueError('Incomplete receipted model repair search')
+        if pending:
+            recorded = {key(row) for row in json.loads((worker / archive / 'targets.json').read_text())}
+            common = [pending.pop(k) for k in sorted(pending.keys() & recorded)]
+            if common:
+                checked.extend(r.replay_model_repair_search(worker / archive, common, ownership, proteins, genome, code, params))
+    if pending:
+        archive = Path('model_repair_search')
+        if archive in archives:
+            # Content addressing makes additional archives reproducible across successive replays.
+            label = hashlib.sha256(json.dumps(sorted(pending)).encode()).hexdigest()
+            archive /= 'additional-' + label
+        checked.extend(r.search_model_repair_targets(tmp, list(pending.values()), existing, ownership, proteins,
+                                                     genome, code, params, cpus, archive_name=archive))
+    return checked
+
+
 def _r():
     try:
         import rescue_gene_models
@@ -457,13 +485,10 @@ def rescue(root, plan, name, cpus, *, dependencies):
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
             r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
                 models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
-            search_archive = old_worker / 'model_repair_search'
-            targeted = []
-            if any(member.startswith('model_repair_search/') for member in old_receipt['files']):
-                targets = [*r.verify_model_repair_targets(plan).get(name, []),
-                           *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
-                targeted = r.replay_model_repair_search(search_archive, targets, ownership, proteins,
-                                                        genome, source['genetic_code'], params)
+            targets = [*r.verify_model_repair_targets(plan).get(name, []),
+                       *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
+            targeted = replay_repair_targets(r, old_worker, old_receipt['files'], tmp, targets, existing,
+                                             ownership, proteins, genome, source['genetic_code'], params, cpus)
             r.atomic_json(tmp / 'model_repair_candidates.json',
                           r.model_repair_candidates(chain(models, targeted), ownership, name, source['gff']))
             r.verify_model_repair_targets(plan)

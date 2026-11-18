@@ -4,7 +4,7 @@ import csv
 import io
 import re
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from itertools import pairwise
 from pathlib import Path
 
@@ -229,4 +229,109 @@ def accession_support(entries, proposals, eligible):
                     'genes': [model['locus'][0] for _, model in pair],
                     'rna_sources': [sorted(model['labels']) for _, model in pair],
                 })
+    return {key: matches for key, matches in supported.items() if key not in opposed}
+
+
+def target_neighbors(panel, species, requests):
+    """Find local reference genes with unique proteins on either side of each target."""
+    if not all(species in panel.get(key, {}) for key in ('positions', 'id_maps', 'proteins')):
+        return {}
+    with Path(panel['id_maps'][species]).open() as handle:
+        identifiers = {row['locus_id']: row['jcvi_id'] for row in csv.DictReader(handle, delimiter='\t')
+                       if row['status'] == 'selected'}
+    contigs = defaultdict(list)
+    with Path(panel['positions'][species]).open() as handle:
+        for line in handle:
+            ct, a, b, gene, _, strand = line.split()
+            contigs[ct].append((int(a), int(b), gene, strand))
+    ranks = {}
+    for ct, genes in contigs.items():
+        genes.sort()
+        ranks.update({g: (ct, i) for i, (_, _, g, _) in enumerate(genes)})
+    proteins = {i: p.upper().removesuffix('*') for i, _, p in fasta_records(
+        Path(panel['proteins'][species]), opener=open_resource)}
+    freq = Counter(proteins.values())
+    neighbors = {}
+    for key, row in requests.items():
+        places = [ranks.get(identifiers.get(gene)) for gene in row['owners']]
+        if not all(places) or len({ct for ct, _ in places}) != 1:
+            continue
+        genes = contigs[places[0][0]]
+        lo, hi = min(i for _, i in places), max(i for _, i in places)
+        left, right = min(genes[i][0] for _, i in places), max(genes[i][1] for _, i in places)
+        sides = (reversed(genes[max(0, lo-10):lo]), genes[hi+1:hi+11])
+        neighbors[key] = [[(g, proteins[g]) for a, b, g, _ in side
+                           if (b <= left or a >= right) and g in proteins and len(proteins[g]) >= 60
+                           and freq[proteins[g]] == 1] for side in sides]
+    return neighbors
+
+
+def bracket_transcripts(sides, model_positions, unique):
+    flanks = [next(((gene, unique[p]) for gene, p in side if p in unique), None) for side in sides]
+    if not all(flanks):
+        return None
+    (left, a), (right, b) = flanks
+    if any(pos[1] != a[1] for pos in [b, *model_positions]):
+        return None
+    start = min(pos[3] for pos in model_positions)
+    end = max(pos[4] for pos in model_positions)
+    if (max(a[4], b[4]) - min(a[3], b[3]) > 1_000_000
+            or not (a[4] <= start <= end <= b[3] or b[4] <= start <= end <= a[3])):
+        return None
+    return {'target_flanks': [left, right], 'accession_flanks': [a[0], b[0]]}
+
+
+def anchored_support(entries, requests, panel, species):
+    """Require exact RNA-backed proteins and two unique flanks at the accession locus."""
+    if not requests:
+        return {}
+    owners = defaultdict(set)
+    for row in requests.values():
+        owners[tuple(row['new'])].add(frozenset(row['owners']))
+    distinct = {key: row for key, row in requests.items() if len(owners[tuple(row['new'])]) == 1}
+    sides = target_neighbors(panel, species, distinct)
+    if not sides:
+        return {}
+    anchors = {p for pair in sides.values() for side in pair for _, p in side}
+    proteins = anchors | {p for key in sides for p in (*requests[key]['old'], *requests[key]['new'])}
+    supported, opposed = defaultdict(list), set()
+    original_witnesses = defaultdict(set)
+    for entry in entries:
+        labels, gtf = set(entry['rna_sources']), Path(entry['gtf'])
+        hits = matching_transcripts(Path(entry['protein']), proteins)
+        models = transcript_paths(gtf, set().union(*hits.values())) if hits else {}
+        loci = {p: single_rna_locus(ids, models, labels, p) for p, ids in hits.items()}
+        unique = {p: paths[0][1]['position'] for p, paths in loci.items() if paths and p in anchors}
+        pairs = {}
+        for key, neighbors in sides.items():
+            row = requests[key]
+            # A transcript preserving an original protein at this locus can represent a real isoform.
+            original_ids = {i for p in row['old'] for i in hits.get(p, ()) if i in models
+                            and models[i]['labels'] <= labels and models[i]['exonic_bases'] >= 3 * len(p)
+                            and bracket_transcripts(neighbors, [models[i]['position']], unique)}
+            if original_ids:
+                if not row.get('allow_alternative'):
+                    opposed.add(key)
+                    continue
+                original_witnesses[key].update((entry['evidence_accession'], i) for i in original_ids)
+            paths = [loci.get(p) for p in row['new']]
+            if not all(paths):
+                continue
+            match = split_pair(*paths) if len(paths) == 2 else [paths[0][0]]
+            if not match:
+                continue
+            flank = bracket_transcripts(neighbors, [m['position'] for _, m in match], unique)
+            if not flank:
+                continue
+            if len(paths) == 2:
+                pairs[key] = match
+            supported[key].append({**flank, 'evidence_accession': entry['evidence_accession'],
+                                   'target_accession': entry['target_accession'],
+                                   'transcripts': [i for i, _ in match],
+                                   'genes': [m['locus'][0] for _, m in match]})
+        if pairs:
+            opposed.update(spanning_transcripts(gtf, pairs, labels))
+    for key, witnesses in original_witnesses.items():
+        for match in supported.get(key, ()):
+            match['original_transcript_witnesses'] = sorted(witnesses)
     return {key: matches for key, matches in supported.items() if key not in opposed}

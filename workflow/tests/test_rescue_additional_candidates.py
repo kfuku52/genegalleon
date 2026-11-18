@@ -741,3 +741,26 @@ def test_refinement_input_discovery_ignores_partial_downloads_and_recognizes_gen
     (assemblies / 'Plant_example_isoform.fa.gz').touch()
     (genomes / 'Plant_example.fna').symlink_to(real_genome)
     assert scan() == [str(assemblies.parent), 'genome']
+
+
+def test_length_deficit_proposals_preserve_reciprocal_ranking(tmp_path):
+    path = tmp_path/'alignments'
+    rows = [
+        ('n','subject',1,100,31,130,110), ('n','runner',1,100,1,100,85),
+        ('internal','gap',1,100,1,130,120),
+        ('tied','subject',1,100,31,130,100), ('tied','runner',1,100,31,130,99)]
+    for target_is_a in (False, True):
+        lines = []
+        targets = dict.fromkeys(('n','internal','tied'),100)
+        donors = dict.fromkeys(('subject','runner','gap'),130)
+        for target, donor, a,b,c,d, score in rows:
+            if not target_is_a:
+                target, donor, a,b,c,d = donor,target,c,d,a,b
+            lines.append(f'{target} {donor} 75 100 10 0 {a} {b} {c} {d} 1e-40 {score}\n')
+        path.write_text(''.join(lines))
+        opts = dict(min_identity=.5, coverage_a=.65, coverage_b=.65)
+        lengths = (targets,donors) if target_is_a else (donors,targets)
+        original = list(reciprocal_matches(path,*lengths,**opts))
+        extra = []
+        assert list(reciprocal_matches(path,*lengths,**opts,terminal_hits=extra,target_is_a=target_is_a)) == original
+        assert set(extra) == {('n','subject','N'),('internal','gap','internal')}

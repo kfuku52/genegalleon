@@ -2373,7 +2373,7 @@ def verify_model_repair_targets(plan):
 
 def automatic_model_repair_targets(root, plan, species, proteins, params):
     """Use existing syntenic correspondences to revisit clearly shorter CDSs."""
-    candidates = defaultdict(list)
+    candidates, terminals = defaultdict(list), defaultdict(list)
     donors = plan['donors'][species]
     if len(donors) < 2:
         return []
@@ -2401,10 +2401,16 @@ def automatic_model_repair_targets(root, plan, species, proteins, params):
                     if len(targets_by_query[query]) == len(queries_by_target[target]) == 1}
         left, right = (target_lengths, donor_lengths) if a == species else (donor_lengths, target_lengths)
         coverage = (.90, .75) if a == species else (.75, .90)
+        terminal = []
         matches = reciprocal_matches(root / 'synteny' / job['id'] / 'target.query.last', left, right,
                                      min_identity=params['minimum_identity'],
-                                     coverage_a=coverage[0], coverage_b=coverage[1])
+                                     coverage_a=coverage[0], coverage_b=coverage[1],
+                                     terminal_hits=terminal, target_is_a=a == species, anchors=queries_by_target)
         reciprocal = {(x, y) if a == species else (y, x) for x, y, _ in matches}
+        for target, query, side in terminal:
+            locus = locus_ids.get(target)
+            if locus:
+                terminals[locus, side].append((donor, query, query in queries_by_target.get(target, ())))
         for target, query in sorted(anchored | reciprocal):
             locus = locus_ids.get(target)
             target_length = target_lengths.get(target, 0)
@@ -2419,11 +2425,21 @@ def automatic_model_repair_targets(root, plan, species, proteins, params):
                 continue
             candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor,
                                       'query': query, basis: locus})
+    for (locus, side), rows in terminals.items():
+        if len({donor for donor, _, _ in rows}) < 2 or not any(anchored for _, _, anchored in rows):
+            continue
+        nominated = {(r['donor'], r['query']) for r in candidates[locus]}
+        for donor, query, _ in rows:
+            if (donor, query) not in nominated:
+                candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor, 'query': query,
+                                          **({'internal_gap_locus': locus} if side == 'internal' else
+                                             {'terminal_locus': locus, 'terminal_side': side})})
     return [row for locus in sorted(candidates) if len({r['donor'] for r in candidates[locus]}) >= 2
             for row in candidates[locus]]
 
 
-def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
+def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus, *,
+                                archive_name='model_repair_search'):
     """Project selected donor proteins near specified existing loci for review."""
     if not targets:
         return []
@@ -2433,7 +2449,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     for index, target in enumerate(targets):
         owner = owners.get(target['gene_id'])
         if not owner or not owner.get('cds') or owner['strand'] not in {'+', '-'}:
-            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
+            if any(target.get(k) for k in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus')):
                 continue
             raise ValueError('Unknown or invalid coding owner for model repair: ' + target['gene_id'])
         if target['query'] not in proteins[target['donor']]:
@@ -2442,7 +2458,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         start = max(0, owner['start'] - padding)
         end = min(genome.get_reference_length(owner['seqid']), owner['end'] + padding)
         if end - start > params['max_interval']:
-            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
+            if any(target.get(k) for k in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus')):
                 continue
             raise ValueError('Model repair target exceeds max interval: ' + target['gene_id'])
         identifier = f'review_{index + 1}'
@@ -2451,8 +2467,8 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         queries[identifier] = query
     if not windows:
         return []
-    directory = tmp / 'model_repair_search'
-    directory.mkdir()
+    directory = tmp / archive_name
+    directory.mkdir(parents=True)
     atomic_json(directory / 'targets.json', list(queries.values()))
     predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus,
                                    compact=True, deduplicate_queries=True)
@@ -2496,7 +2512,7 @@ def replay_model_repair_search(directory, targets, ownership, proteins, genome, 
     old = {row['id']: row for row in json.loads(old_targets.read_text())}
     queries = {key: {**row, **current[identity(row)]} for key, row in old.items() if identity(row) in current}
     for key, row in queries.items():
-        for flag in ('syntenic_locus', 'reciprocal_locus'):
+        for flag in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus', 'terminal_side'):
             if flag not in current[identity(old[key])]:
                 row.pop(flag, None)
     if not queries:
@@ -2539,7 +2555,19 @@ def model_repair_geometry(model, ownership):
     if len(owners) != 1 or owners[0]['strand'] != model['strand'] or not owners[0].get('cds'):
         return [], False
     owner = owners[0]
-    old_blocks = {tuple(block) for block in owner['cds']}
+    result = _repair_overlap(model, owner['gene_id'], owner['cds'])
+    if result[0]:
+        return result
+    # A long alternative exon can dilute coverage of the gene-wide union.
+    # Preserve the one-owner constraint and test each actual transcript CDS.
+    matches = [_repair_overlap(model, owner['gene_id'], blocks)
+               for blocks in owner.get('transcript_cds', {}).values()]
+    return max((v for v in matches if v[0]), key=lambda v: (
+        v[1], v[0][0]['overlap_bases'], -v[0][0]['cds_bases']), default=([], False))
+
+
+def _repair_overlap(model, gene_id, blocks):
+    old_blocks = {tuple(block) for block in blocks}
     union = []
     for start, end in sorted(old_blocks):
         if union and start <= union[-1][1]:
@@ -2552,7 +2580,7 @@ def model_repair_geometry(model, ownership):
                  for a, b in union for x, y, _ in model['cds'])
     if 3 * shared < 2 * old_length or 4 * shared < 3 * new_length:
         return [], False
-    geometry = [{'gene_id': owner['gene_id'], 'cds_bases': old_length, 'overlap_bases': shared}]
+    geometry = [{'gene_id': gene_id, 'cds_bases': old_length, 'overlap_bases': shared}]
     return geometry, old_blocks == {tuple(block[:2]) for block in model['cds']}
 
 
@@ -2587,9 +2615,11 @@ def model_repair_candidates(models, ownership, species, source_gff):
             raise ValueError('Inconsistent CDS for reviewed model repair: ' + identifier)
         support = {'donor': evidence['donor'], 'query': evidence['query'],
                    'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
-        for basis in ('syntenic_locus', 'reciprocal_locus'):
+        for basis in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus'):
             if evidence.get(basis) == geometry[0]['gene_id']:
                 support[basis] = evidence[basis]
+                if basis == 'terminal_locus':
+                    support['terminal_side'] = evidence['terminal_side']
         if support not in row['support']:
             row['support'].append(support)
 

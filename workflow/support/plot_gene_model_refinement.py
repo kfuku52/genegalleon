@@ -42,8 +42,10 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     changes = verified_json(root / "effective", "changes.json", plan_hash)
     merges = (verified_json(root / "effective", "split_model_merges.json", plan_hash)
               if any(row["status"] == "merged_split_model" for row in changes) else [])
+    effective = root / "effective"
+    receipt = json.loads((effective / "receipt.json").read_text())
     repairs = (verified_json(root / "effective", "model_repairs.json", plan_hash)
-               if any(row["status"] == "repaired_model" for row in changes) else [])
+               if "model_repairs.json" in receipt["files"] else [])
     fissions = (verified_json(root / "effective", "fused_model_splits.json", plan_hash)
                 if any(row["status"] == "split_fused_model" for row in changes) else [])
     fissions_by_species = Counter(row["species"] for row in fissions)
@@ -80,11 +82,10 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
         }
         detail_keys.update((name, r["gene_id"]) for r in accepted if (name, r["gene_id"]) in selections)
         detail_keys.update((name, r["gene_id"]) for r in selected if r["status"] in {"conserved", "sequence_repaired"})
+    detail_keys.update((r['species'], r['gene_id']) for r in repairs)
     for r in table(root / "effective" / "effective_exclusions.tsv"):
         stats[r["species"]].setdefault("effective_exclusions", 0)
         stats[r["species"]]["effective_exclusions"] += 1
-    effective = root / "effective"
-    receipt = json.loads((effective / "receipt.json").read_text())
     admission = receipted_compressed_member(receipt["files"], "translation_admission.tsv")
     for r in table(effective / admission):
         quality = json.loads(r["quality"])

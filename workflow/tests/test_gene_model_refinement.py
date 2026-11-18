@@ -1162,8 +1162,8 @@ def test_source_annotation_archive_preserves_decoded_crlf_bytes(tmp_path, compre
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("implicit", [False, True])
-def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changing_source(tmp_path, monkeypatch, implicit):
+@pytest.mark.parametrize("implicit, grouped", [(False, False), (True, False), (False, True)])
+def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changing_source(tmp_path, monkeypatch, implicit, grouped):
     inputs, edges, rows = tiny_inputs(tmp_path)
     target = rows[0]
     genomic = "ATGGTACCCTAA" + "C" * 30 + "AGAAATAA" + "C" * 40
@@ -1179,6 +1179,8 @@ def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changin
               'chr1\tprovider\texon\t61\t72\t9.5\t+\t.\tgene_id "nc"; transcript_id "nct"; note "noncoding=kept";\n')
     if implicit:
         source = "".join(line for line in source.splitlines(keepends=True) if line.split("\t")[2] in {"CDS", "exon"})
+    if grouped:
+        source = source.replace('chr1\tprovider\texon\t61', '###\nchr1\tprovider\texon\t61')
     original = source.replace("\n", "\r\n").encode()
     Path(target["gff"]).write_bytes(original)
     for donor in rows[1:]:
@@ -1211,6 +1213,11 @@ def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changin
     assert all(set(attrs.get("Parent", ())) <= identifiers for _, attrs in parsed)
     assert next(fields[3:5] for fields, attrs in parsed if attrs.get("ID") == ("g",)) == ["1", "50"]
     assert any(attrs.get("note") == ("noncoding=kept",) for _, attrs in parsed)
+    if grouped:
+        gene_group, _ = full.read_text().split('###\n', 1)
+        predicted_id = accepted[0]["candidate"]["source_transcript_id"]
+        assert f"ID={predicted_id};Parent=g;" in gene_group
+        assert f"Parent={predicted_id}" in gene_group
     if not implicit:
         assert any(attrs.get("gene_name") == ("coding=name",) for _, attrs in parsed)
     audit = json.loads((effective / "gene_bounds_changes.json").read_text())
@@ -2057,3 +2064,242 @@ def test_fission_resolves_only_a_uniquely_flanked_conflict(tmp_path, monkeypatch
         else:
             assert decision['reason'] == 'mixed_closest_donor_architectures'
             assert 'off_locus_fusion_donors' not in decision
+
+
+def test_complete_orf_behind_partial_label_and_in_frame_splice():
+    splits = refinement.refinement_native_splits
+    quality = dict(valid_orf=False, usable=True, has_start=True, has_stop=True, annotated_partial=True)
+    assert splits.complete_source_orf({'quality': quality})
+    for key, value in [('usable', False), ('translation_offset', 1), ('incomplete_codon', True)]:
+        assert not splits.complete_source_orf({'quality': {**quality, key: value}})
+    for strand, blocks in [('+', [[0, 2, 0], [10, 20, 1]]), ('-', [[10, 12, 0], [0, 10, 1]])]:
+        path = {'strand': strand, 'cds': blocks}
+        assert splits._in_frame_codons({'blocks': blocks}, path, 3) == {0, 1, 2}
+        assert splits._in_frame_codons({'blocks': blocks[:1]}, path, 3) == set()
+    assert splits.bridges_paired({'left': {0, 1, 2}, 'right': {6, 7, 8}}, set(range(9)))
+    assert not splits.bridges_paired({'left': {0, 1, 2}, 'right': {6, 7, 8}}, {0, 1, 2, 6, 7, 8})
+
+
+def test_collinear_split_copies_and_lost_source_residues_veto_join(tmp_path, monkeypatch):
+    n = refinement.refinement_native_splits
+    search = n.DonorSearch({'donors': {'target': ['d1', 'd2']}},
+                           None, tmp_path/'diamond', 1)
+    keep = set(range(40))
+    candidates = {'join': {'source_fragments': [('a', 'A'*40, keep), ('b', 'B'*40, keep)]}}
+    separate = False
+    def alignments(*args, **kwargs):
+        for frag, offset, alternative in [('A'*40, 0, 'x'), ('B'*40, 40, 'y')]:
+            for donor in ('d1', 'd2'):
+                yield frag, {'donor': donor, 'query': 'joined', 'identity': 1., 'query_coverage': 1.,
+                             'coverage': .5, 'subject_start': offset, 'subject_end': offset+40}, '40', 0, 80
+            if separate:
+                yield frag, {'donor': 'd1', 'query': alternative, 'identity': 1., 'query_coverage': 1.,
+                             'coverage': 1., 'bitscore': 100., 'subject_start': 0, 'subject_end': 40}, '40', 0, 40
+    monkeypatch.setattr(search, 'alignments', alignments)
+    monkeypatch.setattr(search, '_positions', lambda donor: {'x': ('x','chr','+',0,40), 'y': ('y','chr','+',50,90)})
+    def supported():
+        best = {'join': {donor: {'query': 'joined'} for donor in ('d1','d2')}}
+        search._check_source_architecture('target', candidates, best, ())
+        return set(best['join'])
+    assert supported() == {'d1','d2'}
+    keep.difference_update(range(8))
+    assert not supported()
+    keep.update(range(8))
+    separate = True
+    assert not supported()
+
+
+def test_distant_syntenic_fusion_checks_minimal_support_and_rna():
+    decide = refinement.refinement_native_splits.fission_decision
+    tree = [[['a']], [['b']], [['c']], [['d']]]
+    fused = {'d': {'within_syntenic_flanks': True}}
+    assert decide(tree, {'a': {}, 'b': {}}, fused, 2)['reason'] == 'syntenic_fusion_with_minimal_split_support'
+    assert decide(tree, {'a': {}, 'b': {}, 'c': {}}, fused, 2)['reason'] == 'supported_split'
+    fused['d']['syntenic_rna_witnesses'] = 2
+    assert decide(tree, {'a': {}, 'b': {}, 'c': {}}, fused, 2)['reason'] == 'syntenic_donor_fusion_supported_by_rna'
+
+
+def test_internal_gap_requires_witness_for_each_new_splice(monkeypatch):
+    original = {'seqid': 'chr', 'strand': '+', 'blocks': [[0,30,0], [100,130,0], [200,230,0]]}
+    checked = {'seqid': 'chr', 'strand': '+', 'cds': [[0,30,0], [60,75,0], [100,130,0], [200,230,0]]}
+    candidates = {'owner': [({'kind':'coding_path','candidate_id':'new','basis':'conserved_internal_gap_with_target_rna'}, checked)]}
+    sites, whole = {}, {}
+    def counts(*args, bridge_witnesses):
+        for site in bridge_witnesses:
+            bridge_witnesses[site].update(dict.fromkeys(range(sites.get(site[2:],0))))
+        return whole
+    monkeypatch.setattr(refinement,'native_rna_counts',counts)
+    def held():
+        return refinement.terminal_rna_conflicts(candidates, {'owner':(original,original)}, {}, 'target',None,None,None)
+    assert held() == {'new'}
+    sites.update({(130,200):2,(30,60):2,(75,100):1})
+    assert held() == {'new'}
+    sites[75,100] = 2
+    assert not held()
+    sites[30,100] = 2
+    assert held() == {'new'}
+    sites.clear()
+    whole[refinement.rna_candidate_key({**checked, 'blocks': checked['cds']}, 'target')] = 2
+    assert not held()
+    whole[refinement.rna_candidate_key(original, 'target')] = 1
+    assert held() == {'new'}
+
+
+def test_anchored_accession_requires_unique_neighbors_and_no_competing_transcript(tmp_path):
+    rna = refinement.refinement_accession_rna
+    left, right, first, second, old = [letter * 70 for letter in 'ACDEK']
+    pep, bed, mapping = (tmp_path / name for name in ('target.fa', 'target.bed', 'target.map'))
+    pep.write_text(f'>left\n{left}\n>middle\n{old}\n>right\n{right}\n')
+    bed.write_text('one\t0\t210\tleft\t0\t+\none\t300\t750\tmiddle\t0\t+\none\t900\t1110\tright\t0\t+\n')
+    mapping.write_text('locus_id\tjcvi_id\tstatus\nsource\tmiddle\tselected\n')
+    panel = {k: {'target': str(v)} for k, v in [('proteins', pep), ('positions', bed), ('id_maps', mapping)]}
+    other, gtf = tmp_path/'other.fa', tmp_path/'other.gtf'
+    entry = dict(protein=other, gtf=gtf, rna_sources=['reads'], evidence_accession='other', target_accession='ref')
+    models = [('l', left, 1), ('a', first, 301), ('b', second, 601), ('r', right, 901)]
+    def exon(g, t, start):
+        return f'chr\treads\texon\t{start}\t{start+209}\t.\t+\t.\tgene_id "{g}"; transcript_id "{t}";\n'
+    other.write_text(''.join(f'>{g}\n{p}\n' for g,p,_ in models))
+    initial = ''.join(exon(g,g,x) for g,_,x in models)
+    gtf.write_text(initial)
+    queries = {'split': {'owners':['source'], 'old':(old,), 'new':(first,second)}}
+    def support():
+        return rna.anchored_support([entry], queries, panel, 'target')
+    assert support()['split'][0]['accession_flanks'] == ['l','r']
+    gtf.write_text(initial + exon('both','spanning',301) + exon('both','spanning',601))
+    assert support() == {}
+    gtf.write_text(initial)
+    pep.write_text(pep.read_text() + f'>another_left\n{left}\n')
+    assert support() == {}
+
+
+@pytest.mark.parametrize('rival,expected', [('outside',True), ('inside',False), (None,False)])
+def test_competing_joins_require_every_alternative_to_project_off_locus(rival, expected):
+    import types
+    shapes, automatic, published = {}, [], []
+    for i in (0,1):
+        checked = {'seqid':'chr', 'strand':'+', 'cds':[[0,150+i*3,0]], 'start':0, 'end':150+i*3}
+        hits = [{'donor':d, 'query':str(i), 'coverage':1., 'identity':1.} for d in ('a','b','c')]
+        row = {**checked, 'candidate_id':str(i), 'owner_overlap':[{'gene_id':g} for g in ('l','r')], 'support':hits}
+        shapes[refinement.coding_shape(row)] = {'source_fragments':True}
+        automatic.append((row,checked))
+        published.append(row)
+    search = types.SimpleNamespace(flanking_blocks=True,
+                                   relative_locus=lambda t,d,span,qs: 'inside' if qs=={'0'} else rival)
+    params = {'max_interval':100000,'minimum_coverage':.8,'minimum_identity':.5,'minimum_broad_coverage':.9}
+    selected = refinement.distinguish_projected_joins(automatic,shapes,published,search,'target',params)
+    assert bool(selected) == expected
+    if expected:
+        assert selected[frozenset(('l','r'))] == {refinement.coding_shape(published[0])}
+
+
+def test_outer_flanks_ignore_internal_anchor_and_preserve_inversion():
+    n = refinement.refinement_native_splits
+    target = {str(i):(str(i),'one','+',i*100,i*100+20) for i in range(3)}
+    donor = {str(i):(str(i),'two','-',i*200,i*200+30) for i in range(3)}
+    blocks = [[('0','2'),('1','1'),('2','0')]]
+    index = n.outer_anchor_blocks(blocks, target, donor)
+    query = dict(seqid='one',strand='+',start=95,end=135)
+    assert n.outer_regions(index, query, 1000) == {('two',30,400,'-')}
+    assert not n.outer_regions(index, query, 10)
+
+
+def test_transcript_pairing_shared_cds_and_ambiguous_paths(monkeypatch):
+    tx = refinement.transcript_repairs_module
+    def model(tid, blocks):
+        return dict(seqid='chr', strand='+', source_transcript_id=tid, blocks=blocks,
+                    quality={'usable':True})
+    a = model('a', [[0,60,0],[100,160,0],[200,260,0]])
+    b = model('b', [[100,160,0],[200,260,0]])
+    copy = {**a,'source_transcript_id':'copy'}
+    path = dict(seqid='chr',strand='+',cds=[[0,69,0],[100,160,0],[200,260,0]])
+    from unittest.mock import Mock
+    compare = Mock(wraps=tx.coding_overlap)
+    monkeypatch.setattr(tx, 'coding_overlap', compare)
+    assert [m['source_transcript_id'] for m in tx.TranscriptPaths([b,a,copy]).match(path)] == ['a','copy']
+    assert compare.call_count == 2
+    assert tx.TranscriptPaths([a,{**copy,'quality':{'usable':True,'annotated_exception':True}}]).match(path) is None
+    assert tx.TranscriptPaths([a]).match({**path,'cds':a['blocks']}) is None
+    left = model('left', [[0,60,0],[100,160,0]])
+    right = model('right', [[100,160,0],[200,260,0]])
+    assert tx.TranscriptPaths([left,right]).match({**path,'cds':a['blocks']}) is None
+
+
+def test_transcript_addition_and_representative_are_independent(monkeypatch):
+    g = refinement
+    old = dict(seqid='chr',strand='+',blocks=[[0,60,0]],cds='ATG'+'AAA'*18+'TAA',
+               source_gene_id='g',source_transcript_id='t',candidate_id='old',protein='M'+'K'*18,origin='original',
+               quality={'valid_orf':True,'usable':True})
+    alt = {**old,'source_transcript_id':'s','candidate_id':'other'}
+    gene = {'gene_id':'target_g','candidates':[old,alt]}
+    def suggestion(i):
+        seq='ATG'+'AAA'*(20+i)+'TAA'
+        end=len(seq)
+        ck=dict(seqid='chr',strand='+',start=0,end=end,cds=[[0,end,0]],sequence=seq)
+        row=dict(seqid='chr',strand='+',candidate_id=str(i),cds=ck['cds'],kind='coding_path',
+                 support=[dict(donor=d,syntenic_locus='g') for d in ('a','b')])
+        return g.coding_shape(ck),dict(checked=ck,review=row,models=[old],protein='M'+'K'*(20+i))
+    def run(chosen,ids,old_rna=False):
+        proposed=dict(suggestion(i) for i in ids)
+        evidence={('transcript',str(i)):[{'evidence_accession':'another'}] for i in ids}
+        selected={'target_g':{'candidate_id':chosen,'status':'original'}}
+        published, audit, repaired = {}, [], {}
+        g.publish_transcript_repairs(proposed,evidence,'target',1,dict(min_support=2),None,{},None,
+                                     {g.rna_candidate_key(old,'target'):int(old_rna)}, {'g':gene},
+                                     selected,repaired,audit,published,g.rescue.OwnershipIndex([]))
+        return [v['representative'] for v in audit],selected['target_g']['candidate_id'],set(published)
+    assert run('old',[1]) == ([True],'1',{'1.t1'})
+    assert run('other',[1]) == ([False],'other',{'1.t1'})
+    assert run('old',[1],True) == ([False],'old',{'1.t1'})
+    assert run('old',[1,2]) == ([False,False],'old',{'1.t1','2.t1'})
+
+
+def test_previously_withheld_prediction_keeps_its_transcript_id():
+    g = refinement
+    source = dict(origin='original',candidate_id='old',source_transcript_id='mRNA',source_gene_id='g',
+                  seqid='chr',strand='+',blocks=[[0,60,0]],cds='ATG'+'AAA'*18+'TAA',protein='M'+'K'*18,
+                  quality={'valid_orf':True,'usable':True})
+    seq = 'ATG'+'AAA'*28+'TAA'
+    checked = dict(seqid='chr',strand='+',cds=[[0,len(seq),0]],start=0,end=len(seq),sequence=seq)
+    predicted = {**source,'origin':'predicted','candidate_id':'p','source_transcript_id':'p.t1',
+                 'cds':seq,'blocks':checked['cds'],'protein':'M'+'K'*28}
+    gene = {'gene_id':'target_g','candidates':[source,predicted]}
+    shape = g.coding_shape(checked)
+    assert g.reusable_transcript_prediction(gene,shape,'p') == (False,None)
+    assert g.reusable_transcript_prediction(gene,shape,'old') == (True,predicted)
+    row = dict(checked,candidate_id='frozen',kind='coding_path',
+               support=[dict(donor=d,syntenic_locus='g') for d in ('d1','d2')])
+    item = dict(checked=checked,review=row,models=[source],protein=predicted['protein'],prediction=predicted)
+    selected = {'target_g':dict(candidate_id='old',status='ambiguous_correspondence')}
+    repaired, audit, added = {}, [], {}
+    g.publish_transcript_repairs({shape:item},{('transcript','frozen'):[{'evidence_accession':'a'}]},
+                                 'target',1,dict(min_support=2),None,{},None,{}, {'g':gene},
+                                 selected,repaired,audit,added,g.rescue.OwnershipIndex([]))
+    assert selected['target_g']['candidate_id'] == 'p'
+    assert set(added) == {'p.t1'} and audit[0]['rescue_or_native_candidate_id'] == 'frozen'
+
+
+def test_donor_scores_for_representative_switch_use_same_target_proteins():
+    from types import SimpleNamespace
+    search = SimpleNamespace(_proteins=lambda d: [('p', 'M'+'K'*110)])
+    old = {'protein':'M'+'K'*60,'cds':'A'*186}
+    new = {'protein':'M'+'K'*110,'cds':'A'*336}
+    support = [dict(donor=d,query='p',syntenic_locus='g') for d in ('a','b')]
+    params = dict(min_support=2, min_margin=.10)
+    check = refinement.better_transcript_representatives
+    assert check({'new':(new,old,support)},search,params) == {'new'}
+    assert not check({'new':(new,old,support[:1])},search,params)
+    assert not check({'new':(new,new,support)},search,params)
+
+
+def test_rescue_projection_uses_individual_cds_at_multi_isoform_locus():
+    r = refinement.rescue
+    one = 'chr\ts\t'
+    gff = [one+x+'\n' for x in (
+        'gene\t1\t2100\t.\t+\t.\tID=g', 'mRNA\t1\t300\t.\t+\t.\tID=short;Parent=g',
+        'mRNA\t1\t2100\t.\t+\t.\tID=long;Parent=g',
+        'CDS\t1\t90\t.\t+\t0\tParent=short,long', 'CDS\t201\t290\t.\t+\t0\tParent=short',
+        'CDS\t1001\t2000\t.\t+\t0\tParent=long')]
+    ownership = r.OwnershipIndex(r.original_ownership(gff,r.attributes))
+    path = dict(seqid='chr',strand='+',start=0,end=299,cds=[[0,90,0],[200,299,0]])
+    geo,exact = r.model_repair_geometry(path,ownership)
+    assert not exact and geo == [dict(gene_id='g',cds_bases=180,overlap_bases=180)]

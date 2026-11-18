@@ -450,3 +450,24 @@ def test_annotation_ancestor_already_in_prediction_history_is_not_read_twice(com
     parent = plan['request']['admission_cache']['annotation_history']['root']
     rows = [row for row in history if row['directory'] == parent + '/rescued/Target_species' and row['status'] == 'verified']
     assert len(rows) == 1
+
+
+def test_repair_replay_searches_only_missing_donor_windows(tmp_path, monkeypatch):
+    worker, destination = tmp_path/'old', tmp_path/'replay'
+    archive = worker/'model_repair_search'
+    archive.mkdir(parents=True)
+    rows = [dict(species='target',gene_id='gene',donor=name,query='q') for name in ('old','new')]
+    (archive/'targets.json').write_text(json.dumps(rows[:1]))
+    files = ['model_repair_search/'+leaf for leaf in ('targets.json',rescue.LOCAL_RECORDS,rescue.INTERVAL_ARCHIVE)]
+    calls = []
+    def cached(directory, targets, *args):
+        calls.append(('reuse', [r['donor'] for r in targets]))
+        return ['old']
+    def project(tmp, targets, *args, archive_name):
+        assert archive_name.parent == Path('model_repair_search')
+        calls.append(('align', [r['donor'] for r in targets]))
+        return ['new']
+    monkeypatch.setattr(rescue,'replay_model_repair_search',cached)
+    monkeypatch.setattr(rescue,'search_model_repair_targets',project)
+    assert replay.replay_repair_targets(rescue,worker,files,destination,rows,[],None,{},None,1,{},1) == ['old','new']
+    assert calls == [('reuse',['old']),('align',['new'])]

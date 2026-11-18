@@ -356,7 +356,10 @@ cover at least two-thirds of the sole owner's coding bases and share at least
 three-quarters of their own coding bases with that owner. Paths with unchanged
 coordinates are included only when their declared phases conflict. These
 publications are available for review even when the prediction has an
-unresolved placement flag.
+unresolved placement flag. At loci with multiple coding transcripts, rescue also
+checks overlap against individual transcript CDSs when the combined locus
+intervals dilute support. Refinement assigns the resulting candidate to its
+source transcript using splice and reading-frame evidence.
 
 Rescue also searches automatically at existing loci when two or more
 reference species have longer, unambiguous internal anchors in their syntenic
@@ -369,6 +372,16 @@ nominate the same search. These matches must cover at least 90% of the shorter
 target and 75% of the donor, and both proteins must have a unique best partner.
 Refinement can adopt a reciprocal-match extension only when it preserves the
 source CDS in full and in frame.
+
+Rescue also checks the same alignments for a shared N-terminal or C-terminal
+deficit, or a gap inside an otherwise aligned protein. Each donor protein must
+be a unique best hit for the target, with the same type of deficit in at least
+two species and a matching synteny anchor in at least one. Miniprot projects
+these proteins in the target gene window. An internal gap repair that relies
+on this evidence requires a partial source CDS, at least 90% in-frame retention,
+and target RNA supporting the revised path or each new splice. Replicated RNA
+for a conflicting original splice holds the repair. Admission replay revalidates
+archived projections and searches only newly nominated donor/locus pairs.
 
 To revisit a particular annotation even when donor screening considers it
 represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
