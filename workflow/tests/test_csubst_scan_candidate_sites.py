@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import zipfile
+from hashlib import sha256
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -657,12 +658,12 @@ def test_required_report_input_preflight_reports_and_recovers_missing_stat_branc
     assert second["OG0002"]["required_input_signature"] != first_signature
 
 
-def make_candidate_cache(mod, cache_root, row):
+def make_candidate_cache(mod, cache_root, row, site_dirname="csubst.branch_id8,9"):
     cache_dir = cache_root / row["_cache_name"]
     cache_dir.mkdir(parents=True)
     focused = cache_dir / f"{row['_candidate_id']}.focused_tree_site.pdf"
     mod.site_wrapper.create_pdf("Focused site tree", str(focused))
-    site_dir = cache_dir / "csubst_sites" / "csubst.branch_id8,9"
+    site_dir = cache_dir / "csubst_sites" / site_dirname
     site_dir.mkdir(parents=True)
     (site_dir / "csubst.tsv").write_text(
         "codon_site_alignment\tOCNany2spe\n4\t2.0\n",
@@ -693,7 +694,9 @@ def make_candidate_cache(mod, cache_root, row):
                 "file_size_bytes": 0,
             },
         ]
-    ).to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
+    ).assign(branch_ids=row["_canonical_support_branch_ids"]).to_csv(
+        site_dir / "csubst.outputs.tsv", sep="\t", index=False,
+    )
     pd.DataFrame(
         [
             {
@@ -705,10 +708,17 @@ def make_candidate_cache(mod, cache_root, row):
     ).to_csv(cache_dir / "analysis.complete.tsv", sep="\t", index=False)
 
 
-def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
+@pytest.mark.parametrize("long_branch_list", [False, True])
+def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path, long_branch_list):
     mod = load_module()
     summary = tmp_path / "summary.tsv"
     source = candidate_rows().iloc[[1]].copy()
+    site_dirname = "csubst.branch_id8,9"
+    if long_branch_list:
+        branch_ids = ",".join(map(str, range(100, 181)))
+        source["support_branch_ids"] = branch_ids
+        digest = sha256(("csubst.branch_id" + branch_ids).encode("utf-8")).hexdigest()[:32]
+        site_dirname = "csubst.branch_id.sha256-" + digest
     lineage_support = {
         "lineage_total": 4,
         "support_lineage_count": 3,
@@ -736,7 +746,8 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     assert "Support lineage fraction: 0.75" in annotation
     assert "Support foreground lineage IDs: 7,11,13" in annotation
     cache_root = tmp_path / "cache"
-    make_candidate_cache(mod, cache_root, row)
+    make_candidate_cache(mod, cache_root, row, site_dirname)
+    assert mod.candidate_cache_complete(cache_root / row["_cache_name"], row)
     archive = tmp_path / "candidate_sites_min_support_5.zip"
 
     mod.package_threshold(
@@ -770,10 +781,9 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         for column, value in lineage_support.items():
             assert candidate_table.loc[0, column] == value
             assert candidate_manifest.loc[0, column] == value
-        output_manifest = pd.read_csv(
-            zipped.open(f"{candidate_prefix}/csubst_sites/csubst.branch_id8,9/csubst.outputs.tsv"),
-            sep="\t",
-        )
+        raw_manifest_path = f"{candidate_prefix}/csubst_sites/{site_dirname}/csubst.outputs.tsv"
+        output_manifest = pd.read_csv(zipped.open(raw_manifest_path), sep="\t")
+        assert output_manifest["branch_ids"].eq(row["_canonical_support_branch_ids"]).all()
         assert output_manifest["output_path"].tolist() == [
             "csubst.tsv",
             "csubst.pdf",
@@ -781,9 +791,7 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         ]
         assert output_manifest["file_exists"].tolist() == ["Y", "Y", "Y"]
         self_row = output_manifest.loc[output_manifest["output_kind"] == "output_manifest"].iloc[0]
-        zipped_manifest_info = zipped.getinfo(
-            f"{candidate_prefix}/csubst_sites/csubst.branch_id8,9/csubst.outputs.tsv"
-        )
+        zipped_manifest_info = zipped.getinfo(raw_manifest_path)
         assert int(self_row["file_size_bytes"]) == zipped_manifest_info.file_size
     assert mod.archive_matches_source(archive, summary)
 

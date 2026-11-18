@@ -519,10 +519,12 @@ def extract_pdb_id(indir):
 
 
 def resolve_site_output_dir(dir_out_og, branch_id_str):
+    from csubst.site_output import intersection_job_dirname
+
     return os.path.join(
         dir_out_og,
         CSUBST_SITES_OUTDIR,
-        CSUBST_SITES_OUTPUT_PREFIX + ".branch_id" + branch_id_str,
+        intersection_job_dirname(branch_id_str, CSUBST_SITES_OUTPUT_PREFIX),
     )
 
 
@@ -530,7 +532,7 @@ def load_site_output_manifest(site_dir):
     manifest_path = os.path.join(site_dir, CSUBST_SITES_OUTPUT_PREFIX + ".outputs.tsv")
     if not os.path.isfile(manifest_path):
         return None
-    return pandas.read_csv(manifest_path, sep="\t", header=0, index_col=None)
+    return pandas.read_csv(manifest_path, sep="\t", dtype={"branch_ids": str})
 
 
 def resolve_manifest_output_path(site_dir, row):
@@ -596,6 +598,12 @@ def is_auxiliary_site_pdf(path):
 def resolve_site_artifacts(dir_out_og, branch_id_str):
     site_dir = resolve_site_output_dir(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
     manifest_df = load_site_output_manifest(site_dir=site_dir)
+    if (
+        manifest_df is not None
+        and "branch_ids" in manifest_df
+        and not manifest_df["branch_ids"].eq(branch_id_str).all()
+    ):
+        raise ValueError(f"Branch IDs in the CSUBST sites manifest do not match the request: {site_dir}")
     pdb_id = extract_pdb_id(indir=site_dir)
 
     site_table_candidates = []
@@ -1506,6 +1514,7 @@ def run_stat_branch2tree_plot(
     csubst_nonsyn_recode="no",
     convergent_sites=None,
     file_tree_plot_out=None,
+    site_artifacts=None,
 ):
     dir_myscript = os.path.realpath(os.path.dirname(__file__))
     file_stat_branch = get_stat_branch_path(dir_og=dir_og, og=og)
@@ -1515,10 +1524,11 @@ def run_stat_branch2tree_plot(
     iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
     input_dir = structural_directory(iqtree_anc_dir) if normalize_csubst_nonsyn_recode(csubst_nonsyn_recode) == "3di20" else Path(iqtree_anc_dir)
     file_csubst_input_fasta = str(input_dir / "csubst.fasta")
-    artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
-    file_csubst_site_tsv = artifacts["site_table_tsv"]
+    if site_artifacts is None:
+        site_artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
+    file_csubst_site_tsv = site_artifacts["site_table_tsv"]
     if file_csubst_site_tsv is None:
-        raise FileNotFoundError(f"CSUBST site table was not found in {artifacts['site_dir']}.")
+        raise FileNotFoundError(f"CSUBST site table was not found in {site_artifacts['site_dir']}.")
     explicit_convergent_sites = convergent_sites is not None
     if convergent_sites is None:
         df_csubst_site = pandas.read_csv(file_csubst_site_tsv, sep="\t", header=0, index_col=None)
@@ -1532,7 +1542,7 @@ def run_stat_branch2tree_plot(
     recoded_site_alignment = prepare_recoded_site_alignment(
         dir_out_og=dir_out_og,
         og=og,
-        site_dir=artifacts["site_dir"],
+        site_dir=site_artifacts["site_dir"],
         codon_alignment_path=file_csubst_input_fasta,
         csubst_nonsyn_recode=csubst_nonsyn_recode,
     )
