@@ -14,8 +14,10 @@ cannot provide independent donor support.
 
 DIAMOND searches unique translated proteins with `--ultra-sensitive`, no masking
 or composition correction, E-value 1000 and no target cap. Exact protein matches
-are also included independently of seeding. All returned sequence pairs pass the
-existing global reciprocal-coverage alignment. Identical sequences share this
+are also included independently of seeding. The ratio of the shorter to the
+longer protein length bounds the reciprocal coverage. Search hits below the
+existing minimum on that bound are counted in the native audit. The remaining
+pairs pass the existing global alignment. Identical sequences share this
 computation, while donor identifiers, native isoforms and genomic copies remain
 distinct. No search hit means no hit under this declared search, not proof of
 biological absence or an exhaustive comparison of every possible alignment.
@@ -45,22 +47,38 @@ The original Miniprot binary must match for raw prediction-cache reuse. Native
 donor alignment, genomic QC and admission run freshly; no native GPU prediction
 is repeated. Complete all species before the ordinary `finalize` command.
 
-For large completed compact stores, add `--producer-source /archive/producer`
-to `native-genomewide-plan` to reuse already validated coding evidence. The
-archived source must match the producer plan and prove unchanged genomic,
-homology, terminal, boundary and native coding-structure decisions. A changed
-UTR parser must reconstruct identical coding paths from each actual frozen
-native GFF. Unknown or changed strict evidence stops this route. Prepared donor
-proteins and every old publication member are freshly byte-verified; strict
-rejections remain recorded. The genomewide donor search and Miniprot structure
-confirmation run freshly. Placement and locus admission run on the combined
-old and new evidence, and admitted CDS pass fresh genomic QC.
+When a `source/workflow/support` archive is available in or next to
+`--previous-output`, the extension tries to reuse previously validated coding
+evidence. The archive must match the producer plan and prove unchanged genomic,
+homology, terminal, boundary and native coding-structure decisions. An explicit
+`--producer-source /archive/producer` requires this proof. With automatic
+discovery, an unavailable or incompatible source uses ordinary raw prediction
+revalidation. A legacy worker, or a changed UTR parser that produces different
+coding paths from that species' frozen native GFF, also uses ordinary
+revalidation. The plan and existing worker audits report the reuse decision.
 
-Completed workers from an identical genomewide scope may be independently copied
-with `--completed-output /data/pilot --completed-producer-source /archive/pilot`.
-Their original plan, source contract and worker receipt remain explicit in
-`completed_native_worker_import.json`. Changed scientific scope, admission rules
-or worker bytes prevent import. Neither route edits its producer generation.
+Prepared inputs and previous worker members used as validated evidence are
+freshly byte-verified. Strict rejections remain recorded. Genomewide donor
+search, Miniprot structure confirmation, placement and admission on the
+combined evidence all run freshly. Admitted CDS pass fresh genomic QC. Appended candidates are written in bounded
+shards in ordinal order. Use `native-genomewide-plan --diagnostics summary` to
+convert retained legacy diagnostic tables into counters and exportable
+unresolved-query records.
+
+During selective replay of a verified compact store, the reader uses a private
+copy of the SQLite body database in the job's temporary directory when that
+directory is on a different filesystem and has enough free space. It compares
+the copied bytes to the frozen receipt before opening SQLite and removes the
+copy on close. If temporary storage fills, the reader continues from the
+verified source database. During admission patching, unchanged copied files
+are checked against their source digests as part of the final manifest scan.
+
+`--completed-output /data/pilot` imports the workers already complete when
+the plan is made, provided their genomewide scientific scope and decision
+rules match. Use `--completed-producer-source /archive/pilot` when the source
+archive is elsewhere. Later workers finishing in the producer do not change
+this set. Each import retains its exact producer plan and worker receipt in
+`completed_native_worker_import.json`. The producer outputs are read-only.
 
 Each worker publishes `oriongeno_genomewide.json`, accounting for every native
 transcript as original overlap, invalid translation, no protein-search hit,

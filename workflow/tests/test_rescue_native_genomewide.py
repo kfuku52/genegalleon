@@ -82,6 +82,43 @@ def test_outside_any_window_and_represented_donors_are_admitted_with_real_search
     assert accepted[0]['evidence']['oriongeno']['alignment']['junction_information_available'] is False
 
 
+@pytest.mark.parametrize('boundary', [False, True])
+def test_coverage_prefilter_preserves_threshold_and_accounts_for_rejected_hits(tmp_path, monkeypatch, boundary):
+    genome, frozen, protein, _ = fixture(tmp_path)
+    donor = protein[:50] + '*'
+    minimum = 50 / len(protein)
+    if not boundary:
+        minimum += 0.000001
+    params = {**refinement.DEFAULTS, 'minimum_coverage': minimum}
+    aligned = []
+    run = rescue.run
+    score = annevo._scored_pairs
+
+    def one_hit(command, directory, label, *args, **kwargs):
+        if label == 'blastp':
+            (directory / 'pairs.tsv').write_text('n0\td0\n')
+        else:
+            return run(command, directory, label, *args, **kwargs)
+
+    def observed(pairs, cpus):
+        pairs = list(pairs)
+        aligned.extend(pairs)
+        return score(pairs, cpus)
+
+    monkeypatch.setattr(rescue, 'run', one_hit)
+    monkeypatch.setattr(annevo, '_scored_pairs', observed)
+    with catalog.indexed_genome(genome) as sequence:
+        models, audit = native.nominate(frozen, 'Target_species', {'Other_species': {'donor': donor}},
+                                       sequence, rescue.OwnershipIndex([]), params, tmp_path)
+    assert len(aligned) == len(models) == int(boundary)
+    assert audit['length_rejected_protein_hits'] == int(not boundary)
+    if not boundary:
+        path, = native.finish_audit(audit, models)['paths']
+        assert path['status'] == 'not_admitted'
+        assert path['reasons'] == ['low_reciprocal_coverage']
+        assert path['candidate_records'] == 0
+
+
 def test_identical_isoforms_keep_both_native_ids_but_one_gene_model(tmp_path):
     models, audit, _ = evaluate(tmp_path, aliases=True)
     assert sum(m['status'] == 'accepted' for m in models) == 1
@@ -224,7 +261,8 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
     old = directory / 'previous'
     args = rescue.parser().parse_args(['plan', '--cds-dir', str(directory/'cds'), '--gff-dir', str(directory/'gff'),
         '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'), '--genome-fallback', '0',
-        '--tree', str(directory/'tree.nwk'), '--output', str(old), '--oriongeno-inputs', str(table)])
+        '--tree', str(directory/'tree.nwk'), '--output', str(old), '--oriongeno-inputs', str(table),
+        '--diagnostics', 'legacy'])
     plan = rescue.build_plan(args)
     for name in names:
         rescue.prepared(old, plan, name)
@@ -264,27 +302,74 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
     rescue.rescue(new, rescue.load(new), target, 2)
     # Validated evidence import must produce the same complete native decisions,
     # while running fresh search/mapping and never replaying the old raw stream.
-    source = directory / 'producer_source'
+    source = directory / 'source'
     shutil.copytree(Path(rescue.__file__).parent, source / 'workflow/support')
     fast = directory / 'validated_extension'
-    fast_plan = native.build_plan(old, fast, producer_source=source)
+    fast_plan = native.build_plan(old, fast, compact_diagnostics=True)
+    assert fast_plan['request']['admission_cache']['contract']['producer_source'] == str(source.resolve())
     native.prepare(fast, fast_plan, 2)
     def forbidden(*args, **kwargs):
         raise AssertionError('validated evidence must not repeat old raw QC')
-    monkeypatch.setattr(rescue, 'verify_prediction_cache', forbidden)
-    rescue.rescue(fast, fast_plan, target, 2)
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, 'verify_prediction_cache', forbidden)
+        rescue.rescue(fast, fast_plan, target, 2)
     assert list(store.iter_models(fast/'rescued'/target)) == list(store.iter_models(new/'rescued'/target))
     fast_audit = json.loads((fast/'rescued'/target/'oriongeno_genomewide.json').read_text())
     assert fast_audit['path_status_counts'] == audit['path_status_counts']
+    fast_worker = fast / 'rescued' / target
+    assert not (fast_worker / 'quality_flags.tsv').exists()
+    detailed = rescue.export_worker_diagnostics(fast, fast_plan, target, directory / 'detailed', 2)
+    for filename in ('audit.tsv', 'quality_flags.tsv'):
+        assert (detailed / filename).read_text() == (new / 'rescued' / target / filename).read_text()
+
+    reuse = importlib.import_module('rescue_native_genomewide_reuse')
+    prove = reuse.prove_contract
+    with monkeypatch.context() as patch:
+        def changed_parser(plan, source):
+            return {**prove(plan, source), 'native_parser_equivalence_required': True}
+
+        def compare_parser(plan, name, genome):
+            if name == target:
+                raise reuse.IncompatibleEvidence('Frozen native coding paths changed under the current GFF parser')
+            return {'native_prediction_available': False}
+
+        patch.setattr(reuse, 'prove_contract', changed_parser)
+        patch.setattr(reuse, 'parser_equivalence', compare_parser)
+        mixed = directory / 'mixed_extension'
+        mixed_plan = native.build_plan(old, mixed)
+        native.prepare(mixed, mixed_plan, 2)
+        rescue.rescue(mixed, mixed_plan, target, 2)
+        rescue.rescue(mixed, mixed_plan, names[1], 2)
+        validation = json.loads((mixed / 'rescued' / target / 'cached_prediction_validation.json').read_text())
+        assert validation['reuse'] == 'raw_prediction_cache'
+        assert 'coding paths changed' in validation['reason']
+        assert (mixed / 'rescued' / names[1] / 'admission_replay.json').is_file()
+        assert list(store.iter_accepted_models(mixed / 'rescued' / target)) == accepted
+
+    archived_file = source / 'workflow/support/rescue_raw_validation.py'
+    archived_file.write_text(archived_file.read_text() + '\n# incompatible archived identity\n')
+    fallback = native.build_plan(old, directory / 'automatic_raw_extension')
+    assert 'producer source differs' in fallback['request']['native_genomewide_parent']['validated_reuse_unavailable']
+    archived_file.write_bytes((Path(rescue.__file__).parent / archived_file.name).read_bytes())
+
     # A new qualified generation may independently import a completed worker,
     # retaining its real producer receipt and performing no fresh science.
     imported = directory / 'imported_extension'
-    imported_plan = native.build_plan(old, imported, producer_source=source,
-        completed_output=new, completed_producer_source=source)
+    imported_plan = native.build_plan(old, imported, completed_output=new)
+    frozen = imported_plan['request']['native_genomewide_worker_imports']['workers']
+    assert set(frozen) == {target}
+    # An unrelated array task can finish after the snapshot was taken.
+    rescue.rescue(new, extended, names[1], 2)
     native.prepare(imported, imported_plan, 2)
+    assert not (imported / 'rescued' / names[1]).exists()
     monkeypatch.setattr(native, 'nominate', forbidden)
     rescue.rescue(imported, imported_plan, target, 2)
     assert list(store.iter_models(imported/'rescued'/target)) == list(store.iter_models(new/'rescued'/target))
     provenance = json.loads((imported/'rescued'/target/'completed_native_worker_import.json').read_text())
     assert provenance['source_receipt_sha256'] == rescue.digest(new/'rescued'/target/'receipt.json')
     assert not provenance['new_scientific_computation']
+
+    worker_receipt = new / 'rescued' / target / 'receipt.json'
+    worker_receipt.write_bytes(worker_receipt.read_bytes() + b'\n')
+    with pytest.raises(ValueError, match='worker generations changed'):
+        reuse.verify_completed(imported_plan)

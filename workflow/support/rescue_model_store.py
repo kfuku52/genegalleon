@@ -6,6 +6,7 @@ The manifest is an index, not an independent trust anchor: verified readers bind
 it and their consumed members to the enclosing producer receipt. A streaming
 reader must be exhausted to complete its checksum and generation fence.
 """
+import errno
 import gzip
 import hashlib
 import io
@@ -18,7 +19,7 @@ import sys
 import tempfile
 from collections import OrderedDict, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 from itertools import batched, chain, islice
 from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
@@ -613,6 +614,31 @@ def _readonly(path):
     return sqlite3.connect(Path(path).as_uri() + "?mode=ro&immutable=1", uri=True)
 
 
+@contextmanager
+def _open_body_database(path, expected=None):
+    """Open a private, byte-verified copy for selective replay on shared storage."""
+    with ExitStack() as resources:
+        readable = path
+        if expected is not None:
+            source = _stat(path)
+            scratch = Path(tempfile.gettempdir())
+            if scratch.stat().st_dev != source[0] and shutil.disk_usage(scratch).free >= source[2]:
+                try:
+                    directory = resources.enter_context(tempfile.TemporaryDirectory(
+                        prefix="gg-model-bodies-", dir=scratch))
+                    copied = Path(directory) / path.name
+                    shutil.copyfile(path, copied)
+                except OSError as error:
+                    if error.errno not in {errno.ENOSPC, errno.EDQUOT}:
+                        raise
+                    resources.close()
+                else:
+                    if _digest(copied) != expected or _stat(path) != source:
+                        raise ValueError("Model-store body database changed during scratch copy")
+                    readable = copied
+        yield resources.enter_context(closing(_readonly(readable)))
+
+
 class _Bodies:
     def __init__(self, db, codec):
         self.db = db
@@ -883,15 +909,15 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
             yield from _partials(root, store, manifest, key)
         elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
               and len(manifest["shards"]) >= scan_workers * 2):
-            with closing(_readonly(store / "bodies.sqlite")) as db:
+            with _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
                 for envelope in _selected_shard_rows(prefix, manifest, paths, key["files"], context_filter, scan_workers):
                     record = bodies.unpack(envelope, context_owned=True)
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
         else:
-            db = _readonly(store / "bodies.sqlite")
-            try:
+            checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and context_filter is not None else None
+            with _open_body_database(store / "bodies.sqlite", checksum) as db:
                 bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
                     count = 0
@@ -922,8 +948,6 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                         raise ValueError("Model-store shard count changed")
                 if ordinal != manifest["counts"]["models"]:
                     raise ValueError("Model-store candidate count changed")
-            finally:
-                db.close()
     if key is not None:
         _check_key(directory, key, kind)
         if any(_stat(path) != stats[member] for member, path in paths.items()):
@@ -1026,7 +1050,9 @@ def iter_model_items(directory, *, context_filter=None, frozen_key=None, verific
     DNA bodies need not be restored, but every raw shard and body database is
     freshly hashed. Exhaust before consuming decisions or publishing a result.
     Parallel scans require a picklable predicate without side effects and use
-    bounded batches of private scratch files for selected rows.
+    bounded batches of private scratch files for selected rows. A selective
+    scan uses a checksum-verified body database copy when the temporary
+    directory is on a separate filesystem with sufficient space.
     """
     if type(scan_workers) is not int or scan_workers < 1:
         raise ValueError("Model-store scan workers must be a positive integer")

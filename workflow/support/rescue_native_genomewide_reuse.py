@@ -13,6 +13,18 @@ import sys
 from pathlib import Path
 
 
+class IncompatibleEvidence(ValueError):
+    """An intact producer cannot provide the required equivalence proof."""
+
+
+def archived_sources(output):
+    """Discover archived code next to or inside its producer output."""
+    output = Path(output).resolve(strict=True)
+    for source in (output.parent / 'source', output / 'source'):
+        if (source / 'workflow/support').is_dir():
+            yield source
+
+
 def _r():
     try:
         import rescue_gene_models
@@ -62,7 +74,7 @@ def caller_contract(support):
     tree=ast.parse((support/'rescue_gene_models.py').read_text())
     nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='checked_prediction']
     if len(nodes)!=1:
-        raise ValueError('Coding QC requires one checked-prediction caller')
+        raise IncompatibleEvidence('Coding QC requires one checked-prediction caller')
     function=nodes[0]
     if any(isinstance(n,ast.Attribute) and n.attr=='checked_prediction' for n in ast.walk(function)):
         expected=ast.parse('''def checked_prediction(model):
@@ -72,12 +84,12 @@ def caller_contract(support):
         engine=sys.modules[__name__])
 ''').body[0]
         if ast.dump(function,include_attributes=False)!=ast.dump(expected,include_attributes=False):
-            raise ValueError('Coding QC worker context changed')
+            raise IncompatibleEvidence('Coding QC worker context changed')
         helper=support/'rescue_cached_validation.py'
         functions=[n for n in ast.parse(helper.read_text()).body
                    if isinstance(n,ast.FunctionDef) and n.name=='checked_prediction']
         if len(functions)!=1:
-            raise ValueError('Coding QC worker helper is unavailable')
+            raise IncompatibleEvidence('Coding QC worker helper is unavailable')
         function=functions[0]
     ignored={ast.dump(ast.parse(text).body[0],include_attributes=False) for text in
              ('evidence = model["evidence"]','r = engine or _r()')}
@@ -92,7 +104,7 @@ def prove_contract(previous_plan,producer_source):
     current=Path(r.__file__).resolve().parent
     request=previous_plan['request']
     if not request.get('oriongeno') or request.get('annevo') or request.get('gemoma_jar'):
-        raise ValueError('Validated native extension requires an Orion-only non-GeMoMa producer')
+        raise IncompatibleEvidence('Validated native extension requires an Orion-only non-GeMoMa producer')
     before,after=request['tools'],r.identities()
     # These modules serve input provenance, cache replay or noncoding UTRs, not
     # the reused genomic/terminal/boundary/donor decisions. Actual source inputs
@@ -111,7 +123,7 @@ def prove_contract(previous_plan,producer_source):
     if 'cached_validation_implementation' in before:
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
         if before['cached_validation_implementation']!=after['cached_validation_implementation']:
-            raise ValueError('The producer cached-validation dispatcher changed')
+            raise IncompatibleEvidence('The producer cached-validation dispatcher changed')
     if request.get('oriongeno_genomewide'):
         bindings['rescue_native_genomewide.py']='native_genomewide_implementation'
     proof=r.FreshDigestBatch()
@@ -122,20 +134,24 @@ def prove_contract(previous_plan,producer_source):
     for name,field in bindings.items():
         value=observed[str(old/name)]
         if before.get(field)!=value:
-            raise ValueError('Native extension producer source differs from its plan: '+name)
+            raise IncompatibleEvidence('Native extension producer source differs from its plan: '+name)
         old_files[str(old/name)]=value
     for name in strict:
         if observed[str(old/name)]!=observed[str(current/name)]:
-            raise ValueError('Native extension coding evidence kernel changed: '+name)
+            raise IncompatibleEvidence('Native extension coding evidence kernel changed: '+name)
     for name,names in functions.items():
-        if _definitions(old/name,names)!=_definitions(current/name,names):
-            raise ValueError('Native extension coding decision function changed: '+name)
+        try:
+            previous_functions = _definitions(old / name, names)
+        except ValueError as exc:
+            raise IncompatibleEvidence('Native extension coding decision function unavailable: ' + name) from exc
+        if previous_functions != _definitions(current / name, names):
+            raise IncompatibleEvidence('Native extension coding decision function changed: ' + name)
     if caller_contract(old)!=caller_contract(current):
-        raise ValueError('Native extension checked-prediction recipe changed')
+        raise IncompatibleEvidence('Native extension checked-prediction recipe changed')
     if request.get('oriongeno_genomewide'):
         names=('nominate','transfer_structure','finish_audit')
         if _definitions(old/'rescue_native_genomewide.py',names)!=_definitions(current/'rescue_native_genomewide.py',names):
-            raise ValueError('The completed genomewide search/structure decisions changed')
+            raise IncompatibleEvidence('The completed genomewide search/structure decisions changed')
     permitted=set(replay.ALLOWED_TOOL_CHANGES)|{'verify_prediction_cache_implementation','transcript_utr_implementation',
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
@@ -146,7 +162,7 @@ def prove_contract(previous_plan,producer_source):
     # frozen selection and requires the complete plan scope unchanged; no tree
     # command executes during validated extension or completed-worker import.
     if any(before.get(k)!=after.get(k) for k in before.keys()|after.keys() if k not in permitted):
-        raise ValueError('Native extension coding runtime/tool identity changed')
+        raise IncompatibleEvidence('Native extension coding runtime/tool identity changed')
     proof.check()
     return dict(schema=1,scope='native_genomewide_extension',producer_source=str(old.parent.parent),
         source_files=old_files,current_implementation=after['implementation'],
@@ -170,7 +186,7 @@ def scientific_signature(plan):
     return result
 
 
-def freeze_completed(plan,output,producer_source):
+def freeze_completed(plan, output, producer_source, *, names=None):
     r=_r()
     previous=Path(output).resolve(strict=True)
     prior=r.load(previous,inspect_only=True)
@@ -178,28 +194,49 @@ def freeze_completed(plan,output,producer_source):
         raise ValueError('Completed-worker reuse requires the same genomewide search scope')
     if scientific_signature(prior)!=scientific_signature(plan):
         raise ValueError('Completed native workers differ from the new scientific scope')
-    contract=prove_contract(prior,producer_source)
+    if producer_source is None:
+        sources = list(archived_sources(previous))
+        if not sources:
+            raise ValueError('Completed native workers require their archived producer source')
+        for source in sources:
+            try:
+                contract = prove_contract(prior, source)
+                break
+            except (IncompatibleEvidence, FileNotFoundError):
+                continue
+        else:
+            raise ValueError('No archived source matches the completed native workers')
+    else:
+        contract = prove_contract(prior, producer_source)
     old=Path(contract['producer_source'])/'workflow/support'
     current=Path(r.__file__).parent
-    for name in ('rescue_coding_paths.py','rescue_additional_candidates.py','rescue_model_quality.py'):
-        if r.digest(old/name)!=r.digest(current/name):
-            raise ValueError('Completed-worker admission rules changed: '+name)
-    frozen=r.frozen_prediction_cache_key(previous)
+    for name in ('rescue_coding_paths.py', 'rescue_additional_candidates.py', 'rescue_model_quality.py'):
+        if r.digest(old / name) != r.digest(current / name):
+            raise ValueError('Completed-worker admission rules changed: ' + name)
+    decisions = ('consolidate', 'revalidate_retained_coding_paths', 'split_model_candidates',
+                 'automatic_model_repair_targets', 'validate_model_repair_predictions', 'model_repair_candidates')
+    if _definitions(old / 'rescue_gene_models.py', decisions) != _definitions(current / 'rescue_gene_models.py', decisions):
+        raise ValueError('Completed-worker admission or repair decisions changed')
+    frozen = r.frozen_prediction_cache_key(previous, names)
+    r.require_same_key(frozen['plan_sha256'], r.plan_digest(previous, prior))
     if not frozen['species']:
         raise ValueError('No completed native workers are available to reuse')
     return {'root':str(previous),'plan_sha256':frozen['plan_sha256'],'contract':contract,
             'workers':{name:value['receipt_sha256'] for name,value in frozen['species'].items()}}
 
 
-def verify_completed(plan):
+def verify_completed(plan, *, name=None):
     frozen=plan['request'].get('native_genomewide_worker_imports')
     if frozen is None:
         return
-    if frozen!=freeze_completed(plan,frozen['root'],frozen['contract']['producer_source']):
+    expected = frozen if name is None else {**frozen, 'workers': {name: frozen['workers'][name]}}
+    current = freeze_completed(plan, frozen['root'], frozen['contract']['producer_source'],
+                               names=expected['workers'])
+    if expected != current:
         raise ValueError('Completed native worker generations changed')
 
 
-def import_worker(root,plan,name,cpus):
+def import_worker(root, plan, name, cpus, *, dependencies):
     """Publish independent copies with explicit original-producer provenance."""
     r=_r()
     frozen=plan['request']['native_genomewide_worker_imports']
@@ -210,24 +247,34 @@ def import_worker(root,plan,name,cpus):
     source=previous/'rescued'/name
     if r.digest(source/'receipt.json')!=frozen['workers'][name]:
         raise ValueError('Completed native worker receipt changed')
-    old_key=r.rescue_key(previous,prior,name)
-    new_key=r.rescue_key(root,plan,name)
+    old_key = r.rescue_key(previous, prior, name, dependency_snapshot=dependencies)
+    new_key = r.rescue_key(root, plan, name, dependency_snapshot=dependencies)
+
     def guard():
-        verify_completed(plan)
-        r.require_same_key(new_key,r.rescue_key(root,plan,name))
+        dependencies.check_all()
+        verify_completed(plan, name=name)
+        r.require_same_key(new_key, r.rescue_key(root, plan, name, dependency_snapshot=dependencies))
         r.require_same_key(frozen['plan_sha256'],r.plan_digest(previous,prior))
         r.require_same_key(frozen['workers'][name],r.digest(source/'receipt.json'))
     def build(tmp):
-        r.copy_verified_comparison(source,tmp,old_key,cpus)
-        r.atomic_json(tmp/'completed_native_worker_import.json',{
-            'schema':1,'source_worker':str(source),'source_plan_sha256':frozen['plan_sha256'],
-            'source_receipt_sha256':frozen['workers'][name],'source_contract':frozen['contract'],
-            'scientific_scope_identical':True,'new_scientific_computation':False})
+        contract = frozen['contract']
+        audit = {'schema': 1, 'source_worker': str(source), 'source_plan_sha256': frozen['plan_sha256'],
+                 'source_receipt_sha256': frozen['workers'][name], 'source_contract': contract,
+                 'scientific_scope_identical': True, 'new_scientific_computation': False}
+        if contract['native_parser_equivalence_required']:
+            from gene_model_catalog import indexed_genome
+
+            r.verify_sources(plan, [name], ['genome', 'fasta', 'gff'])
+            with indexed_genome(plan['request']['sources'][name]['genome']) as genome:
+                audit['native_coding_parser'] = parser_equivalence(plan, name, genome, contract=contract)
+        r.copy_verified_comparison(source, tmp, old_key, cpus, receipt_sha256=frozen['workers'][name])
+        r.atomic_json(tmp / 'completed_native_worker_import.json', audit)
     return r.stage(root,Path('rescued')/name,new_key,build,guard,hash_workers=cpus)
 
 
-def parser_equivalence(plan,name,genome):
-    contract=plan['request']['admission_cache']['contract']
+def parser_equivalence(plan, name, genome, *, contract=None):
+    if contract is None:
+        contract = plan['request']['admission_cache']['contract']
     if contract['scope']!='native_genomewide_extension':
         raise ValueError('Native extension parser proof has the wrong scope')
     frozen=plan['request']['oriongeno']
@@ -257,27 +304,28 @@ print(json.dumps({'count':len(rows),'sha256':hashlib.sha256(json.dumps(rows,sort
     result=subprocess.run([sys.executable,'-B','-c',code,str(old),path,os.fsdecode(genome.filename)],
                           capture_output=True,text=True,check=True)
     previous=json.loads(result.stdout)
-    if previous!={'count':len(rows),'sha256':fingerprint(rows)}:
-        raise ValueError('Frozen native coding paths changed under the current GFF parser')
     native.verify_inputs(frozen,[name])
+    if previous!={'count':len(rows),'sha256':fingerprint(rows)}:
+        raise IncompatibleEvidence('Frozen native coding paths changed under the current GFF parser')
     return {'native_prediction_available':True,'coding_paths_identical':True,
             'native_paths':len(rows),'coding_paths_sha256':previous['sha256']}
 
 
-def fresh_candidates(root,plan,name,proteins,genome,ownership,params,directory,cpus,previous):
+def fresh_candidates(plan, name, proteins, genome, ownership, params, directory, cpus, previous, *, parser_proof=None):
     r=_r()
     import annevo_gene_models
     import rescue_cached_validation
     import rescue_native_genomewide as native
-    parser_proof=parser_equivalence(plan,name,genome)
-    models,audit=native.nominate(plan['request']['oriongeno'],name,proteins,genome,ownership,params,directory,cpus=cpus)
+    if parser_proof is None:
+        parser_proof = parser_equivalence(plan, name, genome)
     memo=r.RawValidationMemo(r.validate_model,genome,plan['request']['sources'][name]['genetic_code'],params,
                              candidate_homology=r.homology_problems)
     def check(model):
         evidence=model['evidence']
         return rescue_cached_validation.checked_prediction(model,memo,genome,
             plan['request']['sources'][name]['genetic_code'],params,proteins[evidence['donor']][evidence['query']],engine=r)
-    checked=[check(model) for model in models]
+    checked, audit = native.nominate(plan['request']['oriongeno'], name, proteins, genome, ownership,
+                                    params, directory, cpus=cpus, validate=check)
     transferred=native.transfer_structure(checked,proteins,genome,
         plan['request']['sources'][name]['genetic_code'],params,directory,cpus=cpus)
     transfers=[check(model) for model in transferred]

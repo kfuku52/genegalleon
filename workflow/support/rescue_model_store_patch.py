@@ -8,8 +8,9 @@ import os
 import shutil
 import tempfile
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor
-from contextlib import ExitStack
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import ExitStack, nullcontext
+from itertools import batched
 from multiprocessing import get_context
 from pathlib import Path
 
@@ -21,14 +22,14 @@ except ImportError:
     from .stage_output_hashes import hash_paths
 
 
-def _copy(source, destination, expected):
+def _copy(source, destination, expected, *, verify_destination=True):
     checksum = hashlib.sha256()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with source.open('rb') as inp, destination.open('xb') as out:
         for block in iter(lambda: inp.read(1024 * 1024), b''):
             checksum.update(block)
             out.write(block)
-    if checksum.hexdigest() != expected or store._digest(destination) != expected:
+    if checksum.hexdigest() != expected or (verify_destination and store._digest(destination) != expected):
         raise ValueError('Model-store changed during immutable copying')
 
 
@@ -120,6 +121,90 @@ def _patch_shards(source, output, shards, manifest, ordered_changes, changes, wo
             yield from pending.popleft().result()
 
 
+APPEND_SHARD_BYTES = 32 * 1024 * 1024
+BODY_DB_BATCH = 128
+
+
+def _write_packed_shard(path, packed, codec, level):
+    with store._writer(path, codec, level) as handle:
+        handle.write(packed)
+
+
+def _append_models(directory, count, appended, manifest, body_db, body_cache, workers):
+    """Pack once in order, overlapping bounded shard compression with SQLite writes."""
+    codec, level = manifest['codec'], manifest['compression_level']
+    extension = 'gz' if codec == 'gzip' else 'zst'
+    shards, partials = [], []
+    packed = bytearray()
+    bodies = {}
+    pending = deque()
+    first, rows = count, 0
+    writers = min(3, workers - 1)
+
+    def flush(executor):
+        nonlocal packed, first, rows
+        path = f'models-append-{first:012d}.jsonl.{extension}'
+        args = directory / path, packed, codec, level
+        if executor is None:
+            _write_packed_shard(*args)
+        else:
+            if len(pending) == writers:
+                pending.popleft().result()
+            pending.append(executor.submit(_write_packed_shard, *args))
+        shards.append({'path': path, 'first': first, 'count': rows})
+        packed = bytearray()
+        first += rows
+        rows = 0
+
+    context = ThreadPoolExecutor(max_workers=writers) if writers else nullcontext()
+    with context as executor:
+        for ordinal, record in enumerate(appended, count):
+            body, sha, row, _ = store._encode_model(record, ordinal)
+            if bodies.setdefault(sha, body) != body:
+                raise ValueError('Model-store body hash collision')
+            if len(bodies) == BODY_DB_BATCH or len(packed) + len(row) > APPEND_SHARD_BYTES:
+                _insert_appended_bodies(body_db, bodies, body_cache, level)
+                bodies.clear()
+            if packed and len(packed) + len(row) > APPEND_SHARD_BYTES:
+                flush(executor)
+            if record.get('partial_evidence', {}).get('partial'):
+                partials.append((ordinal, len(manifest['shards']) + len(shards), rows))
+            packed.extend(row)
+            rows += 1
+        _insert_appended_bodies(body_db, bodies, body_cache, level)
+        if packed:
+            flush(executor)
+        for result in pending:
+            result.result()
+    return shards, partials
+
+
+def _insert_appended_bodies(db, bodies, cache, level):
+    """Keep a single SQLite writer, checking collisions before batched insertion."""
+    for rows in batched(bodies.items(), BODY_DB_BATCH):
+        lookup = {}
+        for sha, body in rows:
+            if sha not in cache.cache:
+                lookup[sha] = body
+            elif cache.cache[sha] != body:
+                raise ValueError('Model-store body hash collision')
+            else:
+                cache.cache.move_to_end(sha)
+        if not lookup:
+            continue
+        parameters = ','.join('?' for _ in lookup)
+        found = dict(db.execute(f'SELECT sha,data FROM bodies WHERE sha IN ({parameters})', tuple(lookup)))
+        inserts = []
+        for sha, body in lookup.items():
+            if sha not in found:
+                inserts.append((sha, store._compress(body, cache.codec, level)))
+            elif store._decompress(found[sha], cache.codec, expected_size=len(body)) != body:
+                raise ValueError('Model-store body hash collision')
+            cache.remember(sha, body)
+        db.executemany('INSERT INTO bodies VALUES (?,?)', inserts)
+
+
+
 def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,
                       append_partial_evidence=False, publication_workers=1):
     """Amend decisions without rewriting unselected DNA bodies or candidates.
@@ -151,8 +236,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
     if any(type(i) is not int or not 0 <= i < count for i in changes):
         raise ValueError('Patch ordinal outside the original model publication')
     appended = list(appended)
-    new_partials = [i for i, m in enumerate(appended) if m.get('partial_evidence', {}).get('partial')]
-    if new_partials and not append_partial_evidence:
+    if not append_partial_evidence and any(m.get('partial_evidence', {}).get('partial') for m in appended):
         raise ValueError('Admission append cannot change the partial reference stream')
     target = Path(destination) / 'model_store'
     if target.exists() or target.is_symlink():
@@ -188,10 +272,10 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         def copy_shard(path):
             name = str(path.relative_to(source_store))
             expected = manifest['files'][name]
-            _copy(path, temporary / name, expected)
+            _copy(path, temporary / name, expected, verify_destination=False)
             return expected
 
-        hash_paths(source_store, unchanged, workers=publication_workers, hash_function=copy_shard)
+        deferred = hash_paths(source_store, unchanged, workers=publication_workers, hash_function=copy_shard)
         normalized.update(_patch_shards(source_store, temporary, affected_shards, manifest,
                                         ordered_changes, changes, publication_workers))
         _copy(source_store / 'bodies.sqlite', temporary / 'bodies.sqlite', manifest['files']['bodies.sqlite'])
@@ -203,49 +287,43 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         for ordinal in sorted(normalized):
             body, _ = store._pack(changes[ordinal])
             store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'], body_cache)
-        appended_shard = None
-        if appended:
-            suffix = 'zst' if manifest['codec'] == 'zstd' else 'gz'
-            member = f'models-{len(manifest["shards"]):06d}.jsonl.{suffix}'
-            appended_shard = {'path': member, 'first': count, 'count': len(appended)}
-            with store._writer(temporary / member, manifest['codec'], manifest['compression_level']) as out:
-                for ordinal, model in enumerate(appended, count):
-                    # Validate the final envelope before inserting its body,
-                    # then retain neither serialized object beyond this row.
-                    body, envelope = store._pack(model, _validate_envelope=False)
-                    envelope['ordinal'] = ordinal
-                    encoded = store._json(envelope) + b'\n'
-                    store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'], body_cache)
-                    out.write(encoded)
+        new_shards, new_partials = _append_models(temporary, count, appended, manifest, body_db, body_cache,
+                                                   publication_workers)
         output['counts']['bodies'] = body_db.execute('SELECT COUNT(*) FROM bodies').fetchone()[0]
         body_db.commit()
         body_db.close()
         databases.remove(body_db)
         del body_cache
-        _copy(source_store / 'partial.sqlite', temporary / 'partial.sqlite', manifest['files']['partial.sqlite'])
+        partial_expected = manifest['files']['partial.sqlite']
+        _copy(source_store / 'partial.sqlite', temporary / 'partial.sqlite', partial_expected,
+              verify_destination=bool(new_partials))
         if new_partials:
             partial_db = store.sqlite3.connect(temporary / 'partial.sqlite')
             databases.append(partial_db)
             original_count = partial_db.execute('SELECT COUNT(*) FROM refs').fetchone()[0]
             if original_count != manifest['counts']['partial']:
                 raise ValueError('Original partial reference count changed')
-            for position, line in enumerate(new_partials, original_count):
-                partial_db.execute('INSERT INTO refs VALUES (?,?,?,?)',
-                                   (position, count + line, len(manifest['shards']), line))
+            partial_db.executemany('INSERT INTO refs VALUES (?,?,?,?)',
+                                   ((position, *ref) for position, ref in enumerate(new_partials, original_count)))
             partial_db.commit()
             partial_db.close()
             databases.remove(partial_db)
             output['counts']['partial'] += len(new_partials)
+        else:
+            deferred['partial.sqlite'] = partial_expected
         known = {'bodies.sqlite', 'partial.sqlite', 'accepted.sqlite', 'revision.sqlite',
                  *[s['path'] for s in manifest['shards']]}
         for name in manifest['files'].keys() - known:
-            _copy(source_store / name, temporary / name, manifest['files'][name])
-        if appended_shard is not None:
-            output['shards'].append(appended_shard)
-            if new_partials:
-                previous = output['scopes']['partial'][1:]
-                output['scopes']['partial'] = ['partial.sqlite', 'bodies.sqlite',
-                    *(name for name in previous if name != 'bodies.sqlite'), appended_shard['path']]
+            expected = manifest['files'][name]
+            _copy(source_store / name, temporary / name, expected, verify_destination=False)
+            deferred[name] = expected
+        output['shards'].extend(new_shards)
+        if new_partials:
+            previous = output['scopes']['partial'][1:]
+            partial_shards = sorted({shard for _, shard, _ in new_partials})
+            output['scopes']['partial'] = ['partial.sqlite', 'bodies.sqlite',
+                *(name for name in previous if name != 'bodies.sqlite'),
+                *(output['shards'][shard]['path'] for shard in partial_shards)]
         overlay_counts = {}
         for kind, rows in (('accepted', sorted(accepted.items())), ('revision', enumerate(revisions))):
             db = store._overlay(temporary / (kind + '.sqlite'))
@@ -263,6 +341,8 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         output['scopes']['models'] = ['bodies.sqlite', *[s['path'] for s in output['shards']]]
         files = (p for p in temporary.rglob('*') if p.is_file())
         hashes = hash_paths(temporary, files, workers=publication_workers, hash_function=store._digest)
+        if any(hashes.get(name) != expected for name, expected in deferred.items()):
+            raise ValueError('Unchanged model-store member differs at publication')
         output['files'] = dict(sorted(hashes.items()))
         (temporary / 'manifest.json').write_bytes(store._json(output) + b'\n')
         store._check_key(source, key, 'models')

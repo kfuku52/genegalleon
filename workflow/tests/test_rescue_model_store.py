@@ -1,5 +1,6 @@
 """Lossless compact publications, selective integrity, and legacy interoperability."""
 import copy
+import errno
 import gzip
 import hashlib
 import json
@@ -57,6 +58,59 @@ def test_exact_all_records_fields_order_and_raw_binding(tmp_path, codec):
     assert manifest["counts"]["bodies"] == 1
     assert manifest["codec"] in {"gzip", "zstd"}
     assert list(store.iter_models(directory / "model_store")) == original
+
+
+def even_candidate(context):
+    return int(context["query"].removeprefix("query")) % 2 == 0
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("fault", [None, "full", "corrupt", "source_replaced"])
+def test_selective_body_database_uses_verified_scratch(tmp_path, monkeypatch, workers, fault):
+    records = [model(i) for i in range(8)]
+    directory, _ = published(tmp_path, records)
+    original = directory / "model_store/bodies.sqlite"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    real_stat, real_copy, real_open = store._stat, store.shutil.copyfile, store._readonly
+    opened = []
+
+    def separate_device(path):
+        stats = real_stat(path)
+        return (-1, *stats[1:]) if path == original else stats
+
+    def copy_body(source, destination):
+        if fault == "full":
+            destination.write_bytes(b"partial")
+            raise OSError(errno.ENOSPC, "No space")
+        real_copy(source, destination)
+        if fault == "corrupt":
+            destination.write_bytes(b"corrupt")
+        elif fault == "source_replaced":
+            replacement = original.with_name("replacement.sqlite")
+            real_copy(source, replacement)
+            replacement.replace(original)
+
+    def traced(path):
+        opened.append(path)
+        if fault == "full":
+            assert not any(scratch.glob("gg-model-bodies-*"))
+        return real_open(path)
+
+    monkeypatch.setattr(store, "_stat", separate_device)
+    monkeypatch.setattr(store.tempfile, "gettempdir", lambda: str(scratch))
+    monkeypatch.setattr(store.shutil, "copyfile", copy_body)
+    monkeypatch.setattr(store, "_readonly", traced)
+    rows = store.iter_model_items(directory, context_filter=even_candidate, scan_workers=workers)
+    if fault in {"corrupt", "source_replaced"}:
+        with pytest.raises(ValueError, match="changed during scratch copy"):
+            list(rows)
+        assert not opened
+    else:
+        assert list(rows) == [(i, records[i]) for i in range(0, len(records), 2)]
+        assert len(opened) == 1
+        assert opened[0] == original if fault == "full" else scratch in opened[0].parents
+    assert not any(scratch.iterdir())
 
 
 def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):

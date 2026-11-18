@@ -1544,12 +1544,31 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
     if phase != "all" and any(plan["request"].get(k) for k in
                               ("admission_cache", "gemoma_jar", "oriongeno_genomewide")):
         raise ValueError("Split miniprot rescue does not support admission replay, GeMoMa or native genome-wide transfer")
-    if plan['request'].get('admission_cache'):
-        if name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
-            import rescue_native_genomewide_reuse
-            return rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
+    request = plan['request']
+    if name in request.get('native_genomewide_worker_imports', {}).get('workers', {}):
+        import rescue_native_genomewide_reuse
+        return rescue_native_genomewide_reuse.import_worker(root, plan, name, cpus, dependencies=dependencies)
+    admission = request.get('admission_cache')
+    revalidation_reason = request.get('native_genomewide_parent', {}).get('validated_reuse_unavailable')
+    if admission:
         import rescue_admission_replay
-        return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies)
+        parser_proof = None
+        if admission.get('automatic'):
+            import rescue_native_genomewide_reuse
+            if admission['species'][name].get('model_store', {}).get('format') != rescue_admission_replay.store.FORMAT:
+                revalidation_reason = 'Producer worker lacks a compact validated model store'
+            elif admission['contract']['native_parser_equivalence_required']:
+                from gene_model_catalog import indexed_genome
+
+                verify_sources(plan, [name], ['genome', 'fasta', 'gff'])
+                with indexed_genome(request['sources'][name]['genome']) as genome:
+                    try:
+                        parser_proof = rescue_native_genomewide_reuse.parser_equivalence(plan, name, genome)
+                    except rescue_native_genomewide_reuse.IncompatibleEvidence as exc:
+                        revalidation_reason = str(exc)
+        if revalidation_reason is None:
+            return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies,
+                                                 parser_proof=parser_proof)
     storage = output_storage(plan)
     diagnostics = storage.get("diagnostics", "legacy")
     donors = [name, *plan["donors"][name]]
@@ -1714,6 +1733,9 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 cached_validation = {}
                 validated.extend(rescue_cached_validation.validate_cached(old_models, genome,
                     source['genetic_code'], params, proteins, cpus, checked_prediction, cached_validation))
+                if revalidation_reason:
+                    cached_validation.update(reuse='raw_prediction_cache', reason=revalidation_reason,
+                                             source_receipt_sha256=cached.frozen['receipt_sha256'])
                 atomic_json(tmp / 'cached_prediction_validation.json', cached_validation)
             for model in predictions:
                 region = by_id[model["query"]]
@@ -3166,9 +3188,10 @@ def parser():
     extension = sub.add_parser('native-genomewide-plan', help='Extend a completed rescue with candidate-first OrionGeno evaluation')
     extension.add_argument('--previous-output', type=Path, required=True)
     extension.add_argument('--output', type=Path, required=True)
-    extension.add_argument('--producer-source', type=Path, help='Reuse completed validated evidence only after proving unchanged coding QC')
+    extension.add_argument('--producer-source', type=Path, help='Require validated reuse using this archived source instead of automatic discovery')
+    extension.add_argument('--diagnostics', choices=('summary',), help='Convert legacy diagnostic tables to exportable summaries')
     extension.add_argument('--completed-output', type=Path, help='Import completed workers from the identical genomewide scientific scope')
-    extension.add_argument('--completed-producer-source', type=Path, help='Archived source of those completed genomewide workers')
+    extension.add_argument('--completed-producer-source', type=Path, help='Archived source of those completed genomewide workers, if outside the output or its parent')
     extension = sub.add_parser('native-genomewide-prepare', help='Import the extension plan\'s frozen prepared and comparison stages')
     extension.add_argument('--output', type=Path, required=True)
     extension.add_argument('--cpus', type=int, default=1)
@@ -3261,8 +3284,13 @@ def main():
     if args.command == 'native-genomewide-plan':
         import rescue_native_genomewide
         plan = rescue_native_genomewide.build_plan(args.previous_output, args.output,producer_source=args.producer_source,
-            completed_output=args.completed_output,completed_producer_source=args.completed_producer_source)
-        print(json.dumps({'species': len(plan['species']), 'native_genomewide': True}))
+            completed_output=args.completed_output,completed_producer_source=args.completed_producer_source,
+            compact_diagnostics=args.diagnostics == 'summary')
+        request = plan['request']
+        print(json.dumps({'species': len(plan['species']), 'native_genomewide': True,
+                          'validated_evidence': 'admission_cache' in request,
+                          'completed_workers': len(request.get('native_genomewide_worker_imports', {}).get('workers', {})),
+                          'revalidation_reason': request.get('native_genomewide_parent', {}).get('validated_reuse_unavailable')}))
         return
     if args.command == "self-align":
         if args.cpus < 1 or not 0 < args.cscore <= 1:

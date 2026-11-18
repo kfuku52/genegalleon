@@ -29,7 +29,7 @@ def record(index, body_group_size, model):
 
 
 def worker(args):
-    store, model, _ = modules()
+    store, model, receipt = modules()
     source=Path(args.source)
     spec=importlib.util.spec_from_file_location('benchmark_patch',args.implementation)
     patch=importlib.util.module_from_spec(spec)
@@ -41,9 +41,18 @@ def worker(args):
     started=time.perf_counter()
     result=patch.patch_model_store(source,Path(args.destination),changes,appended=appended,
                                   append_partial_evidence=bool(appended))
+    elapsed = time.perf_counter() - started
     maximum=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    print(json.dumps({'wall_seconds':time.perf_counter()-started,'peak_rss_bytes':maximum if sys.platform=='darwin' else maximum*1024,
-                      'output_sha256':hashlib.sha256(store._json(result)).hexdigest(),'output_files':len(result['files'])}))
+    destination = Path(args.destination)
+    receipt(destination)
+    semantic = hashlib.sha256()
+    for read in (store.iter_models, store.iter_accepted_models, store.iter_partial_models, store.iter_revision_models):
+        semantic.update(read.__name__.encode() + b'\n')
+        for row in read(destination):
+            semantic.update(store._json(row) + b'\n')
+    print(json.dumps({'wall_seconds':elapsed,'peak_rss_bytes':maximum if sys.platform=='darwin' else maximum*1024,
+                      'output_sha256':hashlib.sha256(store._json(result)).hexdigest(),
+                      'semantic_sha256':semantic.hexdigest(),'output_files':len(result['files'])}))
 
 
 def main():
@@ -89,7 +98,7 @@ def main():
                          '--source',str(source),'--destination',str(base/(label+'-'+str(i)))]
                 result=subprocess.run(command,capture_output=True,text=True,check=True)
                 measurements[label].append(json.loads(result.stdout))
-        assert len({x['output_sha256'] for runs in measurements.values() for x in runs})==1
+        assert len({x['semantic_sha256'] for runs in measurements.values() for x in runs})==1
         report={'records':args.records,'changed_records':len(range(0,args.records,args.change_every)),
                           'appended_records':args.appended_records,'body_group_size':args.body_group_size,
                           'sequence_nt':12006,'shards':len(before['shards']),
