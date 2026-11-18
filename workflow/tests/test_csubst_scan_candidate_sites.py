@@ -802,12 +802,30 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path, long
         assert mod.archive_matches_source(archive, summary)
 
     original_summary = summary.read_text(encoding="utf-8")
-    summary.write_text(original_summary + "\n", encoding="utf-8")
-    assert not mod.archive_matches_source(archive, summary)
-    summary.write_text(original_summary, encoding="utf-8")
-    assert mod.archive_matches_source(archive, summary)
+    with monkeypatch.context() as context:
+        opened = []
+        open_member = zipfile.ZipFile.open
+
+        def record_open(zipped, member, *args, **kwargs):
+            opened.append(member.filename if isinstance(member, zipfile.ZipInfo) else member)
+            return open_member(zipped, member, *args, **kwargs)
+
+        context.setattr(zipfile.ZipFile, "open", record_open)
+        summary.write_text(original_summary + "\n", encoding="utf-8")
+        assert not mod.archive_matches_source(archive, summary)
+        assert opened == [f"{archive.stem}/package_metadata.tsv"]
+        opened.clear()
+        summary.write_text(original_summary, encoding="utf-8")
+        assert mod.archive_matches_source(archive, summary)
+        assert sorted(opened) == sorted(names)
 
     original_archive = archive.read_bytes()
+    # A member outside the report manifests must still pass its CRC before reuse.
+    with zipfile.ZipFile(archive, "a") as zipped:
+        zipped.writestr(f"{archive.stem}/extra.bin", b"unlisted-payload", compress_type=zipfile.ZIP_STORED)
+    archive.write_bytes(archive.read_bytes().replace(b"unlisted-payload", b"unlisted-damaged"))
+    assert not mod.archive_matches_source(archive, summary)
+    archive.write_bytes(original_archive)
     with zipfile.ZipFile(archive, "a") as zipped:
         original_manifest = zipped.read(zipped_manifest_info.filename)
         zipped.writestr(f"{candidate_prefix}/csubst_sites-other/csubst.outputs.tsv", original_manifest)
@@ -1039,6 +1057,31 @@ def test_package_threshold_writes_valid_empty_zip(tmp_path):
     os.replace(temporary, archive)
     assert mod.archive_matches_source(archive, summary, minimum_support=5)
     assert not mod.archive_matches_source(archive, summary, minimum_support=5, minimum_lineage_support=4)
+
+
+@pytest.mark.parametrize("replaced", ["summary", "archive"])
+def test_archive_reuse_rejects_replacement_during_payload_check(tmp_path, monkeypatch, replaced):
+    mod = load_module()
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary)
+    archive = tmp_path / "report.zip"
+    column = "q_rate_enrichment_asymptotic_global"
+    empty = mod.load_threshold_candidates(summary, 5, column, 0.0, 0, "no", "none")
+    mod.package_threshold(empty, 5, summary, archive, tmp_path / "packages", tmp_path / "cache", column, 0.0)
+    target = summary if replaced == "summary" else archive
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(target.read_bytes())
+    open_member = zipfile.ZipFile.open
+
+    def replace_on_read(zipped, member, *args, **kwargs):
+        name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+        if name.endswith("/README.txt"):
+            replacement.replace(target)
+        return open_member(zipped, member, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", replace_on_read)
+    assert not mod.archive_matches_source(archive, summary)
+    assert not replacement.exists()
 
 
 def make_run_args(tmp_path):
