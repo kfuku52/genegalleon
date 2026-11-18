@@ -792,7 +792,9 @@ Notable defaults:
   to 5), analyzes each unique candidate once, and writes a self-contained ZIP
   per threshold directly under `gene_summary/<source>`; every candidate entry
   contains its annotated row, raw `csubst sites` outputs, an exact-site tree
-  PDF, and a combined report; PDB search is disabled by default,
+  PDF, and a combined report. CSUBST shortens long branch-list directory names
+  with a SHA-256 digest and records the complete branch list in
+  `csubst.outputs.tsv`. PDB search is disabled by default,
 - `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,
   and writes convergence outputs under the selected source's `csubst_site`

@@ -107,7 +107,15 @@ def test_guided_native_default_sensitivity_cache_and_source_provenance(tmp_path)
     assert mismatch.returncode != 0 and "same reads and k" in mismatch.stderr
     assert not list((workspace / "output").rglob("*.zip"))
     first = run_stage(workspace, initial="-1", guided=True)
-    assert first.returncode == 0, first.stdout + first.stderr
+    if first.returncode != 0:
+        log_path = workspace / "output/tmp/task/Test_species.smudgeplot/commands.log"
+        log_tail = b""
+        if log_path.is_file():
+            with log_path.open("rb") as log:
+                log.seek(max(0, log_path.stat().st_size - 8000))
+                log_tail = log.read(8000)
+        raise AssertionError(first.stdout + first.stderr + "\nSmudgeplot commands.log (tail)\n"
+                             + log_tail.decode(errors="replace"))
     archive = workspace / "output/species_dnaseq_genomescope/Test_species_genomescope.zip"
     smudge_archive = workspace / "output/species_dnaseq_smudgeplot/Test_species_smudgeplot.zip"
     with zipfile.ZipFile(archive) as handle:

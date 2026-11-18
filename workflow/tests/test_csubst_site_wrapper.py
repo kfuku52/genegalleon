@@ -205,6 +205,18 @@ def test_resolve_site_artifacts_uses_manifest_or_current_names(tmp_path, with_ma
     assert artifacts["pdb_id"] == "2XYZ"
 
 
+def test_resolve_site_artifacts_rejects_wrong_manifest_branches(tmp_path):
+    mod = load_module()
+    branches = ",".join(map(str, range(100, 181)))
+    site_dir = Path(mod.resolve_site_output_dir(str(tmp_path), branches))
+    site_dir.mkdir(parents=True)
+    (site_dir / "csubst.outputs.tsv").write_text(
+        "output_kind\tbranch_ids\noutput_manifest\t1,2\n", encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Branch IDs.*do not match"):
+        mod.resolve_site_artifacts(str(tmp_path), branches)
+
+
 def test_get_cb_required_columns_keeps_needed_columns_only():
     mod = load_module()
     cols = [
@@ -589,11 +601,14 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
     monkeypatch.setattr(mod, "get_alignment_for_tree_plot", lambda **kwargs: "trim.fa")
     monkeypatch.setattr(mod, "get_untrimmed_alignment_for_tree_plot", lambda **kwargs: None)
     monkeypatch.setattr(mod, "get_iqtree_anc_dir", lambda **kwargs: str(iqtree_dir))
-    monkeypatch.setattr(
-        mod,
-        "resolve_site_artifacts",
-        lambda **kwargs: {"site_table_tsv": str(site_table), "site_dir": str(tmp_path)},
-    )
+    site_artifacts = {"site_table_tsv": str(site_table), "site_dir": str(tmp_path)}
+    lookups = []
+
+    def resolve_site_artifacts(**kwargs):
+        lookups.append(kwargs)
+        return site_artifacts
+
+    monkeypatch.setattr(mod, "resolve_site_artifacts", resolve_site_artifacts)
     monkeypatch.setattr(mod, "prepare_recoded_site_alignment", lambda **kwargs: None)
     monkeypatch.setattr(mod, "resolve_csubst_genetic_code", lambda directory: 2)
     monkeypatch.setattr(
@@ -618,9 +633,11 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
         dir_og=str(tmp_path),
         convergent_sites=[5],
         file_tree_plot_out=str(output),
+        site_artifacts=site_artifacts,
     )
 
     assert output.read_bytes() == b"focused"
+    assert lookups == []
     assert "--panel10=amino_acid_site,2,5," + str(iqtree_dir / "csubst.fasta") in commands[0]
     assert not any("amino_acid_site,2,2:5," in token for token in commands[0])
 
@@ -638,6 +655,7 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
         file_tree_plot_out=str(legacy_output),
     )
     assert legacy_output.read_bytes() == b"focused"
+    assert len(lookups) == 1
 
     with pytest.raises(ValueError, match="No convergent sites"):
         mod.run_stat_branch2tree_plot(

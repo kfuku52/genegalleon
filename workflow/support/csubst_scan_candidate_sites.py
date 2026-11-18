@@ -822,6 +822,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
             csubst_nonsyn_recode=nonsyn_recode,
             convergent_sites=[target_site],
             file_tree_plot_out=str(cache_dir / focused_name),
+            site_artifacts=artifacts,
         )
         shutil.rmtree(iqtree_anc_dir, ignore_errors=True)
         for temporary_name in (

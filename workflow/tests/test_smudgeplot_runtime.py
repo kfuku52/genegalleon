@@ -46,8 +46,9 @@ def high_coverage_reads(tmp_path_factory):
 
 
 @pytest.mark.parametrize(("compressed", "lower"), [(False, "4"), (True, "4"), (True, "auto")])
-def test_real_fastk_smudgeplot_pipeline(tmp_path, diploid_reads, high_coverage_reads, compressed, lower):
-    dataset = high_coverage_reads if lower == "auto" else diploid_reads
+def test_real_fastk_smudgeplot_pipeline(tmp_path, request, compressed, lower):
+    fixture = "high_coverage_reads" if lower == "auto" else "diploid_reads"
+    dataset = request.getfixturevalue(fixture)
     reads = dataset[int(compressed)]
     alias = tmp_path / ("linked.fastq.gz" if compressed else "linked.fastq")
     alias.symlink_to(reads)
