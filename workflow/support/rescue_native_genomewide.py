@@ -322,6 +322,7 @@ def build_plan(previous_output, output, *, producer_source=None, completed_outpu
         name: hashlib.sha256(raw).hexdigest() for name, raw in metadata.items()}
     r.require_same_key(frozen, r.frozen_prediction_cache_key(previous))
     r.require_same_key(frozen['plan_sha256'], r.plan_digest(previous, prior))
+    r.refresh_source_versions(plan)
     root.mkdir(parents=True)
     for name, raw in metadata.items():
         (root / name).write_bytes(raw)
@@ -362,9 +363,12 @@ def _prepare_raw(root, plan, cpus):
         if key not in plan['request']:
             continue
         expected['request'][key] = plan['request'][key]
-    r.require_same_key(expected, plan)
+    # Generation hints are refreshed by the planner. The source SHA-256 values
+    # in the inherited request remain part of this exact comparison.
+    expected.pop('source_versions', None)
+    r.require_same_key(expected, {k: v for k, v in plan.items() if k != 'source_versions'})
     r.require_same_key(CONTRACT, plan['request']['oriongeno_genomewide'])
-    batch = r.FreshDigestBatch()
+    batch = r.RescueSourceBatch(plan)
     def guard():
         batch.check()
         r.require_same_key(old_sha, r.plan_digest(previous, prior))

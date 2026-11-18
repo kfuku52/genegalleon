@@ -90,6 +90,8 @@ try:
     from rescue_search_inputs import (
         records as local_search_records,
     )
+    from rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
+    from rescue_source_verification import refresh_source_versions as refresh_source_versions
     from rescue_terminal_completion import complete_terminals
     from species_labeling import assembly_only_species, extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
@@ -148,6 +150,8 @@ except ImportError:
     from .rescue_search_inputs import (
         records as local_search_records,
     )
+    from .rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
+    from .rescue_source_verification import refresh_source_versions as refresh_source_versions
     from .rescue_terminal_completion import complete_terminals
     from .species_labeling import assembly_only_species, extract_species_label
     from .stage_output_hashes import hash_outputs, hash_paths
@@ -217,6 +221,7 @@ def identities():
     for package in ("locuskit", "kffractbias", "jcvi"):
         versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
+    versions["source_verification_implementation"] = digest(Path(__file__).with_name("rescue_source_verification.py"))
     versions["annevo_candidate_implementation"] = digest(Path(__file__).with_name("annevo_gene_models.py"))
     versions["annevo_alignment_implementation"] = digest(Path(__file__).with_name("gene_model_selection.py"))
     versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
@@ -406,7 +411,9 @@ def build_plan(args):
         profiles = read_profiles(profiles_path, sources)
         if profiles_path:
             files.append(str(profiles_path.resolve()))
-        request = {"schema": SCHEMA, "sources": sources, "files": digest_paths(files), "parameters": params,
+        genomic_paths = source_paths({"sources": sources})
+        file_hashes, source_versions = freeze_sources(genomic_paths, other_paths=files)
+        request = {"schema": SCHEMA, "sources": sources, "files": file_hashes, "parameters": params,
                    "species_profiles": profiles,
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
@@ -546,7 +553,9 @@ def build_plan(args):
                     "synteny_jobs": [{**job, "index": i, "id": f"comparison_{i:06d}"} for i, job in enumerate(jobs, 1)]}
             if guide_stability:
                 plan["guide_tree_stability"] = {n: guide_stability[n] for n in targets}
-            if guide_stability and digest_paths(request["files"]) != request["files"]:
+            if source_versions:
+                plan["source_versions"] = source_versions
+            if guide_stability and RescueSourceBatch(plan).read(request["files"]) != request["files"]:
                 raise ValueError("Guide evidence changed during reference selection")
             for file in ("selection.nwk", "quality.tsv", "references.nwk", "references.tsv"):
                 shutil.copyfile(tmp / file, root / file)
@@ -583,7 +592,7 @@ def plan_digest(root, plan):
 
 def verify_sources(plan, names, keys, *, verification=None):
     paths = [plan["request"]["sources"][n][k] for n in names for k in keys]
-    current = verification.read(paths) if verification is not None else digest_paths(paths)
+    current = (verification if verification is not None else RescueSourceBatch(plan)).read(paths)
     if any(plan["request"]["files"][p] != value for p, value in current.items()):
         raise ValueError("Frozen rescue input changed")
     for engine in ('annevo', 'oriongeno'):
@@ -1589,7 +1598,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         except (FileNotFoundError, ValueError) as exc:
             raise ValueError(invalid_checkpoint) from exc
     key = current_key()
-    source_proof = FreshDigestBatch()
+    source_proof = RescueSourceBatch(plan)
 
     def check_sources():
         verify_sources(plan, [name], ["genome", "fasta", "gff"], verification=source_proof)
@@ -2985,7 +2994,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                                            "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    source_proof = FreshDigestBatch()
+    source_proof = RescueSourceBatch(plan)
     with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers)) as dependency_snapshot:
         def publication_guard():
             dependency_snapshot.check_all()

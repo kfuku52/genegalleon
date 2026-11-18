@@ -201,7 +201,7 @@ def test_actual_core_input_routing_uses_verified_view(selected_view, tmp_path, c
         expected[1] = str(reader)
     assert actual == expected
     # Tampered selected files must stop before a raw-input fallback is consumed.
-    selected_cds = effective / "species_cds/Target_species.fa"
+    selected_cds = effective / ("analysis_cds" if consumer == "annotation" else "species_cds") / "Target_species.fa"
     selected_cds.write_text(selected_cds.read_text() + "A\n")
     failed = subprocess.run(["bash", "-c", 'set -euo pipefail\nsource "$gg_support_dir/gg_util.sh"\n' + script + result],
                             env=environment, text=True, capture_output=True, timeout=30)
@@ -599,3 +599,52 @@ cd "${dir_tmp}"
                               capture_output=True, timeout=20)
     assert negative.returncode != 0
     assert 'Query gene not found in the protein inventory: Target_species_pseudo' in negative.stdout
+
+
+def test_verified_field_reads_only_the_requested_species_and_role(selected_view, tmp_path, monkeypatch):
+    effective, *_ = selected_view
+    manifest = effective / 'inputs.tsv'
+    state = importlib.import_module('input_generation_array_state')
+    reads = []
+    original = state.digest
+
+    def count(path):
+        reads.append(Path(path))
+        return original(path)
+
+    monkeypatch.setattr(state, 'digest', count)
+    target = effective / 'species_cds/Target_species.fa'
+    assert refinement.verify_inputs(manifest, 'cds', species='Target_species') == str(target)
+    assert sorted(reads) == sorted([manifest, effective / 'receipt.json', target])
+    other = effective / 'species_cds/Donor_one.fa'
+    other.write_text(other.read_text() + 'N\n')
+    assert refinement.verify_inputs(manifest, 'cds', species='Target_species') == str(target)
+    with pytest.raises(ValueError, match='Effective input changed'):
+        refinement.verify_inputs(manifest, 'cds')
+    with pytest.raises(ValueError, match='Effective input changed'):
+        refinement.verify_inputs(manifest)
+    with pytest.raises(ValueError, match='one effective input row'):
+        refinement.verify_inputs(manifest, 'cds', species='Unknown')
+    with pytest.raises(ValueError, match='single effective input field'):
+        refinement.verify_inputs(manifest, 'layout', species='Target_species')
+    copied = tmp_path / 'input-copy.tsv'
+    copied.write_bytes(manifest.read_bytes().replace(b'Target_species', b'Tamper_species'))
+    with pytest.raises(ValueError, match='differs from the published view'):
+        refinement.verify_inputs(copied, 'cds', species='Tamper_species')
+
+
+def test_legacy_optional_directory_uses_its_receipt(selected_view):
+    effective, *_ = selected_view
+    manifest, receipt_path = effective / 'inputs.tsv', effective / 'receipt.json'
+    rows = refinement.read_table(manifest)
+    for row in rows:
+        del row['transcript'], row['transcript_sha256']
+    tsv(manifest, list(rows[0]), rows)
+    receipt = json.loads(receipt_path.read_text())
+    receipt['files']['inputs.tsv'] = refinement.digest(manifest)
+    refinement.atomic_json(receipt_path, receipt)
+    assert refinement.verify_inputs(manifest, 'transcript') == str(effective / 'species_transcript')
+    target = effective / 'species_transcript/Target_species.fa'
+    target.write_bytes(target.read_bytes() + b'N')
+    with pytest.raises(ValueError, match='incomplete or corrupt'):
+        refinement.verify_inputs(manifest, 'transcript')

@@ -143,3 +143,11 @@ def test_strict_failed_bridge_cannot_change_placement_or_final_admission():
         return [(m['cds'],m['status'],m['problems']) for m in rows if m is not rows[-1] or 'internal_stop' not in m['problems']]
     assert decision(copy.deepcopy([valid,other])) == decision(copy.deepcopy([valid,other,rejected]))
     assert not replay.eligible({'problems':['internal_stop']})
+
+
+def test_scientific_signature_keeps_source_hashes_across_generation_refresh():
+    original = {'request': {'files': {'genome.fa': 'old-SHA'}}}
+    refreshed = {**copy.deepcopy(original), 'source_versions': {'genome.fa': ['old-SHA', ['new mount']]}}
+    assert reuse.scientific_signature(refreshed) == reuse.scientific_signature(original)
+    refreshed['request']['files']['genome.fa'] = 'new-SHA'
+    assert reuse.scientific_signature(refreshed) != reuse.scientific_signature(original)

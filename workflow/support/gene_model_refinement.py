@@ -172,7 +172,7 @@ def implementation():
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
                     'rescue_homology_policy.py', 'rescue_path_compatibility.py', 'rescue_boundary_revalidation.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
-                    'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
+                    'rescue_prepared_snapshot.py', 'rescue_source_verification.py', 'refinement_receipt_snapshot.py',
                     'refinement_input_snapshot.py', 'refinement_native_splits.py', 'refinement_transcript_repairs.py', 'rescue_split_replay.py', 'annevo_gene_models.py', 'oriongeno_runtime.py', 'oriongeno_model_profiles.py', 'transcript_utrs.py', 'genome_sequence_identity.py',
                     'gene_model_source_retention.py', 'gene_model_transcriptome.py', 'rename_rnabloom_transcripts.py',
                     'model_protein_correspondence.py', 'refinement_rna.py', 'refinement_accession_rna.py',
@@ -4227,69 +4227,120 @@ def finalize(root, value, *, cpus=1):
                      dependency_check=check_flanking_dependencies)
 
 
-def verify_inputs(inputs, field=None, *, verification=None):
-    def parsed_identity(path):
-        info = Path(path).stat()
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                str(Path(path).resolve(strict=True)))
+EFFECTIVE_VIEW_NAMES = {
+    'cds': 'species_cds', 'protein': 'species_protein', 'gff': 'species_gff', 'genome': 'species_genome',
+    'transcript': 'species_transcript', 'analysis_cds': 'analysis_cds', 'analysis_gff': 'analysis_gff',
+    'representative_map': 'representative_map.tsv',
+}
+GENOMIC_ROLES = ('cds', 'protein', 'gff', 'genome', 'representative_map')
 
-    input_identity = parsed_identity(inputs)
-    rows = read_table(inputs)
+
+def verified_input_rows(inputs, roles=None, *, species_names=None, view_names=(), verification=None):
+    """Bind the requested rows and file roles to the published manifest. No roles requests full QC."""
+    def identity(path):
+        info = path.stat()
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, path.resolve(strict=True)
+
+    inputs = Path(inputs)
+    input_identity = identity(inputs)
+    raw_manifest = inputs.read_bytes()
+    tsv = gzip.decompress(raw_manifest) if inputs.suffix.lower() == '.gz' else raw_manifest
+    rows = list(csv.DictReader(io.StringIO(tsv.decode('utf-8'), newline=''), delimiter='\t'))
     if not rows:
         raise ValueError('Empty effective input manifest')
-    roots = set()
-    for row in rows:
-        roots.add(str(Path(row['cds']).parent.parent))
+    roots = {Path(row['cds']).parent.parent for row in rows}
     if len(roots) != 1:
         raise ValueError('Effective inputs must share one published view')
-    root = Path(next(iter(roots)))
+    root = roots.pop()
     receipt_path = root / 'receipt.json'
-    receipt_identity = parsed_identity(receipt_path)
-    receipt = json.loads(receipt_path.read_text())
+    receipt_identity = identity(receipt_path)
+    raw_receipt = receipt_path.read_bytes()
+    receipt = json.loads(raw_receipt)
     if (not isinstance(receipt, dict) or 'key' not in receipt or not isinstance(receipt.get('files'), dict)
             or not receipt['files'] or any(not isinstance(path, str) or not isinstance(value, str)
-                                          or not (root / path).is_file() for path, value in receipt['files'].items())):
+                                          for path, value in receipt['files'].items())):
         raise ValueError('Effective view is incomplete or corrupt')
-    # Fresh full hashes are shared only inside this boundary. Include every
-    # receipt member, including unselected annotations and admitted views, as
-    # well as external role paths supported by existing manifests. digest_paths
-    # deduplicates resolved aliases and fences mutations across the whole batch.
-    roles = ('cds', 'protein', 'gff', 'genome', 'representative_map')
-    paths = [inputs, receipt_path, *(row[role] for row in rows for role in roles),
-             *(root / path for path in receipt['files'])]
-    hashes = digest_paths(paths) if verification is None else verification.read(paths)
-    # Parsing happened before the batch began; bind the parsed rows/receipt to
-    # those same bytes even if they changed before their fresh hash was taken.
-    if parsed_identity(inputs) != input_identity or parsed_identity(receipt_path) != receipt_identity:
-        raise OSError('Effective manifest or receipt changed while verifying')
+    files = receipt['files']
+    metadata = {str(inputs): hashlib.sha256(raw_manifest).hexdigest(),
+                str(receipt_path): hashlib.sha256(raw_receipt).hexdigest()}
+    if metadata[str(inputs)] != files.get('inputs.tsv'):
+        raise ValueError('Effective input manifest differs from the published view')
+    if species_names is not None:
+        wanted = set(species_names)
+        rows = [row for row in rows if row['species'] in wanted]
+        if len(rows) != len(wanted) or {row['species'] for row in rows} != wanted:
+            raise ValueError('Expected one effective input row per requested species')
+    full = roles is None
+    roles = GENOMIC_ROLES if full else roles
+    # Older manifests can publish optional directories with receipt hashes
+    # before gaining the per-row role columns. Preserve directory lookups.
+    published_names = {name.split('/', 1)[0] for name in files}
+    selected = {}
     for row in rows:
         for role in roles:
-            if hashes[str(row[role])] != row[role + '_sha256']:
-                message = ('Effective representative map changed' if role == 'representative_map'
-                           else 'Effective input changed: ' + row[role])
-                raise ValueError(message)
-    if any(hashes[str(root / path)] != value for path, value in receipt['files'].items()):
+            path, expected = row.get(role), row.get(role + '_sha256')
+            if (role not in row and role + '_sha256' not in row and role not in GENOMIC_ROLES
+                    and EFFECTIVE_VIEW_NAMES[role] in view_names and EFFECTIVE_VIEW_NAMES[role] in published_names):
+                continue
+            if not path or not expected or selected.get(path, expected) != expected:
+                raise ValueError('Missing or inconsistent effective input for ' + role)
+            selected[path] = expected
+    if full:
+        members = files
+    else:
+        members = {path: sha for path, sha in files.items()
+                   if path.split('/', 1)[0] in view_names or str(root / path) in selected}
+        if any(name.endswith('.tsv') and name not in members for name in view_names):
+            raise ValueError('Effective view is incomplete or corrupt')
+    if any(not (root / path).is_file() for path in members):
         raise ValueError('Effective view is incomplete or corrupt')
-    # A copied TSV must still be the published manifest. Role hashes alone do
-    # not bind its species labels, genetic codes, row membership, or paths.
-    if hashes[str(inputs)] != receipt['files'].get('inputs.tsv'):
-        raise ValueError('Effective input manifest differs from the published view')
-    if field in {'layout', 'analysis_layout', 'coding_layout'}:
-        coding = field != 'layout'
-        names = ('analysis_cds' if coding else 'species_cds', 'species_protein', 'analysis_gff' if coding else 'species_gff',
-                 'species_genome', 'representative_map.tsv', 'species_genetic_code.tsv')
-        if coding and any(not (root / name).exists() for name in names[:3]):
-            raise ValueError('Published view lacks admitted coding inputs; generate a new refinement output')
-        layout = '\t'.join(str(root / name) for name in names)
+    paths = [*metadata, *selected, *(root / path for path in members)]
+    hashes = digest_paths(paths) if verification is None else verification.read(paths)
+    if (identity(inputs) != input_identity or identity(receipt_path) != receipt_identity
+            or any(hashes[path] != value for path, value in metadata.items())):
+        raise OSError('Effective manifest or receipt changed while verifying')
+    for path, expected in selected.items():
+        if hashes[path] != expected:
+            if path == rows[0].get('representative_map'):
+                raise ValueError('Effective representative map changed')
+            raise ValueError('Effective input changed: ' + path)
+    if any(hashes[str(root / path)] != value for path, value in members.items()):
+        raise ValueError('Effective view is incomplete or corrupt')
+    return rows
+
+
+def verify_inputs(inputs, field=None, *, species=None, verification=None):
+    layout = field in {'layout', 'analysis_layout', 'coding_layout'}
+    if species is not None and field not in EFFECTIVE_VIEW_NAMES:
+        raise ValueError('Select a single effective input field with --species')
+    if not field:
+        return verified_input_rows(inputs, verification=verification)
+    if layout:
+        roles = GENOMIC_ROLES if field == 'layout' else ('analysis_cds', 'protein', 'analysis_gff', 'genome', 'representative_map')
+        names = tuple(EFFECTIVE_VIEW_NAMES[role] for role in roles) + ('species_genetic_code.tsv',)
+    else:
+        if field not in EFFECTIVE_VIEW_NAMES:
+            raise ValueError('Unknown effective input field: ' + str(field))
+        roles, names = (field,), (EFFECTIVE_VIEW_NAMES[field],)
+    batch = FreshDigestBatch(scoped_reads=True) if verification is None else verification
+    rows = verified_input_rows(inputs, roles, species_names=[species] if species is not None else None,
+                               view_names=() if species is not None else names, verification=batch)
+    root = Path(rows[0]['cds']).parent.parent
+    if layout:
+        if any(not (root / name).exists() for name in names):
+            raise ValueError('Published view lacks requested inputs; generate a new refinement output')
+        result = '\t'.join(str(root / name) for name in names)
         if field == 'coding_layout':
+            if any('analysis_cds' not in row for row in rows):
+                raise ValueError('Published view lacks per-species coding paths for a genetic code lookup')
             codes = {int(row['genetic_code']) for row in rows if Path(row['analysis_cds']).stat().st_size}
             if len(codes) != 1:
                 raise ValueError('CDS analysis requires one common genetic code; use input_sequence_mode=protein for mixed codes')
-            layout += '\t' + str(codes.pop())
-        return layout
-    if field:
-        return str(root / ('representative_map.tsv' if field == 'representative_map' else field if field.startswith('analysis_') else 'species_' + field))
-    return rows
+            result += '\t' + str(codes.pop())
+    else:
+        result = rows[0][field] if species is not None else str(root / names[0])
+    batch.check()
+    return result
 
 
 def inspect_stages(root, value, cpus=1, *, effective_verification=None):
@@ -4451,6 +4502,7 @@ def parser():
         s.add_argument('--comparison-cache', type=Path)
     check = sub.add_parser('verify-inputs')
     check.add_argument('--inputs', required=True, type=Path)
+    check.add_argument('--species', help='Return the verified file for one exact species and field')
     check.add_argument('--field', choices=['cds', 'protein', 'gff', 'genome', 'analysis_cds', 'analysis_gff', 'representative_map', 'transcript', 'layout', 'analysis_layout', 'coding_layout'])
     utr = sub.add_parser('reproject-utrs', help='Re-evaluate UTRs from a completed, immutable coding-model view')
     utr.add_argument('--source-output', required=True, type=Path)
@@ -4470,7 +4522,7 @@ def _main(args):
         transcript_utr_reassessment.reproject(args.source_output, args.output, args.source_receipt_sha256, args.species)
         return
     if args.command == 'verify-inputs':
-        result = verify_inputs(args.inputs, args.field)
+        result = verify_inputs(args.inputs, args.field, species=args.species)
         print(result if isinstance(result, str) else json.dumps(result, sort_keys=True))
         return
     if args.command == 'plan':

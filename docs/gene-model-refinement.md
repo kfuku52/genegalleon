@@ -1158,8 +1158,13 @@ or publication step.
 Selected sequence, synteny and CDS-resolution caches are separated by manifest
 identity and sequence view. Use separate workflow output directories when
 running different bundles against the same final analysis artifacts.
-Input verification freshly hashes every publication member once per boundary,
-sharing reads between role paths and receipt entries while checking mutations.
+`verify-inputs` without a field checks every member of the publication. With a
+field it verifies the supplied manifest against its publication receipt and
+hashes the requested files. Layout fields verify the directories and shared
+tables they return. For one exact file, use
+`verify-inputs --inputs effective/inputs.tsv --field cds --species Species_name`.
+Kallisto uses this lookup. Paired fractionation reads the requested species'
+CDS, GFF and representative map, and BUSCO input pairing verifies the CDS role.
 FASTA indices retain the decompressed UTF-8 byte total as private metadata for
 selected TBLASTN database sizes. Existing indices receive one atomic rebuild
 under `ensure`; public schema 2 manifests and extracted sequences are unchanged.

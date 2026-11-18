@@ -120,6 +120,8 @@ def prove_contract(previous_plan,producer_source):
               'rescue_coding_paths.py':'resolve_coding_paths_implementation',
               'input_generation_array_state.py':'state_implementation',
               'oriongeno_runtime.py':'oriongeno_candidate_implementation'}
+    if 'source_verification_implementation' in before:
+        bindings['rescue_source_verification.py']='source_verification_implementation'
     if 'cached_validation_implementation' in before:
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
         if before['cached_validation_implementation']!=after['cached_validation_implementation']:
@@ -156,6 +158,8 @@ def prove_contract(previous_plan,producer_source):
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
         'oriongeno_candidate_implementation','nwkit'}
+    if 'source_verification_implementation' not in before:
+        permitted.add('source_verification_implementation')
     # The GPU launcher is not invoked here. Its old bytes remain bound, while
     # frozen prediction GFF/receipts and the coding reader/alignment are strict.
     # NWKit belongs to initial tree/donor selection. This route byte-imports the
@@ -177,6 +181,7 @@ def scientific_signature(plan):
     """Separate immutable scientific scope from declared producer/import paths."""
     result=copy.deepcopy(plan)
     result.pop('output',None)
+    result.pop('source_versions',None)  # The frozen request still compares every source SHA-256.
     request=result['request']
     history=_replay()._legacy_annotation_history(plan)
     for name in ('tools','admission_cache','native_genomewide_parent','native_genomewide_worker_imports',

@@ -377,3 +377,93 @@ def test_receipt_becoming_malformed_after_digest_is_not_initial_corruption(tmp_p
     with pytest.raises(snapshot_module.PreparationChanged):
         snapshot.prepared(names[0])
     snapshot.close()
+
+
+def test_shared_source_versions_reuse_and_rehash_only_the_changed_member(tmp_path, monkeypatch):
+    module = import_module('rescue_source_verification')
+    _, plan, names = fixture(tmp_path)
+    files = plan['request']['files']
+    generations = {path: [path, path, 1] for path in files}
+    monkeypatch.setattr(module, 'content_generation', lambda path: generations.get(str(Path(path).resolve())))
+    reads = []
+    original = state.digest
+
+    def counted(path):
+        reads.append(str(Path(path).resolve()))
+        return original(path)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    monkeypatch.setattr(module, 'digest', counted)
+    module.refresh_source_versions(plan)
+    assert sorted(reads) == sorted(files)
+    reads.clear()
+    for _ in range(2):
+        run = module.RescueSourceBatch(plan)
+        rescue.verify_sources(plan, names, ('genome', 'fasta', 'gff'), verification=run)
+        run.check()
+    assert not reads
+    target = plan['request']['sources'][names[0]]['genome']
+    generations[target] = [target, 2]
+    with pytest.raises(OSError, match='changed during use'):
+        run.check()
+    # Identical bytes in a newer generation need one fresh hash in each job.
+    rescue.verify_sources(plan, names, ('genome', 'fasta', 'gff'))
+    assert reads == [target]
+    Path(target).write_bytes(b'X' * Path(target).stat().st_size)
+    generations[target] = [target, 3]
+    with pytest.raises(ValueError, match='Frozen rescue input changed'):
+        rescue.verify_sources(plan, names, ('genome', 'fasta', 'gff'))
+    with pytest.raises(ValueError, match='Frozen rescue input changed'):
+        module.refresh_source_versions(plan)
+
+
+def test_source_generation_unavailable_falls_back_to_full_verification(tmp_path, monkeypatch):
+    module = import_module('rescue_source_verification')
+    _, plan, names = fixture(tmp_path)
+    expected = plan['request']['files']
+    monkeypatch.setattr(module, 'content_generation', lambda path: None)
+    measured = metrics(monkeypatch)
+    plan['source_versions'] = {path: [sha, ['previous mount']] for path, sha in expected.items()}
+    rescue.verify_sources(plan, names, ('fasta', 'gff', 'genome'))
+    assert measured['sha256_reads'] == len(expected)
+    module.refresh_source_versions(plan)
+    assert 'source_versions' not in plan
+    rescue.verify_sources(plan, names, ('fasta', 'gff', 'genome'))
+    assert measured['sha256_reads'] == 2 * len(expected)
+
+
+def test_planning_refuses_data_version_change_during_hash(tmp_path, monkeypatch):
+    module = import_module('rescue_source_verification')
+    source = tmp_path / 'genome'
+    source.write_text('genome')
+    version = iter(([1], [2]))
+    monkeypatch.setattr(module, 'content_generation', lambda _: next(version))
+    with pytest.raises(OSError, match='changed before hashing'):
+        module.freeze_sources([source])
+
+
+def test_swapped_then_restored_path_cannot_bind_other_bytes(tmp_path, monkeypatch):
+    module = import_module('rescue_source_verification')
+    source, saved, replacement = (tmp_path / name for name in ('genome', 'saved', 'other'))
+    source.write_bytes(b'correct')
+    replacement.write_bytes(b'corrupt')
+    original = state.digest
+    expected = original(source)
+    # Simulate a generation provider that distinguishes the two objects and
+    # a pathname swap entirely inside the SHA read, restored before final checks.
+    def version(path):
+        return [str(Path(path).resolve()), os.stat(path).st_ino, 1]
+
+    def swapped(path):
+        source.rename(saved)
+        replacement.rename(source)
+        try:
+            return original(path)
+        finally:
+            source.rename(replacement)
+            saved.rename(source)
+
+    monkeypatch.setattr(module, 'content_generation', version)
+    monkeypatch.setattr(module, 'digest', swapped)
+    hashes, _ = module.freeze_sources([source])
+    assert hashes[str(source)] == expected

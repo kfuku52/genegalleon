@@ -127,9 +127,17 @@ def canonical_gff(species, source, choices):
     return "".join(lines), audit
 
 
-def prepare_selected_inputs(inputs, species_names, cache_root):
+def prepare_selected_inputs(inputs, species_names, cache_root, *, published=False):
     manifest = Path(inputs).resolve()
-    rows = load_effective_inputs(manifest)
+    if published:
+        if __package__:
+            from .gene_model_refinement import verified_input_rows
+        else:
+            from gene_model_refinement import verified_input_rows
+        selected = verified_input_rows(manifest, ('cds', 'gff', 'representative_map'), species_names=species_names)
+        rows = {row['species']: row for row in selected}
+    else:
+        rows = load_effective_inputs(manifest)
     manifest_hash, helpers, runtime = file_digest(manifest), implementation(), runtime_identity()
     output = []
     for species in species_names:
@@ -172,6 +180,9 @@ def prepare_selected_inputs(inputs, species_names, cache_root):
             any(file_digest(rows[species][role]) != rows[species][role + "_sha256"]
                 for species in species_names for role in ("cds", "gff", "representative_map"))):
         raise ValueError("Fractionation selected identity changed before delivery")
+    if published:
+        for row in output:
+            row['representative_map'] = rows[row['species']]['representative_map']
     return output
 
 
@@ -180,9 +191,12 @@ def main():
     parser.add_argument("--inputs", required=True, type=Path)
     parser.add_argument("--species", required=True, action="append")
     parser.add_argument("--cache-root", required=True, type=Path)
+    parser.add_argument("--published", action="store_true",
+                        help="Require a published refinement view and include its verified representative map path")
     args = parser.parse_args()
-    for row in prepare_selected_inputs(args.inputs, args.species, args.cache_root):
-        print("\t".join(row[key] for key in ("cds", "gff", "receipt")))
+    fields = ("cds", "gff", "receipt", "representative_map") if args.published else ("cds", "gff", "receipt")
+    for row in prepare_selected_inputs(args.inputs, args.species, args.cache_root, published=args.published):
+        print("\t".join(row[key] for key in fields))
 
 
 if __name__ == "__main__":

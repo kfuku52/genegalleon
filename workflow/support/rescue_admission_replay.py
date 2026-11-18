@@ -122,6 +122,8 @@ def prove_contract(previous_plan, producer_source):
                 'annevo_gene_models.py': 'annevo_candidate_implementation',
                 'rescue_coding_paths.py': 'resolve_coding_paths_implementation',
                 'input_generation_array_state.py': 'state_implementation'}
+    if 'source_verification_implementation' in before:
+        bindings['rescue_source_verification.py'] = 'source_verification_implementation'
     hashes = {}
     batch = r.FreshDigestBatch()
     observed = batch.read([*[old / filename for filename in bindings],
@@ -138,6 +140,8 @@ def prove_contract(previous_plan, producer_source):
         if _definitions(old / filename, names) != _definitions(current / filename, names):
             raise ValueError('Rescue replay function changed: ' + filename)
     permitted = set(ALLOWED_TOOL_CHANGES)
+    if 'source_verification_implementation' not in before:
+        permitted.add('source_verification_implementation')
     # This route is absent from legacy plans. Once used, its implementation is
     # strict evidence and cannot change during an admission-only replay.
     if not previous_plan['request'].get('oriongeno_genomewide'):
@@ -242,6 +246,7 @@ def build_plan(previous_output, producer_source, output, *, native_extension=Fal
     r.require_same_key(frozen['plan_sha256'], r.plan_digest(previous, prior))
     if any(r.digest(previous / name) != sha for name, sha in plan['request']['admission_cache']['metadata_sha256'].items()):
         raise ValueError('Admission metadata changed during plan creation')
+    r.refresh_source_versions(plan)
     root.mkdir(parents=True)
     for name, raw in metadata.items():
         (root / name).write_bytes(raw)
@@ -279,7 +284,10 @@ def previous_context(root, plan):
             expected['request']['output_storage'] = {**r.output_storage(prior), 'diagnostics': 'summary'}
         if 'native_genomewide_worker_imports' in plan['request']:
             expected['request']['native_genomewide_worker_imports']=plan['request']['native_genomewide_worker_imports']
-    r.require_same_key(expected, plan)
+    # Generation hints are refreshed by the planner. The source SHA-256 values
+    # in the inherited request remain part of this exact comparison.
+    expected.pop('source_versions', None)
+    r.require_same_key(expected, {k: v for k, v in plan.items() if k != 'source_versions'})
     r.require_same_key(plan['request']['prediction_cache'], r.frozen_prediction_cache_key(previous))
     for name, sha in cache['metadata_sha256'].items():
         if r.digest(root / name) != sha or r.digest(previous / name) != sha:
@@ -292,7 +300,7 @@ def prepare(root, plan, cpus):
     r = _r()
     previous, prior = previous_context(root, plan)
     old_hash, new_hash = r.plan_digest(previous, prior), r.plan_digest(root, plan)
-    inputs = r.FreshDigestBatch()
+    inputs = r.RescueSourceBatch(plan)
     def guard():
         inputs.check()
         r.require_same_key(old_hash, r.plan_digest(previous, prior))
@@ -421,7 +429,7 @@ def rescue(root, plan, name, cpus, *, dependencies, parser_proof=None):
     r.require_same_key(old_receipt['key'], r.rescue_key(previous, prior, name, dependency_snapshot=dependencies))
     raw_key = store.frozen_model_store_key(old_worker)
     batch = FreshDigestBatch()
-    source_proof = FreshDigestBatch()
+    source_proof = r.RescueSourceBatch(plan)
     expected = {str(old_worker / member): sha for member, sha in old_receipt['files'].items()}
     expected[str(old_worker / 'receipt.json')] = frozen['receipt_sha256']
     expected.update(plan['request']['admission_cache']['contract']['source_files'])

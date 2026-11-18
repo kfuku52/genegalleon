@@ -13,15 +13,17 @@ from pathlib import Path
 
 try:
     from input_generation_array_state import FreshDigestBatch
+    from rescue_source_verification import RescueSourceBatch
 except ImportError:
     from .input_generation_array_state import FreshDigestBatch
+    from .rescue_source_verification import RescueSourceBatch
 
 
 class _Proof:
     """Full bytes first, with pathname, ancestor and permission fences."""
 
-    def __init__(self):
-        self.batch = FreshDigestBatch()
+    def __init__(self, batch=None):
+        self.batch = FreshDigestBatch() if batch is None else batch
         self.components = {}
 
     @staticmethod
@@ -178,7 +180,7 @@ class PreparedSnapshot:
         self.check([name])
         if name not in self.sources:
             source = self.frozen['request']['sources'][name]
-            proof = _Proof()
+            proof = _Proof(RescueSourceBatch(self.frozen))
             self._verify_files(proof, {source[key]: self.frozen['request']['files'][source[key]]
                                        for key in ('fasta', 'gff', 'genome')})
             self.sources[name] = proof

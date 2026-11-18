@@ -18,11 +18,13 @@ try:
     from input_generation_array_state import FreshDigestBatch
     from rescue_model_store import frozen_model_store_key
     from rescue_model_store import iter_models as iter_stored_models
+    from rescue_source_verification import RescueSourceBatch
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .input_generation_array_state import FreshDigestBatch
     from .rescue_model_store import frozen_model_store_key
     from .rescue_model_store import iter_models as iter_stored_models
+    from .rescue_source_verification import RescueSourceBatch
 
 
 SEARCH_CONTRACT_FILE = "prediction_search_contract.json"
@@ -396,12 +398,11 @@ class VerifiedPredictionCache:
 
     def iter_models(self):
         stored = self.frozen.get("model_store")
+        self.check()
         if stored is None:
-            self.check()
             hasher = hashlib.sha256()
             rows = stream_json_array(self.directory / "models.json", hasher=hasher)
         else:
-            # The compact reader checks the whole live batch on entry and exhaustion.
             rows = iter_stored_models(self.directory, frozen_key=stored, verification=self.batch)
         for model in rows:
             if isinstance(model, dict) and model.get("search") == "genome_fallback":
@@ -549,7 +550,7 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
         raise ValueError("Frozen prediction cache root differs")
     if name not in frozen["species"]:
         return None
-    batch = FreshDigestBatch()
+    batch = RescueSourceBatch(plan)
     def expect_many(items):
         items = list(items)
         hashes = batch.read(path for path, _ in items)

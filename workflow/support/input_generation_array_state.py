@@ -46,31 +46,48 @@ class FreshDigestBatch:
     checksum. Call check before accepting/publishing any result from the batch.
     """
 
-    def __init__(self):
+    def __init__(self, *, scoped_reads=False):
         self.paths = {}
         self.hashes = {}
+        # Scoped callers explicitly check the full batch before accepting outputs.
+        self.scoped_reads = scoped_reads
 
-    def check(self):
-        for path, (identity, target) in self.paths.items():
+    def _check_paths(self, paths):
+        for path in paths:
+            identity, target = self.paths[path]
             if (_stat_identity(os.stat(path)) != identity
                     or str(Path(path).resolve(strict=True)) != target):
                 raise OSError("File changed while hashing: " + path)
 
+    def check(self):
+        self._check_paths(self.paths)
+
+    def _hash(self, path):
+        identity, target = self.paths[path]
+        if identity not in self.hashes:
+            self.hashes[identity] = digest(target)
+        return self.hashes[identity]
+
     def read(self, paths, *, expected=None):
-        """Hash current members together; expected hashes retain fail-fast reads."""
-        self.check()
+        """Hash requested members, stopping at the first incorrect expected hash."""
         paths = list(dict.fromkeys(str(path) for path in paths))
+        if self.scoped_reads:
+            self._check_paths(path for path in paths if path in self.paths)
+        else:
+            self.check()
         for path in paths:
             if path not in self.paths:
                 self.paths[path] = (_stat_identity(os.stat(path)), str(Path(path).resolve(strict=True)))
+        result = {}
         for path in paths:
-            identity, target = self.paths[path]
-            if identity not in self.hashes:
-                self.hashes[identity] = digest(target)
-            if expected is not None and self.hashes[identity] != expected[path]:
+            result[path] = self._hash(path)
+            if expected is not None and result[path] != expected[path]:
                 raise ValueError("File hash mismatch: " + path)
-        self.check()
-        return {path: self.hashes[self.paths[path][0]] for path in paths}
+        if self.scoped_reads:
+            self._check_paths(paths)
+        else:
+            self.check()
+        return result
 
 
 def digest_paths(paths):
@@ -177,7 +194,7 @@ def namespace_path(path, namespace_root=None):
 def read_verified_receipt(plan, index, plan_sha256=None, *, namespace_root=None):
     """Return the verified receipt, or None if any of its members changed."""
     try:
-        batch = FreshDigestBatch()
+        batch = FreshDigestBatch(scoped_reads=True)
         path = receipt_path(plan, index)
         metadata = batch.read([path] if plan_sha256 else [path, plan])
         receipt = json.loads(path.read_text())
@@ -268,7 +285,7 @@ def export_staged_manifest(plan_path, outfile, donor_plans=()):
     from input_generation_staging_reuse import REUSE_FIELDS, StagedProofReader
 
     plan_path = Path(plan_path).resolve(strict=True)
-    batch = FreshDigestBatch()
+    batch = FreshDigestBatch(scoped_reads=True)
     sources = {}
     primary = None
     reader = StagedProofReader()
@@ -318,7 +335,6 @@ def export_staged_manifest(plan_path, outfile, donor_plans=()):
             # as planning. It reads only sealed metadata and stat identities.
             reader.resolve({**task, "manifest_row": row})
             sources[species] = {**selected[species], "manifest_row": row}
-        batch.check()
     batch.check()
     reader.check()
     output = Path(outfile).resolve()

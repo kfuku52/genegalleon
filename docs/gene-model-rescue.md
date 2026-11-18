@@ -270,6 +270,13 @@ tool identities (including executable and alignment/annotation source hashes)
 and comparison indices. Post-rescue BUSCO never changes this
 selection. Changed inputs/settings/tools require a new output directory.
 
+On supported Linux Lustre mounts, planning hashes each source genome, CDS and GFF
+and records its filesystem, FID and flushed data version in the existing plan.
+Workers reuse the SHA-256 while the same object, path and version match. A new
+generation triggers a fresh content hash. Older plans and other filesystems use
+fresh hashes in each worker. Publication checks cover all consumed inputs.
+This also applies to new plans derived from archived raw predictions.
+
 ## Candidate and model evidence
 
 Pair comparisons use JCVI/DIAMOND; self comparisons use JCVI/LAST alignment and
@@ -481,8 +488,8 @@ verification batch across writes or subsequent commands.
 Finalization also retains independently verified prepared, synteny and rescue
 publications within that command. Repeated dependency guards check the observed
 generations instead of rescanning all their contents. Original and native inputs
-keep a separate fresh byte proof. Both scopes are fenced before publication and
-when reusing an existing export, and a later command starts from full verification.
+keep a separate verification scope with the source-generation policy above. Both scopes are fenced before publication and
+when reusing an existing export. A later command opens a new verification scope.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction

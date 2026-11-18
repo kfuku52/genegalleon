@@ -5073,18 +5073,23 @@ task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
 file_kallisto_reference_fasta=""
 if [[ ${kallisto_reference} == 'species_cds' ]]; then
-  dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
   if [[ -n "${representative_inputs}" ]]; then
-    dir_kallisto_species_cds=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
-      --inputs "${representative_inputs}" --field cds) || exit 1
-  fi
-  kallisto_ref_candidates=()
-  mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
-  if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
-    file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
-  elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
-    echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
-    exit 1
+    # Existing outputs can still trigger a provenance check or automatic rebuild.
+    if [[ ${run_amalgkit_quant} -eq 1 || -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ||
+          -e "${dir_amalgkit_quant}/${sp_ub}" || -e "${dir_amalgkit_quant}/${sp_ub}.zip" ]]; then
+      file_kallisto_reference_fasta=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+        --inputs "${representative_inputs}" --field cds --species "${sp_ub}") || exit 1
+    fi
+  else
+    dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
+    kallisto_ref_candidates=()
+    mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
+    if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
+      file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
+    elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
+      echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
+      exit 1
+    fi
   fi
 elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
   file_kallisto_reference_fasta=${file_longestcds_transcript}

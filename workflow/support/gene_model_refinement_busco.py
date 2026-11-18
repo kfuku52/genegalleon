@@ -20,7 +20,7 @@ from pathlib import Path
 
 from busco_quality_metadata import parse_short_summary
 from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
-from gene_model_refinement import verify_inputs
+from gene_model_refinement import verified_input_rows
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 from rescue_model_store import frozen_model_store_key, iter_accepted_models
 from rescue_swissprot_evidence import COLOURS as SWISSPROT_COLOURS
@@ -346,7 +346,7 @@ def input_pairs(root, cds_dir=None, *, three_stage=False, rescue_output=None):
     request = plan["request"]
     transcriptome_species = request.get("transcriptome_sources", {})
     targets = genomic_targets(request)
-    effective = {r["species"]: r for r in verify_inputs(root / "effective" / "inputs.tsv")}
+    effective = {r["species"]: r for r in verified_input_rows(root / "effective" / "inputs.tsv", ("cds",))}
     if set(effective) != targets:
         raise ValueError("Refinement species membership differs from the frozen plan")
     pairs = {}
