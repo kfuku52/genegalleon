@@ -69,15 +69,36 @@ def select(manifest, task):
     return members[task - 1]
 
 
-def bind(source, target, *, expected_sha256=None):
+def _verified_input_sha256(path, expected_sha256, expected_md5):
+    if expected_md5:
+        sha256 = hashlib.sha256()
+        md5 = hashlib.md5(usedforsecurity=False)
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+                sha256.update(chunk)
+                md5.update(chunk)
+        if md5.hexdigest() != expected_md5:
+            raise ValueError('Downloaded genome does not match the published MD5')
+        actual = sha256.hexdigest()
+    else:
+        actual = file_sha(path)
+    if expected_sha256 is not None and actual != expected_sha256:
+        raise ValueError('Source changed while preparing native input')
+    return actual
+
+
+def bind(source, target, *, expected_sha256=None, expected_md5=None):
+    """Publish or reuse a verified private copy and return its SHA256 for the receipt."""
     source = physical(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     physical(target.parent, directory=True)
-    expected = expected_sha256 or file_sha(source)
     if target.exists() or target.is_symlink():
-        if target.is_symlink() or file_sha(physical(target)) != expected:
+        actual = _verified_input_sha256(source, expected_sha256, expected_md5)
+        if target.is_symlink() or file_sha(physical(target)) != actual:
             raise ValueError(f'Conflicting native input: {target}')
-        return
+        return actual
+    if expected_sha256 is None and not expected_md5:
+        expected_sha256 = file_sha(source)
     # A hardlink to the source changes its ctime and invalidates another
     # command's live source proof. Publish a verified private copy instead.
     fd, name = tempfile.mkstemp(prefix='.cohort-input-', dir=target.parent)
@@ -88,13 +109,13 @@ def bind(source, target, *, expected_sha256=None):
                 shutil.copyfileobj(inp, out, 8 * 1024 * 1024)
             out.flush()
             os.fsync(out.fileno())
-        if file_sha(pending) != expected:
-            raise ValueError('Source changed while preparing native input')
+        actual = _verified_input_sha256(pending, expected_sha256, expected_md5)
         try:
             os.link(pending, target)
         except FileExistsError:
-            if target.is_symlink() or file_sha(physical(target)) != expected:
+            if target.is_symlink() or file_sha(physical(target)) != actual:
                 raise ValueError(f'Conflicting native input: {target}') from None
+        return actual
     finally:
         pending.unlink(missing_ok=True)
 
@@ -161,11 +182,16 @@ def entrypoint(manifest, name, env):
 
 def acquire(manifest, member, workspace):
     source = member['source']
+    expected_sha256 = source.get('sha256')
+    expected_md5 = None
     if source.get('local_path'):
-        genome = physical(source['local_path'])
-        if file_sha(genome) != source['sha256']:
-            raise ValueError('Previously acquired genome has changed')
+        genome = source['local_path']
+        if not expected_sha256:
+            raise ValueError('Local genome requires a SHA256 digest')
     else:
+        expected_md5 = source.get('md5')
+        if expected_md5 and source.get('archive_member'):
+            raise ValueError('The published MD5 of an archive cannot verify an extracted genome')
         row_path = workspace / 'genome.download.tsv'
         row = dict(provider='direct', id=member['species'], species_key=member['species'],
                    genome_url=source['url'], genome_filename=member['filename'],
@@ -184,18 +210,11 @@ def acquire(manifest, member, workspace):
                      'SPECIES_TAXONOMY', 'GENERATE_SPECIES_TRAIT', 'GENE_MODEL_RESCUE', 'GENE_MODEL_REFINEMENT'):
             env['GG_INPUT_RUN_' + flag] = '0'
         entrypoint(manifest, 'gg_input_generation', env)
-        genome = physical(provider_raw_dir('direct', workspace / 'raw', member['species']) / member['filename'])
-        if source.get('md5'):
-            digest = hashlib.md5(usedforsecurity=False)
-            with genome.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                    digest.update(chunk)
-            if source.get('archive_member') or digest.hexdigest() != source['md5']:
-                raise ValueError('Downloaded genome does not match the published MD5')
+        genome = provider_raw_dir('direct', workspace / 'raw', member['species']) / member['filename']
     target = workspace / 'input/species_genome' / member['filename']
-    bind(genome, target, expected_sha256=source.get('sha256') or file_sha(genome))
+    digest = bind(genome, target, expected_sha256=expected_sha256, expected_md5=expected_md5)
     atomic_json(workspace / 'genome.acquired.json',
-                dict(species=member['species'], source=source, path=str(target), sha256=file_sha(target)))
+                dict(species=member['species'], source=source, path=str(target), sha256=digest))
 
 
 def audit(path, workspace, step, species, *, support_root=None):

@@ -340,10 +340,15 @@ def test_acquisition_never_publishes_partial_or_overwrites_existing_input(tmp_pa
         assert not target.exists()
 
 
-def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bad_digest', ['md5', 'sha256'])
+def test_public_acquisition_calls_native_download_only_and_rejects_bad_digest(tmp_path, monkeypatch, bad_digest):
     manifest, _, workspace = fixture(tmp_path)
+    payload = b'download fixture'
+    checksums = dict(md5=hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+                     sha256=hashlib.sha256(payload).hexdigest())
+    checksums[bad_digest] = '0' * len(checksums[bad_digest])
     member = dict(task=1, species='Plant_one', filename='Plant_one.genome.fa',
-                  source=dict(url='https://example.invalid/genome.fa', md5='0' * 32))
+                  source=dict(url='https://example.invalid/genome.fa', **checksums))
     calls = []
     def native(manifest, name, env):
         calls.append((name, env))
@@ -352,9 +357,9 @@ def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_p
                              genome_url=member['source']['url'], genome_filename=member['filename'], genome_archive_member='')]
         root = cohort.provider_raw_dir('direct', workspace / 'raw', member['species'])
         root.mkdir(parents=True)
-        (root / member['filename']).write_text('download fixture')
+        (root / member['filename']).write_bytes(payload)
     monkeypatch.setattr(cohort, 'entrypoint', native)
-    with pytest.raises(ValueError, match='published MD5'):
+    with pytest.raises(ValueError, match='published MD5' if bad_digest == 'md5' else 'changed'):
         cohort.acquire(manifest, member, workspace)
     assert not (workspace / 'genome.acquired.json').exists()
     assert not (workspace / 'input/species_genome/Plant_one.genome.fa').exists()
@@ -363,7 +368,8 @@ def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_p
     assert calls[0][1]['GG_INPUT_RUN_SPECIES_BUSCO'] == '0'
 
 
-def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, monkeypatch):
+@pytest.mark.parametrize('published_md5', [False, True])
+def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, monkeypatch, published_md5):
     manifest, member, workspace = fixture(tmp_path)
     data = b'>contig\nATGAAATAA\n'
     requests = []
@@ -380,8 +386,9 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    member['source'] = dict(url=f'http://127.0.0.1:{server.server_port}/genome.fa',
-                            md5=hashlib.md5(data, usedforsecurity=False).hexdigest())
+    member['source'] = dict(url=f'http://127.0.0.1:{server.server_port}/genome.fa')
+    if published_md5:
+        member['source']['md5'] = hashlib.md5(data, usedforsecurity=False).hexdigest()
     def native(manifest, name, env):
         subprocess.run([sys.executable, str(SUPPORT / 'format_species_inputs.py'), '--provider', 'direct',
                         '--download-only', '--download-manifest', env['GG_INPUT_DOWNLOAD_MANIFEST'],
@@ -391,6 +398,7 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
     try:
         cohort.acquire(manifest, member, workspace)
         first = (workspace / 'genome.acquired.json').read_bytes()
+        assert json.loads(first)['sha256'] == hashlib.sha256(data).hexdigest()
         count = len(requests)
         cohort.acquire(manifest, member, workspace)
         assert first == (workspace / 'genome.acquired.json').read_bytes()
