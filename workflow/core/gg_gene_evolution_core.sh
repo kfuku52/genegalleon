@@ -152,9 +152,9 @@ rsc_origin_min_posterior="${rsc_origin_min_posterior:-0.5}"
 rsc_origin_leave_one_out="${rsc_origin_leave_one_out:-no}"
 rsc_allow_large_dense="${rsc_allow_large_dense:-no}"
 
-# Substitution model in CSUBST and mapdNdS
+# Codon substitution model for the IQ-TREE fit used by CSUBST
 if [[ ${genetic_code} -eq 1 ]]; then
-  codon_model="ECMK07+F+R4" # Standard genetic code
+  codon_model="ECMK07_GY0K+F+R4" # Standard genetic code
 else
   codon_model="GY+F+R4" # Non-standard genetic code
 fi
@@ -6033,7 +6033,7 @@ if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
     --seqtype "CODON${genetic_code}" \
     --prefix csubst \
     --ancestral \
-    --rate \
+    --rate -v \
     "${IQTREE_MEM_ARGS[@]}" \
     --seed 12345 \
     --redo
@@ -6048,7 +6048,7 @@ if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
       iqtree -s csubst.3di/csubst.fasta -te csubst.3di/csubst.nwk \
         -m "${codon_model}" -T AUTO --threads-max "${GG_TASK_CPUS}" \
         --seqtype "CODON${genetic_code}" --prefix csubst.3di/csubst \
-        --ancestral --rate "${IQTREE_MEM_ARGS[@]}" --seed 12345 --redo
+        --ancestral --rate -v "${IQTREE_MEM_ARGS[@]}" --seed 12345 --redo
       (
         cd csubst.3di
         csubst inspect --full_cds_alignment_file csubst.fasta --rooted_tree_file csubst.nwk \
