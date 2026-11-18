@@ -37,16 +37,26 @@ def load_extract_pdb_id():
     return namespace["extract_pdb_id"]
 
 
-def test_create_csubst_site_archive_marks_and_verifies_completed_zip(tmp_path):
+def test_create_csubst_site_archive_marks_and_verifies_completed_zip(tmp_path, monkeypatch):
     mod = load_module()
     output = tmp_path / "csubst_site_trait_K2"
     output.mkdir()
     (output / "summary.pdf").write_bytes(b"pdf")
 
+    checks = []
+    testzip = zipfile.ZipFile.testzip
+
+    def record_crc_check(archive):
+        checks.append(archive.filename)
+        return testzip(archive)
+
+    monkeypatch.setattr(zipfile.ZipFile, "testzip", record_crc_check)
     archive_path = mod.create_csubst_site_archive(output)
+    assert len(checks) == 1
 
     assert archive_path == Path(f"{output}.zip")
     assert mod.csubst_site_archive_is_complete(archive_path)
+    assert len(checks) == 1
     with zipfile.ZipFile(archive_path) as archive:
         assert archive.comment == mod.CSUBST_SITE_ARCHIVE_COMMENT
         assert archive.read("summary.pdf") == b"pdf"

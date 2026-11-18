@@ -13,11 +13,11 @@ python workflow/support/prepare_orthogroup_copy_number.py \
   --dated_species_tree dated_species_tree.nwk --validate-only
 ```
 
-The workflow performs this check before preparing or reusing a copy-number
-matrix. This matters because an old cached matrix must not bypass corrected
-input validation. In particular, pandas can rename duplicate species headers
-or infer an index from extra cells, and native CAFE can truncate fractional
-counts. These inputs are rejected before producing output.
+Matrix preparation checks the counts and tree as it reads them. A successful
+build replaces the previous matrix and plots together. An ordinary rerun with
+matching provenance skips the input parser. The workflow runs the standalone
+check when adopting an existing matrix without provenance or when the stage
+is requested with `artifact_stale_policy=reuse` and a recorded matrix exists.
 
 ## Reusing a saved CAFE fit
 
@@ -27,13 +27,15 @@ python workflow/support/validate_cafe_outputs.py \
   --tree dated_species_tree.nwk --output-dir cafe_output
 ```
 
-Before adopting a manifest-free fit, before recording a new fit, and when reusing
-a recorded fit, the workflow checks species and topology, branch/family
+Before adopting a manifest-free fit or recording a new fit, the workflow
+checks species and topology, branch/family
 identities, and agreement of reconstructed extant counts with the supplied
 matrix. Foreign or duplicate families, malformed changes and ambiguous headers
 are rejected. Input families legitimately omitted by CAFE, such as root-absent
 families, are reported as omissions and are not imputed as zeros. Native
-`FamilyID` and `#FamilyID` headers are supported.
+`FamilyID` and `#FamilyID` headers are supported. Ordinary reruns rely on
+the recorded input and output signatures. Requesting the stage with
+`artifact_stale_policy=reuse` also runs the semantic check on an existing fit.
 
 This semantic check cannot establish the gamma categories, optimisation settings
 or other historical parameters of an unrecorded fit. Preserve its original

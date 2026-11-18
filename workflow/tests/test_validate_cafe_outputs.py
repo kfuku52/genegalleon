@@ -1,6 +1,5 @@
 """A saved fit needs scientific identity checks before generic legacy adoption."""
 import importlib.util
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -81,24 +80,6 @@ def test_count_domain_is_finite_nonnegative_integral(value):
 
 def test_count_identity_is_not_rounded_through_binary_float():
     assert validator.count("9007199254740993") == 9007199254740993
-
-
-@pytest.mark.parametrize("active", ["0", "1"])
-def test_raw_validation_runs_before_cached_matrix_adoption(tmp_path, active):
-    raw = tmp_path / "counts.tsv"
-    raw.write_text("besthit_0.95\tOrthogroup\tA\tA\tB\nY\tOG1\t1\t9\t2\n")
-    tree = tmp_path / "tree.nwk"
-    tree.write_text("(A:1,B:1);\n")
-    cache = tmp_path / "already-prepared.tsv"
-    cache.write_text("existing scientific matrix must remain unchanged\n")
-    core = (SUPPORT.parent / "core/gg_genome_evolution_core.sh").read_text()
-    block = core.split('task="Orthogroup copy-number matrix preparation"', 1)[1]
-    block = 'if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then' + block.split('if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then', 1)[1].split('copy_number_needs_update=0', 1)[0]
-    env = {**os.environ, "run_orthogroup_copy_number_stage": active, "gg_support_dir": str(SUPPORT),
-           "file_orthogroup_genecount_selected": str(raw), "file_dated_species_tree": str(tree)}
-    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], env=env, capture_output=True, text=True, timeout=30)
-    assert (result.returncode == 0) == (active == "0"), result.stdout + result.stderr
-    assert cache.read_text() == "existing scientific matrix must remain unchanged\n"
 
 
 def test_ambiguous_family_id_aliases_are_rejected(tmp_path):

@@ -817,14 +817,21 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path, long
         opened.clear()
         summary.write_text(original_summary, encoding="utf-8")
         assert mod.archive_matches_source(archive, summary)
-        assert sorted(opened) == sorted(names)
+        assert opened == [
+            f"{archive.stem}/package_metadata.tsv",
+            f"{archive.stem}/candidate_manifest.tsv",
+            f"{archive.stem}/skipped_candidates.tsv",
+            zipped_manifest_info.filename,
+        ]
 
     original_archive = archive.read_bytes()
-    # A member outside the report manifests must still pass its CRC before reuse.
+    # An explicit full audit still detects damage to an unread payload.
     with zipfile.ZipFile(archive, "a") as zipped:
         zipped.writestr(f"{archive.stem}/extra.bin", b"unlisted-payload", compress_type=zipfile.ZIP_STORED)
     archive.write_bytes(archive.read_bytes().replace(b"unlisted-payload", b"unlisted-damaged"))
-    assert not mod.archive_matches_source(archive, summary)
+    assert mod.archive_matches_source(archive, summary)
+    with zipfile.ZipFile(archive) as zipped:
+        assert zipped.testzip() == f"{archive.stem}/extra.bin"
     archive.write_bytes(original_archive)
     with zipfile.ZipFile(archive, "a") as zipped:
         original_manifest = zipped.read(zipped_manifest_info.filename)
@@ -1060,7 +1067,7 @@ def test_package_threshold_writes_valid_empty_zip(tmp_path):
 
 
 @pytest.mark.parametrize("replaced", ["summary", "archive"])
-def test_archive_reuse_rejects_replacement_during_payload_check(tmp_path, monkeypatch, replaced):
+def test_archive_reuse_rejects_replacement_during_manifest_read(tmp_path, monkeypatch, replaced):
     mod = load_module()
     summary = tmp_path / "summary.tsv"
     write_summary(summary)
@@ -1075,7 +1082,7 @@ def test_archive_reuse_rejects_replacement_during_payload_check(tmp_path, monkey
 
     def replace_on_read(zipped, member, *args, **kwargs):
         name = member.filename if isinstance(member, zipfile.ZipInfo) else member
-        if name.endswith("/README.txt"):
+        if name.endswith("/candidate_manifest.tsv"):
             replacement.replace(target)
         return open_member(zipped, member, *args, **kwargs)
 

@@ -899,6 +899,7 @@ def test_ensure_uniprot_sprot_metadata_tsv_builds_runtime_meta_from_runtime_dat(
         'mkdir -p "$(dirname "${runtime_prefix}")" "$(dirname "${workspace_dir}/downloads/locks/.x")"; '
         "printf 'ID   TEST1_HUMAN              Reviewed;         100 AA.\\nAC   P12345;\\nOS   Homo sapiens (Human).\\nOX   NCBI_TaxID=9606;\\n//\\n' "
         '| gzip -c > "${runtime_dat}"; '
+        'gzip() { touch standalone-gzip-called; command gzip "$@"; }; '
         'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "${runtime_prefix}"); '
         'printf "meta=%s\\n" "${meta_path}"; '
         'test -s "${meta_path}"; printf "size=%s\\n" "$?"; '
@@ -909,6 +910,7 @@ def test_ensure_uniprot_sprot_metadata_tsv_builds_runtime_meta_from_runtime_dat(
 
     completed = run_bash(command, cwd=tmp_path)
     assert completed.returncode == 0, completed.stderr
+    assert not (tmp_path / "standalone-gzip-called").exists()
     lines = completed.stdout.strip().splitlines()
     assert lines[0] == f"meta={runtime_prefix}.meta.tsv.gz"
     assert lines[1] == "size=0"
@@ -952,9 +954,9 @@ def test_uniprot_metadata_replaces_a_truncated_runtime_dat_cache(tmp_path):
         f"workspace_dir={shlex.quote(str(workspace_dir))}; "
         f"runtime_prefix={shlex.quote(str(runtime_prefix))}; "
         f"runtime_dat={shlex.quote(str(runtime_dat))}; "
-        "_download_uniprot_sprot_dat_to_file() { "
+        "curl() { "
         "printf 'ID   REPLACED_HUMAN           Reviewed;         100 AA.\\nAC   R12345;\\n//\\n' "
-        '| gzip -c > "$1"; }; '
+        '| gzip -c > "${!#}"; }; '
         'meta_path=$(ensure_uniprot_sprot_metadata_tsv "${workspace_dir}" "${runtime_prefix}"); '
         'gzip -t "${runtime_dat}"; '
         "python -c \"import gzip,sys; t=gzip.open(sys.argv[1],'rt',encoding='utf-8').read(); "
@@ -967,30 +969,36 @@ def test_uniprot_metadata_replaces_a_truncated_runtime_dat_cache(tmp_path):
     assert completed.stdout.strip() == "has_replacement=1"
 
 
-def test_uniprot_dat_download_rejects_corrupt_gzip_without_replacing_output(tmp_path):
-    output = tmp_path / "uniprot_sprot.dat.gz"
-    output.write_bytes(b"known-good-placeholder")
-    command = (
+def test_uniprot_dat_download_rejects_truncated_gzip_without_publishing(tmp_path):
+    cached = tmp_path / "runtime.dat.gz"
+    cached.write_bytes(b"previous cache")
+    download = tmp_path / "download.gz"
+    download.write_bytes(gzip.compress(b"ID   TEST1_HUMAN\nAC   P12345;\n//\n")[:-4])
+    completed = run_bash(
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"output={shlex.quote(str(output))}; "
-        "curl() { "
-        "local previous='' argument output_path=''; "
-        'for argument in "$@"; do '
-        'if [[ "${previous}" == -o ]]; then output_path=${argument}; fi; '
-        "previous=${argument}; "
-        "done; "
-        "printf 'not-gzip' > \"${output_path}\"; "
-        "}; "
-        'if _download_uniprot_sprot_dat_to_file "${output}"; then exit 91; fi; '
-        'printf "content=%s\\n" "$(cat "${output}")"; '
-        'find "$(dirname "${output}")" -maxdepth 1 -name "tmp.uniprot_sprot_dat.*" -print'
+        'curl() { cp download.gz "${!#}"; }; '
+        '_prepare_uniprot_sprot_meta_to_file meta.tsv.gz system runtime',
+        cwd=tmp_path,
     )
+    assert completed.returncode != 0
+    assert cached.read_bytes() == b"previous cache"
+    assert set(tmp_path.iterdir()) == {cached, download}
 
-    completed = run_bash(command, cwd=tmp_path)
 
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "content=known-good-placeholder"
-    assert "failed gzip validation" in completed.stderr
+def test_uniprot_metadata_preserves_parse_error_for_intact_gzip(tmp_path):
+    cached = tmp_path / "runtime.dat.gz"
+    cached.write_bytes(gzip.compress(b"ID   TEST1_HUMAN\nAC   P12345;\nDR   GO; invalid\n//\n"))
+    (tmp_path / "system.dat.gz").write_bytes(gzip.compress(b"ID   TEST2_HUMAN\nAC   Q12345;\n//\n"))
+    completed = run_bash(
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        'curl() { touch unexpected-download; return 1; }; '
+        '_prepare_uniprot_sprot_meta_to_file meta.tsv.gz system runtime',
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert "Malformed UniProt GO" in completed.stderr
+    assert not (tmp_path / "meta.tsv.gz").exists()
+    assert not (tmp_path / "unexpected-download").exists()
 
 
 def test_gg_array_download_once_accepts_nonempty_ready_marker(tmp_path):

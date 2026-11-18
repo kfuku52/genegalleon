@@ -49,7 +49,7 @@ except ImportError:  # direct script execution
 from boolean_values import strtobool as strtobool
 
 
-def csubst_site_archive_is_complete(path):
+def csubst_site_archive_is_complete(path, *, check_crc=False):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
         return False
@@ -62,7 +62,7 @@ def csubst_site_archive_is_complete(path):
                 return False
             if len({info.filename for info in members}) != len(members):
                 return False
-            return archive.testzip() is None
+            return not check_crc or archive.testzip() is None
     except (OSError, RuntimeError, zipfile.BadZipFile):
         return False
 
@@ -107,7 +107,7 @@ def create_csubst_site_archive(directory):
         )
         with zipfile.ZipFile(temporary_zip, "a") as archive:
             archive.comment = CSUBST_SITE_ARCHIVE_COMMENT
-        if not csubst_site_archive_is_complete(temporary_zip):
+        if not csubst_site_archive_is_complete(temporary_zip, check_crc=True):
             raise RuntimeError(f"New CSUBST site archive failed verification: {temporary_zip}")
         with temporary_zip.open("rb") as handle:
             os.fsync(handle.fileno())
@@ -1940,18 +1940,19 @@ if __name__ == "__main__":
                 f"{csubst_nonsyn_recode_output_suffix(args.csubst_nonsyn_recode)}"
             )
             print(f"{datetime.datetime.now()}: Started processing: {out_name}", flush=True)
-            file_trait_color = find_file_trait_color(trait)
             dir_out = os.path.realpath(os.path.join(args.dir_out, out_name))
             out_zip = os.path.join(cwd, dir_out + ".zip")
-            quarantined_zip = None
-            if os.path.exists(out_zip) and not csubst_site_archive_is_complete(out_zip):
+            # gg-cache-guard: audited - publication verified the marked ZIP before retiring its source.
+            if csubst_site_archive_is_complete(out_zip):
+                print(f"Skipped arity = {arity}. Completed output ZIP already exists: {out_zip}", flush=True)
+                continue
+            if os.path.exists(out_zip):
                 quarantined_zip = quarantine_unverified_csubst_site_archive(out_zip)
                 print(
                     f"Rebuilding unverified CSUBST site ZIP; previous file retained at: {quarantined_zip}",
                     flush=True,
                 )
-            if (not os.path.exists(dir_out)) and (not os.path.exists(out_zip)):
-                os.makedirs(dir_out)
+            os.makedirs(dir_out, exist_ok=True)
             conditions = True
             conditions &= cb["OCNany2spe"] >= min_OCNany2spe
             conditions &= cb["omegaCany2spe"] >= min_omegaCany2spe
@@ -1969,21 +1970,15 @@ if __name__ == "__main__":
             if conditions.sum() == 0:
                 outfile = os.path.join(dir_out, out_name + ".txt")
                 print("No branch combinations to analyze.", flush=True)
-                if csubst_site_archive_is_complete(out_zip):
-                    print(f"Skipped arity = {arity}. Verified output ZIP already exists: {out_zip}", flush=True)
-                elif os.path.exists(dir_out):
-                    print(f"Writing a placeholder file to: {outfile}", flush=True)
-                    with open(outfile, "w") as f:
-                        f.write("No analyzable branch combinations.\n")
-                    create_csubst_site_archive(dir_out)
-                    shutil.rmtree(dir_out)
-                    cleanup_quarantined_csubst_site_archives(out_zip)
+                print(f"Writing a placeholder file to: {outfile}", flush=True)
+                with open(outfile, "w") as f:
+                    f.write("No analyzable branch combinations.\n")
+                create_csubst_site_archive(dir_out)
+                shutil.rmtree(dir_out)
+                cleanup_quarantined_csubst_site_archives(out_zip)
                 continue
             cb_passed = cb.loc[conditions, :].sort_values(by="orthogroup").reset_index(drop=True)
-            # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
-            if csubst_site_archive_is_complete(out_zip):
-                print(f"Skipped arity = {arity}. Verified output ZIP already exists: {out_zip}", flush=True)
-                continue
+            file_trait_color = find_file_trait_color(trait)
             plot_scatter(
                 cb=cb_passed,
                 xcol="OCNany2spe",

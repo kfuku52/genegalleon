@@ -1384,7 +1384,6 @@ def archive_matches_source(
                 if skipped_manifest.to_dict(orient="records") != expected_skipped.to_dict(orient="records"):
                     return False
             output_manifests = sorted(name for name in member_names if name.endswith("/csubst.outputs.tsv"))
-            parsed_members = {metadata_member, candidate_manifest_member, skipped_manifest_member}
             paths = ["candidate_tsv", "focused_tree_site_pdf", "report_pdf", "csubst_sites_dir"]
             for candidate_tsv, focused_pdf, report_pdf, site_dir in candidate_manifest[paths].itertuples(
                 index=False, name=None
@@ -1400,15 +1399,6 @@ def archive_matches_source(
                     return False
                 if not archive_site_outputs_are_complete(archive, output_manifests[index]):
                     return False
-                parsed_members.add(output_manifests[index])
-            # Reading a ZIP member to EOF checks its CRC. The TSV parsers have
-            # already consumed their entire members, including the header-only tables.
-            for member in archive.infolist():
-                if member.filename in parsed_members:
-                    continue
-                with archive.open(member) as handle:
-                    while handle.read(1024 * 1024):
-                        pass
         return (ContentDigestCache.signature(archive_path) == archive_identity
                 and ContentDigestCache.signature(source_summary) == summary_identity)
     except Exception:
