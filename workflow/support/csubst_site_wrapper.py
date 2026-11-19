@@ -18,7 +18,8 @@ import textwrap
 import uuid
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
+from itertools import groupby, repeat
+from operator import itemgetter
 from pathlib import Path
 
 import numpy
@@ -402,8 +403,8 @@ pandas.set_option("display.max_columns", None)
 
 def _get_matplotlib():
     import matplotlib
+    import matplotlib.figure
     import matplotlib.patches
-    import matplotlib.pyplot
 
     matplotlib.rcParams["font.size"] = 8
     matplotlib.rcParams["font.family"] = "Helvetica"
@@ -426,19 +427,19 @@ def require_pdf_dependencies():
 def plot_scatter(cb, xcol, ycol, outbase, xmax=10, ymax=10, nbin=50, polygon_xmin=0, polygon_ymin=0):
     matplotlib = _get_matplotlib()
     axis_margin_rate = 1.02
-    cb_plot = cb.copy()
-    cb_plot[xcol] = cb_plot[xcol].clip(0, xmax)
-    cb_plot[ycol] = cb_plot[ycol].clip(0, ymax)
+    x = cb[xcol].clip(0, xmax)
+    y = cb[ycol].clip(0, ymax)
     wr = (0.8, 0.2)
     hr = (0.2, 0.8)
-    fig, axes = matplotlib.pyplot.subplots(
-        nrows=2, ncols=2, figsize=(3.2, 3.2), sharey=False, sharex=False, width_ratios=wr, height_ratios=hr
+    fig = matplotlib.figure.Figure(figsize=(3.2, 3.2))
+    axes = fig.subplots(
+        nrows=2, ncols=2, sharey=False, sharex=False, width_ratios=wr, height_ratios=hr
     )
     axes = axes.flat
     axes[1].axis("off")
     ax = axes[0]
     ax.axvline(x=polygon_xmin, color="red", alpha=0.3)
-    ax.hist(x=cb_plot[xcol], bins=numpy.arange(0, 1.001 + (1 / nbin), 1 / nbin) * xmax, color="darkblue")
+    ax.hist(x=x, bins=numpy.arange(0, 1.001 + (1 / nbin), 1 / nbin) * xmax, color="darkblue")
     ax.set_xlim(0, xmax * axis_margin_rate)
     ax.set_xticks([])
     ax.set_yscale("log")
@@ -446,7 +447,7 @@ def plot_scatter(cb, xcol, ycol, outbase, xmax=10, ymax=10, nbin=50, polygon_xmi
     ax = axes[3]
     ax.axhline(y=polygon_ymin, color="red", alpha=0.3)
     ax.hist(
-        x=cb_plot[ycol],
+        x=y,
         bins=numpy.arange(0, 1.001 + (1 / nbin), 1 / nbin) * ymax,
         color="darkblue",
         orientation="horizontal",
@@ -460,8 +461,8 @@ def plot_scatter(cb, xcol, ycol, outbase, xmax=10, ymax=10, nbin=50, polygon_xmi
     polygon_coord = [[polygon_xmin, polygon_ymin], [xmax, polygon_ymin], [xmax, ymax], [polygon_xmin, ymax]]
     ax.add_patch(matplotlib.patches.Polygon(polygon_coord, color="red", alpha=0.3))
     ax.hexbin(
-        cb_plot[xcol].values,
-        cb_plot[ycol].values,
+        x.values,
+        y.values,
         gridsize=nbin,
         extent=plot_range,
         cmap="jet",
@@ -955,16 +956,33 @@ def skip_lower_order(cb_passed, arity, trait, already_analyzed_in_greater_K):
     bid_cols = cb_passed.columns[cb_passed.columns.str.startswith("branch_id_")].tolist()
     keep_indices = []
     analyzed_by_og = already_analyzed_in_greater_K[trait]
-    for row in cb_passed.loc[:, ["orthogroup"] + bid_cols].itertuples(index=True, name=None):
-        row_index = row[0]
-        og = row[1]
-        branch_id_set = frozenset(row[2:])
+    rows = cb_passed.loc[:, ["orthogroup"] + bid_cols].itertuples(index=True, name=None)
+    # The caller sorts by family. Keep one family's lookup in memory; a
+    # noncontiguous repeat rebuilds from the authoritative, ordered history.
+    for og, family_rows in groupby(rows, key=itemgetter(1)):
         analyzed_sets = analyzed_by_og.setdefault(og, [])
-        if any(branch_id_set.issubset(analyzed_set) for analyzed_set in analyzed_sets):
-            print(f"Skipped. Subset of already analyzed higher order convergence: {og} {branch_id_set}", flush=True)
-            continue
-        analyzed_sets.append(branch_id_set)
-        keep_indices.append(row_index)
+        by_branch = None
+        for row in family_rows:
+            branch_id_set = frozenset(row[2:])
+            if len(analyzed_sets) < 16:
+                # For short histories a direct scan costs less than building an index.
+                candidates = analyzed_sets
+            else:
+                if by_branch is None:
+                    by_branch = {}
+                    for previous in analyzed_sets:
+                        for branch in previous:
+                            by_branch.setdefault(branch, []).append(previous)
+                # Every superset must contain even the least frequent branch.
+                candidates = min((by_branch.get(b, ()) for b in branch_id_set), key=len, default=analyzed_sets)
+            if any(branch_id_set.issubset(previous) for previous in candidates):
+                print(f"Skipped. Subset of already analyzed higher order convergence: {og} {branch_id_set}", flush=True)
+                continue
+            analyzed_sets.append(branch_id_set)
+            if by_branch is not None:
+                for branch in branch_id_set:
+                    by_branch.setdefault(branch, []).append(branch_id_set)
+            keep_indices.append(row[0])
     cb_passed = cb_passed.loc[keep_indices, :].reset_index(drop=True)
     num_after_filtering = cb_passed.shape[0]
     print(

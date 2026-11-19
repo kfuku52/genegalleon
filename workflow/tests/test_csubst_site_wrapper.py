@@ -343,6 +343,22 @@ def test_skip_lower_order_filters_subset_rows_per_orthogroup():
     assert frozenset([5, 6]) in updated["traitA"]["OG2"]
 
 
+def test_indexed_subsets_keep_order_and_family_trait_boundaries():
+    mod = load_module()
+    # A full history activates the index. A shared branch alone is not a hit.
+    history = [frozenset((1, k, k + 100)) for k in range(2, 34)]
+    prior = {"leaf": {"A": list(history)}, "stem": {"A": [frozenset((1, 99))]}}
+    frame = pandas.DataFrame(
+        [("A", 2, 102), ("A", 1, 99), ("B", 2, 102), ("A", 99, 1), ("A", 2, 103)],
+        columns=["orthogroup", "branch_id_1", "branch_id_2"],
+    )
+    kept, state = mod.skip_lower_order(frame, 2, "leaf", prior)
+    pandas.testing.assert_frame_equal(kept, frame.iloc[[1, 2, 4]].reset_index(drop=True))
+    assert state["leaf"]["A"] == history + [frozenset((1, 99)), frozenset((2, 103))]
+    assert state["leaf"]["B"] == [frozenset((2, 102))]
+    assert state["stem"]["A"] == [frozenset((1, 99))]
+
+
 def test_load_annotation_besthits_reads_besthit_columns_only(tmp_path):
     mod = load_module()
     annot_dir = tmp_path / "Orthogroups_filtered"

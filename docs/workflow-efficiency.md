@@ -1,5 +1,39 @@
 # Workflow helper efficiency
 
+## CSUBST site-summary selection and plots
+
+When lower-order subsets are skipped, the site summary needs to know whether
+a previously retained combination in the same family contains *every* branch
+of the new one. Long family histories are indexed by branch, so only the
+groups containing the least frequent query branch need the full subset test.
+Short histories use a direct scan. Both paths preserve selection order across
+arities. When plotting, only the two axes are clipped; saving the plot no
+longer leaves a figure registered with pyplot.
+
+These are stage measurements, not full workflow runtimes. On Linux arm64
+GeneGalleon Docker with CSUBST 1.19.0, compared with commit `5b465d3f`,
+one warmup followed by three fresh processes per variant gave these medians:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| Subset selection: 4 families, 9,600 quartets + 14,400 pairs | 1.325 s | 0.070 s |
+| Subset selection: 2,400 families, 9,600 quartets + 19,200 pairs | 0.054 s | 0.053 s |
+| Eight scatter plots from an 80,000 × 64 table, peak process RSS | 345 MiB | 222 MiB |
+
+The retained rows and their order matched on both selection workloads. The
+eight PDF/SVG pairs matched byte for byte with fixed export metadata. The
+baseline left eight pyplot figures open and the new code left none.
+To reproduce, run the following from the repository root. Pass
+`--support /path/to/baseline/workflow/support` to the same script for the
+baseline (make that directory visible to the runtime).
+
+```bash
+for case in selection sparse figures; do
+  bash workflow/tests/run_in_runtime.sh env MPLBACKEND=Agg \
+    python workflow/benchmarks/benchmark_csubst_site_summary.py "$case"
+done
+```
+
 ## Complete native ClipKIT runtimes
 
 `gg_gene_evolution` accepts `clipkit_binary` and an optional
