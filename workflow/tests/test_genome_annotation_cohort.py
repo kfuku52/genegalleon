@@ -82,13 +82,13 @@ def test_cpu_format_reuse_audits_original_prediction_without_gpu(tmp_path, monke
             verify(*arguments)
 
 
-def prediction(workspace):
+def prediction(workspace, cds_name='Plant_one.cds.fa'):
     root = workspace / 'output/genome_prediction/oriongeno/Plant_one'
     formatted = root / 'formatted/generation'
     for role in ('cds', 'gff', 'genome'):
         directory = formatted / ('species_' + role)
         directory.mkdir(parents=True)
-        filename = 'Plant_one.gff3' if role == 'gff' else 'Plant_one.' + role + '.fa'
+        filename = {'gff': 'Plant_one.gff3', 'cds': cds_name, 'genome': 'Plant_one.genome.fa'}[role]
         (directory / filename).write_text('formatted fixture ' + role)
         (directory / (filename + '.audit.json')).write_text('formatter audit fixture')
     gff = root / 'Plant_one.gff3'
@@ -246,6 +246,9 @@ def test_unique_frozen_membership_and_exact_lineage(tmp_path):
 
 @pytest.mark.parametrize('name,expected', [
     ('Plant_one.cds.fa', True), ('Plant_one.cds.fa.gz', True), ('Plant_one.FASTA', True),
+    ('Plant_one_gff3.derived.cds.fa.gz', True),
+    ('Plant_one_gff3.derived.cds.fa.gz.cds-normalisation.json', False),
+    ('Plant_one_two_gff3.derived.cds.fa.gz', False),
     ('Plant_one.extra.cds.fa', False), ('Plant_one_two.cds.fa', False),
     ('Other_species.cds.fa', False), ('Plant_one.cds.fa.audit.json', False),
 ])
@@ -413,7 +416,8 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
 def test_busco_requires_current_native_prediction_and_successful_native_proof(tmp_path, monkeypatch, damage):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)
-    root = prediction(workspace)
+    cds_name = 'Plant_one_gff3.derived.cds.fa.gz'
+    root = prediction(workspace, cds_name)
     calls = []
     def native(manifest, name, env):
         calls.append(env)
@@ -428,8 +432,8 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
         assert env['GG_ARRAY_TASK_ID'] == '1'
         inputs = workspace / 'busco/input'
         assert {p.name for p in inputs.iterdir()} == {'species_cds'}
-        assert (inputs / 'species_cds/Plant_one.cds.fa').read_bytes() == (
-            root / 'formatted/generation/species_cds/Plant_one.cds.fa').read_bytes()
+        assert (inputs / 'species_cds' / cds_name).read_bytes() == (
+            root / 'formatted/generation/species_cds' / cds_name).read_bytes()
         if damage in {'wrong_lineage', 'none'}:
             phase_workspace = workspace / 'busco'
             output = phase_workspace / 'output/short.txt'

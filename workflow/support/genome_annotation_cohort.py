@@ -37,7 +37,7 @@ ANNOTATION_RUN_FLAGS = ('COLLECT_GFF_INFO', 'BUSCO_CDS', 'UNIPROT_ANNOTATION', '
 
 def matches_formatted_cds(filename, species):
     """Match the complete frozen ID and a known CDS/FASTA filename suffix."""
-    suffixes = {role + extension for role in ('', '.cds') for extension in FASTA_EXTENSIONS}
+    suffixes = {role + extension for role in ('', '.cds', '_gff3.derived.cds') for extension in FASTA_EXTENSIONS}
     return filename.startswith(species) and filename[len(species):].lower() in suffixes
 
 
@@ -239,8 +239,12 @@ def annotate(manifest, member, workspace, phase):
     prediction = workspace / 'output/genome_prediction/oriongeno' / species
     phase_workspace = workspace
     if phase == 'busco':
-        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species)
-        formatted = audit(prediction / 'format.provenance.json', workspace, 'genome_annotation_oriongeno_format', species)
+        support_root = manifest.get('prediction_support_root')
+        support = Path(support_root) if support_root else None
+        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species,
+              support_root=support)
+        formatted = audit(prediction / 'format.provenance.json', workspace, 'genome_annotation_oriongeno_format', species,
+                          support_root=support)
         entry = next(e for e in formatted['outputs'] if e['label'] == 'formatted')
         directory = resolve_reference(entry, workspace / 'output/.gg_global_artifacts', workspace)
         phase_workspace = workspace / 'busco'
@@ -331,14 +335,15 @@ def main():
     if file_sha(path) != args.manifest_sha256:
         parser.error('Cohort manifest changed')
     manifest = json.loads(path.read_text())
-    if args.phase == 'format':
+    has_prediction_runtime = args.prediction_runtime_root is not None or args.prediction_runtime_manifest_sha256 is not None
+    if args.phase == 'format' or (args.phase == 'busco' and has_prediction_runtime):
         if args.prediction_runtime_root is None or args.prediction_runtime_manifest_sha256 is None:
-            parser.error('Format resumption requires its original prediction runtime')
+            parser.error('Resumption requires the complete original prediction runtime binding')
         previous = annotation_runtime(manifest, 'predict', args.prediction_runtime_root,
                                       args.prediction_runtime_manifest_sha256)
         manifest = {**manifest, 'prediction_support_root': str(Path(previous['runtime_root']) / 'workflow/support')}
-    elif args.prediction_runtime_root is not None or args.prediction_runtime_manifest_sha256 is not None:
-        parser.error('Original prediction runtime is only valid for format resumption')
+    elif has_prediction_runtime:
+        parser.error('Original prediction runtime is only valid for format or BUSCO resumption')
     manifest = acquisition_runtime(manifest, args.phase, args.acquisition_runtime_root,
                                    args.acquisition_runtime_manifest_sha256)
     manifest = annotation_runtime(manifest, args.phase, args.annotation_runtime_root,
