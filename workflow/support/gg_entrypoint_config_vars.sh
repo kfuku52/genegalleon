@@ -538,6 +538,7 @@ min_num_species
 min_percent_species_coverage
 n_gamma_cats_cafe
 nucleotide_model
+omark_cache_dir
 omark_db_path
 orthogroup_copy_number_max_size_differential
 orthogroup_copy_number_trait
@@ -647,6 +648,9 @@ EOF
       ;;
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
+run_species_omark
+omark_db_path
+omark_cache_dir
 run_gene_model_refinement
 gene_model_refinement_dir
 gene_model_refinement_policy

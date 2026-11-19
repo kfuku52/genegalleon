@@ -1054,17 +1054,8 @@ run_shared_species_omark_stage() {
   local task="OMArk analysis of species-wise protein input files"
   local source_species_input_dir=""
   local -a source_species_input_fasta=()
-  local -a species_input_fasta=()
-  local -a input_species_set=()
-  local -a existing_species_dirs=()
-  local protein_full protein_file sp_ub omamer_out omark_outdir sum_file omamer_query
-  local input_species existing_dir existing_species existing_found
-  local omark_db_file=""
-  local missing_omark_outputs=0
-  local omark_needs_update=0
-  local -a omark_provenance_args=()
-  local -a omamer_query_files=()
-
+  local -a omark_args=() legacy_args=()
+  local source species status=0 legacy=0 needs_update=0
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
   fi
@@ -1085,130 +1076,47 @@ run_shared_species_omark_stage() {
     exit 1
   fi
 
-  mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
-  gg_artifact_contract_init omark_provenance_args "genome_evolution_species_omark" "all_species" "${genome_evolution_provenance_dir}/omark.species.json"
-  omark_provenance_args+=(
-    --input "species_sequences=${source_species_input_dir}"
-    --parameter "input_sequence_mode=${input_sequence_mode}"
-    --parameter "genetic_code=${genetic_code}"
-    --parameter "omark_db_path=${omark_db_path}"
-  )
-  gg_artifact_add_input_if_present omark_provenance_args "species_genetic_code" "${file_species_genetic_code}"
-  for input_species in "${input_species_set[@]}"; do
-    omark_provenance_args+=(
-      --output "omamer_${input_species}=${dir_species_omamer}/${input_species}.omamer"
-      --output "summary_${input_species}=${dir_species_omark}/${input_species}/${input_species}.sum"
+  for source in "${source_species_input_fasta[@]}"; do
+    species=$(gg_species_name_from_path "$(basename "${source}")") || return $?
+    omark_args+=(--input "${species}" "${source}")
+    if [[ -d "${dir_species_omark}/${species}" && ! -L "${dir_species_omark}/${species}" ]]; then legacy=1; fi
+    legacy_args+=(
+      --output "omamer_${species}=${dir_species_omamer}/${species}.omamer"
+      --output "summary_${species}=${dir_species_omark}/${species}/${species}.sum"
     )
   done
-  gg_artifact_prepare_stage omark_needs_update run_species_omark "${omark_provenance_args[@]}" || return $?
-  if [[ ${omark_needs_update} -ne 1 ]]; then
-    for protein_full in "${source_species_input_fasta[@]}"; do
-      echo "Skipped OMArk: $(basename "${protein_full}")"
-    done
-    echo "$(date): End: ${task}"
-    return 0
+  # Honour the existing reuse policy for pre-cache, local results. They
+  # cannot seed the shared store: their tool and DB identities are unknown.
+  if [[ ${legacy} -eq 1 ]]; then
+    local -a contract=()
+    gg_artifact_contract_init contract "genome_evolution_species_omark" "all_species" "${genome_evolution_provenance_dir}/omark.species.json"
+    contract+=(--input "species_sequences=${source_species_input_dir}"
+      --parameter "input_sequence_mode=${input_sequence_mode}" --parameter "genetic_code=${genetic_code}"
+      --parameter "omark_db_path=${omark_db_path}")
+    gg_artifact_add_input_if_present contract "species_genetic_code" "${file_species_genetic_code}"
+    gg_artifact_prepare_stage needs_update run_species_omark "${contract[@]}" "${legacy_args[@]}" || return $?
+    if [[ ${needs_update} -eq 0 ]]; then
+      for source in "${source_species_input_fasta[@]}"; do echo "Skipped OMArk: $(basename "${source}")"; done
+      return 0
+    fi
+    clear_directory_contents_safe "${dir_species_omark}" || return $?
+    clear_directory_contents_safe "${dir_species_omamer}" || return $?
   fi
-  if [[ -d "${dir_species_omamer}" ]]; then
-    clear_directory_contents_safe "${dir_species_omamer}" || return 1
+  omark_db_resolved=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}") || return $?
+  omark_args+=(--genome "${dir_genome_evolution}" --db "${omark_db_resolved}"
+    --cache "${omark_cache_dir:-${gg_workspace_output_dir}/species_omark_cache}"
+    --scratch "${dir_tmp}/omamer_queries" --threads "${GG_TASK_CPUS}")
+  [[ ${delete_tmp_dir} -eq 1 ]] || omark_args+=(--keep-query)
+  if [[ "${source_species_input_dir}" == "${dir_sp_cds}" ]]; then
+    omark_args+=(--cds-signature "${shared_protein_input_signature}")
+    [[ ${species_protein_ready} -eq 0 ]] || omark_args+=(--translated "${dir_sp_protein}")
   fi
-  if [[ -d "${dir_species_omark}" ]]; then
-    clear_directory_contents_safe "${dir_species_omark}" || return 1
-  fi
-  ensure_dir "${dir_species_omamer}"
-  ensure_dir "${dir_species_omark}"
-
-  mapfile -t existing_species_dirs < <(find "${dir_species_omark}" -maxdepth 1 -mindepth 1 -type d ! -name '.*' | sort)
-  for existing_dir in "${existing_species_dirs[@]}"; do
-    existing_species=$(basename "${existing_dir}")
-    existing_found=0
-    for input_species in "${input_species_set[@]}"; do
-      if [[ "${input_species}" == "${existing_species}" ]]; then
-        existing_found=1
-        break
-      fi
-    done
-    if [[ ${existing_found} -eq 0 ]]; then
-      echo "Removing stale OMArk output for species not in current input: ${existing_dir}"
-      rm -rf -- "${existing_dir}"
-      rm -f -- "${dir_species_omamer}/${existing_species}.omamer"
-    fi
-  done
-  for input_species in "${input_species_set[@]}"; do
-    omamer_out="${dir_species_omamer}/${input_species}.omamer"
-    sum_file="${dir_species_omark}/${input_species}/${input_species}.sum"
-    if [[ ! -s "${omamer_out}" || ! -s "${sum_file}" ]]; then
-      missing_omark_outputs=1
-      break
-    fi
-  done
-  if [[ ${missing_omark_outputs} -ne 1 ]]; then
-    for protein_full in "${source_species_input_fasta[@]}"; do
-      echo "Skipped OMArk: $(basename "${protein_full}")"
-    done
-    echo "$(date): End: ${task}"
-    return 0
-  fi
-
-  if ! omark_db_file=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"); then
-    echo "Failed to prepare OMArk database: ${omark_db_path}"
-    exit 1
-  fi
-  omark_db_resolved="${omark_db_file}"
-  prepare_species_protein_tmp
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${dir_sp_protein}" 1)
-
-  for protein_full in "${species_input_fasta[@]}"; do
-    protein_file=$(basename "${protein_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${protein_file}")
-    omamer_out="${dir_species_omamer}/${sp_ub}.omamer"
-    omark_outdir="${dir_species_omark}/${sp_ub}"
-    sum_file="${omark_outdir}/${sp_ub}.sum"
-
-    if [[ -s "${omamer_out}" && -s "${sum_file}" ]]; then
-      echo "Skipped OMArk: ${protein_file}"
-      continue
-    fi
-
-    gg_step_start "${task}: ${protein_file}"
-    ensure_dir "${omark_outdir}"
-    if [[ ! -s "${omamer_out}" ]]; then
-      # Derived search input is computation scratch, not an OMArk result.
-      # Keep it outside the directory fingerprinted by the summary stage.
-      if [[ -L "${dir_tmp}/omamer_queries" ]]; then
-        echo "Refusing symlinked OMAmer query scratch." >&2
-        exit 1
-      fi
-      omamer_query="${dir_tmp}/omamer_queries/${sp_ub}.query.fa"
-      if [[ -L "${omamer_query}" ]]; then
-        echo "Refusing symlinked OMAmer query input: ${omamer_query}" >&2
-        exit 1
-      fi
-      stage_species_protein_fasta "${protein_full}" "${omamer_query}"
-      omamer_query_files+=("${omamer_query}")
-      omamer search \
-        --db "${omark_db_file}" \
-        --query "${omamer_query}" \
-        --out "${omamer_out}"
-    fi
-    if [[ ! -s "${omamer_out}" ]]; then
-      echo "OMAmer search output was not created: ${omamer_out}"
-      exit 1
-    fi
-
-    if [[ ! -s "${sum_file}" ]]; then
-      omark \
-        -f "${omamer_out}" \
-        -d "${omark_db_file}" \
-        -o "${omark_outdir}"
-    fi
-    if [[ ! -s "${sum_file}" ]]; then
-      echo "OMArk summary output was not created: ${sum_file}"
-      exit 1
-    fi
-  done
-  gg_artifact_record "${omark_provenance_args[@]}"
-  if [[ ${delete_tmp_dir} -eq 1 && ${#omamer_query_files[@]} -gt 0 ]]; then
-    rm -f -- "${omamer_query_files[@]}"
+  python "${gg_support_dir}/species_omark.py" "${omark_args[@]}" || status=$?
+  if [[ ${status} -eq 75 && "${source_species_input_dir}" == "${dir_sp_cds}" && ${species_protein_ready} -eq 0 ]]; then
+    prepare_species_protein_tmp || return $?
+    python "${gg_support_dir}/species_omark.py" "${omark_args[@]}" --translated "${dir_sp_protein}" || return $?
+  elif [[ ${status} -ne 0 ]]; then
+    return "${status}"
   fi
   echo "$(date): End: ${task}"
 }
@@ -1229,6 +1137,14 @@ run_shared_omark_summary_stage() {
   fi
 
   ensure_dir "${dir_species_omark}"
+  if [[ -f "${dir_genome_evolution}/.omark-inputs.json" ]]; then
+    # The shared result directories are immutable. Only the small summaries
+    # are needed here, including in a later summary-only invocation.
+    ensure_parent_dir "${file_species_omark_summary_table}"
+    python "${gg_support_dir}/summarize_omark.py" --omark_outdir "${dir_species_omark}" \
+      --selection "${dir_genome_evolution}/.omark-inputs.json" --outfile "${file_species_omark_summary_table}"
+    return $?
+  fi
   gg_artifact_contract_init omark_summary_provenance_args "genome_evolution_omark_summary" "all_species" "${genome_evolution_provenance_dir}/omark.summary.json"
   omark_summary_provenance_args+=(
     --output "summary=${file_species_omark_summary_table}"

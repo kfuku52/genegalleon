@@ -32,6 +32,8 @@ Notable defaults:
   parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
 - `run_gene_model_rescue=1` optionally adds [sparse multi-species/self-synteny gene-model rescue](gene-model-rescue.md), with five common references, nearest donors, augmented CDS/GFF and post-rescue BUSCO,
+- `run_species_omark=1` compares representative proteomes at refinement finalization.
+  For an existing publication use [the OMArk-only mode](gene-model-refinement.md#comparing-representative-proteomes-with-omark).
 - `run_gene_model_refinement=1` optionally preserves all coding isoforms, selects conserved representatives, and adds supported existing-locus repairs/isoforms; see [refinement stages, arrays and downstream inputs](gene-model-refinement.md),
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
@@ -457,7 +459,8 @@ Notable defaults:
 - species-tree substeps are enabled in the unified wrapper by default, including BUSCO extraction, ASTRAL tree inference, and the IQ2MC/mcmctree dating steps,
 - the same multi-species BUSCO run also feeds the BUSCO-based genome-evolution branch; BUSCO-based genome-evolution steps reuse the BUSCO outputs driven by `run_species_busco` and `run_build_species_busco_summary`,
 - OMArk is optional (`run_species_omark=0` by default) and runs after
-  OrthoFinder so it can reuse the current effective protein inputs,
+  OrthoFinder on the current effective proteins. Matching species results from the
+  [input-generation OMArk comparison](gene-model-refinement.md#comparing-representative-proteomes-with-omark) are reused automatically,
 - shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,
 - duplicated BUSCOs are excluded from each species by default;
   [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-parameters.md#busco-duplicate-representatives-for-species-trees)

@@ -1176,8 +1176,7 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     assert 'dir_species_omark="${dir_genome_evolution}/omark"' in core
     assert 'file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"' in core
     assert 'ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"' in core
-    assert "omamer search \\" in core
-    assert "omark \\" in core
+    assert 'python "${gg_support_dir}/species_omark.py"' in core
     assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
 
 

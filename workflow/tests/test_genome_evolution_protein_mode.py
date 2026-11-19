@@ -2550,6 +2550,12 @@ def test_omark_failure_retains_query_scratch(tmp_path, failed_tool):
     query = Path((tmp_path / "capture/omamer_queries.txt").read_text().strip())
     assert query.read_text().startswith(">Arabidopsis_thaliana_gene1\n")
     assert not (tmp_path / "workspace/output/artifact_provenance/genome_evolution/omark.species.json").exists()
+    output = tmp_path / "workspace/output/genome_evolution"
+    assert not (output / ".omark-inputs.json").exists()
+    retry = _run_core(tmp_path, {"run_species_omark": "1", "run_orthofinder": "0", "GG_OMARK_DB_URL": db.as_uri()})
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert (output / "omark/Arabidopsis_thaliana/Arabidopsis_thaliana.sum").stat().st_size > 0
+
 
 
 @pytest.mark.parametrize("link_target", ["directory", "file"])

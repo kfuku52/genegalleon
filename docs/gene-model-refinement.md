@@ -1224,6 +1224,61 @@ The final index copies the verified initial SQLite index and applies the
 accepted predictions to that copy. This reuses the original catalog import
 and preserves the initial index for restart and inspection.
 
+## Comparing representative proteomes with OMArk
+
+Set `run_species_omark=1` in input generation to evaluate the representatives
+after refinement finalization. For a completed publication, run only the comparison
+with the existing refinement directory and workspace:
+
+```bash
+GG_INPUT_INPUT_GENERATION_MODE=refinement_omark \
+GG_INPUT_GENE_MODEL_REFINEMENT_DIR=/path/to/refinement \
+bash workflow/gg_input_generation_entrypoint.sh
+```
+
+To evaluate input representatives before refinement finishes, select
+`input_generation_mode=refinement_omark_baseline` and point
+`gene_model_refinement_dir` at a plan with completed species catalogues.
+Run one array task per species in plan order (`GG_ARRAY_TASK_ID`, starting at 1).
+A previous catalogue for the same original inputs is also suitable. Each task
+excludes that catalogue's newly rescued loci and caches only the input result.
+Use the same OMArk database and cache for the final comparison. It derives the
+representatives from the current catalogue and reuses matching protein sets.
+
+The table at `<refinement>.review/omark_comparison.tsv` has one row per species
+and evaluated stage. The input and rescued stages use the catalogue's baseline
+transcript and its admitted translation, one protein per locus. The input stage
+excludes loci appended by this rescue. Genomic targets without rescue and
+CDS-only targets have input and refined rows. The refined stage uses the exact
+published representative proteins, including the mixed cohort in
+`effective/sequence/inputs.tsv`.
+
+The table reports protein counts, taxonomically consistent full-length proteins
+(count and percentage), fragment and partial counts across placements, the
+selected clade, conserved HOGs and missing HOGs. The missing-HOG delta is
+relative to input and is populated only for a matching clade and HOG
+denominator. A stage with zero admitted proteins has empty HOG fields.
+Each evaluated row links to OMArk's native summary.
+
+Both workflows use `output/species_omark_cache` in their shared workspace.
+To share results across workspaces, set `omark_cache_dir` to the same absolute
+directory in both. Select the same database with `omark_db_path` (default
+`auto`). With `run_species_omark=1`, genome evolution reuses matching results
+and exposes the usual paths under `genome_evolution/omamer_search` and
+`genome_evolution/omark` as links. Keep the shared cache accessible while using
+these outputs. Previously generated local results retain the legacy workflow's
+reuse policy.
+
+Reuse matches species, protein IDs and amino-acid sequences, OMAmer database
+content, the ETE taxonomy database used to select the clade, and tool versions
+and executables. Record order, descriptions, wrapping
+and a terminal stop are normalised before search. A CDS translation that yields
+a different protein set gets its own result. Each distinct result is published
+only when both tools succeed. Unchanged database and catalogue files use the
+existing digest cache where file timestamps permit. The comparison consumes
+the published locus catalogue and effective proteins, without replaying
+predictors or checking genome and GFF contents.
+
 ## Three-stage BUSCO
 
 Within each species, three thin horizontal stacked bars are ordered vertically:

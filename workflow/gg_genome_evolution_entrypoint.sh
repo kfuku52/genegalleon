@@ -254,6 +254,7 @@ mcmc_birth_death_sampling="1,1,0.5" # MCMCTree birth-death-sampling prior as bir
 mcmc_clock_model="IND" # {EQUAL, IND, CORR}; MCMCTree clock model, where EQUAL is strict-clock, IND uses independent rates, and CORR uses autocorrelated rates.
 
 # Orthogroup and species-protein QC parameters
+omark_cache_dir="" # Shared by both workflows; blank uses output/species_omark_cache.
 omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.
 orthogroup_catalog_name="Orthogroups_filtered" # Named selected-catalog directory below output/orthofinder; keep the original name to retain legacy behavior.
 orthogroup_table="HOG" # "OG" or "HOG"; choose whether orthogroup selection starts from OrthoFinder orthogroups or hierarchical orthogroups.

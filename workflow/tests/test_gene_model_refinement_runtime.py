@@ -1583,3 +1583,76 @@ def test_fixed_refinement_reuses_exact_real_miniprot_search(tmp_path, monkeypatc
     assert first and first == second and searches == [executable]
     for member in (refinement.rescue.INTERVAL_ARCHIVE, refinement.rescue.LOCAL_RECORDS):
         assert (cold / member).read_bytes() == (warm / member).read_bytes()
+
+
+def test_posthoc_omark_mixed_cohort_reuses_final_proteomes(tmp_path):
+    """Real rescue/refinement publications, stubbed external OMArk tools."""
+    genome = import_module("test_genome_evolution_protein_mode")
+    generation = import_module("test_gg_input_generation_end_to_end")
+    fixture = import_module("test_rescue_gene_models_runtime")
+    anchor, names, _ = fixture.make_plan(fixture.hidden_models.__wrapped__(tmp_path))
+    fixture.cli("run", "--output", anchor, "--cpus", 2)
+    assembly = "Plant_assembly"
+    mapping = tmp_path / "isoforms.tsv"
+    mapping.write_text("transcript_id\tgene_id\tbaseline\nshort\tPlant_assembly_g\t1\nlong\tPlant_assembly_g\t0\n")
+    (tmp_path / "assembly.fa").write_text(">short\nATGAAATAA\n>long\nATGAAAAAATAA\n")
+    sources = tmp_path / "assembly.tsv"
+    sources.write_text(f"species\tcds\ttranscript_gene_map\n{assembly}\tassembly.fa\tisoforms.tsv\n")
+    root = tmp_path / "refinement"
+    refinement.plan(root, rescue_output=anchor, transcriptome_inputs=sources, mode="off", cpus=2)
+    cli("run", "--output", root, "--cpus", 2)
+
+    workspace = tmp_path / "workspace"
+    (workspace / "tmp_runtime").mkdir(parents=True)
+    tools = genome._prepare_stub_binaries(tmp_path)
+    db = tmp_path / "fixture.h5"
+    db.write_text("fixture database")
+    env = generation._core_env(workspace, None, tools, "refinement_omark")
+    env.update(gene_model_refinement_dir=str(root), omark_db_path=str(db))
+    captured = tmp_path / "capture/omamer_queries.txt"
+    report = root.with_name("refinement.review") / "omark_comparison.tsv"
+    # Precompute one genome and the transcriptome even when effective/ is unavailable.
+    effective = root / "effective"
+    effective.rename(root / "pending")
+    plan_species = json.loads((root / "plan.json").read_text())["species"]
+    for index, name in enumerate([names[0], assembly], start=1):
+        baseline_env = dict(env, input_generation_mode="refinement_omark_baseline",
+                            GG_ARRAY_TASK_ID=str(plan_species.index(name) + 1))
+        result = subprocess.run(["bash", generation.CORE_PATH], env=baseline_env, cwd=tmp_path, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"{name} input protein_set_sha256=" in result.stdout
+        assert len(captured.read_text().splitlines()) == index
+    assert not report.exists()
+    (root / "pending").rename(effective)
+    for _ in range(2):
+        result = subprocess.run(["bash", generation.CORE_PATH], env=env, cwd=tmp_path, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        rows = {(r["species"], r["stage"]): r for r in refinement.read_table(report)}
+        assert len(rows) == 3 * len(names) + 2
+        assert rows[names[0], "input"]["sum_file"] != rows[names[0], "rescued"]["sum_file"]
+        assert rows[names[0], "rescued"]["sum_file"] == rows[names[0], "refined"]["sum_file"]
+        assert rows[names[1], "input"]["sum_file"] == rows[names[1], "rescued"]["sum_file"]
+        assert rows[assembly, "input"]["sum_file"] == rows[assembly, "refined"]["sum_file"]
+        assert (assembly, "rescued") not in rows
+        assert int(rows[assembly, "refined"]["consistent_full"]) == 885
+        assert len(captured.read_text().splitlines()) == len(names) + 2
+
+    proteins = workspace / "input/species_protein"
+    proteins.mkdir(parents=True)
+    for row in refinement.read_table(root / "effective/sequence/inputs.tsv"):
+        (proteins / (row["species"] + ".fa")).hardlink_to(root / "effective/sequence" / row["protein"])
+    settings = {"run_species_omark": "1", "run_build_species_omark_summary": "1", "run_orthofinder": "0",
+                "input_sequence_mode": "protein", "omark_db_path": str(db), "artifact_stale_policy": "rebuild"}
+    result = genome._run_core(tmp_path, settings)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(captured.read_text().splitlines()) == len(names) + 2
+    for name in [*names, assembly]:
+        downstream = workspace / "output/genome_evolution/omark" / name / (name + ".sum")
+        assert downstream.samefile(rows[name, "refined"]["sum_file"])
+
+    changed = proteins / (assembly + ".fa")
+    changed.unlink()
+    changed.write_text(">Plant_assembly_g\nMTT\n")
+    result = genome._run_core(tmp_path, settings)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(captured.read_text().splitlines()) == len(names) + 3

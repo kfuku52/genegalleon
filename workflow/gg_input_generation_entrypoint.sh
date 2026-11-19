@@ -162,6 +162,9 @@ run_species_taxonomy=1 # Resolve NCBI taxonomic ranks and plot them on the avail
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
 run_cds_fx2tab=1 # Run seqkit fx2tab for formatted species CDS files.
+run_species_omark=0 # Compare representative proteomes on refinement finalization.
+omark_db_path="auto" # Local OMAmer database or auto for the shared download.
+omark_cache_dir="" # Shared by both workflows; blank uses output/species_omark_cache.
 run_species_busco=1 # Run BUSCO for formatted species CDS files.
 species_busco_mode="transcriptome" # transcriptome re-predicts from CDS; proteins evaluates frame-1 CDS translations directly.
 busco_timeout_seconds=0 # 0 disables the per-species BUSCO wall-time limit; set a positive number for large arrays.
@@ -177,7 +180,7 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
-input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_predict | rescue_postprocess | rescue_finalize | refinement_prepare | refinement_catalog | refinement_correspondence | refinement_predict | refinement_finalize. Workers use GG_ARRAY_TASK_ID.
+input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_predict | rescue_postprocess | rescue_finalize | refinement_prepare | refinement_catalog | refinement_correspondence | refinement_predict | refinement_finalize | refinement_omark (QC only) | refinement_omark_baseline (one species per task). Workers use GG_ARRAY_TASK_ID.
 species_busco_parallel_jobs="auto" # In single mode, auto runs up to four species BUSCO jobs within GG_TASK_CPUS; array_worker still runs one species per task.
 species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.
