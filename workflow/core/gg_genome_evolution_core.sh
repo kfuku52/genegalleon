@@ -2407,15 +2407,15 @@ busco_grampa() {
 }
 
 grampa_locus_provenance() {
-  local -n contract=$1
+  local -n locus_provenance_args=$1
   local output_root=$2
-  contract+=(--parameter "locus_model=${grampa_locus_model}"
+  locus_provenance_args+=(--parameter "locus_model=${grampa_locus_model}"
     --parameter "locus_species_tree=${grampa_locus_species_tree}"
     --parameter "locus_h2=${grampa_locus_h2}"
     --parameter "locus_bootstrap=${grampa_locus_bootstrap}"
     --parameter "locus_null_calibration=${grampa_locus_null_calibration}")
   if [[ -n "${grampa_locus_model}" ]]; then
-    contract+=(--input "locus_config=${grampa_locus_model}"
+    locus_provenance_args+=(--input "locus_config=${grampa_locus_model}"
       --input "locus_species=${grampa_locus_species_tree}"
       --optional-output "locus_bundle=${output_root}/locus")
   fi
