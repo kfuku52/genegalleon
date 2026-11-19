@@ -450,3 +450,39 @@ def test_sites_uses_asr_genetic_code_with_real_iqtree(tmp_path, genetic_code):
     assert list(output.rglob("csubst.tsv"))
     assert list(output.rglob("csubst.pdf"))
     assert list(output.rglob("csubst.outputs.tsv"))
+
+
+def test_family_search_ocn_cutoff_filters_sites_without_changing_pair_estimates(tmp_path):
+    # Exercise the entrypoint defaults and the actual search command on a supplied PGK fit.
+    data = Path(csubst.__file__).parent / "dataset"
+    bundle = tmp_path / "PGK.iqtree.anc"
+    bundle.mkdir()
+    for source, target in [("alignment.fa", "fasta"), ("tree.nwk", "nwk")] + [
+        (f"alignment.fa.{ext}", ext) for ext in ("treefile", "state", "rate", "iqtree", "log")
+    ]:
+        shutil.copyfile(data / f"PGK.{source}", bundle / f"csubst.{target}")
+    entry = (REPO_ROOT / "workflow/gg_gene_evolution_entrypoint.sh").read_text()
+    defaults = entry.split("# CSUBST options\n", 1)[1].split("\n# Intron", 1)[0]
+    core = CSUBST_CORE_SCRIPT.read_text()
+    command = core.split('  csubst_input_base="./${og_id}.iqtree.anc/csubst"', 1)[1].split('\n  csubst_b_src=', 1)[0]
+    script = (defaults + '\ncsubst_max_arity=2\ncsubst_exhaustive_until=2\nforeground_params=()\n'
+              + 'csubst_input_base="./${og_id}.iqtree.anc/csubst"' + command)
+    env = dict(os.environ, og_id="PGK", genetic_code="1", codon_model="ECMK07_GY0K+F+R4",
+               GG_TASK_CPUS="1", csubst_nonsyn_recode="no")
+    env.pop("csubst_min_ocn_site_pp", None)
+    frames = []
+    for mode in ("default", "unfiltered"):
+        run_dir = tmp_path / mode
+        run_dir.mkdir()
+        (run_dir / bundle.name).symlink_to(bundle, target_is_directory=True)
+        result = subprocess.run(["bash", "-eu", "-c", script], cwd=run_dir, capture_output=True, text=True,
+                                env=env if mode == "default" else dict(env, csubst_min_ocn_site_pp="0"), timeout=180)
+        assert result.returncode == 0, result.stderr
+        out = run_dir / "csubst_search"
+        if mode == "default":
+            assert pd.read_table(out / "csubst_cb_stats.tsv").min_ocn_site_pp.eq(0.5).all()
+        frames.append(pd.read_table(out / "csubst_cb_2.tsv").set_index(["branch_id_1", "branch_id_2"]).sort_index())
+    filtered, raw = frames
+    assert "cutoff_OCNany2spe" not in raw
+    assert ((filtered.cutoff_OCNany2spe < 2) & (filtered.OCNany2spe >= 2)).any()
+    pd.testing.assert_frame_equal(filtered[["OCNany2spe", "omegaCany2spe"]], raw[["OCNany2spe", "omegaCany2spe"]])

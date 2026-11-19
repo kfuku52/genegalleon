@@ -131,8 +131,10 @@ csubst_cutoff_stat
 csubst_exhaustive_until
 csubst_fg_exclude_wg
 csubst_fg_stem_only
+csubst_high_order_pruning
 csubst_max_arity
 csubst_max_combination
+csubst_min_ocn_site_pp
 csubst_nonsyn_recode
 csubst_resolve_binary_foreground
 csubst_scan_match

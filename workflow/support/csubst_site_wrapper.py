@@ -437,14 +437,14 @@ def plot_scatter(cb, xcol, ycol, outbase, xmax=10, ymax=10, nbin=50, polygon_xmi
     axes = axes.flat
     axes[1].axis("off")
     ax = axes[0]
-    ax.axvline(x=min_OCNany2spe, color="red", alpha=0.3)
+    ax.axvline(x=polygon_xmin, color="red", alpha=0.3)
     ax.hist(x=cb_plot[xcol], bins=numpy.arange(0, 1.001 + (1 / nbin), 1 / nbin) * xmax, color="darkblue")
     ax.set_xlim(0, xmax * axis_margin_rate)
     ax.set_xticks([])
     ax.set_yscale("log")
     ax.set_ylabel("Count")
     ax = axes[3]
-    ax.axhline(y=min_omegaCany2spe, color="red", alpha=0.3)
+    ax.axhline(y=polygon_ymin, color="red", alpha=0.3)
     ax.hist(
         x=cb_plot[ycol],
         bins=numpy.arange(0, 1.001 + (1 / nbin), 1 / nbin) * ymax,
@@ -469,6 +469,8 @@ def plot_scatter(cb, xcol, ycol, outbase, xmax=10, ymax=10, nbin=50, polygon_xmi
     )
     ax.set_xlim(0, xmax * axis_margin_rate)
     ax.set_ylim(0, ymax * axis_margin_rate)
+    ax.set_xlabel(xcol)
+    ax.set_ylabel(ycol)
     fig.tight_layout(pad=0.25, w_pad=1.5, h_pad=0.5)
     for ext in ["svg", "pdf"]:
         outpath = os.path.join(outbase + "." + ext)
@@ -731,7 +733,8 @@ CSUBST sites command
 
 
 def get_annotation_text(
-    og, arity, branch_id_str, trait, min_OCNany2spe, min_omegaCany2spe, min_OCNCoD, besthit_values, observed_values=None
+    og, arity, branch_id_str, trait, min_OCNany2spe, min_omegaCany2spe, min_OCNCoD, besthit_values, observed_values=None,
+    ocn_cutoff_col="OCNany2spe",
 ):
     if besthit_values is None:
         besthit_values = ["NA", "NA", "NA", "NA", "NA"]
@@ -748,7 +751,7 @@ Trait: {trait}
 
 Threshold
 
-OCNany2spe: {min_OCNany2spe}
+{ocn_cutoff_col}: {min_OCNany2spe}
 
 omegaCany2spe: {min_omegaCany2spe}
 
@@ -1008,6 +1011,7 @@ def load_annotation_besthits(dir_of):
 
 def get_cb_required_columns(cb_columns, trait_names):
     required = {
+        "cutoff_OCNany2spe",
         "orthogroup",
         "OCNany2spe",
         "ECNany2spe",
@@ -1926,6 +1930,7 @@ if __name__ == "__main__":
         select_cols_sql = ", ".join('"{}"'.format(col) for col in cb_required_cols)
         sql_cb = sqlalchemy.text(f"SELECT {select_cols_sql} from {cb_table}")
         cb = pandas.read_sql_query(sql=sql_cb, con=conn.connect(), index_col=None, coerce_float=True)
+        ocn_cutoff_col = "cutoff_OCNany2spe" if "cutoff_OCNany2spe" in cb else "OCNany2spe"
         sum_ocn = cb.loc[:, "OCNany2spe"].sum()
         sum_ecn = cb.loc[:, "ECNany2spe"].sum()
         sum_ocs = cb.loc[:, "OCSany2spe"].sum()
@@ -1954,7 +1959,7 @@ if __name__ == "__main__":
                 )
             os.makedirs(dir_out, exist_ok=True)
             conditions = True
-            conditions &= cb["OCNany2spe"] >= min_OCNany2spe
+            conditions &= cb[ocn_cutoff_col] >= min_OCNany2spe
             conditions &= cb["omegaCany2spe"] >= min_omegaCany2spe
             conditions &= cb["OCNCoD"] >= min_OCNCoD
             if "is_fg" in cb.columns:
@@ -1962,7 +1967,7 @@ if __name__ == "__main__":
             else:
                 conditions &= cb.loc[:, "is_fg_" + trait] == "Y"
             print(
-                f"Number of branch combinations for {trait} with OCNany2spe>={min_OCNany2spe}, "
+                f"Number of branch combinations for {trait} with {ocn_cutoff_col}>={min_OCNany2spe}, "
                 f"omegaCany2spe>={min_omegaCany2spe}, and OCNCoD>={min_OCNCoD} at K={arity}: {conditions.sum()} "
                 f"(before removing branch combinations already analyzed in greater K)",
                 flush=True,
@@ -1981,7 +1986,7 @@ if __name__ == "__main__":
             file_trait_color = find_file_trait_color(trait)
             plot_scatter(
                 cb=cb_passed,
-                xcol="OCNany2spe",
+                xcol=ocn_cutoff_col,
                 ycol="omegaCany2spe",
                 outbase=os.path.join(dir_out, out_name + "_OCNany2spe-omegaC"),
                 polygon_xmin=min_OCNany2spe,
@@ -1989,7 +1994,7 @@ if __name__ == "__main__":
             )
             plot_scatter(
                 cb=cb_passed,
-                xcol="OCNany2spe",
+                xcol=ocn_cutoff_col,
                 ycol="OCNCoD",
                 outbase=os.path.join(dir_out, out_name + "_OCNany2spe-OCNCoD"),
                 polygon_xmin=min_OCNany2spe,
@@ -2048,6 +2053,7 @@ if __name__ == "__main__":
                         min_OCNCoD=min_OCNCoD,
                         besthit_values=besthit_values,
                         observed_values=observed_values,
+                        ocn_cutoff_col=ocn_cutoff_col,
                     )
                 )
             batch_order = []

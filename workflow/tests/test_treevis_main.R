@@ -6,6 +6,16 @@ suppressPackageStartupMessages(library(genegalleon.treevis))
 # Plotting helpers may open the default device during this test. Keep it off disk.
 pdf(NULL)
 
+# At the OCN boundary, only the supported pair belongs in the overlay.
+cb_path <- tempfile(fileext = '.tsv')
+branch_frame <- data.frame(branch_id=1:4, branch=1:4, y=1:4)
+cb <- data.frame(branch_id_1=c(1, 3), branch_id_2=c(2, 4), is_fg='Y',
+                 OCNany2spe=c(5, 3), cutoff_OCNany2spe=c(0, 2), omegaCany2spe=6)
+write.table(cb, cb_path, sep='\t', row.names=FALSE, quote=FALSE)
+overlay <- overlay_convergence(ggplot(branch_frame), 100, 1, TRUE, '2-2', cb_path, 'OCNany2spe,2|omegaCany2spe,5')
+stopifnot(setequal(overlay$data$branch_id[overlay$data$count > 0], c(3, 4)))
+unlink(cb_path)
+
 # Focused transfer marks use exact internal nodes, with no family-wide marking.
 focus_marker <- getFromNamespace('add_focused_hgt_node_marks', 'genegalleon.treevis')
 focus_plot <- ggplot(data.frame(x=c(1,2,3), y=c(1,2,3), isTip=c(TRUE,FALSE,FALSE),

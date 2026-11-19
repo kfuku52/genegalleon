@@ -327,6 +327,18 @@ def test_cutoff_explicit_empty_and_unknown_column():
     assert mod.apply_cutoff(frame, "A,-2")["A"].tolist() == [-1, 1]
 
 
+def test_cb_cutoff_uses_supported_sites_and_preserves_raw_statistics():
+    mod = load_module()
+    frame = pandas.DataFrame({
+        "OCNany2spe": [2.1, 3.0, 9, 4], "cutoff_OCNany2spe": [0, 2, None, 3],
+        "omegaCany2spe": [9, 6, 10, 1],
+    })
+    cutoff = "OCNany2spe,2|omegaCany2spe,5"
+    pandas.testing.assert_frame_equal(mod.apply_cutoff(frame, cutoff), frame.iloc[[1]])
+    raw = frame.drop(columns="cutoff_OCNany2spe")
+    pandas.testing.assert_frame_equal(mod.apply_cutoff(raw, cutoff), raw.iloc[:3])
+
+
 def test_apply_cutoff_accepts_preparsed_cutoff_list():
     mod = load_module()
     df = pandas.DataFrame(

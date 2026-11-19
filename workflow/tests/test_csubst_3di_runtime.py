@@ -62,6 +62,7 @@ def test_full_bundle_search_scan_and_sites_with_real_predictor(tmp_path, code, m
                file_og_trimmed_aln_analysis=str(tmp_path / "trimmed.fa"),
                file_og_untrimmed_aln_analysis=str(tmp_path / "full.fa"),
                file_og_rooted_tree_analysis=str(tmp_path / "rooted.nwk"),
+               csubst_min_ocn_site_pp="0.5", csubst_high_order_pruning="all_cutoffs",
                csubst_max_arity="2", csubst_exhaustive_until="2", csubst_cutoff_stat="OCNany2spe,0",
                csubst_max_combination="10000", csubst_fg_exclude_wg="no", csubst_fg_stem_only="no",
                csubst_scan_unit_mode="clade", csubst_scan_match="any2spe", csubst_scan_min_event_pp="0.5",
@@ -116,7 +117,7 @@ def test_full_bundle_search_scan_and_sites_with_real_predictor(tmp_path, code, m
     for suffix in ("treefile", "state", "rate", "iqtree", "log"):
         common += ["--iqtree_" + suffix, str(full_dir / ("csubst." + suffix))]
     run(["csubst", "search", *common, "--max_arity", "2", "--exhaustive_until", "2",
-         "--cutoff_stat", "OCNany2spe,0", "--max_combination", "10000", "--fg_exclude_wg", "no",
+         "--min_ocn_site_pp", "0.5", "--cutoff_stat", "OCNany2spe,0", "--max_combination", "10000", "--fg_exclude_wg", "no",
          "--fg_stem_only", "no", "--outdir", "direct_search"], tmp_path, env, "direct_search")
     pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "csubst_search/csubst_cb_2.tsv", sep="\t"),
                                   pd.read_csv(tmp_path / "direct_search/csubst_cb_2.tsv", sep="\t"))

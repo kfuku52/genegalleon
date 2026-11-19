@@ -6115,6 +6115,8 @@ csubst_provenance_args=(
   --parameter "max_arity=${csubst_max_arity}"
   --parameter "exhaustive_until=${csubst_exhaustive_until}"
   --parameter "cutoff_stat=${csubst_cutoff_stat}"
+  --parameter "min_ocn_site_pp=${csubst_min_ocn_site_pp}"
+  --parameter "high_order_pruning=${csubst_high_order_pruning}"
   --parameter "max_combination=${csubst_max_combination}"
   --parameter "fg_exclude_wg=${csubst_fg_exclude_wg}"
   --parameter "fg_stem_only=${csubst_fg_stem_only}"
@@ -6219,6 +6221,8 @@ if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
     --max_arity "${csubst_max_arity}" \
     --exhaustive_until "${csubst_exhaustive_until}" \
     --cutoff_stat "${csubst_cutoff_stat}" \
+    --min_ocn_site_pp "${csubst_min_ocn_site_pp}" \
+    --high_order_pruning "${csubst_high_order_pruning}" \
     --max_combination "${csubst_max_combination}" \
     --fg_exclude_wg "${csubst_fg_exclude_wg}" \
     --fg_stem_only "${csubst_fg_stem_only}" \
@@ -6894,6 +6898,7 @@ tree_plot_provenance_args=(
   --parameter "long_branch_max_fraction=${treevis_long_branch_max_fraction}"
   --parameter "csubst_max_arity=${csubst_max_arity}"
   --parameter "csubst_cutoff_stat=${csubst_cutoff_stat}"
+  --parameter "ocn_cutoff_policy=prefer_site_supported_v1"
   --parameter "promoter_bp=${promoter_bp}"
   --parameter "fimo_qvalue=${fimo_qvalue}"
   --parameter "promoter_motif_axis_unit=kb"

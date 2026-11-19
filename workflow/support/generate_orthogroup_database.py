@@ -677,6 +677,8 @@ def parse_cutoff_stat(cutoff_stat):
 
 def apply_cutoff(df, cutoff_stat):
     for name, threshold in parse_cutoff_stat(cutoff_stat):
+        if name.startswith("OCN") and "cutoff_" + name in df.columns:
+            name = "cutoff_" + name
         if name not in df.columns:
             raise ValueError(f"Unknown cutoff column: {name}")
         values = pd.to_numeric(df[name], errors="raise")

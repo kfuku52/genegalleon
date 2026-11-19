@@ -887,6 +887,7 @@ run_gene_family_database_for_source() {
     --parameter "scan_inference_contract=analytical_bh_global_v1"
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
+    --parameter "ocn_cutoff_policy=prefer_site_supported_v1"
     --parameter "reconciliation_import=${gene_family_database_reconciliation}"
   )
   if [[ "${gene_family_database_reconciliation}" == "1" ]]; then
@@ -1167,6 +1168,7 @@ run_csubst_site_convergence_summary_for_source() {
     --parameter "skip_lower_order=${csubst_site_skip_lower_order}"
     --parameter "min_fg_stem_ratio=${csubst_site_min_fg_stem_ratio}"
     --parameter "min_OCNany2spe=${csubst_site_min_ocn_any2spe}"
+    --parameter "ocn_cutoff_policy=prefer_site_supported_v1"
     --parameter "min_omegaCany2spe=${csubst_site_min_omega_c_any2spe}"
     --parameter "min_OCNCoD=${csubst_site_min_ocn_cod}"
     --parameter "max_per_K=${csubst_site_max_candidates_per_arity}"

@@ -232,6 +232,7 @@ def test_get_cb_required_columns_keeps_needed_columns_only():
     cols = [
         "orthogroup",
         "OCNany2spe",
+        "cutoff_OCNany2spe",
         "ECNany2spe",
         "OCSany2spe",
         "ECSany2spe",
@@ -251,6 +252,7 @@ def test_get_cb_required_columns_keeps_needed_columns_only():
     assert out == [
         "orthogroup",
         "OCNany2spe",
+        "cutoff_OCNany2spe",
         "ECNany2spe",
         "OCSany2spe",
         "ECSany2spe",
@@ -274,6 +276,7 @@ def test_get_annotation_text_includes_observed_branch_statistics():
         branch_id_str="1,2",
         trait="traitA",
         min_OCNany2spe=1.8,
+        ocn_cutoff_col="cutoff_OCNany2spe",
         min_omegaCany2spe=3.0,
         min_OCNCoD=0.0,
         besthit_values=["a", "b", "c", "d", "e"],
@@ -289,7 +292,7 @@ def test_get_annotation_text_includes_observed_branch_statistics():
         },
     )
 
-    assert "Threshold\n\nOCNany2spe: 1.8" in text
+    assert "Threshold\n\ncutoff_OCNany2spe: 1.8" in text
     assert "omegaCany2spe: 3.0" in text
     assert "OCNCoD: 0.0" in text
     assert "Observed\n\nOCNany2spe: 2.4" in text

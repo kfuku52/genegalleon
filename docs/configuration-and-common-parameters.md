@@ -657,6 +657,26 @@ when supplied for a single entrypoint run.
 
 For `3di20`, see [full-CDS inputs, model resources and report coordinates](csubst-3di.md).
 
+## CSUBST search cutoffs
+
+GeneGalleon runs `csubst search` with `csubst_min_ocn_site_pp=0.5`.
+A site contributes its posterior probability to the OCN cutoff sum only if
+that probability for the **whole branch combination** is at least 0.5.
+Ten sites with PP 0.2 therefore contribute zero to the cutoff sum, while two
+sites with PP 0.7 contribute 1.4. Raw OCN and ωC still use all sites.
+
+The search, gene-tree convergence overlay, gene-family database import and
+site-summary selection use the exported `cutoff_OCNany2spe` for the corresponding
+OCN threshold when available. Tables without this column use raw OCN. To
+disable site filtering on a new search set
+`GG_GENE_EVOLUTION_CSUBST_MIN_OCN_SITE_PP=0`. The search setting is recorded
+in stage provenance. The separate `csubst_scan_min_event_pp` controls scan.
+
+For higher arities, `csubst_high_order_pruning=all_cutoffs` follows the
+CSUBST default. Set `GG_GENE_EVOLUTION_CSUBST_HIGH_ORDER_PRUNING=ocn_bound`
+to expand subsets on the supported OCN minimum before applying the final
+ωC cutoff. Both modes can miss combinations when the subset cap is reached.
+
 ## CSUBST binary foreground resolution
 
 Set the following opt-in option when a `species_trait.tsv` column uses only

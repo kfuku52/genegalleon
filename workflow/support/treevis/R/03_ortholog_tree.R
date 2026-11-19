@@ -221,6 +221,8 @@ overlay_convergence = function(g, top_percent_to_show, max_num_to_show, is_targe
           next
         }
         stat_name = split[[1]]
+        supported = paste0('cutoff_', stat_name)
+        if (startsWith(stat_name, 'OCN') && supported %in% colnames(cb_target)) stat_name = supported
         stat_value = as.numeric(split[[2]])
         if (!(stat_name %in% colnames(cb_target)) || is.na(stat_value)) {
           cat('Skipping invalid cutoff stat: ', paste(split, collapse=','), '\n')
@@ -233,7 +235,8 @@ overlay_convergence = function(g, top_percent_to_show, max_num_to_show, is_targe
     if (length(cutoff_stat_names) > 0) {
       cb_target = cb_target[rev(do.call(order, cb_target[,cutoff_stat_names, drop=FALSE])),] # sort by the first cutoff_stat
       for (cutoff_stat_name in cutoff_stat_names) {
-        cb_target = cb_target[(cb_target[[cutoff_stat_name]] >= cutoff_stat_list[[cutoff_stat_name]]),]
+        values = cb_target[[cutoff_stat_name]]
+        cb_target = cb_target[!is.na(values) & values >= cutoff_stat_list[[cutoff_stat_name]], , drop=FALSE]
       }
     }
     rownames(cb_target) = NULL
