@@ -612,7 +612,7 @@ def _readonly(path):
 
 
 @contextmanager
-def _open_body_database(path, expected=None):
+def _open_body_database(path, expected=None, *, verify_source=False):
     """Use a private, byte-verified SQLite copy for random reads on shared storage."""
     with ExitStack() as resources:
         readable = path
@@ -633,6 +633,8 @@ def _open_body_database(path, expected=None):
                     if _digest(copied) != expected or _stat(path) != source:
                         raise ValueError("Model-store body database changed during scratch copy")
                     readable = copied
+            if readable == path and verify_source and _digest(path) != expected:
+                raise ValueError(f"Model-store checksum changed: {path.name}")
         yield resources.enter_context(closing(_readonly(readable)))
 
 
@@ -895,13 +897,23 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
     else:
         manifest, _ = _manifest(store)
         prefix = store.relative_to(root).as_posix()
+        revision_member = f"{prefix}/revision.sqlite" if kind == "revision" else None
         if key is not None and verification is None:
             for member, path in paths.items():
-                if not member.endswith((".jsonl.gz", ".jsonl.zst")) and _digest(path) != key["files"][member]:
+                if (member != revision_member and not member.endswith((".jsonl.gz", ".jsonl.zst"))
+                        and _digest(path) != key["files"][member]):
                     raise ValueError(f"Model-store checksum changed: {member}")
         if kind in {"accepted", "revision"}:
-            db = _readonly(store / f"{kind}.sqlite")
-            try:
+            path = store / f"{kind}.sqlite"
+            if revision_member is not None and key is not None:
+                # The overlay's body lookups are random even though its
+                # envelopes are consumed in ordinal order. Verify the local
+                # copy, or the source when no separate scratch is available.
+                database = _open_body_database(path, key["files"][revision_member],
+                                               verify_source=verification is None)
+            else:
+                database = closing(_readonly(path))
+            with database as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
                 count = 0
                 for ordinal, blob in db.execute("SELECT ordinal,envelope FROM entries ORDER BY ordinal"):
@@ -916,8 +928,6 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                         yield (ordinal, record) if with_ordinals else record
                 if count != manifest["counts"][kind]:
                     raise ValueError("Model-store overlay count changed")
-            finally:
-                db.close()
         elif kind == "partial":
             yield from _partials(root, store, manifest, key)
         elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None

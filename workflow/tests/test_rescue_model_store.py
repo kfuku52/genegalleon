@@ -90,14 +90,15 @@ def even_candidate(context):
     return int(context["query"].removeprefix("query")) % 2 == 0
 
 
-@pytest.mark.parametrize("reader", ["raw_cache", "selective", "parallel_selective"])
+@pytest.mark.parametrize("reader", ["raw_cache", "selective", "parallel_selective", "revision"])
 @pytest.mark.parametrize("fault", [None, "full", "corrupt", "source_replaced"])
 def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reader, fault):
     from workflow.support.input_generation_array_state import FreshDigestBatch
 
     records = [model(i) for i in range(8)]
-    directory, _ = published(tmp_path, records)
-    original = directory / "model_store/bodies.sqlite"
+    directory, _ = published(tmp_path, records, revisions=records if reader == "revision" else None)
+    filename = "revision.sqlite" if reader == "revision" else "bodies.sqlite"
+    original = directory / "model_store" / filename
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     real_stat, real_copy, real_open = store._stat, store.shutil.copyfile, store._readonly
@@ -132,6 +133,9 @@ def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reade
     if reader == "raw_cache":
         rows = store.iter_models(directory, verification=FreshDigestBatch())
         expected = records
+    elif reader == "revision":
+        rows = store.iter_revision_models(directory, frozen_key=store.frozen_model_store_key(directory, kind="revision"))
+        expected = records
     else:
         workers = 2 if reader == "parallel_selective" else 1
         rows = store.iter_model_items(directory, context_filter=even_candidate, scan_workers=workers)
@@ -145,6 +149,17 @@ def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reade
         assert len(opened) == 1
         assert opened[0] == original if fault == "full" else scratch in opened[0].parents
     assert not any(scratch.iterdir())
+
+
+def test_revision_overlay_checks_source_if_scratch_is_on_same_device(tmp_path, monkeypatch):
+    records = [model(0)]
+    directory, _ = published(tmp_path, records, revisions=records)
+    key = store.frozen_model_store_key(directory, kind="revision")
+    original = directory / "model_store/revision.sqlite"
+    monkeypatch.setattr(store.tempfile, "gettempdir", lambda: str(tmp_path))
+    original.write_bytes(original.read_bytes() + b"corrupt")
+    with pytest.raises(ValueError, match="checksum changed: revision.sqlite"):
+        list(store.iter_revision_models(directory, frozen_key=key))
 
 
 def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):

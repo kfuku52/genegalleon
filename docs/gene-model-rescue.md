@@ -71,6 +71,8 @@ directory is on a different filesystem and has enough free space. It compares
 the copied bytes to the frozen receipt before opening SQLite and removes the
 copy on close. Raw prediction replay shares its current input verification with the
 store reader so previously hashed source members need only identity checks during the replay.
+Refinement uses the same temporary-copy check for the compact `revision.sqlite`
+overlay before looking up its candidate bodies.
 If temporary storage fills, the reader continues from the
 verified source database. During admission patching, unchanged copied files
 are checked against their source digests as part of the final manifest scan.
