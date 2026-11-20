@@ -900,6 +900,14 @@ Notes:
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,
+- the genome FASTA reader can restore a missing newline before an inline
+  header when it has the next ID in the same numbered contig series, as in
+  `ACGT>001518F` immediately after contig `001517F`. Genome formatting,
+  GFF reference matching, and CDS extraction use the recovered boundary.
+  Ambiguous inline headers or duplicate IDs after repair cause an error.
+  The hidden `.<formatted FASTA>.fasta-boundary-repair.json` records the
+  source and output SHA256 hashes and insertion offsets in the decoded
+  input stream. Downloaded and curated source files are retained.
 - ordinary genome formatting (FASTA or GenBank/EMBL) uppercases IUPAC DNA
   bases and replaces each other sequence character (such as `-`, `.`, `?`,
   `X`, or `U`) with one `N` after stripping whitespace. Coordinates and raw

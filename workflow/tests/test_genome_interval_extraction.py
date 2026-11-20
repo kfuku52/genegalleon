@@ -199,3 +199,68 @@ def test_publisher_metadata_continuations_preserve_one_note(note):
     assert result.startswith("ID=g;Note=") and result.endswith(";Parent=p")
     assert result.count(";") == 2
     assert unquote(result.split(";", 2)[1][5:]) == note
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 16, 1024 * 1024])
+def test_inline_header_recovery_keeps_formatting_gff_and_cds_on_same_contigs(tmp_path, chunk):
+    import hashlib
+    import json
+
+    from format_species_annotation.reference import gff_reference_mapping
+    from format_species_discovery import format_genome
+
+    raw = b">001517F\r\nACGT>001518F\r\nATGAAATAA\r\n"
+    path = tmp_path / "source.fa.gz"
+    path.write_bytes(gzip.compress(raw))
+    original = path.read_bytes()
+    edits = []
+    fragments = list(genome_fragments(path, chunk, repairs=edits))
+    assert [text for kind, text in fragments if kind == "header"] == ["001517F", "001518F"]
+    assert len(edits) == 1
+    assert edits[0]["character_offset"] == len(">001517F\nACGT")
+    assert edits[0]["contig"] == "001518F"
+    gff = tmp_path / "models.gff"
+    gff.write_text("001518F\tsrc\tgene\t1\t9\t.\t+\t.\tID=g\n"
+                   "001518F\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent=g\n"
+                   "001518F\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=t\n")
+    task = dict(provider="direct", species_key="Example_species", species_prefix="Example_species",
+                genome_path=path, gff_path=gff)
+    assert gff_reference_mapping(gff, path) == {"001518F": "001518F"}
+    assert list(genbank.derive_cds_records_from_gff_and_genome(task)) == [("t [gene=g]", "ATGAAATAA")]
+    r = format_genome(task, tmp_path, overwrite=True, dry_run=False)
+    output = r["output_path"]
+    assert header_lengths(output) == {"001517F": 4, "001518F": 9}
+    assert path.read_bytes() == original
+    receipt = output.with_name("." + output.name + ".fasta-boundary-repair.json")
+    audit = json.loads(receipt.read_text())
+    assert audit["source_sha256"] == hashlib.sha256(original).hexdigest()
+    assert audit["output_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert audit["insertions"] == edits
+    path.write_bytes(gzip.compress(raw.replace(b"ACGT>", b"ACGT\r\n>")))
+    format_genome(task, tmp_path, overwrite=True, dry_run=False)
+    assert not receipt.exists()
+
+
+def header_lengths(path):
+    from genome_sequence_identity import genome_sequence_digest
+
+    result = {}
+    genome_sequence_digest(path, contig_lengths=result)
+    return result
+
+
+@pytest.mark.parametrize("raw, error", [
+    (">001517F\nACGT>ACGT\nACGT\n", "Ambiguous inline"),
+    (">001517F\nACGT>001519F\nACGT\n", "Ambiguous inline"),
+    (">001517F\nACGT>001518F\n>001519F\nTT\n", "no initial DNA"),
+    (">001517F\nACGT>001518F\nTT\n>001518F\nAA\n", "Duplicate"),
+])
+def test_inline_header_rejects_ambiguity_and_corrupt_boundaries(tmp_path, raw, error):
+    from format_species_discovery import format_genome
+
+    path = tmp_path / "raw.fa"
+    path.write_text(raw)
+    task = dict(species_prefix="Example_species", genome_path=path)
+    with pytest.raises(ValueError, match=error):
+        format_genome(task, tmp_path, overwrite=True, dry_run=False)
+    assert list(tmp_path.iterdir()) == [path]
