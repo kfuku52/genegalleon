@@ -580,12 +580,15 @@ def load(root, *, inspect_only=False):
     return plan
 
 
-def plan_digest(root, plan):
+def plan_digest(root, plan, *, verification=None):
     """Refuse to stamp a stale in-memory plan with the current file's hash."""
     path = root / "plan.json"
     raw = path.read_bytes()
     result = hashlib.sha256(raw).hexdigest()
-    if json.loads(raw) != plan or digest(path) != result:
+    if json.loads(raw) != plan:
+        raise ValueError("Frozen rescue plan changed during execution")
+    current = digest(path) if verification is None else verification.read([path])[str(path)]
+    if current != result:
         raise ValueError("Frozen rescue plan changed during execution")
     return result
 
@@ -936,15 +939,16 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
     return stage(root, Path("synteny") / job["id"], key, build, guard, **publication)
 
 
-def comparison_key(root, job, prepared_snapshot=None, *, dependency_snapshot=None):
-    if prepared_snapshot is not None and dependency_snapshot is not None:
+def comparison_key(root, job, prepared_snapshot=None, *, dependency_snapshot=None, plan_hash=None):
+    if prepared_snapshot is not None and (dependency_snapshot is not None or plan_hash is not None):
         raise ValueError('Choose one preparation verification context')
     if prepared_snapshot is not None:
         prepared_snapshot.assert_context(root)
         prepared_snapshot.check_job(job)
         return {"plan": prepared_snapshot.plan_digest(), "job": job,
                 "prepared": {n: prepared_snapshot.receipt_digest(n) for n in sorted({job["a"], job["b"]})}}
-    plan_hash = digest(root / "plan.json")
+    if plan_hash is None:
+        plan_hash = digest(root / "plan.json")
     names = sorted({job["a"], job["b"]})
     check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for name in names:
@@ -1057,14 +1061,17 @@ def candidates(root, plan, name):
     return list({r["id"]: r for r in result}.values())
 
 
-def rescue_key(root, plan, name, *, dependency_snapshot=None):
+def rescue_key(root, plan, name, *, dependency_snapshot=None, plan_hash=None):
     jobs = [j for j in plan["synteny_jobs"] if name in {j["a"], j["b"]}
             and (j["a"] == j["b"] or (j["b"] if name == j["a"] else j["a"]) in plan["donors"][name])]
-    plan_hash = plan_digest(root, plan)
+    # A cohort finalizer can supply its command-local, fenced plan digest.
+    comparison_plan_hash = plan_hash
+    if plan_hash is None:
+        plan_hash = plan_digest(root, plan)
     check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for job in jobs:
-        comparison = (comparison_key(root, job) if dependency_snapshot is None
-                      else comparison_key(root, job, dependency_snapshot=dependency_snapshot))
+        comparison = comparison_key(root, job, dependency_snapshot=dependency_snapshot,
+                                    plan_hash=comparison_plan_hash)
         if not check(root / "synteny" / job["id"], comparison):
             raise ValueError("Comparison incomplete or corrupted: " + job["id"])
     donors = [name, *plan["donors"][name]]
@@ -2876,16 +2883,19 @@ def rescue_selection_attributes(model, path=None):
 
 def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
     names = names or plan["species"]
-    key = {"plan": plan_digest(root, plan), "rescue_receipts": {
+    source_proof = RescueSourceBatch(plan)
+    plan_hash = plan_digest(root, plan, verification=source_proof)
+    key = {"plan": plan_hash, "rescue_receipts": {
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
+        require_same_key(plan_hash, plan_digest(root, plan, verification=source_proof))
         for name in names:
-            expected = rescue_key(root, plan, name, dependency_snapshot=dependency_snapshot)
+            expected = rescue_key(root, plan, name, dependency_snapshot=dependency_snapshot, plan_hash=plan_hash)
             if not verified_dependency(dependency_snapshot, root / "rescued" / name, expected):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
         verify_sources(plan, names, ["fasta", "gff", "genome", "busco"], verification=source_proof)
-        require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
-            n: digest(root / "rescued" / n / "receipt.json") for n in names}})
+        require_same_key(key["rescue_receipts"], {
+            n: digest(root / "rescued" / n / "receipt.json") for n in names})
     def build(tmp):
         for subdir in ("species_cds", "species_gff", "anchor_admission"):
             (tmp / subdir).mkdir()
@@ -2993,8 +3003,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                                            "common_references": plan["common_references"],
                                            "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
-                                           "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    source_proof = RescueSourceBatch(plan)
+                                           "gene_loss_calls": False, "plan_sha256": plan_hash})
     with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers)) as dependency_snapshot:
         def publication_guard():
             dependency_snapshot.check_all()

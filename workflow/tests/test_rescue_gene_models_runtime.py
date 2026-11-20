@@ -2151,7 +2151,7 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-@pytest.mark.parametrize("target", ["raw_source", "stage_member"])
+@pytest.mark.parametrize("target", ["raw_source", "stage_member", "plan"])
 def test_finalization_fences_inputs_through_publication_and_reuse(hidden_models, monkeypatch, reuse, target):
     root, _species, _sequences = hidden_models
     output, names, _ = make_plan(hidden_models)
@@ -2169,8 +2169,12 @@ def test_finalization_fences_inputs_through_publication_and_reuse(hidden_models,
     baseline = rescue.finalize(output, plan, [name], Path("baseline"))
     before = {p.relative_to(baseline).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in baseline.rglob("*") if p.is_file()}
-    path = (Path(plan["request"]["sources"][name]["fasta"]) if target == "raw_source"
-            else output / "rescued" / name / "audit.tsv")
+    paths = {
+        "raw_source": Path(plan["request"]["sources"][name]["fasta"]),
+        "stage_member": output / "rescued" / name / "audit.tsv",
+        "plan": output / "plan.json",
+    }
+    path = paths[target]
     original = path.read_bytes()
     destination = Path("baseline" if reuse else "new_view")
     changed = []
