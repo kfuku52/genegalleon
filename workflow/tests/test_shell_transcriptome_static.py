@@ -399,6 +399,9 @@ def test_transcriptome_core_uses_current_cdskit_longestorf_interface():
     assert '--seq_file "${sp_ub}.tmp.renamed.fa"' in text
     assert '--out_file "${longestcds_tmp}"' in text
     assert '--codon_table "${genetic_code}"' in text
+    assert 'longestcds_selection="longest"' in text
+    assert '--selection "${longestcds_selection}"' in text
+    assert '--parameter "orf_selection=${longestcds_selection}"' in text
     assert "--annotate_seq_name no" in text
     assert "cdskit longestcds" not in text
 

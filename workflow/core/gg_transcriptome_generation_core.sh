@@ -4529,6 +4529,15 @@ fi
 
 task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" "${file_isoform}"
+longestcds_selection="longest"
+orf_representative_mode="${orf_representative_mode:-length}"
+case "${orf_representative_mode}" in
+  length|homology|homology-orfs) ;;
+  *)
+    echo "Invalid orf_representative_mode=${orf_representative_mode}; expected length, homology, or homology-orfs." >&2
+    exit 2
+    ;;
+esac
 longestcds_needs_update=0
 gg_artifact_contract_init longestcds_provenance_args "transcriptome_longest_cds" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds.json"
 longestcds_provenance_args+=(
@@ -4537,10 +4546,25 @@ longestcds_provenance_args+=(
   --output "longest_transcript=${file_longestcds_transcript}"
   --parameter "assembly_method=${effective_assembly_method}"
   --parameter "orf_aggregation_level=${orf_aggregation_level}"
+  --parameter "orf_selection=${longestcds_selection}"
   --parameter "genetic_code=${genetic_code}"
 )
 if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
   longestcds_provenance_args+=(--input "corset_clusters=${file_corset_clusters}")
+fi
+if [[ "${orf_representative_mode}" != length && ( ${run_longestcds} -eq 1 || -e "${file_longestcds}" ) ]]; then
+  orf_swissprot_db=$(ensure_uniprot_sprot_db "${gg_workspace_dir}") || exit $?
+  orf_cdskit_version=$(cdskit --version) || exit $?
+  orf_diamond_version=$(diamond version) || exit $?
+  orf_selection_report="${dir_transcriptome_assembly_output}/orf_representative_selection/${sp_ub}_orf_selection.tsv"
+  longestcds_provenance_args+=(
+    --input "swissprot_db=${orf_swissprot_db}.dmnd"
+    --output "orf_selection_report=${orf_selection_report}"
+    --parameter "orf_representative_mode=${orf_representative_mode}"
+    --parameter "orf_homology_policy=1"
+    --parameter "orf_cdskit_version=${orf_cdskit_version}"
+    --parameter "orf_diamond_version=${orf_diamond_version}"
+  )
 fi
 gg_artifact_prepare_stage longestcds_needs_update run_longestcds "${longestcds_provenance_args[@]}" || exit $?
 if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
@@ -4588,10 +4612,16 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   fi
 
   longestcds_tmp="${sp_ub}.tmp.longestcds.raw.fa"
+  alternate_orf_args=()
+  if [[ "${orf_representative_mode}" == homology-orfs ]]; then
+    alternate_orf_args=(--alternate_orfs "${sp_ub}.tmp.alternate_orfs.fa")
+  fi
   if ! cdskit longestorf \
     --seq_file "${sp_ub}.tmp.renamed.fa" \
     --out_file "${longestcds_tmp}" \
     --codon_table "${genetic_code}" \
+    --selection "${longestcds_selection}" \
+    "${alternate_orf_args[@]}" \
     --annotate_seq_name no \
     --threads "${GG_TASK_CPUS}"; then
     echo "Error: cdskit longestorf failed."
@@ -4606,8 +4636,25 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   seqkit rmdup --by-seq "${longestcds_tmp}" |
     cdskit pad --codon_table "${genetic_code}" |
     seqkit sort --by-name --threads "${GG_TASK_CPUS}" |
-    cdskit aggregate -x "${aggregate_expression}" \
-      > "${sp_ub}.tmp.aggregated.fa"
+    if [[ "${orf_representative_mode}" == length ]]; then
+      cdskit aggregate -x "${aggregate_expression}" > "${sp_ub}.tmp.aggregated.fa"
+    else
+      cat > "${sp_ub}.tmp.baseline_orfs.fa"
+    fi
+  if [[ "${orf_representative_mode}" != length ]]; then
+    homology_args=()
+    if [[ "${orf_representative_mode}" == homology-orfs ]]; then
+      homology_args=(--alternates "${sp_ub}.tmp.alternate_orfs.fa")
+    fi
+    python "${gg_support_dir}/transcriptome_homology.py" \
+      --baseline "${sp_ub}.tmp.baseline_orfs.fa" "${homology_args[@]}" \
+      --database "${orf_swissprot_db}.dmnd" --expression "${aggregate_expression}" \
+      --genetic-code "${genetic_code}" --cpus "${GG_TASK_CPUS}" \
+      --output "${sp_ub}.tmp.ranked_orfs.fa" --report "${sp_ub}.tmp.orf_selection.tsv" || exit $?
+    # Preserve the source transcript ID in the published CDS and cDNA pair.
+    sed -E '/^>/ {s/[[:space:]].*//; s/\.cdskit-orf-[0-9]+$//;}' \
+      "${sp_ub}.tmp.ranked_orfs.fa" > "${sp_ub}.tmp.aggregated.fa"
+  fi
 
   awk '/^>/ {sub(/^>/, "", $0); sub(/[[:space:]].*$/, "", $0); sub(/\.p[0-9].*$/, "", $0); print}' \
     "${sp_ub}.tmp.aggregated.fa" > "${sp_ub}.tmp.aggregated.transcript_id.txt"
@@ -4623,6 +4670,9 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa" |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
     mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+    if [[ "${orf_representative_mode}" != length ]]; then
+      mv_out "${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}"
+    fi
   else
     echo "Output file not detected for the task: ${task}"
   fi

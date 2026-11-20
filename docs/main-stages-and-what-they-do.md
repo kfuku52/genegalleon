@@ -144,9 +144,20 @@ Purpose:
 - metadata retrieval (amalgkit),
 - FASTQ retrieval/preprocessing,
 - transcriptome assembly (`Trinity` or `rnaSPAdes`),
-- longest CDS extraction,
+- longest CDS extraction with CDSKIT `--selection longest`, including partial ORFs,
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
+
+Set `GG_TRANSCRIPTOME_ORF_REPRESENTATIVE_MODE=homology` to rank the existing
+ORFs within each assembly group using DIAMOND hits against the shared
+UniProtKB/Swiss-Prot database. `homology-orfs` also searches CDSKIT's bounded
+set of alternate coding frames on the retained transcripts. Only alternatives
+with qualifying hits enter representative selection. The default
+`length` selects the longest ORF and then the longest group representative.
+The homology modes publish the baseline and selected candidates, replacement
+reason, alignment scores, and query/target coverage in
+`transcriptome_assembly/orf_representative_selection/`. The paired cDNA output
+uses the selected ORF's original transcript ID.
 
 For SRA-derived inputs, schema-4 `getfastq_completion.json` binds every published FASTQ
 and its per-run `getfastq_stats.tsv` to relative paths, byte sizes, and SHA-256
