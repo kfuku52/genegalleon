@@ -159,6 +159,18 @@ reason, alignment scores, and query/target coverage in
 `transcriptome_assembly/orf_representative_selection/`. The paired cDNA output
 uses the selected ORF's original transcript ID.
 
+New rnaSPAdes assemblies with the main `transcripts.fasta` archive their graph,
+paths, and final k-mer size under `transcriptome_assembly/rnaspades_graph/`.
+Set `GG_TRANSCRIPTOME_RNASPADES_GROUP_AUDIT=yes` to report weak connections
+within original groups at aggregation level `i`. The optional
+`GG_TRANSCRIPTOME_RNASPADES_JUNCTION_TABLE` adds externally measured
+paired-read support. Set `GG_TRANSCRIPTOME_RNASPADES_LOCUS_TABLE` to an
+absolute TSV path with original `transcript_id` and uniquely assigned
+`locus_id` columns to split groups supported by complete locus evidence.
+Assignments and the audit are published under
+`transcriptome_assembly/rnaspades_group_audit/`.
+[CDSKIT input and output formats](https://github.com/kfuku52/cdskit/wiki/cdskit-regroup)
+
 For SRA-derived inputs, schema-4 `getfastq_completion.json` binds every published FASTQ
 and its per-run `getfastq_stats.tsv` to relative paths, byte sizes, and SHA-256
 digests, and also requires a complete gzip/FASTQ integrity check. The statistics

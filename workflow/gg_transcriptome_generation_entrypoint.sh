@@ -158,6 +158,9 @@ amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-
 kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}; reference FASTA used for expression quantification, choosing provider CDS, assembled longest transcripts, assembled longest CDS, or contamination-filtered longest CDS.
 orf_aggregation_level="i" # {c,g,i,p}; Longest-CDS ORF aggregation level. The value selects how transcript/ORF IDs are trimmed before choosing one representative CDS per group: "p" groups ORFs within the same transcript, "i" groups isoforms within the same gene-level ID, and "g" or "c" use broader upstream ID levels when those levels exist in the assembler output. Lower levels are more aggressive and collapse more sequences; "i" is the default balance. For rnaSPAdes, "c" is not supported because rnaSPAdes transcript IDs do not include a Trinity-style component level.
 orf_representative_mode="length" # {length,homology,homology-orfs}; Optionally use Swiss-Prot DIAMOND hits within each group. homology-orfs includes alternative ORFs.
+rnaspades_group_audit="no" # {no,yes}; Audit candidate bridges with the archived rnaSPAdes paths and graph.
+rnaspades_locus_table="" # Optional absolute TSV path with original transcript_id and uniquely assigned locus_id for splitting rnaSPAdes groups.
+rnaspades_junction_table="" # Optional absolute TSV path with paired-read counts for graph junctions in the rnaSPAdes audit.
 assembly_cpu_offset=0 # Number of CPU cores reserved from GG_TASK_CPUS before launching the assembler.
 assembly_ram_offset=4 # Amount of RAM in GB reserved from GG_MEM_TOTAL_GB before launching the assembler; GG_MEM_TOOL_RESERVE_GB is used if larger.
 

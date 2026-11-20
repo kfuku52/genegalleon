@@ -836,6 +836,9 @@ orf_aggregation_level
 orf_representative_mode
 protocol_rna_seq
 remove_amalgkit_fastq_after_completion
+rnaspades_group_audit
+rnaspades_junction_table
+rnaspades_locus_table
 transcriptome_getfastq_cache_dir
 transcriptome_metadata_input_subdir
 transcriptome_tmp_max_bytes

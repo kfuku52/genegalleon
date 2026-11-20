@@ -112,10 +112,12 @@ def write_eligible_candidates(baseline, alternates, supported, output):
                 destination.write(f">{header}\n{sequence}\n")
 
 
-def aggregate(candidates, hits, expressions, output, report, cpus):
+def aggregate(candidates, hits, expressions, output, report, cpus, group_table=None):
+    group_args = ["--group_table", str(group_table)] if group_table else []
+    expression_args = ["--expression", *expressions] if expressions else []
     subprocess.run(
         ["cdskit", "aggregate", "--seq_file", str(candidates), "--out_file", str(output),
-         "--threads", str(cpus), "--expression", *expressions, "--hit_table", str(hits),
+         "--threads", str(cpus), *expression_args, *group_args, "--hit_table", str(hits),
          "--selection_report", str(report)],
         check=True,
     )
@@ -126,7 +128,9 @@ def main():
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--alternates", type=Path)
     parser.add_argument("--database", required=True, type=Path)
-    parser.add_argument("--expression", required=True)
+    grouping = parser.add_mutually_exclusive_group(required=True)
+    grouping.add_argument("--expression")
+    grouping.add_argument("--group-table", type=Path)
     parser.add_argument("--genetic-code", type=int, required=True)
     parser.add_argument("--cpus", type=int, required=True)
     parser.add_argument("--output", required=True, type=Path)
@@ -141,12 +145,12 @@ def main():
         supported = expand_hits(raw, hits, aliases)
         del aliases
         candidates = args.baseline
-        expressions = [args.expression]
+        expressions = [args.expression] if args.expression else []
         if args.alternates:
             candidates = root / "candidates.fna"
             write_eligible_candidates(args.baseline, args.alternates, supported, candidates)
             expressions.insert(0, ALT_ORF_SUFFIX)
-        aggregate(candidates, hits, expressions, args.output, args.report, args.cpus)
+        aggregate(candidates, hits, expressions, args.output, args.report, args.cpus, args.group_table)
 
 
 if __name__ == "__main__":

@@ -4098,6 +4098,7 @@ fi
 
 task='De novo transcriptome assembly'
 assembly_needs_update=0
+rnaspades_graph_prefix="${dir_transcriptome_assembly_output}/rnaspades_graph/${sp_ub}"
 gg_artifact_contract_init assembly_provenance_args "transcriptome_assembly" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.assembly.json"
 assembly_provenance_args+=(
   --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
@@ -4111,6 +4112,13 @@ assembly_provenance_args+=(
 )
 if [[ "${effective_assembly_method}" == rnaspades && "${protocol_rna_seq}" == mixed ]]; then
   assembly_provenance_args+=(--parameter "mixed_library_selection=all")
+fi
+if [[ "${effective_assembly_method}" == rnaspades ]]; then
+  assembly_provenance_args+=(
+    --optional-output "paths=${rnaspades_graph_prefix}.paths.gz"
+    --optional-output "graph=${rnaspades_graph_prefix}.fastg.gz"
+    --optional-output "graph_kmer=${rnaspades_graph_prefix}.kmer.txt"
+  )
 fi
 gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provenance_args[@]}" || exit $?
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
@@ -4412,7 +4420,29 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
           echo "Failed to generate tmp.isoform.fa.gz from rnaSPAdes output: ${rnaspades_transcript_fasta}. Exiting."
           exit 1
         fi
-        mv_out "tmp.isoform.fa.gz" "${file_isoform}"
+        if [[ "${rnaspades_transcript_fasta##*/}" == transcripts.fasta ]]; then
+          rnaspades_final_k=0
+          for kdir in "${dir_tmp}/rnaspades_output"/K*; do
+            if [[ -d "${kdir}" && "${kdir##*/}" =~ ^K([1-9][0-9]*)$ && ${BASH_REMATCH[1]} -gt ${rnaspades_final_k} ]]; then
+              rnaspades_final_k=${BASH_REMATCH[1]}
+            fi
+          done
+          if [[ ${rnaspades_final_k} -eq 0 || ! -s rnaspades_output/transcripts.paths || ! -s rnaspades_output/assembly_graph.fastg ]]; then
+            echo "Missing rnaSPAdes graph, transcript paths, or final k-mer directory." >&2
+            exit 1
+          fi
+          gzip -c rnaspades_output/transcripts.paths > tmp.rnaspades.paths.gz
+          gzip -c rnaspades_output/assembly_graph.fastg > tmp.rnaspades.fastg.gz
+          printf '%s\n' "${rnaspades_final_k}" > tmp.rnaspades.kmer.txt
+          mv_out_bundle "tmp.isoform.fa.gz" "${file_isoform}" \
+            tmp.rnaspades.paths.gz "${rnaspades_graph_prefix}.paths.gz" \
+            tmp.rnaspades.fastg.gz "${rnaspades_graph_prefix}.fastg.gz" \
+            tmp.rnaspades.kmer.txt "${rnaspades_graph_prefix}.kmer.txt" || exit $?
+        else
+          printf 'none\n' > tmp.rnaspades.kmer.txt
+          mv_out_bundle "tmp.isoform.fa.gz" "${file_isoform}" \
+            tmp.rnaspades.kmer.txt "${rnaspades_graph_prefix}.kmer.txt" || exit $?
+        fi
       else
         echo "rnaSPAdes did not produce a supported transcript fasta under: ${dir_tmp}/rnaspades_output."
         echo "Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta"
@@ -4531,6 +4561,9 @@ task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" "${file_isoform}"
 longestcds_selection="longest"
 orf_representative_mode="${orf_representative_mode:-length}"
+rnaspades_group_audit="${rnaspades_group_audit:-no}"
+rnaspades_locus_table="${rnaspades_locus_table:-}"
+rnaspades_junction_table="${rnaspades_junction_table:-}"
 case "${orf_representative_mode}" in
   length|homology|homology-orfs) ;;
   *)
@@ -4551,6 +4584,47 @@ longestcds_provenance_args+=(
 )
 if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
   longestcds_provenance_args+=(--input "corset_clusters=${file_corset_clusters}")
+fi
+rnaspades_group_args=()
+if [[ "${rnaspades_group_audit}" != no || -n "${rnaspades_locus_table}${rnaspades_junction_table}" ]]; then
+  if [[ "${rnaspades_group_audit}" != no && "${rnaspades_group_audit}" != yes ]] ||
+    [[ "${effective_assembly_method}" != rnaspades || "${orf_aggregation_level}" != i ]]; then
+    echo "rnaSPAdes group auditing requires assembly_method=rnaspades, orf_aggregation_level=i, and rnaspades_group_audit=yes or no." >&2
+    exit 2
+  fi
+  rnaspades_group_prefix="${dir_transcriptome_assembly_output}/rnaspades_group_audit/${sp_ub}"
+  longestcds_provenance_args+=(
+    --parameter "rnaspades_grouping_policy=1"
+    --output "rnaspades_groups=${rnaspades_group_prefix}.groups.tsv"
+    --output "rnaspades_group_audit=${rnaspades_group_prefix}.audit.tsv"
+  )
+  rnaspades_final_k=""
+  if [[ -s "${rnaspades_graph_prefix}.kmer.txt" ]]; then
+    rnaspades_final_k=$(cat "${rnaspades_graph_prefix}.kmer.txt")
+  fi
+  if [[ "${rnaspades_final_k}" =~ ^[1-9][0-9]*$ && -s "${rnaspades_graph_prefix}.paths.gz" && -s "${rnaspades_graph_prefix}.fastg.gz" ]]; then
+    rnaspades_group_args+=(
+      --paths "${rnaspades_graph_prefix}.paths.gz"
+      --fastg "${rnaspades_graph_prefix}.fastg.gz"
+      --kmer_size "${rnaspades_final_k}"
+    )
+    longestcds_provenance_args+=(
+      --input "paths=${rnaspades_graph_prefix}.paths.gz"
+      --input "graph=${rnaspades_graph_prefix}.fastg.gz"
+      --input "graph_kmer=${rnaspades_graph_prefix}.kmer.txt"
+    )
+  elif [[ "${rnaspades_group_audit}" == yes || -n "${rnaspades_junction_table}" ]]; then
+    echo "The rnaSPAdes graph audit requires the archived FASTG, transcript paths, and final k-mer size." >&2
+    exit 1
+  fi
+  if [[ -n "${rnaspades_locus_table}" ]]; then
+    rnaspades_group_args+=(--locus_table "${rnaspades_locus_table}")
+    longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_locus_table}")
+  fi
+  if [[ -n "${rnaspades_junction_table}" ]]; then
+    rnaspades_group_args+=(--junction_table "${rnaspades_junction_table}")
+    longestcds_provenance_args+=(--input "rnaspades_junctions=${rnaspades_junction_table}")
+  fi
 fi
 if [[ "${orf_representative_mode}" != length && ( ${run_longestcds} -eq 1 || -e "${file_longestcds}" ) ]]; then
   orf_swissprot_db=$(ensure_uniprot_sprot_db "${gg_workspace_dir}") || exit $?
@@ -4612,6 +4686,22 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   fi
 
   longestcds_tmp="${sp_ub}.tmp.longestcds.raw.fa"
+  aggregate_args=(-x "${aggregate_expression}")
+  homology_group_args=(--expression "${aggregate_expression}")
+  rnaspades_split=no
+  if (( ${#rnaspades_group_args[@]} )); then
+    cdskit regroup --seq_file "${file_isoform}" "${rnaspades_group_args[@]}" \
+      --out_file "${sp_ub}.tmp.groups.tsv" --report "${sp_ub}.tmp.group_audit.tsv" || exit $?
+    if [[ -n "${rnaspades_locus_table}" ]]; then
+      rnaspades_split=$(python "${gg_support_dir}/rnaspades_group_ids.py" normalize \
+        "${sp_ub}.tmp.groups.tsv" "${sp_ub}.tmp.group_audit.tsv" \
+        "${sp_ub}" "${sp_ub}.tmp.normalized_groups.tsv") || exit $?
+    fi
+  fi
+  if [[ "${rnaspades_split}" == yes ]]; then
+    aggregate_args=(--group_table "${sp_ub}.tmp.normalized_groups.tsv")
+    homology_group_args=(--group-table "${sp_ub}.tmp.normalized_groups.tsv")
+  fi
   alternate_orf_args=()
   if [[ "${orf_representative_mode}" == homology-orfs ]]; then
     alternate_orf_args=(--alternate_orfs "${sp_ub}.tmp.alternate_orfs.fa")
@@ -4633,11 +4723,17 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     exit 1
   fi
 
-  seqkit rmdup --by-seq "${longestcds_tmp}" |
+  if [[ "${rnaspades_split}" == yes ]]; then
+    seqkit rmdup --by-seq "${longestcds_tmp}" |
+      python "${gg_support_dir}/rnaspades_group_ids.py" restore-split-candidates \
+        "${sp_ub}.tmp.normalized_groups.tsv" "${longestcds_tmp}"
+  else
+    seqkit rmdup --by-seq "${longestcds_tmp}"
+  fi |
     cdskit pad --codon_table "${genetic_code}" |
     seqkit sort --by-name --threads "${GG_TASK_CPUS}" |
     if [[ "${orf_representative_mode}" == length ]]; then
-      cdskit aggregate -x "${aggregate_expression}" > "${sp_ub}.tmp.aggregated.fa"
+      cdskit aggregate "${aggregate_args[@]}" > "${sp_ub}.tmp.aggregated.fa"
     else
       cat > "${sp_ub}.tmp.baseline_orfs.fa"
     fi
@@ -4648,7 +4744,7 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     fi
     python "${gg_support_dir}/transcriptome_homology.py" \
       --baseline "${sp_ub}.tmp.baseline_orfs.fa" "${homology_args[@]}" \
-      --database "${orf_swissprot_db}.dmnd" --expression "${aggregate_expression}" \
+      --database "${orf_swissprot_db}.dmnd" "${homology_group_args[@]}" \
       --genetic-code "${genetic_code}" --cpus "${GG_TASK_CPUS}" \
       --output "${sp_ub}.tmp.ranked_orfs.fa" --report "${sp_ub}.tmp.orf_selection.tsv" || exit $?
     # Preserve the source transcript ID in the published CDS and cDNA pair.
@@ -4666,12 +4762,30 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
       --pattern-file "${sp_ub}.tmp.aggregated.transcript_id.txt" \
       "${sp_ub}.tmp.renamed.fa" \
       --out-file "${sp_ub}.tmp.longestcds.transcript.fa.gz"
-    mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
-    sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa" |
+    if [[ "${rnaspades_split}" == yes ]]; then
+      python "${gg_support_dir}/rnaspades_group_ids.py" rename-selected \
+        "${sp_ub}.tmp.normalized_groups.tsv" "${sp_ub}.tmp.aggregated.fa"
+    else
+      sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa"
+    fi |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
-    mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
-    if [[ "${orf_representative_mode}" != length ]]; then
-      mv_out "${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}"
+    if (( ${#rnaspades_group_args[@]} )); then
+      longestcds_bundle=(
+        "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
+        "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+        "${sp_ub}.tmp.groups.tsv" "${rnaspades_group_prefix}.groups.tsv"
+        "${sp_ub}.tmp.group_audit.tsv" "${rnaspades_group_prefix}.audit.tsv"
+      )
+      if [[ "${orf_representative_mode}" != length ]]; then
+        longestcds_bundle+=("${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}")
+      fi
+      mv_out_bundle "${longestcds_bundle[@]}" || exit $?
+    else
+      mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
+      mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+      if [[ "${orf_representative_mode}" != length ]]; then
+        mv_out "${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}"
+      fi
     fi
   else
     echo "Output file not detected for the task: ${task}"
