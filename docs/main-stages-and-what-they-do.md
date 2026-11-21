@@ -148,16 +148,56 @@ Purpose:
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
 
-Set `GG_TRANSCRIPTOME_ORF_REPRESENTATIVE_MODE=homology` to rank the existing
-ORFs within each assembly group using DIAMOND hits against the shared
-UniProtKB/Swiss-Prot database. `homology-orfs` also searches CDSKIT's bounded
-set of alternate coding frames on the retained transcripts. Only alternatives
-with qualifying hits enter representative selection. The default
-`length` selects the longest ORF and then the longest group representative.
+The default `homology-orfs` ranks representatives within each assembly
+group using DIAMOND hits against UniProtKB/Swiss-Prot. It also searches
+CDSKIT's bounded set of alternative ORFs and considers alternatives with
+qualifying hits. Set `GG_TRANSCRIPTOME_ORF_REPRESENTATIVE_MODE=homology`
+to rank only the baseline ORFs or `length` to select by coding length
+without the Swiss-Prot search.
 The homology modes publish the baseline and selected candidates, replacement
 reason, alignment scores, and query/target coverage in
 `transcriptome_assembly/orf_representative_selection/`. The paired cDNA output
 uses the selected ORF's original transcript ID.
+
+For rnaSPAdes with aggregation level `i` and `homology-orfs`,
+`GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=auto` enables rescue by default
+when the regular assembler groups are used. Rescue first checks that the
+provisional representatives support distinct Swiss-Prot families. It then
+compares their peptides to the complete representative catalogue and adds
+supported candidates that lack a match with at least 90% identity and 90%
+candidate coverage. Existing representatives are retained. Exact peptide
+extensions and candidates from an already represented transcript are reviewed
+in `transcriptome_assembly/orf_catalog_rescue/<species>.tsv`. Added CDS use
+the provisional `.splitN` identifier and the paired cDNA retains its source
+transcript ID, recorded in that table. Both FASTA outputs can feed quantification.
+
+Use `GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=off` for ordinary representative
+selection. The `auto` setting also respects explicit locus-table grouping
+and `orf_homology_split=report` or `apply`. For rescue with an optional
+locus table as corroborating evidence, select `orf_catalog_rescue=on`
+and `orf_homology_split=off`.
+
+With rnaSPAdes, `orf_aggregation_level=i`, and `homology-orfs`, set
+`GG_TRANSCRIPTOME_ORF_HOMOLOGY_SPLIT=report` to flag multi-transcript groups
+that match different Swiss-Prot protein families. The review compares
+near-best hits spanning at least 80% of both proteins and aligns the matched
+Swiss-Prot proteins to recognize related accessions. `apply` splits a group
+only when all its transcripts have trusted locus assignments and each locus
+has support from a distinct set of protein families. Conflicting ORFs from
+one transcript are reported for review. With either setting, the locus
+table corroborates homology-based split candidates. Without a locus table,
+`apply` publishes the review and retains the original groups.
+The assignments and decisions are written under
+`transcriptome_assembly/orf_homology_split/`. The default is `off`.
+
+In `report` mode, the additional `*.preview.tsv` file shows the provisional
+representatives of each proposed family split. The preview checks whether the
+selected ORFs still match the expected distinct families over at least 80% of
+both proteins. A shared locus, a shared hit family, or near-identical peptides
+can flag a split for retention. Verified distinct loci provide independent
+support. The preview includes the proposed transcript assignments and leaves the
+published representatives intact. `apply` continues to use the locus-supported
+split policy documented above.
 
 New rnaSPAdes assemblies with the main `transcripts.fasta` archive their graph,
 paths, and final k-mer size under `transcriptome_assembly/rnaspades_graph/`.
@@ -166,7 +206,8 @@ within original groups at aggregation level `i`. The optional
 `GG_TRANSCRIPTOME_RNASPADES_JUNCTION_TABLE` adds externally measured
 paired-read support. Set `GG_TRANSCRIPTOME_RNASPADES_LOCUS_TABLE` to an
 absolute TSV path with original `transcript_id` and uniquely assigned
-`locus_id` columns to split groups supported by complete locus evidence.
+`locus_id` columns to split groups supported by complete locus evidence
+when homology-based splitting is off.
 Assignments and the audit are published under
 `transcriptome_assembly/rnaspades_group_audit/`.
 [CDSKIT input and output formats](https://github.com/kfuku52/cdskit/wiki/cdskit-regroup)

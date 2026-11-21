@@ -406,6 +406,16 @@ def test_transcriptome_core_uses_current_cdskit_longestorf_interface():
     assert "cdskit longestcds" not in text
 
 
+def test_transcriptome_representative_selection_defaults_match_core():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+
+    assert 'orf_representative_mode="homology-orfs"' in entrypoint
+    assert 'orf_representative_mode="${orf_representative_mode:-homology-orfs}"' in core
+    assert 'orf_catalog_rescue="auto"' in entrypoint
+    assert 'orf_catalog_rescue="${orf_catalog_rescue:-auto}"' in core
+
+
 def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)

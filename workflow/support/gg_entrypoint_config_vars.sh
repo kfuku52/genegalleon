@@ -833,6 +833,8 @@ kallisto_reference
 max_assembly_input_fastq_size
 mode_transcriptome_assembly
 orf_aggregation_level
+orf_catalog_rescue
+orf_homology_split
 orf_representative_mode
 protocol_rna_seq
 remove_amalgkit_fastq_after_completion

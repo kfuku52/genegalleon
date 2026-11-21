@@ -4560,7 +4560,9 @@ fi
 task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" "${file_isoform}"
 longestcds_selection="longest"
-orf_representative_mode="${orf_representative_mode:-length}"
+orf_representative_mode="${orf_representative_mode:-homology-orfs}"
+orf_catalog_rescue="${orf_catalog_rescue:-auto}"
+orf_homology_split="${orf_homology_split:-off}"
 rnaspades_group_audit="${rnaspades_group_audit:-no}"
 rnaspades_locus_table="${rnaspades_locus_table:-}"
 rnaspades_junction_table="${rnaspades_junction_table:-}"
@@ -4568,6 +4570,40 @@ case "${orf_representative_mode}" in
   length|homology|homology-orfs) ;;
   *)
     echo "Invalid orf_representative_mode=${orf_representative_mode}; expected length, homology, or homology-orfs." >&2
+    exit 2
+    ;;
+esac
+case "${orf_homology_split}" in
+  off) ;;
+  report|apply)
+    if [[ "${orf_representative_mode}" != homology-orfs ||
+        "${effective_assembly_method}" != rnaspades || "${orf_aggregation_level}" != i ]]; then
+      echo "orf_homology_split requires homology-orfs and rnaSPAdes aggregation level i." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "Invalid orf_homology_split=${orf_homology_split}; expected off, report, or apply." >&2
+    exit 2
+    ;;
+esac
+orf_catalog_rescue_enabled=no
+case "${orf_catalog_rescue}" in
+  off) ;;
+  auto|on)
+    if [[ "${orf_representative_mode}" == homology-orfs &&
+          "${effective_assembly_method}" == rnaspades && "${orf_aggregation_level}" == i &&
+          "${orf_homology_split}" == off ]]; then
+      if [[ "${orf_catalog_rescue}" == on || -z "${rnaspades_locus_table}" ]]; then
+        orf_catalog_rescue_enabled=yes
+      fi
+    elif [[ "${orf_catalog_rescue}" == on ]]; then
+      echo "orf_catalog_rescue=on requires homology-orfs, rnaSPAdes aggregation level i, and orf_homology_split=off." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "Invalid orf_catalog_rescue=${orf_catalog_rescue}; expected auto, on, or off." >&2
     exit 2
     ;;
 esac
@@ -4586,7 +4622,11 @@ if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
   longestcds_provenance_args+=(--input "corset_clusters=${file_corset_clusters}")
 fi
 rnaspades_group_args=()
-if [[ "${rnaspades_group_audit}" != no || -n "${rnaspades_locus_table}${rnaspades_junction_table}" ]]; then
+rnaspades_unconditional_loci=""
+if [[ "${orf_homology_split}" == off && "${orf_catalog_rescue_enabled}" == no ]]; then
+  rnaspades_unconditional_loci="${rnaspades_locus_table}"
+fi
+if [[ "${rnaspades_group_audit}" != no || -n "${rnaspades_unconditional_loci}${rnaspades_junction_table}" ]]; then
   if [[ "${rnaspades_group_audit}" != no && "${rnaspades_group_audit}" != yes ]] ||
     [[ "${effective_assembly_method}" != rnaspades || "${orf_aggregation_level}" != i ]]; then
     echo "rnaSPAdes group auditing requires assembly_method=rnaspades, orf_aggregation_level=i, and rnaspades_group_audit=yes or no." >&2
@@ -4617,9 +4657,9 @@ if [[ "${rnaspades_group_audit}" != no || -n "${rnaspades_locus_table}${rnaspade
     echo "The rnaSPAdes graph audit requires the archived FASTG, transcript paths, and final k-mer size." >&2
     exit 1
   fi
-  if [[ -n "${rnaspades_locus_table}" ]]; then
-    rnaspades_group_args+=(--locus_table "${rnaspades_locus_table}")
-    longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_locus_table}")
+  if [[ -n "${rnaspades_unconditional_loci}" ]]; then
+    rnaspades_group_args+=(--locus_table "${rnaspades_unconditional_loci}")
+    longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_unconditional_loci}")
   fi
   if [[ -n "${rnaspades_junction_table}" ]]; then
     rnaspades_group_args+=(--junction_table "${rnaspades_junction_table}")
@@ -4639,6 +4679,34 @@ if [[ "${orf_representative_mode}" != length && ( ${run_longestcds} -eq 1 || -e 
     --parameter "orf_cdskit_version=${orf_cdskit_version}"
     --parameter "orf_diamond_version=${orf_diamond_version}"
   )
+  if [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+    longestcds_provenance_args+=(--input "swissprot_targets=${orf_swissprot_db}.pep")
+    if [[ -n "${rnaspades_locus_table}" ]]; then
+      longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_locus_table}")
+    fi
+  fi
+  if [[ "${orf_homology_split}" != off ]]; then
+    orf_split_prefix="${dir_transcriptome_assembly_output}/orf_homology_split/${sp_ub}"
+    longestcds_provenance_args+=(
+      --output "orf_homology_split_groups=${orf_split_prefix}.groups.tsv"
+      --output "orf_homology_split_audit=${orf_split_prefix}.audit.tsv"
+      --parameter "orf_homology_split=${orf_homology_split}"
+      --parameter "orf_homology_split_policy=1"
+    )
+    if [[ "${orf_homology_split}" == report ]]; then
+      longestcds_provenance_args+=(
+        --output "orf_homology_split_preview=${orf_split_prefix}.preview.tsv"
+        --parameter "orf_homology_split_preview_policy=1"
+      )
+    fi
+  fi
+  if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+    orf_catalog_rescue_report="${dir_transcriptome_assembly_output}/orf_catalog_rescue/${sp_ub}.tsv"
+    longestcds_provenance_args+=(
+      --output "orf_catalog_rescue_report=${orf_catalog_rescue_report}"
+      --parameter "orf_catalog_rescue_policy=1"
+    )
+  fi
 fi
 gg_artifact_prepare_stage longestcds_needs_update run_longestcds "${longestcds_provenance_args[@]}" || exit $?
 if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
@@ -4692,7 +4760,7 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   if (( ${#rnaspades_group_args[@]} )); then
     cdskit regroup --seq_file "${file_isoform}" "${rnaspades_group_args[@]}" \
       --out_file "${sp_ub}.tmp.groups.tsv" --report "${sp_ub}.tmp.group_audit.tsv" || exit $?
-    if [[ -n "${rnaspades_locus_table}" ]]; then
+    if [[ -n "${rnaspades_unconditional_loci}" ]]; then
       rnaspades_split=$(python "${gg_support_dir}/rnaspades_group_ids.py" normalize \
         "${sp_ub}.tmp.groups.tsv" "${sp_ub}.tmp.group_audit.tsv" \
         "${sp_ub}" "${sp_ub}.tmp.normalized_groups.tsv") || exit $?
@@ -4742,6 +4810,31 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     if [[ "${orf_representative_mode}" == homology-orfs ]]; then
       homology_args=(--alternates "${sp_ub}.tmp.alternate_orfs.fa")
     fi
+    if [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+      homology_args+=(
+        --split-mode "${orf_homology_split}" --split-transcripts "${file_isoform}"
+        --split-species "${sp_ub}" --split-extra-baseline "${longestcds_tmp}"
+        --split-targets "${orf_swissprot_db}.pep"
+      )
+      if [[ -n "${rnaspades_locus_table}" ]]; then
+        homology_args+=(--split-loci "${rnaspades_locus_table}")
+      fi
+    fi
+    if [[ "${orf_homology_split}" != off ]]; then
+      homology_args+=(
+        --split-report "${sp_ub}.tmp.homology_split_audit.tsv"
+        --split-groups "${sp_ub}.tmp.normalized_groups.tsv"
+      )
+      if [[ "${orf_homology_split}" == report ]]; then
+        homology_args+=(--split-preview "${sp_ub}.tmp.homology_split_preview.tsv")
+      fi
+    fi
+    if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+      homology_args+=(
+        --rescue-report "${sp_ub}.tmp.catalog_rescue.tsv"
+        --rescue-groups "${sp_ub}.tmp.normalized_groups.tsv"
+      )
+    fi
     python "${gg_support_dir}/transcriptome_homology.py" \
       --baseline "${sp_ub}.tmp.baseline_orfs.fa" "${homology_args[@]}" \
       --database "${orf_swissprot_db}.dmnd" "${homology_group_args[@]}" \
@@ -4762,20 +4855,38 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
       --pattern-file "${sp_ub}.tmp.aggregated.transcript_id.txt" \
       "${sp_ub}.tmp.renamed.fa" \
       --out-file "${sp_ub}.tmp.longestcds.transcript.fa.gz"
-    if [[ "${rnaspades_split}" == yes ]]; then
+    if [[ "${rnaspades_split}" == yes || "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
       python "${gg_support_dir}/rnaspades_group_ids.py" rename-selected \
         "${sp_ub}.tmp.normalized_groups.tsv" "${sp_ub}.tmp.aggregated.fa"
     else
       sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa"
     fi |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
-    if (( ${#rnaspades_group_args[@]} )); then
+    if (( ${#rnaspades_group_args[@]} )) || [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
       longestcds_bundle=(
         "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
         "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
-        "${sp_ub}.tmp.groups.tsv" "${rnaspades_group_prefix}.groups.tsv"
-        "${sp_ub}.tmp.group_audit.tsv" "${rnaspades_group_prefix}.audit.tsv"
       )
+      if (( ${#rnaspades_group_args[@]} )); then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.groups.tsv" "${rnaspades_group_prefix}.groups.tsv"
+          "${sp_ub}.tmp.group_audit.tsv" "${rnaspades_group_prefix}.audit.tsv"
+        )
+      fi
+      if [[ "${orf_homology_split}" != off ]]; then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.normalized_groups.tsv" "${orf_split_prefix}.groups.tsv"
+          "${sp_ub}.tmp.homology_split_audit.tsv" "${orf_split_prefix}.audit.tsv"
+        )
+      fi
+      if [[ "${orf_homology_split}" == report ]]; then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.homology_split_preview.tsv" "${orf_split_prefix}.preview.tsv"
+        )
+      fi
+      if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+        longestcds_bundle+=("${sp_ub}.tmp.catalog_rescue.tsv" "${orf_catalog_rescue_report}")
+      fi
       if [[ "${orf_representative_mode}" != length ]]; then
         longestcds_bundle+=("${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}")
       fi
