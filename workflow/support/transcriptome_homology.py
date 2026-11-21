@@ -10,14 +10,18 @@ from contextlib import nullcontext
 from heapq import merge
 from pathlib import Path
 
+from Bio import SeqIO
 from Bio.SeqIO.FastaIO import SimpleFastaParser
-from cdskit.homology import HIT_COLUMNS, parse_hit, qualifies
+from cdskit.atomicio import atomic_output_paths
+from cdskit.homology import HIT_COLUMNS, hit_values, parse_hit, qualifies
 from cdskit.longestcds import ALT_ORF_SUFFIX
+from fasta_sequence_store import open_text
 from transcriptome_orf_translation import make_orf_peptide_translator
 
 DIAMOND_COLUMNS = ("qseqid", "sseqid", "evalue", "bitscore",
                    "qstart", "qend", "qlen", "sstart", "send", "slen")
 ALT_PATTERN = re.compile(ALT_ORF_SUFFIX)
+TRINITY_TRANSCRIPT_ID = re.compile(r"(?:TRINITY_)?(DN\d+_c\d+_g\d+)_(i\d+)")
 
 
 def fasta(path):
@@ -108,6 +112,79 @@ def expand_hits(raw, output, aliases):
     return supported
 
 
+def retain_supported_longer_orfs(raw_hits, aliases, candidates, output, report):
+    """Check provisional short replacements against local evidence on the same target."""
+    with report.open(newline="") as stream:
+        comparisons = [row for row in csv.DictReader(stream, delimiter="\t")
+                       if row["reason"] == "supported_alternative"]
+    if not comparisons:
+        return
+
+    requested = {}
+    for row in comparisons:
+        for candidate in (row["baseline_id"], row["selected_id"]):
+            requested[candidate] = row["selected_target_id"]
+    query_ids = {
+        candidate: f"orf{index}"
+        for index, identifiers in enumerate(aliases, 1)
+        for candidate in identifiers
+        if candidate in requested
+    }
+    targets_by_query = {}
+    for candidate, query in query_ids.items():
+        targets_by_query.setdefault(query, set()).add(requested[candidate])
+    evidence = {}
+    with raw_hits.open(newline="") as stream:
+        # expand_hits already validated the DIAMOND TSV. Parse only alignments
+        # that can inform a provisional replacement.
+        for line in stream:
+            query, _, rest = line.partition("\t")
+            targets = targets_by_query.get(query)
+            if targets:
+                target, _, _ = rest.partition("\t")
+                if target in targets:
+                    row = line.rstrip("\r\n").split("\t")
+                    _, hit = parse_hit(row)
+                    evidence[query, target] = int(row[6]), hit
+
+    retained = {}
+    for row in comparisons:
+        baseline, selected, target = row["baseline_id"], row["selected_id"], row["selected_target_id"]
+        baseline_evidence = evidence.get((query_ids.get(baseline), target))
+        selected_evidence = evidence.get((query_ids.get(selected), target))
+        if not baseline_evidence or not selected_evidence:
+            continue
+        baseline_length, before = baseline_evidence
+        selected_length, after = selected_evidence
+        before_support = (before.bitscore, before.target_coverage)
+        after_support = (after.bitscore, after.target_coverage)
+        if (baseline_length > selected_length and before_support != after_support
+                and all(old >= new for old, new in zip(before_support, after_support, strict=True))):
+            retained[selected] = (baseline, before)
+    if not retained:
+        return
+
+    baseline_ids = {baseline for baseline, _ in retained.values()}
+    original = {record.id: record for record in SeqIO.parse(candidates, "fasta") if record.id in baseline_ids}
+    fields = ("target_id", "evalue", "bitscore", "query_coverage", "target_coverage")
+    with atomic_output_paths([output, report]) as (staged_fasta, staged_report):
+        with output.open() as stream:
+            SeqIO.write((original[retained[r.id][0]] if r.id in retained else r
+                         for r in SeqIO.parse(stream, "fasta")), staged_fasta, "fasta")
+        with report.open(newline="") as source, open(staged_report, "w", newline="") as target:
+            rows = csv.DictReader(source, delimiter="\t")
+            writer = csv.DictWriter(target, fieldnames=rows.fieldnames, delimiter="\t", lineterminator="\n")
+            writer.writeheader()
+            for row in rows:
+                if row["selected_id"] in retained:
+                    baseline, hit = retained[row["selected_id"]]
+                    row.update(selected_id=baseline, selected_description=original[baseline].description,
+                               reason="retain_dominant_baseline_hit")
+                    for name, value in zip(fields, hit_values(hit), strict=True):
+                        row[f"baseline_{name}"] = row[f"selected_{name}"] = value
+                writer.writerow(row)
+
+
 def write_eligible_candidates(
     baseline, alternates, supported, output, restored=(), sources=None, preview_alternates=None,
 ):
@@ -172,6 +249,35 @@ def target_links(candidates, target_fasta, root, cpus):
                 yield query, hit.target
 
 
+def split_input_transcripts(path, assembler):
+    if assembler == "rnaspades":
+        from cdskit.regroup import transcript_groups, transcript_key
+
+        for group, members in transcript_groups(path).items():
+            for raw in members:
+                _, isoform = transcript_key(raw)
+                yield raw, group, isoform
+        return
+
+    # Match the IDs emitted by the Trinity branch of longest-CDS extraction.
+    seen = set()
+    with open_text(path) as stream:
+        for line in stream:
+            if not line.startswith(">"):
+                continue
+            raw, *_ = line[1:].split(maxsplit=1) or [""]
+            match = TRINITY_TRANSCRIPT_ID.fullmatch(raw)
+            if not match:
+                raise ValueError(f"Invalid Trinity transcript ID: {raw!r}")
+            group, isoform = match[1].replace("_", "-"), match[2]
+            if (group, isoform) in seen:
+                raise ValueError(f"Duplicate Trinity transcript key: {group}/{isoform}")
+            seen.add((group, isoform))
+            yield raw, group, isoform
+    if not seen:
+        raise ValueError(f"No Trinity transcripts in {path}")
+
+
 def split_groups(args, hits, root):
     from cdskit.homology_split import (
         SPLIT_COLUMNS,
@@ -180,18 +286,15 @@ def split_groups(args, hits, root):
         potential_splits,
         read_split_targets,
     )
-    from cdskit.regroup import read_loci, transcript_groups, transcript_key
+    from cdskit.regroup import read_loci
     from cdskit.tsvio import write_tsv
 
     groups, raw_to_source = {}, {}
-    for group, members in transcript_groups(args.split_transcripts).items():
+    for raw, group, isoform in split_input_transcripts(args.split_transcripts, args.split_assembler):
         normalized = f"{args.split_species}_{group}"
-        groups[normalized] = []
-        for raw in members:
-            _, isoform = transcript_key(raw)
-            source = f"{normalized}-{isoform}"
-            groups[normalized].append(source)
-            raw_to_source[raw] = source
+        source = f"{normalized}-{isoform}"
+        groups.setdefault(normalized, []).append(source)
+        raw_to_source[raw] = source
     loci = {}
     if args.split_loci:
         loci = {raw_to_source[raw]: locus for raw, locus in read_loci(args.split_loci, raw_to_source).items()}
@@ -218,12 +321,14 @@ def restrict_hits(hits, output, sources):
         writer.writerows(row for row in reader if source_name(row[0]) in sources)
 
 
-def aggregate(candidates, hits, expressions, output, report, cpus, group_table=None):
+def aggregate(candidates, hits, expressions, output, report, cpus, group_table=None,
+              orf_transcripts=None, genetic_code=1):
     group_args = ["--group_table", str(group_table)] if group_table else []
     expression_args = ["--expression", *expressions] if expressions else []
+    orf_args = ["--orf_transcripts", str(orf_transcripts), "--codon_table", str(genetic_code)] if orf_transcripts else []
     subprocess.run(
         ["cdskit", "aggregate", "--seq_file", str(candidates), "--out_file", str(output),
-         "--threads", str(cpus), *expression_args, *group_args, "--hit_table", str(hits),
+         "--threads", str(cpus), *expression_args, *group_args, *orf_args, "--hit_table", str(hits),
          "--selection_report", str(report)],
         check=True,
     )
@@ -233,6 +338,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--alternates", type=Path)
+    parser.add_argument("--orf-transcripts", type=Path)
     parser.add_argument("--database", required=True, type=Path)
     grouping = parser.add_mutually_exclusive_group(required=True)
     grouping.add_argument("--expression")
@@ -243,6 +349,7 @@ def main():
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--split-mode", choices=("off", "report", "apply"), default="off")
     parser.add_argument("--split-transcripts", type=Path)
+    parser.add_argument("--split-assembler", choices=("rnaspades", "trinity"), default="rnaspades")
     parser.add_argument("--split-species")
     parser.add_argument("--split-loci", type=Path)
     parser.add_argument("--split-targets", type=Path)
@@ -261,11 +368,13 @@ def main():
         parser.error("--split-preview requires --split-mode report")
     if split and not (args.split_report and args.split_groups):
         parser.error("Split review requires a group table and an audit output")
+    if args.split_assembler == "trinity" and (split or args.split_loci):
+        parser.error("Homology splitting and locus-table grouping require rnaSPAdes")
     if (split or rescue) and (args.group_table or not all((
         args.alternates, args.split_transcripts, args.split_species, args.split_targets,
         args.split_extra_baseline,
     ))):
-        parser.error("Split review requires rnaSPAdes transcripts, alternate ORFs, and split inputs and outputs")
+        parser.error("Split review and catalogue rescue require assembly transcripts, alternate ORFs, and their inputs and outputs")
     with tempfile.TemporaryDirectory(prefix="orf-homology.", dir=args.output.parent) as temporary:
         root = Path(temporary)
         peptides = root / "queries.faa"
@@ -276,7 +385,6 @@ def main():
         )
         search(args.database, peptides, raw, args.cpus)
         supported = expand_hits(raw, hits, aliases)
-        del aliases
         candidates = args.baseline
         expressions = [args.expression] if args.expression else []
         group_table = args.group_table
@@ -304,7 +412,10 @@ def main():
                 args.baseline, args.alternates, supported, candidates, restored, sources, preview_alternates,
             )
             expressions.insert(0, ALT_ORF_SUFFIX)
-        aggregate(candidates, hits, expressions, args.output, args.report, args.cpus, group_table)
+        aggregate(candidates, hits, expressions, args.output, args.report, args.cpus, group_table,
+                  args.orf_transcripts, args.genetic_code)
+        retain_supported_longer_orfs(raw, aliases, candidates, args.output, args.report)
+        del aliases
         if args.split_preview:
             from transcriptome_homology_split_review import write_split_preview
 

@@ -159,7 +159,20 @@ reason, alignment scores, and query/target coverage in
 `transcriptome_assembly/orf_representative_selection/`. The paired cDNA output
 uses the selected ORF's original transcript ID.
 
-For rnaSPAdes with aggregation level `i` and `homology-orfs`,
+The homology modes retain the longer CDS when the shorter CDS lies entirely
+inside it in-frame and both map uniquely to their source transcripts in the
+same orientation. They also retain a longer CDS when the shorter CDS has no
+start codon and shares at least 98% of its coding sequence as an exact
+codon-aligned suffix ending at the same stop codon. These checks use the
+genetic code selected for ORF extraction.
+
+Before replacing a length-based representative without a qualifying hit, the
+workflow also checks local hits to the selected Swiss-Prot accession. It keeps
+the longer ORF when its hit has at least as high a bit score and target coverage,
+with a strict advantage in either metric. The selection report records the
+retained hit and the reason `retain_dominant_baseline_hit`.
+
+For Trinity and rnaSPAdes with aggregation level `i` and `homology-orfs`,
 `GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=auto` enables rescue by default
 when the regular assembler groups are used. Rescue first checks that the
 provisional representatives support distinct Swiss-Prot families. It then
@@ -172,9 +185,9 @@ the provisional `.splitN` identifier and the paired cDNA retains its source
 transcript ID, recorded in that table. Both FASTA outputs can feed quantification.
 
 Use `GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=off` for ordinary representative
-selection. The `auto` setting also respects explicit locus-table grouping
-and `orf_homology_split=report` or `apply`. For rescue with an optional
-locus table as corroborating evidence, select `orf_catalog_rescue=on`
+selection. For rnaSPAdes, the `auto` setting also respects explicit locus-table
+grouping and `orf_homology_split=report` or `apply`. To use an rnaSPAdes locus
+table as corroborating evidence during rescue, select `orf_catalog_rescue=on`
 and `orf_homology_split=off`.
 
 With rnaSPAdes, `orf_aggregation_level=i`, and `homology-orfs`, set

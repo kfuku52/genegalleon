@@ -4592,13 +4592,13 @@ case "${orf_catalog_rescue}" in
   off) ;;
   auto|on)
     if [[ "${orf_representative_mode}" == homology-orfs &&
-          "${effective_assembly_method}" == rnaspades && "${orf_aggregation_level}" == i &&
-          "${orf_homology_split}" == off ]]; then
+          ( "${effective_assembly_method}" == rnaspades || "${effective_assembly_method}" == trinity ) &&
+          "${orf_aggregation_level}" == i && "${orf_homology_split}" == off ]]; then
       if [[ "${orf_catalog_rescue}" == on || -z "${rnaspades_locus_table}" ]]; then
         orf_catalog_rescue_enabled=yes
       fi
     elif [[ "${orf_catalog_rescue}" == on ]]; then
-      echo "orf_catalog_rescue=on requires homology-orfs, rnaSPAdes aggregation level i, and orf_homology_split=off." >&2
+      echo "orf_catalog_rescue=on requires homology-orfs, Trinity or rnaSPAdes aggregation level i, and orf_homology_split=off." >&2
       exit 2
     fi
     ;;
@@ -4675,7 +4675,7 @@ if [[ "${orf_representative_mode}" != length && ( ${run_longestcds} -eq 1 || -e 
     --input "swissprot_db=${orf_swissprot_db}.dmnd"
     --output "orf_selection_report=${orf_selection_report}"
     --parameter "orf_representative_mode=${orf_representative_mode}"
-    --parameter "orf_homology_policy=1"
+    --parameter "orf_homology_policy=3"
     --parameter "orf_cdskit_version=${orf_cdskit_version}"
     --parameter "orf_diamond_version=${orf_diamond_version}"
   )
@@ -4813,6 +4813,7 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     if [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
       homology_args+=(
         --split-mode "${orf_homology_split}" --split-transcripts "${file_isoform}"
+        --split-assembler "${effective_assembly_method}"
         --split-species "${sp_ub}" --split-extra-baseline "${longestcds_tmp}"
         --split-targets "${orf_swissprot_db}.pep"
       )
@@ -4837,6 +4838,7 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     fi
     python "${gg_support_dir}/transcriptome_homology.py" \
       --baseline "${sp_ub}.tmp.baseline_orfs.fa" "${homology_args[@]}" \
+      --orf-transcripts "${sp_ub}.tmp.renamed.fa" \
       --database "${orf_swissprot_db}.dmnd" "${homology_group_args[@]}" \
       --genetic-code "${genetic_code}" --cpus "${GG_TASK_CPUS}" \
       --output "${sp_ub}.tmp.ranked_orfs.fa" --report "${sp_ub}.tmp.orf_selection.tsv" || exit $?
