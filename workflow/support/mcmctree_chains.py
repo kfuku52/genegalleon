@@ -59,6 +59,36 @@ def control(text, **values):
     return text
 
 
+def paml_control_values(text, hessian=None):
+    """Translate an IQ2MC control template into upstream MCMCtree options."""
+    values = {}
+    for line in text.replace('FossilErrprint', 'FossilErr\nprint').splitlines():
+        line = re.split(r'[*#]', line, maxsplit=1)[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(r'([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)', line)
+        if not match or match[1] in values:
+            raise ValueError(f'Malformed or duplicate control setting: {line}')
+        values[match[1]] = match[2].strip()
+
+    iq2mc_hessian = values.pop('hessianfile', None)
+    usedata = values.get('usedata', '').split()
+    if usedata[:1] == ['2']:
+        input_path = usedata[1] if len(usedata) > 1 else iq2mc_hessian or 'in.BV'
+        values['usedata'] = ' '.join(['2', hessian or input_path, *usedata[2:]])
+
+    iq2mc_checkpoint = values.pop('ckpfile', None)
+    checkpoint = values.get('checkpoint', '0').split()
+    if iq2mc_checkpoint and len(checkpoint) < 3:
+        probability = checkpoint[1] if len(checkpoint) == 2 else '0.1'
+        values['checkpoint'] = f'{checkpoint[0]} {probability} {iq2mc_checkpoint}'
+
+    if 'BDparas' in values and values['BDparas'].split()[-1].upper() not in {'C', 'M'}:
+        # The IQ2MC MCMCtree fork used the conditional birth-death prior.
+        values['BDparas'] += ' C'
+    return values
+
+
 def sample_stream(path):
     """Validate while streaming: wide MCMC files need not fit in Python memory."""
     with path.open() as stream:
@@ -150,7 +180,7 @@ def reusable_attempt(chain, receipt, index, seed):
     return None
 
 
-def run_chain(root, template, files, binary, index, seed, expected, frequency):
+def run_chain(root, template, files, binary, index, seed, expected, frequency, checkpoint):
     chain = root / f'chain-{index:02d}'
     chain.mkdir(exist_ok=True)
     receipt = chain / 'completed.json'
@@ -164,7 +194,7 @@ def run_chain(root, template, files, binary, index, seed, expected, frequency):
         for path in files:
             shutil.copy2(path, attempt / path.name)
         (attempt / 'run.ctl').write_text(control(template, seed=seed, print=1,
-                                                outfile='chain.out', mcmcfile='mcmc.txt', checkpoint=1))
+                                                outfile='chain.out', mcmcfile='mcmc.txt', checkpoint=checkpoint))
         print(f'MCMCtree chain {index}: seed={seed}, evidence={attempt}', flush=True)
         code = execute(binary, attempt, 'run.ctl')
         state['exit_code'] = code
@@ -222,7 +252,13 @@ def run(args):
         raise ValueError('seed must be 1..2147483642 and jobs must be 1..4')
     template_dir = args.template.resolve()
     files = sorted(p for p in template_dir.iterdir() if p.is_file())
-    template = (template_dir / args.control).read_text()
+    values = paml_control_values((template_dir / args.control).read_text())
+    template = ''.join(f'{key} = {value}\n' for key, value in values.items())
+    checkpoint_options = values.get('checkpoint', '0').split()[1:]
+    if len(checkpoint_options) == 2:
+        # Each parallel chain must write its own checkpoint in its attempt directory.
+        checkpoint_options[1] = Path(checkpoint_options[1]).name
+    checkpoint = ' '.join(['1', *checkpoint_options])
     expected = positive_control_integer(template, 'nsample')
     frequency = positive_control_integer(template, 'sampfreq')
     binary = Path(shutil.which('mcmctree') or '').resolve()
@@ -245,7 +281,7 @@ def run(args):
             save_json(args.status, running)
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, args.jobs)) as pool:
                 tasks = [pool.submit(run_chain, root, template, files, str(binary), i + 1,
-                                     args.seed + i, expected, frequency) for i in range(4)]
+                                     args.seed + i, expected, frequency, checkpoint) for i in range(4)]
                 attempts = [task.result() for task in tasks]
             if STOP.is_set():
                 save_json(args.status, {'state': 'interrupted', 'run': str(root), 'policy': 'warn'})

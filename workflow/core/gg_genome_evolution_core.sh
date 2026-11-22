@@ -1773,95 +1773,6 @@ extract_mcmctree_conversion_inputs() {
   nwkit convert --infile "$1" --outfile "$2/mcmctree_no95CI.nwk" --to newick --age-ci drop
 }
 
-mcmctree_requires_bdparas_flag() {
-  local probe_dir
-  local probe_stdout
-  local probe_stderr
-  local rc
-  probe_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.bdparas_probe.XXXXXX")
-  probe_stdout="${probe_dir}/stdout.txt"
-  probe_stderr="${probe_dir}/stderr.txt"
-  printf '%s\n' "3 1" "((a,b)'B(0.1,0.2,0.025,0.025)',c);" > "${probe_dir}/tree.nwk"
-  cat > "${probe_dir}/dummy.phy" << 'EOF'
-3 4
-a    ACGT
-b    ACGT
-c    ACGT
-EOF
-  cat > "${probe_dir}/mcmctree.ctl" << 'EOF'
-seed = 1
-seqfile = dummy.phy
-treefile = tree.nwk
-outfile = mcmctree.out
-mcmcfile = mcmc.txt
-ndata = 1
-seqtype = 0
-usedata = 0
-clock = 2
-RootAge = <0.3
-model = 4
-alpha = 0.5
-ncatG = 5
-cleandata = 1
-BDparas = 1 1 0.5
-kappa_gamma = 6 2
-alpha_gamma = 1 1
-rgene_gamma = 2 20 1
-sigma2_gamma = 1 10 1
-burnin = 1
-sampfreq = 1
-nsample = 1
-EOF
-  if (
-    cd "${probe_dir}"
-    mcmctree mcmctree.ctl > "${probe_stdout}" 2> "${probe_stderr}"
-  ); then
-    rc=0
-  else
-    rc=$?
-  fi
-  if [[ ${rc} -ne 0 ]] && grep -q "BDparas: expect flag" "${probe_stderr}"; then
-    rm -rf -- "${probe_dir}"
-    return 0
-  fi
-  rm -rf -- "${probe_dir}"
-  return 1
-}
-
-normalize_mcmctree_ctl_for_installed_paml() {
-  local ctl_file=$1
-  if [[ ! -s "${ctl_file}" ]]; then
-    return 0
-  fi
-  if ! mcmctree_requires_bdparas_flag; then
-    return 0
-  fi
-  python - "${ctl_file}" << 'PY'
-from __future__ import annotations
-
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-lines = path.read_text(encoding="utf-8").splitlines()
-updated = []
-pattern = re.compile(
-    r"^(\s*BDparas\s*=\s*)"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s*(?:#.*)?)$"
-)
-for line in lines:
-    match = pattern.match(line)
-    if match:
-        line = "".join(match.groups()[:-1]) + " M" + match.group(5)
-    updated.append(line)
-path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-PY
-}
-
 iq2mc_option_supported() {
   local candidate=$1
   local resolved_candidate
@@ -3246,7 +3157,7 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
   fi
   if ! command -v mcmctree > /dev/null 2>&1; then
     echo "Error: mcmctree command was not found."
-    echo "Please install the IQ2MC-compatible mcmctree binary."
+    echo "Please install upstream PAML's mcmctree binary."
     exit 1
   fi
   echo "Using IQ2MC binary: ${iq2mc_binary}"
@@ -4581,6 +4492,10 @@ mcmctree_provenance_args+=(
   --input "chain_runner=${gg_support_dir}/mcmctree_chains.py"
   --input "diagnostic_adapter=${gg_support_dir}/mcmctree_diagnostics.R"
 )
+mcmctree_executable=$(command -v mcmctree || true)
+if [[ -n "${mcmctree_executable}" ]]; then
+  gg_artifact_add_input_if_present mcmctree_provenance_args executable "$(realpath "${mcmctree_executable}")"
+fi
 # Only public-unit artifacts are recovery sources. Never use the internal
 # scaled working directory, or overwrite a present (possibly corrupt) output.
 mcmctree_recovery_dir=""
@@ -4631,13 +4546,7 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   scale_mcmctree_calibrations_file "${file_iq2mc_rooted_tree}" "${mcmctree_work_dir}/$(basename "${file_iq2mc_rooted_tree}")" "${mcmctree_time_scale_factor}" "down"
   cd "${mcmctree_work_dir}" || exit 1
 
-  # Ensure MCMCtree emits CI-rich summaries (including 95% HPD annotations in FigTree output).
   ctl_basename="$(basename "${file_iq2mc_ctl}")"
-  sed -i -e "s/FossilErrprint/FossilErr\\nprint/g" "${ctl_basename}"
-  if ! grep -q "^print[[:space:]]*=" "${ctl_basename}"; then
-    echo "print = 1" >> "${ctl_basename}"
-  fi
-  normalize_mcmctree_ctl_for_installed_paml "${ctl_basename}"
 
   if ! python "${gg_support_dir}/mcmctree_chains.py" \
     --template "${mcmctree_work_dir}" --control "${ctl_basename}" \
@@ -4682,11 +4591,8 @@ fi
 task="MCMCtree calibration diagnostics"
 if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
   gg_step_start "${task}"
-  calibration_diagnostic_work=$(mktemp -d "${dir_tmp}/calibration-diagnostics.XXXXXX")
-  cp_out "${file_iq2mc_ctl}" "${calibration_diagnostic_work}/mcmctree.ctl"
-  normalize_mcmctree_ctl_for_installed_paml "${calibration_diagnostic_work}/mcmctree.ctl"
   calibration_diagnostic_args=(
-    --control "${calibration_diagnostic_work}/mcmctree.ctl"
+    --control "${file_iq2mc_ctl}"
     --tree "${file_iq2mc_rooted_tree}"
     --alignment "${file_iq2mc_dummy_phy}"
     --hessian "${file_iq2mc_hessian}"
@@ -4699,7 +4605,6 @@ if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
     calibration_diagnostic_args+=(--manifest "${mcmctree_calibration_manifest}")
   fi
   python "${gg_support_dir}/mcmctree_calibration_experiments.py" "${calibration_diagnostic_args[@]}" || exit $?
-  rm -rf -- "${calibration_diagnostic_work}"
 else
   gg_step_skip "${task}"
 fi

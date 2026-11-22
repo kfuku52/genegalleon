@@ -54,7 +54,7 @@ case "${scope}" in
 esac
 
 BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
-PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/abacus-gene/paml.git}
 IQTREE_REPO_URL=${IQTREE_REPO_URL:-https://github.com/iqtree/iqtree3.git}
 RAPIDNJ_REPO_URL=${RAPIDNJ_REPO_URL:-https://github.com/somme89/rapidNJ.git}
 RAPIDNJ_REPO_REF=${RAPIDNJ_REPO_REF:-${GG_SOURCE_RAPIDNJ_REPO_REF}}

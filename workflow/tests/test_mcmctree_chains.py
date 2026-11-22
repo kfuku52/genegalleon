@@ -58,6 +58,23 @@ def test_ctl_replaces_duplicate_values():
     assert 'print = 1' in text
 
 
+def test_iq2mc_control_translates_paths_and_preserves_prior():
+    raw = ("hessianfile = iq2mc.mcmctree.hessian * description\n"
+           "ckpfile = iq2mc.mcmctree.ckp\ncheckpoint = 1\n"
+           "usedata = 2 * likelihood approximation\nBDparas = 1 1 0.5 # comment\n")
+    values = chains.paml_control_values(raw)
+    assert values == {
+        'checkpoint': '1 0.1 iq2mc.mcmctree.ckp',
+        'usedata': '2 iq2mc.mcmctree.hessian',
+        'BDparas': '1 1 0.5 C',
+    }
+    native = "usedata = 2 old.BV 2\nBDparas = 1 1 0.5 M\n"
+    assert chains.paml_control_values(native, 'new.BV') == {
+        'usedata': '2 new.BV 2',
+        'BDparas': '1 1 0.5 M',
+    }
+
+
 @pytest.mark.skipif(shutil.which('mcmctree') is None, reason='GeneGalleon runtime required')
 def test_parallel_paml_pools_samples_and_resumes_completed_chains(tmp_path):
     template = tmp_path / 'template'

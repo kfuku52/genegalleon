@@ -153,7 +153,7 @@ RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.en
 
 FROM source-builder AS paml-build
 
-ARG PAML_REPO_URL="https://github.com/iqtree/paml.git"
+ARG PAML_REPO_URL="https://github.com/abacus-gene/paml.git"
 ARG PAML_REPO_REF=""
 ARG PAML_REPO_SHA=""
 

@@ -4,6 +4,15 @@ Saved dated trees can be redrawn with spelled-out interval legends, geological
 period backgrounds and dataset-labelled BUSCO panels. See
 [Dated-tree presentation](dated-tree-presentation.md).
 
+The container builds IQ-TREE 3 and PAML's MCMCtree from their respective upstream
+branches. GeneGalleon uses IQ-TREE's IQ2MC mode to estimate branch lengths,
+the gradient and Hessian, then adapts the generated control for upstream MCMCtree.
+The execution control passes the Hessian path in `usedata = 2` and makes the
+IQ2MC conditional birth–death prior explicit. An explicit `C` or `M` in the
+input control is preserved. The original IQ2MC files remain reusable together,
+including the matching rooted tree and dummy alignment. Updating MCMCtree alone
+does not require regenerating the IQ2MC inputs.
+
 Species dating runs four independently initialized MCMCtree chains, with separate
 burn-in and distinct explicit seeds. `mcmc_parallel_jobs=4` runs all four
 concurrently when at least four CPUs are allocated. The workflow caps concurrent
