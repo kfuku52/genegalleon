@@ -3272,8 +3272,12 @@ fi
 task="ClipKIT"
 clipkit_binary="${clipkit_binary:-clipkit}"
 clipkit_source_manifest="${clipkit_source_manifest:-}"
+clipkit_mode="${clipkit_mode:-gappy}"
+clipkit_gaps="${clipkit_gaps:-0.90}"
 disable_if_no_input_file "run_clipkit" "${file_og_untrimmed_aln_analysis}"
 clipkit_needs_update=0
+clipkit_args=(--mode "${clipkit_mode}")
+clipkit_legacy_policy="${artifact_legacy_policy:-adopt}"
 clipkit_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.clipkit.json"
   --step "clipkit"
@@ -3285,8 +3289,27 @@ clipkit_provenance_args=(
   --optional-output "clipkit_log=${file_og_clipkit_log}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "genetic_code=${genetic_code}"
-  --parameter "mode=smart-gap"
+  --parameter "mode=${clipkit_mode}"
 )
+if [[ ${run_clipkit} -eq 1 ]]; then
+  case "${clipkit_mode}" in
+    gappy)
+      if [[ ! "${clipkit_gaps}" =~ ^(0|0?\.[0-9]+|1(\.0+)?)$ ]]; then
+        echo "clipkit_gaps must be a decimal fraction between 0 and 1: ${clipkit_gaps}" >&2
+        exit 1
+      fi
+      clipkit_args+=(--gaps "${clipkit_gaps}")
+      clipkit_provenance_args+=(--parameter "gaps=${clipkit_gaps}")
+      # An untracked alignment cannot establish which fixed cutoff generated it.
+      if [[ "${clipkit_legacy_policy}" == adopt ]]; then clipkit_legacy_policy=stop; fi
+      ;;
+    smart-gap) ;;
+    *)
+      echo "clipkit_mode must be gappy or smart-gap: ${clipkit_mode}" >&2
+      exit 1
+      ;;
+  esac
+fi
 if [[ ${run_clipkit} -eq 1 && ( "${clipkit_binary}" != "clipkit" || -n "${clipkit_source_manifest}" ) ]]; then
   clipkit_executable=$(command -v -- "${clipkit_binary}" || true)
   if [[ ! -f "${clipkit_executable}" || ! -s "${clipkit_executable}" || ! -x "${clipkit_executable}" ]]; then
@@ -3302,7 +3325,7 @@ if [[ ${run_clipkit} -eq 1 && ( "${clipkit_binary}" != "clipkit" || -n "${clipki
     clipkit_provenance_args+=(--input "clipkit_source_manifest=${clipkit_source_manifest}")
   fi
 fi
-gg_artifact_prepare_stage clipkit_needs_update run_clipkit "${clipkit_provenance_args[@]}" || exit $?
+artifact_legacy_policy="${clipkit_legacy_policy}" gg_artifact_prepare_stage clipkit_needs_update run_clipkit "${clipkit_provenance_args[@]}" || exit $?
 if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   gg_step_start "${task}"
   rm -f -- "${file_og_clipkit}" "${file_og_clipkit_log}"
@@ -3313,7 +3336,7 @@ if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   if [[ "${input_sequence_mode}" == "protein" ]]; then
     "${clipkit_binary}" \
       "${og_id}.cds.clipkit.input.fasta" \
-      --mode smart-gap \
+      "${clipkit_args[@]}" \
       --sequence_type aa \
       --input_file_format "fasta" \
       --output_file_format "fasta" \
@@ -3322,7 +3345,7 @@ if [[ ${clipkit_needs_update} -eq 1 && ${run_clipkit} -eq 1 ]]; then
   else
     "${clipkit_binary}" \
       "${og_id}.cds.clipkit.input.fasta" \
-      --mode smart-gap \
+      "${clipkit_args[@]}" \
       --sequence_type nt \
       --codon \
       --input_file_format "fasta" \

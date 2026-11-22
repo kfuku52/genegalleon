@@ -126,6 +126,8 @@ cdskit_localize_model
 cdskit_localize_no_model_download
 cdskit_localize_organism_group
 clipkit_binary
+clipkit_gaps
+clipkit_mode
 clipkit_source_manifest
 csubst_cutoff_stat
 csubst_exhaustive_until

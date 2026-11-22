@@ -419,6 +419,16 @@ GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+Gene-family protein and codon alignments use ClipKIT `gappy` with
+`clipkit_gaps=0.90` by default. Sites with at least 90% missing data are
+removed. Set `GG_GENE_EVOLUTION_CLIPKIT_GAPS` to change the fixed cutoff or
+`GG_GENE_EVOLUTION_CLIPKIT_MODE=smart-gap` to estimate the cutoff from the
+alignment. The fixed cutoff applies only in `gappy` mode. The ClipKIT
+manifest records the mode and any fixed cutoff used. To replace a tracked
+alignment produced with different settings, use `artifact_stale_policy=rebuild`.
+For an alignment without provenance, use `artifact_legacy_policy=rebuild`
+to apply the fixed cutoff.
+
 Gene-tree inference and concatenated protein/DNA species-tree inference use
 IQ-TREE's maximum-likelihood `.treefile`, including its UFBoot branch supports
 when bootstrapping is enabled. The bootstrap consensus `.contree` is not used

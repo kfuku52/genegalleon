@@ -1,4 +1,5 @@
 """Exercise the real native ClipKIT stage with a selected executable."""
+import gzip
 import json
 import os
 import shutil
@@ -32,6 +33,7 @@ gg_artifact_prepare_stage() {
   local variable=$1
   shift 2
   printf '%s\\0' "$@" > "$PWD/provenance.args"
+  printf '%s' "$artifact_legacy_policy" > "$PWD/legacy-policy.txt"
   printf -v "$variable" '%s' 1
 }
 gg_artifact_record() { :; }
@@ -43,16 +45,19 @@ set_analysis_file() { :; }
 """ + source[start:end]
 
 
-def run_stage(tmp_path, mode="protein", binary=None, manifest=None, enabled=True):
+def run_stage(tmp_path, mode="protein", binary=None, manifest=None, enabled=True,
+              clipkit_mode=None, gaps=None, alignment=None):
     (tmp_path / "result").mkdir(exist_ok=True)
-    (tmp_path / "input.fa").write_text(
-        ">first full description\nATGACGACG\n>second\nATGACGACT\n"
-    )
+    (tmp_path / "input.fa").write_text(alignment or ">first full description\nATGACGACG\n>second\nATGACGACT\n")
     env = dict(os.environ, TEST_MODE=mode, TEST_RUN_CLIPKIT=str(int(enabled)))
     if binary is not None:
         env["TEST_BINARY"] = str(binary)
     if manifest is not None:
         env["TEST_MANIFEST"] = str(manifest)
+    if clipkit_mode is not None:
+        env["clipkit_mode"] = clipkit_mode
+    if gaps is not None:
+        env["clipkit_gaps"] = gaps
     return subprocess.run(["bash", "-c", stage_script()], cwd=tmp_path, env=env,
                           text=True, capture_output=True)
 
@@ -76,12 +81,15 @@ def test_selected_clipkit_executable_and_manifest_are_bound(tmp_path, mode):
     result = run_stage(tmp_path, mode, wrapper, manifest)
     assert result.returncode == 0, result.stdout + result.stderr
     args = json.loads((tmp_path / "native-argv.json").read_text())
-    assert args[args.index("--mode") + 1] == "smart-gap"
+    assert args[args.index("--mode") + 1] == "gappy"
+    assert args[args.index("--gaps") + 1] == "0.90"
     assert args[args.index("--sequence_type") + 1] == ("nt" if mode == "cds" else "aa")
     assert ("--codon" in args) == (mode == "cds")
     provenance = (tmp_path / "provenance.args").read_bytes().split(b"\0")
     assert f"clipkit_executable={wrapper}".encode() in provenance
     assert f"clipkit_source_manifest={manifest}".encode() in provenance
+    assert b"mode=gappy" in provenance
+    assert b"gaps=0.90" in provenance
     assert (tmp_path / "result/alignment.fa.gz").is_file()
     assert (tmp_path / "result/alignment.log").is_file()
 
@@ -92,6 +100,43 @@ def test_default_clipkit_preserves_existing_provenance_inputs(tmp_path):
     provenance = (tmp_path / "provenance.args").read_bytes()
     assert b"clipkit_executable=" not in provenance
     assert b"clipkit_source_manifest=" not in provenance
+    assert (tmp_path / "legacy-policy.txt").read_text() == "stop"
+
+
+@pytest.mark.parametrize(("gaps", "expected_sequence"), [(None, "AAAC"), ("0.95", "AAAGC")])
+def test_fixed_cutoff_trims_sites_at_or_above_threshold(tmp_path, gaps, expected_sequence):
+    alignment = ">first\nAAATGC\n>second\nAAA-GC\n>third\nAAA--C\n"
+    alignment += "".join(f">sequence{i}\nAAA---\n" for i in range(4, 21))
+    result = run_stage(tmp_path, gaps=gaps, alignment=alignment)
+    assert result.returncode == 0, result.stdout + result.stderr
+    with gzip.open(tmp_path / "result/alignment.fa.gz", "rt") as fasta:
+        assert fasta.readline().strip() == ">first"
+        assert fasta.readline().strip() == expected_sequence
+
+
+def test_smart_gap_retains_previous_provenance_contract(tmp_path):
+    result = run_stage(tmp_path, clipkit_mode="smart-gap", gaps="0.80")
+    assert result.returncode == 0, result.stdout + result.stderr
+    provenance = (tmp_path / "provenance.args").read_bytes().split(b"\0")
+    assert b"mode=smart-gap" in provenance
+    assert not any(arg.startswith(b"gaps=") for arg in provenance)
+    assert (tmp_path / "legacy-policy.txt").read_text() == "adopt"
+
+
+@pytest.mark.parametrize(("clipkit_mode", "gaps", "parameter"), [
+    ("gappy", "1.01", "clipkit_gaps"),
+    ("unknown", "0.90", "clipkit_mode"),
+])
+def test_invalid_clipkit_settings_stop_before_outputs_change(tmp_path, clipkit_mode, gaps, parameter):
+    output = tmp_path / "result"
+    output.mkdir()
+    sentinel = output / "alignment.fa.gz"
+    sentinel.write_bytes(b"preserved prior artifact")
+    result = run_stage(tmp_path, clipkit_mode=clipkit_mode, gaps=gaps)
+    assert result.returncode != 0
+    assert parameter in result.stderr
+    assert sentinel.read_bytes() == b"preserved prior artifact"
+    assert not (tmp_path / "provenance.args").exists()
 
 
 @pytest.mark.parametrize("missing", ["executable", "manifest"])
