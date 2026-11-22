@@ -613,6 +613,8 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
         'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
         'extract_scaled_mcmctree_figtree "${mcmctree_run_output}/FigTree.tre" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
+        'mcmctree_run_args+=(--burnin-percentages "${mcmctree_burnin_percentages}")',
+        '--parameter "burnin_percentages=${mcmctree_burnin_percentages}"',
         "Raw chains, executed controls and logs are retained in mcmctree_main/runs.",
     ]
     for token in expected_tokens:

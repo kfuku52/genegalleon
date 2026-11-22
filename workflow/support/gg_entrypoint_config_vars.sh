@@ -529,6 +529,7 @@ mcmc_birth_death_sampling
 mcmc_parallel_jobs
 mcmc_seed
 mcmc_burnin
+mcmc_burnin_percentages
 mcmc_clock_model
 mcmc_nsample
 mcmc_max_generations

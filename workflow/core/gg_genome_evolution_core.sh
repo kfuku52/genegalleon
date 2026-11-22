@@ -4432,6 +4432,7 @@ fi
 task="IQ2MC step 3 (MCMCtree dating run)"
 mcmctree_parallel_jobs_effective="${mcmc_parallel_jobs:-4}"
 mcmctree_max_generations="${mcmc_max_generations:-auto}"
+mcmctree_burnin_percentages="${mcmc_burnin_percentages:-}"
 if [[ "${mcmctree_max_generations}" != "auto" && ! "${mcmctree_max_generations}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid mcmc_max_generations; expected auto or a positive integer." >&2
   exit 2
@@ -4497,6 +4498,9 @@ mcmctree_provenance_args+=(
   --parameter "chain_runner=nwkit_adaptive_mcmctree_v1"
   --parameter "max_generations=${mcmctree_max_generations}"
 )
+if [[ -n "${mcmctree_burnin_percentages}" ]]; then
+  mcmctree_provenance_args+=(--parameter "burnin_percentages=${mcmctree_burnin_percentages}")
+fi
 mcmctree_executable=$(command -v mcmctree || true)
 if [[ -n "${mcmctree_executable}" ]]; then
   gg_artifact_add_input_if_present mcmctree_provenance_args executable "$(realpath "${mcmctree_executable}")"
@@ -4561,6 +4565,9 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   )
   if [[ "${mcmctree_max_generations}" != "auto" ]]; then
     mcmctree_run_args+=(--max-generations "${mcmctree_max_generations}")
+  fi
+  if [[ -n "${mcmctree_burnin_percentages}" ]]; then
+    mcmctree_run_args+=(--burnin-percentages "${mcmctree_burnin_percentages}")
   fi
   if ! nwkit mcmctree-run "${mcmctree_run_args[@]}"; then
     echo "Error: IQ2MC step 3 failed."

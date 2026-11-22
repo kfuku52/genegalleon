@@ -28,8 +28,13 @@ needed, and checks again using all evenly spaced draws. Intermediate checks
 compute R-hat and ESS. The final diagnostics also report MCSE. Set
 `mcmc_max_generations` to bound the total generations per chain including
 burn-in. With `auto`, the cap is the burn-in plus 64 times the initial sampling
-generations within PAML’s limits. The diagnostics and extension policy are
-described in the [NWKIT guide](https://github.com/kfuku52/nwkit/blob/master/docs/guides/MCMCTREE_RUN.md).
+generations within PAML’s limits. Near the stopping criteria, NWKIT checks more
+frequently. Set `mcmc_burnin_percentages="2.5,5,10,20,40"` to try excluding
+the same initial window from all chains when the full traces fall short. The
+smallest passing cutoff is checked again after adding draws, and a full trace
+that passes has priority. The `sample_window` in the tree’s convergence JSON
+records the original burn-in, effective cutoff and generations used. See the
+[NWKIT guide](https://github.com/kfuku52/nwkit/blob/master/docs/guides/MCMCTREE_RUN.md).
 
 NWKIT resumes each chain from its own final checkpoint and pools the draws to
 generate a FigTree tree with 95% HPD intervals. GeneGalleon converts that tree to

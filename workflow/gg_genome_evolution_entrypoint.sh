@@ -248,6 +248,7 @@ mcmctree_calibration_diagnostic_seed=1729 # Positive base seed for reproducible 
 mcmc_parallel_jobs=4 # Worker budget for sampling and diagnostics, capped by GG_TASK_CPUS. Sampling uses at most four workers.
 mcmc_seed=1729 # First of four distinct positive seeds; recorded with each chain.
 mcmc_burnin=20000 # Burn-in iterations for MCMCTree.
+mcmc_burnin_percentages="" # Optional comma-separated percentages of total generations for NWKIT to test, e.g. 2.5,5,10,20,40.
 mcmc_sampfreq=100 # Sampling frequency for MCMCTree.
 mcmc_nsample=20000 # Minimum number of posterior samples retained per MCMCtree chain.
 mcmc_max_generations="auto" # Total generation ceiling per chain including burn-in. auto uses the NWKIT ceiling.
