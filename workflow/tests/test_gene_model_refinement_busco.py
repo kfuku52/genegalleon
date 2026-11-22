@@ -2,9 +2,7 @@
 
 import gzip
 import json
-import os
 import shutil
-import subprocess
 from importlib import import_module
 from pathlib import Path
 from xml.etree import ElementTree
@@ -782,35 +780,3 @@ def test_busco_cli_keeps_reports_outside_immutable_publications(tmp_path, monkey
         busco.main()
     assert exc.value.code == 2
     assert "Report must be separate from the immutable refinement tree" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("enabled", [0, 1])
-@pytest.mark.parametrize("trailing_slash", [False, True])
-def test_input_generation_finisher_wires_review_and_bounds_busco_resources(tmp_path, enabled, trailing_slash):
-    core = Path(__file__).resolve().parents[1] / "core/gg_input_generation_core.sh"
-    function = core.read_text().split("finish_gene_model_refinement() {", 1)[1].split("\n}\n", 1)[0]
-    log = tmp_path / "commands.txt"
-    script = """set -euo pipefail
-python() { printf '%s\\n' "$*" >> "$COMMAND_LOG"; }
-ensure_shared_busco_lineage_ready() { busco_lineage_resolved=embryophyta_odb12; }
-ensure_busco_download_path() { printf '%s\\n' /db; }
-gg_memory_parallel_job_cap() { printf '%s\\n' 2; }
-finish_gene_model_refinement() {""" + function + "\n}\nfinish_gene_model_refinement\n"
-    env = dict(os.environ, COMMAND_LOG=str(log), run_species_busco=str(enabled), gg_support_dir="/support",
-               run_gene_model_rescue_swissprot="0", gene_model_rescue_dir="/rescue", gene_model_refinement_rescue_dir="",
-               gene_model_refinement_inputs="",
-               gene_model_refinement_dir="/refinement/" if trailing_slash else "/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
-               species_busco_parallel_jobs="auto", task_plan_output="/plan", gg_workspace_dir="/workspace",
-               GG_MEM_TOOL_GB="64", species_busco_memory_gb_per_job="16", busco_lineage_resolved="")
-    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    commands = log.read_text().splitlines()
-    assert " finalize " in commands[0] and " qc " in commands[1]
-    assert "plot_gene_model_refinement.py" in commands[2] and "--cds-dir /all-cds" in commands[2]
-    assert "--report /refinement.review " in commands[2]
-    if enabled:
-        assert "gene_model_refinement_busco.py" in commands[3]
-        assert "--jobs 2 --cpus 4" in commands[3]
-        assert "--report /refinement.review/busco" in commands[3]
-    else:
-        assert len(commands) == 3

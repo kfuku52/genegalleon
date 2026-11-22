@@ -69,7 +69,7 @@ def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True, repairs=None
     for handle in genome_text_handles(Path(path)):
         have_header = False
         edits = []
-        for data, headers, _ in fasta_blocks(handle, edits, chunk_size=chunk_bytes):
+        for data, headers, _ in fasta_blocks(handle, edits, chunk_size=chunk_bytes, limit_headers=strict):
             cursor = 0
             for start, stop in headers:
                 if text := _strip_sequence_whitespace(data[cursor:start]):

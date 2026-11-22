@@ -249,6 +249,23 @@ def header_lengths(path):
     return result
 
 
+@pytest.mark.parametrize("inline", [False, True])
+def test_oversized_header_limit_preserves_permissive_formatting(tmp_path, inline):
+    path = tmp_path / "genome.fa"
+    header = "ctg2 " + "description " * 100_000
+    prefix = ">ctg1\nACGT" + ("" if inline else "\n")
+    path.write_text(f"{prefix}>{header}\nTT\n")
+    with pytest.raises(ValueError, match="header exceeds 1 MiB"):
+        genome_reference_index(path)
+    if inline:
+        with pytest.raises(ValueError, match="header exceeds 1 MiB"):
+            list(genome_fragments(path, strict=False))
+    else:
+        assert list(genome_fragments(path, strict=False)) == [
+            ("header", "ctg1"), ("sequence", "ACGT"), ("header", header), ("sequence", "TT"),
+        ]
+
+
 @pytest.mark.parametrize("raw, error", [
     (">001517F\nACGT>ACGT\nACGT\n", "Ambiguous inline"),
     (">001517F\nACGT>001519F\nACGT\n", "Ambiguous inline"),

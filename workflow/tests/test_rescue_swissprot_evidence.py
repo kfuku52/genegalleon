@@ -242,34 +242,3 @@ def test_real_mmseqs_search_cache_and_verified_gene_counts(tmp_path):
     atomic_json(args.output / "evidence.json", evidence)
     with pytest.raises(ValueError, match="different rescue inputs"):
         swiss.collect(changes, args.output)
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_refinement_finisher_reuses_annotation_and_forwards_verified_audit(tmp_path, enabled):
-    import os
-    core = Path(__file__).resolve().parents[1] / "core/gg_input_generation_core.sh"
-    function = core.read_text().split("finish_gene_model_refinement() {", 1)[1].split("\n}\n", 1)[0]
-    anchor = tmp_path / "anchor"
-    (anchor / "augmented").mkdir(parents=True)
-    (anchor / "augmented/receipt.json").write_text("{}")
-    log = tmp_path / "commands"
-    script = '''set -euo pipefail
-python() { printf '%s\\n' "$*" >> "$COMMAND_LOG"; }
-annotate_gene_model_rescue_swissprot() { printf 'audit %s\\n' "$1" >> "$COMMAND_LOG"; }
-ensure_shared_busco_lineage_ready() { busco_lineage_resolved=embryophyta_odb12; }
-ensure_busco_download_path() { printf '%s\\n' /db; }
-gg_memory_parallel_job_cap() { printf '%s\\n' 2; }
-finish_gene_model_refinement() {''' + function + "\n}\nfinish_gene_model_refinement\n"
-    env = dict(os.environ, COMMAND_LOG=str(log), run_species_busco="1", gg_support_dir="/support",
-               run_gene_model_rescue_swissprot=str(int(enabled)), gene_model_rescue_dir=str(anchor),
-               gene_model_refinement_rescue_dir="", gene_model_refinement_inputs="", gene_model_rescue_swissprot_dir="",
-               gene_model_refinement_dir="/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
-               species_busco_parallel_jobs="auto", task_plan_output="/plan", gg_workspace_dir="/workspace",
-               GG_MEM_TOOL_GB="64", species_busco_memory_gb_per_job="16", busco_lineage_resolved="")
-    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    commands = log.read_text().splitlines()
-    assert any(c.startswith("audit ") for c in commands) == enabled
-    plot = next(c for c in commands if "gene_model_refinement_busco.py" in c)
-    assert ("--rescue-swissprot-dir " + str(anchor) + ".swissprot" in plot) == enabled
-    assert ("--no-rescue-swissprot" in plot) == (not enabled)

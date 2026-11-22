@@ -793,6 +793,18 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
 
 
+def test_daily_publisher_runs_finisher_smoke_before_build_preparation():
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    prepare = jobs["prepare-build"]
+    smoke = named_step(prepare, "Smoke-test input generation refinement")
+    resolve = named_step(prepare, "Resolve moving source revisions")
+    assert prepare["steps"].index(smoke) < prepare["steps"].index(resolve)
+    assert "if" not in smoke and "continue-on-error" not in smoke
+    assert "run_checks.py smoke workflow/tests/test_input_generation_refinement_finisher.py" in smoke["run"]
+    assert jobs["build-and-push"]["needs"] == "prepare-build"
+    assert jobs["build-and-push"]["if"] == "needs.prepare-build.outputs.should_build == '1'"
+
+
 def test_daily_publish_waits_for_both_platform_runtime_checks():
     jobs = load_workflow("container-ghcr.yml")["jobs"]
     build = jobs["build-and-push"]

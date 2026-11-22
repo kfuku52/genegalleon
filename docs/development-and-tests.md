@@ -393,6 +393,9 @@ are enabled, so new marker names must be registered in `pyproject.toml`.
 Adding `@pytest.mark.runtime` to a function does not change its file's lane.
 Keep tests that execute container tools in a separate file registered under
 `runtime_python_files`, leaving dependency-light unit tests in the fast lane.
+The commit smoke lane and the GHCR publisher both run the tool-free input
+generation refinement finisher tests. The publisher runs them before resolving
+upstream sources or starting either architecture's build.
 The fast and integration CI lanes use two pytest-xdist workers. The daily
 publisher uses four workers for the main runtime Python lane and two for its
 additional HGT and download checks in Docker and SIF. The combined runtime

@@ -29,11 +29,13 @@ def _successor(previous, token):
             and len(number) == len(other_number) and int(other_number) == int(number) + 1)
 
 
-def fasta_blocks(stream, repairs, *, chunk_size=BLOCK_SIZE, validate=False):
+def fasta_blocks(stream, repairs, *, chunk_size=BLOCK_SIZE, validate=False, limit_headers=True):
     """Yield original blocks, header spans, and offsets for evidenced insertions.
 
     Edits identify the decoded-stream offset, immediately after the original
     sequence. The stream's newline handling defines its offset convention.
+    Permissive formatting can allow longer ordinary headers. Inline candidates
+    always use the header limit.
     """
     offset = 0
     last = "\n"
@@ -70,22 +72,24 @@ def fasta_blocks(stream, repairs, *, chunk_size=BLOCK_SIZE, validate=False):
                 awaiting = None
             if validate:
                 check_sequence(data[cursor:marker])
+            flank = data[marker - 1] if marker else last
+            inline = flank not in "\r\n"
+            limit_header = limit_headers or inline
             newline = _LINE_END.search(data, marker + 1)
             if newline is None and not end:
                 pending = data[marker:]
-                if len(pending) > _MAX_HEADER:
+                if limit_header and len(pending) > _MAX_HEADER:
                     raise ValueError("Genome FASTA header exceeds 1 MiB")
                 data = data[:marker]
                 cursor = len(data)
                 break
             stop = len(data) if newline is None else newline.start()
-            if stop - marker > _MAX_HEADER:
+            if limit_header and stop - marker > _MAX_HEADER:
                 raise ValueError("Genome FASTA header exceeds 1 MiB")
             header = data[marker + 1:stop].rstrip("\r")
             fields = header.split(None, 1)
             token = fields[0] if fields else ""
-            flank = data[marker - 1] if marker else last
-            if flank not in "\r\n":
+            if inline:
                 at = offset + marker
                 if (flank not in _DNA or header != token or token in seen
                         or not _successor(previous, token)):

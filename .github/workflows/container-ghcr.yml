@@ -51,6 +51,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Python for smoke tests
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Smoke-test input generation refinement
+        run: |
+          python -m pip install --constraint workflow/tests/requirements.lock.txt pytest
+          python workflow/tests/run_checks.py smoke workflow/tests/test_input_generation_refinement_finisher.py -x
+
       - name: Resolve moving source revisions
         shell: bash
         run: |
