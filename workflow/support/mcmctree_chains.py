@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+from nwkit.mcmctree_runner import paml_control_values
+
 STOP = threading.Event()
 PROCESSES = set()
 
@@ -57,36 +59,6 @@ def control(text, **values):
         text = re.sub(r'^\s*' + re.escape(key) + r'\s*=.*\n?', '', text, flags=re.M)
         text = text.rstrip() + f'\n{key} = {value}\n'
     return text
-
-
-def paml_control_values(text, hessian=None):
-    """Translate an IQ2MC control template into upstream MCMCtree options."""
-    values = {}
-    for line in text.replace('FossilErrprint', 'FossilErr\nprint').splitlines():
-        line = re.split(r'[*#]', line, maxsplit=1)[0].strip()
-        if not line:
-            continue
-        match = re.fullmatch(r'([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)', line)
-        if not match or match[1] in values:
-            raise ValueError(f'Malformed or duplicate control setting: {line}')
-        values[match[1]] = match[2].strip()
-
-    iq2mc_hessian = values.pop('hessianfile', None)
-    usedata = values.get('usedata', '').split()
-    if usedata[:1] == ['2']:
-        input_path = usedata[1] if len(usedata) > 1 else iq2mc_hessian or 'in.BV'
-        values['usedata'] = ' '.join(['2', hessian or input_path, *usedata[2:]])
-
-    iq2mc_checkpoint = values.pop('ckpfile', None)
-    checkpoint = values.get('checkpoint', '0').split()
-    if iq2mc_checkpoint and len(checkpoint) < 3:
-        probability = checkpoint[1] if len(checkpoint) == 2 else '0.1'
-        values['checkpoint'] = f'{checkpoint[0]} {probability} {iq2mc_checkpoint}'
-
-    if 'BDparas' in values and values['BDparas'].split()[-1].upper() not in {'C', 'M'}:
-        # The IQ2MC MCMCtree fork used the conditional birth-death prior.
-        values['BDparas'] += ' C'
-    return values
 
 
 def sample_stream(path):

@@ -4256,7 +4256,7 @@ if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]
     if [[ -n "${species_label_map_tsv}" ]]; then
       nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")
     fi
-    nwkit mcmctree "${nwkit_args[@]}"
+    nwkit mcmctree-tree "${nwkit_args[@]}"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
       mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
     fi
@@ -4291,8 +4291,8 @@ if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]
       if [[ "${mcmctree_params[3]}" != "-" ]]; then
         nwkit_args+=(--upper-bound "${mcmctree_params[3]}")
       fi
-      echo "nwkit mcmctree params: ${nwkit_args[*]}"
-      tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")
+      echo "nwkit mcmctree-tree params: ${nwkit_args[*]}"
+      tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree-tree "${nwkit_args[@]}")
     done
     printf '%s\n' "${tree_string}" > "tmp.constrained.tree.nwk"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
@@ -4431,8 +4431,13 @@ fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 mcmctree_parallel_jobs_effective="${mcmc_parallel_jobs:-4}"
-if [[ ! "${mcmctree_parallel_jobs_effective}" =~ ^[1-4]$ ]]; then
-  echo "Invalid mcmc_parallel_jobs; expected an integer from 1 to 4." >&2
+mcmctree_max_generations="${mcmc_max_generations:-auto}"
+if [[ "${mcmctree_max_generations}" != "auto" && ! "${mcmctree_max_generations}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid mcmc_max_generations; expected auto or a positive integer." >&2
+  exit 2
+fi
+if [[ ! "${mcmctree_parallel_jobs_effective}" =~ ^[1-9][0-9]{0,9}$ ]] || (( mcmctree_parallel_jobs_effective > 2147483647 )); then
+  echo "Invalid mcmc_parallel_jobs; expected a positive integer worker budget." >&2
   exit 2
 fi
 if [[ ! "${mcmc_seed:-1729}" =~ ^[1-9][0-9]{0,9}$ ]] || (( ${mcmc_seed:-1729} < 1 || ${mcmc_seed:-1729} > 2147483642 )); then
@@ -4489,8 +4494,8 @@ mcmctree_provenance_args+=(
   --parameter "chains=4"
   --parameter "seed=${mcmc_seed:-1729}"
   --parameter "diagnostics=rank_rhat_1.01_bulk_tail_400_warn"
-  --input "chain_runner=${gg_support_dir}/mcmctree_chains.py"
-  --input "diagnostic_adapter=${gg_support_dir}/mcmctree_diagnostics.R"
+  --parameter "chain_runner=nwkit_adaptive_mcmctree_v1"
+  --parameter "max_generations=${mcmctree_max_generations}"
 )
 mcmctree_executable=$(command -v mcmctree || true)
 if [[ -n "${mcmctree_executable}" ]]; then
@@ -4546,21 +4551,21 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   scale_mcmctree_calibrations_file "${file_iq2mc_rooted_tree}" "${mcmctree_work_dir}/$(basename "${file_iq2mc_rooted_tree}")" "${mcmctree_time_scale_factor}" "down"
   cd "${mcmctree_work_dir}" || exit 1
 
-  ctl_basename="$(basename "${file_iq2mc_ctl}")"
-
-  if ! python "${gg_support_dir}/mcmctree_chains.py" \
-    --template "${mcmctree_work_dir}" --control "${ctl_basename}" \
-    --store "${dir_mcmctree2}/runs" \
-    --output "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" \
-    --status "${dir_mcmctree2}/convergence.json" \
-    --seed "${mcmc_seed:-1729}" --jobs "${mcmctree_parallel_jobs_effective}" \
-    --time-factor "${mcmctree_time_scale_factor}"; then
+  mcmctree_run_output="${mcmctree_work_dir}/nwkit"
+  mcmctree_run_args=(
+    --control "${mcmctree_work_dir}/$(basename "${file_iq2mc_ctl}")"
+    --out-dir "${mcmctree_run_output}"
+    --run-store "${dir_mcmctree2}/runs"
+    --seed "${mcmc_seed:-1729}"
+    --jobs "${mcmctree_parallel_jobs_effective}"
+  )
+  if [[ "${mcmctree_max_generations}" != "auto" ]]; then
+    mcmctree_run_args+=(--max-generations "${mcmctree_max_generations}")
+  fi
+  if ! nwkit mcmctree-run "${mcmctree_run_args[@]}"; then
     echo "Error: IQ2MC step 3 failed."
     exit 1
-  elif [[ ! -s "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" ]]; then
-    echo "Error: IQ2MC step 3 did not generate $(basename "${file_mcmctree_raw_output}")."
-    exit 1
-  elif extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"; then
+  elif extract_scaled_mcmctree_figtree "${mcmctree_run_output}/FigTree.tre" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"; then
     validate_mcmctree_figtree "${mcmctree_work_dir}/FigTree.tre" || exit $?
     {
       echo "GeneGalleon ran MCMCTree in an internal scaled time unit."
@@ -4569,9 +4574,11 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
       echo "The FigTree block below is converted back to the original public time unit."
       cat "${mcmctree_work_dir}/FigTree.tre"
     } > "${mcmctree_work_dir}/public-summary.out"
+    python "${gg_support_dir}/mcmctree_status.py" bind --tree "${mcmctree_work_dir}/FigTree.tre" \
+      --status "${mcmctree_run_output}/convergence.json" --time-factor "${mcmctree_time_scale_factor}" || exit $?
     mv_out_bundle "${mcmctree_work_dir}/FigTree.tre" "${file_mcmctree_figtree_tre}" \
-      "${mcmctree_work_dir}/public-summary.out" "${file_mcmctree_raw_output}" || exit $?
-    python "${gg_support_dir}/mcmctree_status.py" bind --tree "${file_mcmctree_figtree_tre}" --status "${dir_mcmctree2}/convergence.json" || exit $?
+      "${mcmctree_work_dir}/public-summary.out" "${file_mcmctree_raw_output}" \
+      "${mcmctree_run_output}/convergence.json" "${dir_mcmctree2}/convergence.json" || exit $?
   else
     echo "Error: Failed to extract an original-unit FigTree tree block from MCMCTree output."
     exit 1

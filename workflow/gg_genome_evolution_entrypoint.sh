@@ -245,11 +245,12 @@ mcmctree_calibration_manifest="" # Optional reviewed calibration TSV; overrides 
 run_mcmctree_calibration_diagnostics=0 # Opt in to separate prior-only/posterior and leave-calibration-out runs; never replaces the main dated tree.
 mcmctree_calibration_diagnostic_chains=4 # Independent chains per calibration scenario and target distribution.
 mcmctree_calibration_diagnostic_seed=1729 # Positive base seed for reproducible diagnostic chains.
-mcmc_parallel_jobs=4 # Concurrent independent MCMCtree chains (four total), capped by GG_TASK_CPUS; lower to reduce memory use.
+mcmc_parallel_jobs=4 # Worker budget for sampling and diagnostics, capped by GG_TASK_CPUS. Sampling uses at most four workers.
 mcmc_seed=1729 # First of four distinct positive seeds; recorded with each chain.
 mcmc_burnin=20000 # Burn-in iterations for MCMCTree.
 mcmc_sampfreq=100 # Sampling frequency for MCMCTree.
-mcmc_nsample=20000 # Number of posterior samples retained by MCMCTree.
+mcmc_nsample=20000 # Minimum number of posterior samples retained per MCMCtree chain.
+mcmc_max_generations="auto" # Total generation ceiling per chain including burn-in. auto uses the NWKIT ceiling.
 mcmc_birth_death_sampling="1,1,0.5" # MCMCTree birth-death-sampling prior as birth,death,sampling_fraction.
 mcmc_clock_model="IND" # {EQUAL, IND, CORR}; MCMCTree clock model, where EQUAL is strict-clock, IND uses independent rates, and CORR uses autocorrelated rates.
 

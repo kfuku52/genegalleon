@@ -531,6 +531,7 @@ mcmc_seed
 mcmc_burnin
 mcmc_clock_model
 mcmc_nsample
+mcmc_max_generations
 mcmc_sampfreq
 min_gene_orthogroup_grampa
 min_num_gene

@@ -27,12 +27,15 @@ def main():
     parser.add_argument('--tree', type=Path, required=True)
     parser.add_argument('--status', type=Path, required=True)
     parser.add_argument('--target', type=Path)
+    parser.add_argument('--time-factor')
     parser.add_argument('--cached', action='store_true', help='Refresh only a verified conversion of this source tree')
     args = parser.parse_args()
     if args.action == 'bind':
         data = json.loads(args.status.read_text())
         data['schema_version'] = 1
         data['tree_sha256'] = tree_hash(args.tree)
+        if args.time_factor is not None:
+            data['time_factor'] = args.time_factor
         args.status.write_text(json.dumps(data, indent=2) + '\n')
     else:
         data = read_status(args.status, args.tree)

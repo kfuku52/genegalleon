@@ -196,7 +196,7 @@ def test_safe_directory_clear_helper_is_used_for_mcmctree_dirs():
     text = _read_text(script)
     assert "clear_directory_contents_safe()" in text
     assert 'clear_directory_contents_safe "$(dirname "${file_iq2mc_ctl}")"' in text
-    assert '--store "${dir_mcmctree2}/runs"' in text
+    assert '--run-store "${dir_mcmctree2}/runs"' in text
 
 
 def test_support_python_shebangs_use_python3():
@@ -612,7 +612,7 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         '-te "${iq2mc_scaled_constraint_tree}"',
         'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
         'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
-        'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
+        'extract_scaled_mcmctree_figtree "${mcmctree_run_output}/FigTree.tre" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
         "Raw chains, executed controls and logs are retained in mcmctree_main/runs.",
     ]
     for token in expected_tokens:
@@ -1562,9 +1562,9 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         'bound_params="${bound_params} --lower-bound ${mcmctree_params[2]}"',
         'bound_params="${bound_params} --upper-bound ${mcmctree_params[3]}"',
         'left_right="--left-species ${mcmctree_params[0]} --right-species ${mcmctree_params[1]}"',
-        "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree ${left_right} ${bound_params})",
+        "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree-tree ${left_right} ${bound_params})",
         'echo -e "${tree_string}" > "tmp.constrained.tree.nwk"',
-        'nwkit mcmctree \\n    --infile "${file_undated_species_tree}"',
+        'nwkit mcmctree-tree \\n    --infile "${file_undated_species_tree}"',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found string-concatenated mcmctree args token: {token}"
@@ -1579,8 +1579,8 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         '--right-species "${mcmctree_params[1]}"',
         'nwkit_args+=(--lower-bound "${mcmctree_params[2]}")',
         'nwkit_args+=(--upper-bound "${mcmctree_params[3]}")',
-        'echo "nwkit mcmctree params: ${nwkit_args[*]}"',
-        'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")',
+        'echo "nwkit mcmctree-tree params: ${nwkit_args[*]}"',
+        'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree-tree "${nwkit_args[@]}")',
         'printf \'%s\\n\' "${tree_string}" > "tmp.constrained.tree.nwk"',
     ]
     for token in expected_tokens:

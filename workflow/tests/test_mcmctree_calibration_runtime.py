@@ -202,17 +202,18 @@ def test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache(tm
         paths = (args.control, args.tree, args.alignment, args.hessian)
         for path in paths:
             (template / path.name).write_bytes(path.read_bytes())
-        status = tmp_path / "main_status.json"
-        output = tmp_path / "main_summary.out"
+        status = tmp_path / "main_results/convergence.json"
+        output = tmp_path / "main_results/mcmctree.out"
         run = subprocess.run(
-            [sys.executable, str(SUPPORT / "mcmctree_chains.py"), "--template", str(template),
-             "--control", control.name, "--store", str(tmp_path / "main_runs"),
-             "--status", str(status), "--output", str(output)],
+            ["nwkit", "mcmctree-run", "--control", str(template / control.name),
+             "--out-dir", str(tmp_path / "main_results"), "--run-store", str(tmp_path / "main_runs"),
+             "--max-generations", "100"],
             capture_output=True, text=True, timeout=60,
         )
         assert run.returncode == 0, run.stdout + run.stderr
         report = json.loads(status.read_text())
-        assert report["completed_chains"] == 4 and report["pooled_samples"] >= 160
+        assert report["completed_chains"] == 4 and report["pooled_samples"] == 160
+        assert report["reason"] == "generation_limit"
         assert "FigTree" in output.read_text()
         assert all((template / p.name).read_bytes() == p.read_bytes() for p in paths)
     from decimal import Decimal
