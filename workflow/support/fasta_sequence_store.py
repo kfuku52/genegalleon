@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
+from shared_namespace_lock import NamespaceLockError, namespace_lock
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_DATABASE_BYTES = 20 * 1024 * 1024 * 1024
@@ -141,7 +142,9 @@ def record_database_state(database: Path) -> None:
     )
 
 
-def database_content_current(database: Path, *, refresh_state: bool = True) -> bool:
+def database_content_current(
+    database: Path, *, refresh_state: bool = True, verify_content: bool = True,
+) -> bool:
     state_path = database_state_path(database)
     if not database.is_file() or database.is_symlink() or not state_path.is_file() or state_path.is_symlink():
         return False
@@ -152,6 +155,8 @@ def database_content_current(database: Path, *, refresh_state: bool = True) -> b
         signature_before = file_signature(database)
         if state.get("database_signature") == signature_before:
             return True
+        if not verify_content:
+            return False
         digest = sha256_file_uncached(database)
         signature_after = file_signature(database)
         if signature_before != signature_after or state.get("sha256") != digest:
@@ -237,11 +242,13 @@ def total_sequence_bytes(database: Path, manifest: Path) -> int:
         raise SequenceStoreError(f"Unable to validate FASTA sequence total: {exc}") from exc
 
 
-def manifest_current(database: Path, manifest: Path, sources: list[tuple[Path, str]]) -> bool:
+def manifest_current(
+    database: Path, manifest: Path, sources: list[tuple[Path, str]], *, verify_content: bool = True,
+) -> bool:
     if not database.is_file() or database.is_symlink() or not manifest.is_file() or manifest.is_symlink():
         return False
     try:
-        if not database_content_current(database):
+        if not database_content_current(database, verify_content=verify_content):
             return False
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         if payload.get("schema_version") != SCHEMA_VERSION:
@@ -510,10 +517,13 @@ def ensure(args: argparse.Namespace) -> int:
     if args.max_database_bytes < 0 or args.minimum_free_bytes < 0:
         raise SequenceStoreError("FASTA sequence store byte limits must be nonnegative integers")
     sources = read_sources(args.source_list)
-    if manifest_current(args.database, args.manifest, sources):
+    # A stat hit needs no lock or digest. Only the cross-node lock owner
+    # may hash a changed database or publish a replacement state.
+    if manifest_current(args.database, args.manifest, sources, verify_content=False):
         print(args.manifest)
         return 0
-    with exclusive_lock(args.database.with_suffix(args.database.suffix + ".lock")):
+    lock = args.database.with_suffix(args.database.suffix + ".lock")
+    with namespace_lock(lock, exclusive=True, timeout=86400):
         if not manifest_current(args.database, args.manifest, sources):
             if not refresh_signatures_if_content_current(
                 args.database,
@@ -678,7 +688,7 @@ def main() -> int:
         if args.command == "total-bytes":
             print(total_sequence_bytes(args.database, args.manifest))
             return 0
-    except (OSError, sqlite3.Error, SequenceStoreError, UnicodeError) as exc:
+    except (OSError, sqlite3.Error, NamespaceLockError, SequenceStoreError, UnicodeError) as exc:
         print(f"FASTA sequence store error: {exc}", file=sys.stderr)
         return 2
     return 2

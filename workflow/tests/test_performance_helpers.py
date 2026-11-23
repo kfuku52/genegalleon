@@ -537,6 +537,37 @@ def test_fasta_sequence_store_rebuilds_a_valid_but_modified_database(tmp_path: P
     assert output.read_text() == ">Species_a_gene1\nACGT\n"
 
 
+def test_fasta_sequence_store_hashes_changed_stat_only_under_shared_lock(tmp_path, monkeypatch):
+    spec = spec_from_file_location("sequence_store_locking", SUPPORT / "fasta_sequence_store.py")
+    store = module_from_spec(spec)
+    spec.loader.exec_module(store)
+    from shared_namespace_lock import inspect_lock
+
+    source = tmp_path / "Species_a.fa"
+    source.write_text(">Species_a_gene1\nACGT\n")
+    args = argparse.Namespace(
+        database=tmp_path / "sequences.sqlite3", manifest=tmp_path / "sequences.json",
+        source_list=tmp_path / "sources.tsv", max_database_bytes=0, minimum_free_bytes=0,
+    )
+    args.source_list.write_text(f"{source}\tSpecies_a\n")
+    assert store.ensure(args) == 0
+    database_stat = args.database.stat()
+    os.utime(args.database, ns=(database_stat.st_atime_ns, database_stat.st_mtime_ns + 2_000_000_000))
+    lock_path = args.database.with_suffix(".sqlite3.lock")
+    original_hash = store.sha256_file_uncached
+    verified = []
+
+    def hash_under_lock(path):
+        assert inspect_lock(lock_path)["exclusive"]["pid"] == os.getpid()
+        verified.append(path)
+        return original_hash(path)
+
+    monkeypatch.setattr(store, "sha256_file_uncached", hash_under_lock)
+    assert store.ensure(args) == store.ensure(args) == 0
+    assert verified == [args.database]
+    assert args.database.stat().st_ino == database_stat.st_ino
+
+
 def test_fasta_sequence_store_compresses_sequences_and_enforces_a_size_cap(tmp_path: Path):
     source = tmp_path / "Species_a.fa.gz"
     with gzip.open(source, "wt") as handle:

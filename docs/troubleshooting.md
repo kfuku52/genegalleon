@@ -308,6 +308,11 @@ use atomic shared-filesystem namespace locks, not `flock`. This protects active
 tasks even on Lustre `localflock` mounts. The `.gg_store_locks/` tree (including
 `.lock.namespace-v1` sidecars) is persistent coordination state outside the
 movable store metadata and must not be deleted by cleanup tools.
+
+FASTA sequence-index builders use the same cross-node lock protocol. A current
+index needs no lock. When database stat metadata changes, only the lock owner
+checks its contents or rebuilds it. Avoid running older index builders against
+the same cache during this migration.
 Other workflows' array finalizers still require cross-node `flock` semantics.
 
 Shared download/cache, output-publication, and stage-transaction leases use `shared-lock-v3`
