@@ -451,10 +451,10 @@ from functools import cmp_to_key
 from pathlib import Path
 import sys
 
-if len(sys.argv) > 1 and (sys.argv[1] in ("convert", "validate") or (sys.argv[1] == "label" and "s" in sys.argv)):
+if len(sys.argv) > 1 and (sys.argv[1] in ("convert", "validate", "mcmctree-run") or (sys.argv[1] == "label" and "s" in sys.argv)):
     from nwkit.cli import main
-    main(sys.argv[1:])
-    sys.exit(0)
+    status = main(sys.argv[1:])
+    sys.exit(status if sys.argv[1] == "mcmctree-run" else 0)
 
 capture_dir = {str(capture_dir)!r}
 
@@ -615,9 +615,19 @@ if __name__ == "__main__":
 
     _write_executable(
         bin_dir / "Rscript",
-        """#!/usr/bin/env bash
-set -euo pipefail
-exit 0
+        """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+if len(sys.argv) > 1 and Path(sys.argv[1]).name == "mcmctree_diagnostics.R":
+    jobs, count, destination, *chains = sys.argv[2:]
+    assert jobs == "--jobs" and count == "1" and len(chains) == 4
+    for chain in chains:
+        rows = Path(chain).read_text().splitlines()
+        assert rows[0].split() == ["Gen", "t_n4", "t_n5"]
+        assert [int(row.split()[0]) for row in rows[1:]] == list(range(1, 11))
+    Path(destination).write_text("parameter\\trhat\\tess_bulk\\tess_tail\\n"
+                                 "t_n4\\t1.1\\t10\\t10\\nt_n5\\t1.1\\t10\\t10\\n")
 """,
     )
 
@@ -627,8 +637,8 @@ exit 0
 set -euo pipefail
 outfile=$(sed -n 's/^[[:space:]]*outfile[[:space:]]*=[[:space:]]*//p' "$1" | head -n 1)
 if [[ ! -s mcmc.txt ]]; then
-  printf 'Gen\\ttime\\n' > mcmc.txt
-  for i in {1..10}; do printf '%s\\t0.1\\n' "$i" >> mcmc.txt; done
+  printf 'Gen\\tt_n4\\tt_n5\\n' > mcmc.txt
+  for i in {1..10}; do printf '%s\\t0.1%s\\t0.2%s\\n' "$i" "$i" "$i" >> mcmc.txt; done
 fi
 cat > "${outfile:-mcmctree.out}" <<'EOF'
 MCMCtree test output
@@ -1971,7 +1981,11 @@ def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: 
         ">Arabidopsis_thaliana_gene1\nATGAAA\n", encoding="utf-8"
     )
     inputs = {
-        "iq2mc.mcmctree.ctl": "outfile = iq2mc.mcmctree.out\nRootAge = <1\nBDparas = 1 1 0.5\nnsample = 10\nsampfreq = 1\n",
+        "iq2mc.mcmctree.ctl": (
+            "outfile = iq2mc.mcmctree.out\nRootAge = <1\nBDparas = 1 1 0.5\n"
+            "seqfile = iq2mc.dummy.phy\ntreefile = iq2mc.rooted.nwk\n"
+            "usedata = 2 iq2mc.mcmctree.hessian\nburnin = 0\nnsample = 10\nsampfreq = 1\n"
+        ),
         "iq2mc.mcmctree.hessian": "verified hessian\n",
         "iq2mc.rooted.nwk": "((a,b)'B(0.1,0.2,0.025,0.025)',c);\n",
         "iq2mc.dummy.phy": "3 4\na ACGT\nb ACGT\nc ACGT\n",
@@ -1992,14 +2006,15 @@ def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: 
             "input_sequence_mode": "cds",
             "run_orthofinder": "0",
             "species_tree_output_storage": "files",
+            "mcmc_max_generations": "10",
         },
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "Regenerating only the invalid MCMCtree stage" in completed.stdout
     # Ordinary scratch cleanup must not remove retained samples or controls.
-    assert len(list((mcmctree_dir / "runs").glob("*/chain-*/attempt-*/mcmc.txt"))) == 4
-    assert len(list((mcmctree_dir / "runs").glob("*/chain-*/attempt-*/run.ctl"))) == 4
+    assert len(list((mcmctree_dir / "runs").glob("*/round-001/chain-*/attempt-*/mcmc.txt"))) == 4
+    assert len(list((mcmctree_dir / "runs").glob("*/round-001/chain-*/attempt-*/run.ctl"))) == 4
     assert (mcmctree_dir / "convergence.json").is_file()
     assert "WARNING" in completed.stderr
     assert "(a:0.1,(b:0.2,c:0.3):0.4);" in (
@@ -2016,7 +2031,8 @@ def test_genome_evolution_rebuilds_only_invalid_cached_mcmctree_stage(tmp_path: 
     ctl = iq2mc_dir / "iq2mc.mcmctree.ctl"
     ctl.write_text(ctl.read_text().replace("nsample = 10", "nsample = 20"))
     failed = _run_core(tmp_path, {"artifact_stale_policy": "rebuild", "input_sequence_mode": "cds",
-                                  "run_orthofinder": "0", "species_tree_output_storage": "files"})
+                                  "run_orthofinder": "0", "species_tree_output_storage": "files",
+                                  "mcmc_max_generations": "20"})
     assert failed.returncode != 0
     assert "Error: IQ2MC step 3 failed." in failed.stdout
     assert all((mcmctree_dir / name).read_bytes() == content for name, content in published.items())
