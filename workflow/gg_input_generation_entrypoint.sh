@@ -154,6 +154,7 @@ gene_model_rescue_genome_fallback=1 # Search unresolved syntenic and bounded add
 gene_model_rescue_model_repair_targets="" # Optional targeted existing model search TSV.
 gene_model_rescue_max_genome_queries=20000 # Maximum additional genome-only donor queries per target; deferred queries are recorded.
 gene_model_rescue_unanchored_min_species=1 # Independent donor species required for intact, unique unanchored annotation; no orthology/copy assignment.
+gene_model_rescue_oriongeno_without_donor=1 # Admit structurally valid OrionGeno-only genes at uncovered loci.
 gene_model_rescue_terminal_max_extension=300 # Maximum in-frame genomic terminal extension in bp; no gap/stop masking.
 gene_model_rescue_terminal_max_unaligned_c_overhang=2 # Maximum donor C-terminal residues left unaligned for terminal completion.
 gene_model_rescue_gemoma_jar="" # Optional GeMoMa refinement jar; blank uses miniprot alone.

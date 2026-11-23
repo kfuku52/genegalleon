@@ -651,19 +651,24 @@ def test_cache_unsafe_receipt_path_is_rejected(tmp_path):
         frozen_prediction_cache_key(old)
 
 
-def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
+@pytest.mark.parametrize("native_inputs,enable", [("", "1"), ("/native inputs.tsv", "1"), ("/native inputs.tsv", "0")])
+def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path, native_inputs, enable):
     from workflow.support.entrypoint_config_schema import parse_entrypoint
     root = Path(__file__).resolve().parents[2]
     new_parameters = {"prediction_cache": ("", "old verified predictions"), "max_genome_queries": ("20000", "17"),
                       "unanchored_min_species": ("1", "3"), "terminal_max_extension": ("300", "180"),
                       "terminal_max_unaligned_c_overhang": ("2", "1")}
     metadata = {parameter.name: parameter for parameter in parse_entrypoint("gg_input_generation_entrypoint.sh")}
+    admission = metadata["gene_model_rescue_oriongeno_without_donor"]
+    assert admission.default == "1"
     overrides = {}
     for suffix, (default, value) in new_parameters.items():
         name = "gene_model_rescue_" + suffix
         assert metadata[name].default == default
         assert metadata[name].environment == "GG_INPUT_" + name.upper()
         overrides[metadata[name].environment] = value
+    overrides[admission.environment] = enable
+    overrides["GG_INPUT_GENE_MODEL_ORIONGENO_INPUTS"] = native_inputs
     core = (root / "workflow/core/gg_input_generation_core.sh").read_text()
     defaults = core[core.index('gene_model_rescue_tree='):core.index('require_cds=')]
     function = core[core.index('resolve_oriongeno_candidate_inputs() {'):core.index('\ngene_model_rescue_busco_species() {')]
@@ -690,6 +695,9 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     arguments = capture.read_text().splitlines()
+    assert ("--oriongeno-without-donor" in arguments) is bool(native_inputs and enable == "1")
+    if native_inputs:
+        assert arguments[arguments.index("--oriongeno-inputs") + 1] == native_inputs
     for suffix, (_, value) in new_parameters.items():
         flag = "--" + suffix.replace("_", "-")
         assert arguments[arguments.index(flag) + 1] == value

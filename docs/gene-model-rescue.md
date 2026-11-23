@@ -1,5 +1,28 @@
 # Synteny-guided gene-model rescue
 
+## Admit OrionGeno models at uncovered loci
+
+The input-generation entrypoint enables this route when OrionGeno inputs
+are available. Set `GG_INPUT_GENE_MODEL_RESCUE_ORIONGENO_WITHOUT_DONOR=0`
+to disable it. With the independent CLI, pass
+`plan --oriongeno-without-donor --oriongeno-inputs native.tsv`.
+This adds a route after ordinary rescue. It reads the
+verified OrionGeno GFF on the target assembly and checks the genomic ORF,
+CDS phase, splice junctions, and assembly gaps. Existing and already rescued
+coding loci keep priority. The longest valid CDS per OrionGeno gene is selected
+with a stable transcript-ID tie break. Competing same-strand coding loci
+remain unresolved. A species without a native prediction retains ordinary rescue.
+
+The GFF marks these additions as `rescue_admission=oriongeno_without_donor`.
+`oriongeno_without_donor.json` records the decision for each native gene.
+These models contribute zero donor support and leave orthology and expected
+copy unassigned. Cross-species rescue and refinement retain their own gates.
+To extend a completed rescue with frozen OrionGeno inputs, run
+`rescue_gene_models.py oriongeno-extend --previous-output old --output new`.
+This keeps the audited donor-supported calls, copies the verified prepared and
+synteny stages, and appends the new rows to the compact model store. It does
+not repeat Miniprot, DIAMOND or OrionGeno. Use a separate output directory.
+
 ## Evaluate native predictions outside nominated regions
 
 The independent CLI's opt-in `plan --oriongeno-genomewide --oriongeno-inputs

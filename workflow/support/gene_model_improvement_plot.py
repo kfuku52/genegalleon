@@ -20,6 +20,7 @@ from gene_model_improvement_summary import (
     omark_comparison_counts,
     plot_method_summary,
 )
+from gene_model_refinement_busco import RESCUE_NO_DONOR_COLOUR, RESCUE_NO_DONOR_LABEL
 from matplotlib.text import Text
 
 STATUS_COLOURS = ("#000000", "#B22222", "#666666", "#CCCCCC")
@@ -208,6 +209,9 @@ def plot_staged_comparison(rows, output, changes):
                 for key, colour in zip(keys, DONOR_COLOURS, strict=True):
                     rescue_axis.barh(i - .20, donors[key], left=left, height=.32, color=colour)
                     left += donors[key]
+                count = value.get("rescue_oriongeno_without_donor_loci", 0)
+                if count:
+                    rescue_axis.barh(i - .20, count, left=left, height=.32, color=RESCUE_NO_DONOR_COLOUR)
             else:
                 rescue_axis.barh(i - .20, rescued, height=.32, color="#5275b5")
             rescue_axis.annotate(str(rescued), (rescued, i - .20), xytext=(2, 0), textcoords="offset points", va="center")
@@ -279,7 +283,12 @@ def plot_staged_comparison(rows, output, changes):
             return y
 
         top = 4.33
-        end = legend(0, top, "Donor groups\n(upper bars)", DONOR_KEYS, DONOR_COLOURS, DONOR_LABELS)
+        rescue_keys, rescue_colours, rescue_labels = DONOR_KEYS, DONOR_COLOURS, DONOR_LABELS
+        if any(v.get("rescue_oriongeno_without_donor_loci") for v in stats.values()):
+            rescue_keys = (*rescue_keys, "oriongeno_without_donor")
+            rescue_colours = (*rescue_colours, RESCUE_NO_DONOR_COLOUR)
+            rescue_labels = (*rescue_labels, RESCUE_NO_DONOR_LABEL)
+        end = legend(0, top, "Donor groups\n(upper bars)", rescue_keys, rescue_colours, rescue_labels)
         swiss_end = legend(0, end - .13, "Swiss-Prot support\n(lower bars)", SWISS_KEYS, SWISS_COLOURS, SWISS_LABELS)
         end = legend(1, top, "Coding-path type\n(upper bars)", ("repair", "isoform"), ("#187d97", "#d38b21"), ("Repair path", "Added isoform"))
         path_end = legend(1, end - .13, "Donor groups\n(lower bars)", (*DONOR_KEYS, "other_interspecies"),

@@ -72,6 +72,7 @@ gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
 gene_model_rescue_model_repair_targets="${gene_model_rescue_model_repair_targets:-}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
 gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
+gene_model_rescue_oriongeno_without_donor="${gene_model_rescue_oriongeno_without_donor:-0}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
 gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
@@ -2724,6 +2725,11 @@ prepare_gene_model_rescue() {
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  case "${gene_model_rescue_oriongeno_without_donor}" in
+    0) ;;
+    1) [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-without-donor) ;;
+    *) echo "gene_model_rescue_oriongeno_without_donor must be 0 or 1." >&2; return 1 ;;
+  esac
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_rescue_diagnostics}" ]] || rescue_args+=(--diagnostics "${gene_model_rescue_diagnostics}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)

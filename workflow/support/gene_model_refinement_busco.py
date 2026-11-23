@@ -23,6 +23,7 @@ from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
 from gene_model_refinement import verified_input_rows
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 from rescue_model_store import frozen_model_store_key, iter_accepted_models
+from rescue_oriongeno_admission import BASIS as ORIONGENO_WITHOUT_DONOR
 from rescue_swissprot_evidence import COLOURS as SWISSPROT_COLOURS
 from rescue_swissprot_evidence import GROUPS as SWISSPROT_GROUPS
 from rescue_swissprot_evidence import LABELS as SWISSPROT_LABELS
@@ -34,6 +35,8 @@ RESCUE_SUPPORT_COLOURS = ("#5275b5", "#9a6ab2", "#37956f")
 RESCUE_SUPPORT_LABELS = ("Nearest relatives only", "Phylogenetically balanced only", "Both reference groups")
 RESCUE_SELF_COLOUR = "#b59b5b"
 RESCUE_SELF_LABEL = "Self-species only"
+RESCUE_NO_DONOR_COLOUR = "#63a7a0"
+RESCUE_NO_DONOR_LABEL = "OrionGeno without donor support"
 PATH_SUPPORT = (*RESCUE_SUPPORT, "self_only", "other_interspecies")
 PATH_SUPPORT_COLOURS = (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR, "#8a929b")
 PATH_SUPPORT_LABELS = (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL, "Other interspecies only")
@@ -157,6 +160,9 @@ def group_support_evidence(evidence, species, selection, *, allow_other=False):
     counts = dict.fromkeys(groups, 0)
     for identifier, record in evidence.items():
         donors = record.get("supporting_donors")
+        if not allow_other and donors == [] and record.get("category") == ORIONGENO_WITHOUT_DONOR:
+            counts[ORIONGENO_WITHOUT_DONOR] = counts.get(ORIONGENO_WITHOUT_DONOR, 0) + 1
+            continue
         if (not isinstance(donors, list) or not donors
                 or any(not isinstance(d, str) or not d for d in donors)):
             raise ValueError("Missing supporting donor evidence: " + identifier)
@@ -324,6 +330,13 @@ def classify_rescue_support(models, species, rescued, plan, *, method_intersecti
             path_donors = set()
             for entry in support:
                 donor = entry.get("donor")
+                if (donor is None and len(support) == 1 and path is model
+                        and plan.get("request", {}).get(ORIONGENO_WITHOUT_DONOR)
+                        and model.get("search") == ORIONGENO_WITHOUT_DONOR
+                        and entry.get("admission_basis") == ORIONGENO_WITHOUT_DONOR
+                        and entry.get("target") == species and entry.get("oriongeno")):
+                    methods.add("oriongeno")
+                    continue
                 if (entry.get("target") != species
                         or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
                     raise ValueError("Rescue support donor/target differs from the frozen plan")
@@ -337,8 +350,9 @@ def classify_rescue_support(models, species, rescued, plan, *, method_intersecti
         if method_intersections is not None:
             method_intersections["+".join(sorted(methods))] += 1
         near, common = bool(donors & nearest), bool(donors & balanced)
-        category = "both" if near and common else "nearest_only" if near else "balanced_only" if common else "self_only"
-        if category != "self_only":
+        category = ("both" if near and common else "nearest_only" if near else "balanced_only" if common
+                    else "self_only" if donors else ORIONGENO_WITHOUT_DONOR)
+        if category in counts:
             counts[category] += 1
         evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category,
                           "coding_path_support": path_support}
@@ -878,6 +892,9 @@ def collect_model_changes(root, pairs, rescue_output=None):
             stats[name]["rescue_method_intersections"] = dict(methods)
             stats[name]["rescue_support_counts"] = counts
             stats[name]["rescue_self_only_loci"] = sum(s["category"] == "self_only" for s in support.values())
+            without_donor = sum(s["category"] == ORIONGENO_WITHOUT_DONOR for s in support.values())
+            if without_donor:
+                stats[name]["rescue_oriongeno_without_donor_loci"] = without_donor
             evidence[name].update(rescue_receipt_sha256=receipt_hash,
                                   rescue_models_sha256=receipt["files"].get("models.json"),
                                   rescue_model_members_sha256=models_key["files"],
@@ -952,7 +969,7 @@ def plot_comparison(rows, output, model_changes=None):
     if diagnostic_view:
         _validate_swissprot_diagnostics(rows, model_changes)
 
-    stacked_rescue = stacked_paths = grouped_support = False
+    stacked_rescue = stacked_paths = grouped_support = show_without_donor = False
     swissprot_view = False
     if model_changes is not None:
         stats = model_changes["species"]
@@ -993,16 +1010,20 @@ def plot_comparison(rows, output, model_changes=None):
                         or any(type(c) is not int or c < 0 for c in repeats.values())
                         or sum(repeats.values()) != value["prior_rescued_loci"]):
                     raise ValueError("Repeat groups must sum to the rescued gene count")
+            without_donor = value.get("rescue_oriongeno_without_donor_loci", 0)
+            if type(without_donor) is not int or without_donor < 0:
+                raise ValueError("Invalid count of OrionGeno loci without donor support")
+            show_without_donor |= without_donor > 0
             if row["refinement_status"] == "not_analysed":
-                if support is not None or value.get("rescue_self_only_loci") is not None:
+                if support is not None or value.get("rescue_self_only_loci") is not None or without_donor:
                     raise ValueError("Unanalysed rescue support counts must be unavailable")
             elif stacked_rescue:
                 self_only = value.get("rescue_self_only_loci", 0)
                 if (not isinstance(support, dict) or set(support) != set(RESCUE_SUPPORT)
                         or any(type(c) is not int or c < 0 for c in support.values())
                         or type(self_only) is not int or self_only < 0
-                        or sum(support.values()) + self_only != value["prior_rescued_loci"]):
-                    raise ValueError("Rescue support categories plus self-only loci must sum to the rescued gene count")
+                        or sum(support.values()) + self_only + without_donor != value["prior_rescued_loci"]):
+                    raise ValueError("Rescue support categories must sum to the rescued gene count")
             path_support = value.get("accepted_path_support_counts")
             if row["refinement_status"] == "not_analysed":
                 if path_support is not None:
@@ -1013,7 +1034,8 @@ def plot_comparison(rows, output, model_changes=None):
                         or sum(path_support.values()) != value["accepted_repair_paths"] + value["accepted_isoform_paths"]):
                     raise ValueError("Coding-path support categories must sum to the accepted path count")
             for key, categories, stacked, total in (
-                ("rescue_support_groups", SUPPORT_GROUPS, stacked_rescue, value["prior_rescued_loci"]),
+                ("rescue_support_groups", (*SUPPORT_GROUPS, ORIONGENO_WITHOUT_DONOR) if without_donor else SUPPORT_GROUPS,
+                 stacked_rescue, value["prior_rescued_loci"]),
                 ("accepted_path_support_groups", PATH_SUPPORT_GROUPS, stacked_paths,
                  None if row["refinement_status"] == "not_analysed" else value["accepted_repair_paths"] + value["accepted_isoform_paths"]),
             ):
@@ -1025,6 +1047,8 @@ def plot_comparison(rows, output, model_changes=None):
                     if (not isinstance(groups, dict) or set(groups) != set(categories)
                             or any(type(c) is not int or c < 0 for c in groups.values()) or sum(groups.values()) != total):
                         raise ValueError("S/R/P support groups must sum to the source model count")
+                    if key == "rescue_support_groups" and groups.get(ORIONGENO_WITHOUT_DONOR, 0) != without_donor:
+                        raise ValueError("Rescue groups disagree on OrionGeno loci without donor support")
     staged = any("pre_rescue_result" in row for row in rows)
     if staged:
         if not all("pre_rescue_result" in row for row in rows):
@@ -1093,6 +1117,9 @@ def plot_comparison(rows, output, model_changes=None):
                         count = support[category]
                         rescue_axis.barh(rescue_y, count, left=offset, color=color, height=.32)
                         offset += count
+                    count = value.get("rescue_oriongeno_without_donor_loci", 0)
+                    if count:
+                        rescue_axis.barh(rescue_y, count, left=offset, color=RESCUE_NO_DONOR_COLOUR, height=.32)
                 else:
                     rescue_axis.barh(rescue_y, rescued, color="#5275b5", height=.32)
                 rescue_axis.annotate(str(rescued), (rescued, rescue_y),
@@ -1183,6 +1210,9 @@ def plot_comparison(rows, output, model_changes=None):
         if stacked_rescue:
             group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
             group_labels = SUPPORT_GROUP_LABELS if grouped_support else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
+            if show_without_donor:
+                group_colors = (*group_colors, RESCUE_NO_DONOR_COLOUR)
+                group_labels = (*group_labels, RESCUE_NO_DONOR_LABEL)
             rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor=c) for c in group_colors], group_labels,
                                                 "Supporting donor groups (upper rescue bars)"))
         else:

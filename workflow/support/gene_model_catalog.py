@@ -37,6 +37,7 @@ from gff_attribute_syntax import validate_gff
 
 SCHEMA_VERSION = 1
 SOURCE_RESCUE_LOCUS_ATTRIBUTES = (
+    ('source_rescue_admission', 'admission'),
     ('source_rescue_representative_status', 'representative_status'),
     ('source_rescue_representative_selection_policy', 'selection_policy'),
     ('source_rescue_locus_independent_donor_species_count', 'locus_independent_donor_species_count'),
@@ -460,7 +461,16 @@ class _CatalogNormaliser(CdsModelNormaliser):
         self.exons.clear()
         self.nodes.clear()
         self.parent_ids = defaultdict(set)
+        coge_blocks = set()
         for row in self.features:
+            if row["source"] == "CoGe" and row["feature"] in {"CDS", "exon"} and "coge_fid" in row["attributes"]:
+                # CoGe can emit the same coding feature in distinct export
+                # copies. Ignore only the database row ID when comparing them.
+                feature = (row["seqid"], row["feature"], row["start"], row["end"], row["strand"], row["phase"],
+                           tuple(sorted((k, v) for k, v in row["attributes"].items() if k != "coge_fid")))
+                if feature in coge_blocks:
+                    continue
+                coge_blocks.add(feature)
             parsed = parse_gff_attributes(row["source_line"].split("\t", 8)[8])
             tid, gid = row["attributes"].get("transcript_id"), row["attributes"].get("gene_id")
             identifier = row["attributes"].get("ID")
@@ -637,6 +647,7 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                     if row['source'] != 'genegalleon_rescue':
                         continue
                     for attribute, name in (
+                            ('rescue_admission', 'admission'),
                             ('representative_status', 'representative_status'),
                             ('representative_selection_policy', 'selection_policy'),
                             ('locus_independent_donor_species_count', 'locus_independent_donor_species_count'),

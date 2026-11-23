@@ -473,6 +473,11 @@ def build_plan(args):
                 raise ValueError('Genomewide rescue requires --oriongeno-inputs')
             from rescue_native_genomewide import CONTRACT
             request['oriongeno_genomewide'] = CONTRACT
+        if getattr(args, 'oriongeno_without_donor', False):
+            import rescue_oriongeno_admission
+            if not request.get('oriongeno'):
+                raise ValueError('--oriongeno-without-donor requires --oriongeno-inputs')
+            request[rescue_oriongeno_admission.BASIS] = rescue_oriongeno_admission.contract()
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
             request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, prediction_sources)
@@ -1573,6 +1578,9 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         return rescue_native_genomewide_reuse.import_worker(root, plan, name, cpus, dependencies=dependencies)
     admission = request.get('admission_cache')
     revalidation_reason = request.get('native_genomewide_parent', {}).get('validated_reuse_unavailable')
+    if admission and admission['contract'].get('scope') == 'oriongeno_additions':
+        import rescue_oriongeno_admission
+        return rescue_oriongeno_admission.extend_worker(root, plan, name, cpus, dependencies)
     if admission:
         import rescue_admission_replay
         parser_proof = None
@@ -1651,7 +1659,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                           [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins, params)])
         empty = (state["empty"] if checkpoint is not None else
                  not candidate_regions and not repair_targets and not plan["request"].get("prediction_cache")
-                 and not plan['request'].get('oriongeno_genomewide'))
+                 and not plan['request'].get('oriongeno_genomewide')
+                 and not plan['request'].get('oriongeno_without_donor'))
         if empty:
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
@@ -1938,6 +1947,12 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
             models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
                                  retained_paths=retained_paths)
+            if request.get('oriongeno_without_donor'):
+                import rescue_oriongeno_admission
+                require_same_key(rescue_oriongeno_admission.contract(), request['oriongeno_without_donor'])
+                standalone = rescue_oriongeno_admission.admit(
+                    request['oriongeno'], name, genome, source['genetic_code'], params, placement_ownership, models)
+                atomic_json(tmp / rescue_oriongeno_admission.AUDIT, standalone)
             atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
                 models, placement_ownership, name, genome=genome, code=source["genetic_code"],
                 params=params, proteins=proteins))
@@ -2086,6 +2101,9 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
         for path in [model, *model.get('alternative_coding_paths', ())]:
             if not path.get('sequence') or path.get('problems'):
                 raise ValueError('Previous accepted coding path lacks an intact sequence')
+            if path.get('evidence', {}).get('admission_basis') == 'oriongeno_without_donor':
+                # Repeat the native-only decision under the new frozen policy.
+                continue
             shape = coding_shape(path)
             sequence_sha256 = hashlib.sha256(path['sequence'].encode()).hexdigest()
             if shape in result and result[shape]['sequence_sha256'] != sequence_sha256:
@@ -2967,6 +2985,8 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                     if any(plan['request'].get(e) for e in ('annevo', 'oriongeno')):
                         import annevo_gene_models
                         locus_attributes += annevo_gene_models.gff_attributes(model.get('support', [model.get('evidence', {})]))
+                    if model.get('search') == 'oriongeno_without_donor':
+                        locus_attributes += ';rescue_admission=oriongeno_without_donor;locus_independent_donor_species_count=0'
                     out.write("\t".join([*common[:2], "gene", str(gene_start + 1), str(gene_end), *common[5:8], fields("gene", "ID=" + gene + locus_attributes)]) + "\n")
                     transcript_feature = "transcript" if feature == "transcript" else "mRNA"
                     out.write("\t".join([*common[:2], transcript_feature, *common[3:8], fields(transcript_feature, f"ID={transcript};Parent={gene}" + rescue_selection_attributes(model, model))]) + "\n")
@@ -3210,6 +3230,10 @@ def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
+    additions = sub.add_parser('oriongeno-extend', help='Add donor-free OrionGeno loci to a completed rescue')
+    additions.add_argument('--previous-output', type=Path, required=True)
+    additions.add_argument('--output', type=Path, required=True)
+    additions.add_argument('--cpus', type=int, default=1)
     extension = sub.add_parser('native-genomewide-plan', help='Extend a completed rescue with candidate-first OrionGeno evaluation')
     extension.add_argument('--previous-output', type=Path, required=True)
     extension.add_argument('--output', type=Path, required=True)
@@ -3267,6 +3291,8 @@ def parser():
     plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")
     plan.add_argument('--oriongeno-genomewide', action='store_true',
                       help='Also evaluate every native coding path outside the original CDS annotation against all selected external donor proteins')
+    plan.add_argument('--oriongeno-without-donor', action='store_true',
+                      help='Also admit intact OrionGeno coding loci without requiring donor support')
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")
@@ -3306,6 +3332,12 @@ def parser():
 def main():
     p = parser()
     args = p.parse_args()
+    if args.command == 'oriongeno-extend':
+        import rescue_oriongeno_admission
+        if args.cpus < 1:
+            p.error('cpus must be positive')
+        rescue_oriongeno_admission.extend(args.previous_output, args.output, args.cpus)
+        return
     if args.command == 'native-genomewide-plan':
         import rescue_native_genomewide
         plan = rescue_native_genomewide.build_plan(args.previous_output, args.output,producer_source=args.producer_source,

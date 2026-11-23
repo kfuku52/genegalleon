@@ -5,6 +5,7 @@ import json
 import random
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -238,6 +239,32 @@ def test_missing_native_species_leaves_other_rescue_routes_unchanged(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("strand,coding_fault", [("+", None), ("-", None), ("+", "splice")])
+def test_donor_free_native_uses_genomic_qc_and_one_model_per_gene(tmp_path, strand, coding_fault):
+    admission = importlib.import_module("rescue_oriongeno_admission")
+    genome, frozen, _, blocks = fixture(tmp_path, strand=strand, aliases=True, coding_fault=coding_fault)
+    models = []
+    with catalog.indexed_genome(genome) as sequence:
+        audit = admission.admit(frozen, "Target_species", sequence, 1, refinement.DEFAULTS,
+                                rescue.OwnershipIndex([]), models)
+        if coding_fault:
+            assert models == []
+            assert audit["genes"]["native"] == {"status": "invalid_cds", "reasons": ["noncanonical_splice"]}
+            return
+        assert len(models) == 1
+        model = models[0]
+        assert model["cds"] == blocks
+        assert model["coverage"] is None and model["identity"] is None
+        assert rescue.alignment_support(model) == []
+        assert audit["genes"]["native"]["native_transcript_id"] == "native.alt"
+        assert audit["genes"]["native"]["status"] == "admitted"
+        # A previous rescue is a locus owner even when it has another ID.
+        second = admission.admit(frozen, "Target_species", sequence, 1, refinement.DEFAULTS,
+                                 rescue.OwnershipIndex([]), models)
+        assert second["genes"]["native"]["status"] == "already_rescued"
+        assert models == [model]
+
+
 def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue(hidden_models, monkeypatch):
     directory, names, coding = hidden_models
     target = names[0]
@@ -263,21 +290,56 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
         '--genome-dir', str(directory/'genome'), '--busco-dir', str(directory/'busco'), '--genome-fallback', '0',
         '--tree', str(directory/'tree.nwk'), '--output', str(old), '--oriongeno-inputs', str(table),
         '--diagnostics', 'legacy'])
-    plan = rescue.build_plan(args)
-    for name in names:
-        rescue.prepared(old, plan, name)
-
     def build_empty_comparison(tmp, kind):
         rescue.atomic_json(tmp / 'blocks.json', [])
         if kind == 'pair':
             # A completed pair comparison retains its raw alignment even with no hits.
             (tmp / 'target.query.last').touch()
 
-    for job in plan['synteny_jobs']:
-        rescue.stage(old, Path('synteny')/job['id'], rescue.comparison_key(old, job),
-                     lambda tmp, kind=job['kind']: build_empty_comparison(tmp, kind))
-    for name in names:
-        rescue.rescue(old, plan, name, 1)
+    def publish_workers(root):
+        plan = rescue.build_plan(args)
+        for name in names:
+            rescue.prepared(root, plan, name)
+        for job in plan['synteny_jobs']:
+            rescue.stage(root, Path('synteny')/job['id'], rescue.comparison_key(root, job),
+                         lambda tmp, kind=job['kind']: build_empty_comparison(tmp, kind))
+        for name in names:
+            rescue.rescue(root, plan, name, 1)
+        return plan
+
+    plan = publish_workers(old)
+    store = importlib.import_module('rescue_model_store')
+    assert not list(store.iter_accepted_models(old/'rescued'/target))
+    configured = directory / 'configured'
+    args.output, args.oriongeno_without_donor = configured, True
+    configured_plan = publish_workers(configured)
+    rescue.finalize(configured, configured_plan)
+    accepted = list(store.iter_accepted_models(configured/'rescued'/target))
+    assert len(accepted) == 1 and accepted[0]['sequence'] == coding[8]
+    assert accepted[0]['quality_evidence']['donor_species'] == []
+    audit = json.loads((configured/'rescued'/target/'oriongeno_without_donor.json').read_text())
+    assert audit['genes']['n0']['status'] == 'original_cds_overlap'
+    assert audit['genes']['n8']['status'] == 'admitted'
+    gff = (configured/'augmented/species_gff'/f'{target}.rescue.gff3').read_text()
+    assert 'rescue_admission=oriongeno_without_donor;locus_independent_donor_species_count=0' in gff
+    report = importlib.import_module('gene_model_refinement_busco')
+    methods = Counter()
+    counts, per_locus = report.classify_rescue_support(
+        accepted, target, {accepted[0]['model_id']}, configured_plan, method_intersections=methods)
+    assert methods == {'oriongeno': 1}
+    assert sum(counts.values()) == 0
+    grouped = report.group_support_evidence(per_locus, target, configured_plan)
+    assert grouped['oriongeno_without_donor'] == 1
+    admission = importlib.import_module('rescue_oriongeno_admission')
+    overlay = directory / 'overlay'
+    with monkeypatch.context() as patch:
+        def forbid_search(*args, **kwargs):
+            raise AssertionError('OrionGeno additions must reuse the completed donor search')
+        patch.setattr(rescue, 'run', forbid_search)
+        admission.extend(old, overlay, 2)
+        admission.extend(old, overlay, 2)
+    assert list(store.iter_accepted_models(overlay/'rescued'/target)) == accepted
+    assert (overlay/'augmented/species_gff'/f'{target}.rescue.gff3').read_text() == gff
     original = (old/'rescued'/target/'receipt.json').read_bytes()
     new = directory / 'extension'
     extended = native.build_plan(old, new)
@@ -291,7 +353,6 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
         return run(command, root, label, stdout)
     monkeypatch.setattr(rescue, 'run', guarded)
     rescue.rescue(new, extended, target, 2)
-    store = importlib.import_module('rescue_model_store')
     accepted = list(store.iter_accepted_models(new/'rescued'/target))
     assert len(accepted) == 1 and accepted[0]['sequence'] == coding[8]
     assert (old/'rescued'/target/'receipt.json').read_bytes() == original

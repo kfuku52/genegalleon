@@ -187,13 +187,26 @@ def _legacy_annotation_history(plan):
 
 
 def build_plan(previous_output, producer_source, output, *, native_extension=False,
-               completed_output=None, completed_producer_source=None, automatic=False, compact_diagnostics=False):
+               completed_output=None, completed_producer_source=None, automatic=False, compact_diagnostics=False,
+               oriongeno_additions=False):
     r = _r()
     previous, root = Path(previous_output).resolve(strict=True), Path(output).resolve()
     if root == previous or previous in root.parents or root in previous.parents or root.exists():
         raise ValueError('Admission replay requires a new, disjoint output directory')
     prior = r.load(previous, inspect_only=True)
-    if native_extension:
+    if prior['request'].get('oriongeno_without_donor'):
+        message = 'Donor-free OrionGeno models require ordinary planning with --prediction-cache, not donor admission replay'
+        if automatic:
+            from rescue_native_genomewide_reuse import IncompatibleEvidence
+            raise IncompatibleEvidence(message)
+        raise ValueError(message)
+    if oriongeno_additions:
+        from rescue_oriongeno_admission import contract
+
+        if not prior['request'].get('oriongeno'):
+            raise ValueError('OrionGeno additions require frozen native predictions')
+        proof = {'scope': 'oriongeno_additions', 'policy': contract()}
+    elif native_extension:
         if prior['request'].get('oriongeno_genomewide'):
             raise ValueError('Native evidence extension requires the pre-genomewide producer')
         import rescue_native_genomewide_reuse
@@ -223,6 +236,8 @@ def build_plan(previous_output, producer_source, output, *, native_extension=Fal
                                          'contract': proof, 'species': frozen['species'],
                                          'annotation_history': _legacy_annotation_history(prior)}
     plan['request'].pop('integration_reclassification', None)
+    if oriongeno_additions:
+        plan['request']['oriongeno_without_donor'] = proof['policy']
     if native_extension:
         import rescue_native_genomewide
         plan['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
@@ -264,7 +279,12 @@ def previous_context(root, plan):
     if r.plan_digest(previous, prior) != cache['plan_sha256']:
         raise ValueError('Admission producer plan changed')
     native=cache['contract'].get('scope')=='native_genomewide_extension'
-    if native:
+    additions = cache['contract'].get('scope') == 'oriongeno_additions'
+    if additions:
+        from rescue_oriongeno_admission import contract
+
+        proof = {'scope': 'oriongeno_additions', 'policy': contract()}
+    elif native:
         import rescue_native_genomewide
         import rescue_native_genomewide_reuse
         proof=rescue_native_genomewide_reuse.prove_contract(prior,cache['contract']['producer_source'])
@@ -278,6 +298,8 @@ def previous_context(root, plan):
     expected['request']['prediction_cache'] = plan['request']['prediction_cache']
     expected['request']['admission_cache'] = cache
     expected['request'].pop('integration_reclassification', None)
+    if additions:
+        expected['request']['oriongeno_without_donor'] = proof['policy']
     if native:
         expected['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
         if cache.get('compact_diagnostics'):

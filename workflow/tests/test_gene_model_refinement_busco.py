@@ -553,6 +553,13 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
             "evalue": 1e-7, "query_coverage": .6, "target_coverage": .65, "minimum_alignment": 55,
             "score_fraction": .95, "max_hits": 40, "sensitivity": 7,
         }}
+    without_donor = grouped and swissprot
+    if without_donor:
+        tested = changes["species"]["Species_a"]
+        tested["rescue_support_counts"]["both"] -= 1
+        tested["rescue_support_groups"]["multiple"] -= 1
+        tested["rescue_support_groups"][busco.ORIONGENO_WITHOUT_DONOR] = 1
+        tested["rescue_oriongeno_without_donor_loci"] = 1
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
     from xml.etree import ElementTree
@@ -576,7 +583,10 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]
     rescue_upper = [b for b in rescue_bars if b[4] == -.20]
     rescue_lower = [b for b in rescue_bars if b[4] == .20]
-    assert len(rescue_upper) == 4 and sum(b[1] for b in rescue_upper) == 11
+    assert len(rescue_upper) == 4 + without_donor and sum(b[1] for b in rescue_upper) == 11
+    if without_donor:
+        assert rescue_upper[-1][1:4] == (1, 10, busco.RESCUE_NO_DONOR_COLOUR)
+        assert busco.RESCUE_NO_DONOR_LABEL in displayed
     assert len(rescue_lower) == 5 and sum(b[1] for b in rescue_lower) == 11
     assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [0, 0, 0, 0, 11])
     assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 0, 0, 0, 0])
@@ -610,7 +620,7 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 6
     with pytest.raises(ValueError, match="sum to the rescued"):
         busco.plot_comparison(rows, tmp_path, changes)
-    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 5
+    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 5 - without_donor
     changes["species"]["Species_a"]["accepted_path_support_counts"]["self_only"] = 2
     with pytest.raises(ValueError, match="sum to the accepted"):
         busco.plot_comparison(rows, tmp_path, changes)
