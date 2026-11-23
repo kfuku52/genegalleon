@@ -282,7 +282,7 @@ def collect_accepted_path_support(root, changes):
     return regroup_model_support(changes)
 
 
-def classify_rescue_support(models, species, rescued, plan):
+def classify_rescue_support(models, species, rescued, plan, *, method_intersections=None):
     """Count each accepted gene once using all consolidated supporting donors."""
     nearest = set(plan["nearest_references"][species]) - {species}
     balanced = set(plan["common_references"]) - {species}
@@ -309,6 +309,7 @@ def classify_rescue_support(models, species, rescued, plan):
         if gene in evidence:
             raise ValueError("Duplicate accepted rescue gene: " + identifier)
         donors = set()
+        methods = set()
         paths = model.get("alternative_coding_paths", [])
         if not isinstance(paths, list):
             raise ValueError("Malformed rescued alternative coding paths")
@@ -327,8 +328,14 @@ def classify_rescue_support(models, species, rescued, plan):
                         or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
                     raise ValueError("Rescue support donor/target differs from the frozen plan")
                 path_donors.add(donor)
+                if method_intersections is not None:
+                    methods.add("annevo" if entry.get("annevo") else
+                                "oriongeno" if entry.get("oriongeno") else
+                                "synteny_based" if entry.get("comparison") else "miniprot")
             path_support[path_id] = sorted(path_donors)
             donors.update(path_donors)
+        if method_intersections is not None:
+            method_intersections["+".join(sorted(methods))] += 1
         near, common = bool(donors & nearest), bool(donors & balanced)
         category = "both" if near and common else "nearest_only" if near else "balanced_only" if common else "self_only"
         if category != "self_only":
@@ -760,12 +767,18 @@ def collect_model_changes(root, pairs, rescue_output=None):
     """Bind gene rescue and accepted coding-path counts to the same publication."""
     from format_species_annotation.common import parse_gff_attributes
     from plot_gene_model_refinement import verified_json
+    from refinement_figure_inputs import refinement_annotations
 
     plan_hash = digest(root / "plan.json")
     request = json.loads((root / "plan.json").read_text())["request"]
     analysed = {r["species"] for r in pairs if r["refinement_status"] == "analysed"}
     if analysed != genomic_targets(request):
         raise ValueError("Model-count species differ from the refinement plan")
+    effective = root / "effective"
+    receipt_bytes = (effective / "receipt.json").read_bytes()
+    publication = json.loads(receipt_bytes)
+    annotations = (refinement_annotations(effective, publication, analysed)
+                   if publication.get("key", {}).get("plan") == plan_hash else {})
     stats, evidence = {}, {}
     batch = FreshDigestBatch()
     anchor = request.get("rescue_output")
@@ -835,6 +848,8 @@ def collect_model_changes(root, pairs, rescue_output=None):
         evidence[name] = {"source_gff_sha256": source_hash,
                           "catalog_receipt_sha256": digest(root / "catalog" / name / "receipt.json"),
                           "prediction_receipt_sha256": digest(root / "predictions" / name / "receipt.json")}
+        if name in annotations:
+            stats[name]["figure_annotation"] = annotations[name]
         if rescue_root is not None:
             path_counts, path_support = classify_accepted_path_support(models, name, rescue_plan, set(request["sources"]))
             stats[name]["accepted_path_support_counts"] = path_counts
@@ -856,8 +871,11 @@ def collect_model_changes(root, pairs, rescue_output=None):
                            or hashes[str(worker / member)] != expected
                            for member, expected in models_key["files"].items())):
                 raise ValueError("Frozen rescue models changed: " + name)
+            methods = Counter()
             counts, support = classify_rescue_support(
-                iter_accepted_models(worker, frozen_key=models_key, verify=False), name, rescued, rescue_plan)
+                iter_accepted_models(worker, frozen_key=models_key, verify=False), name, rescued, rescue_plan,
+                method_intersections=methods)
+            stats[name]["rescue_method_intersections"] = dict(methods)
             stats[name]["rescue_support_counts"] = counts
             stats[name]["rescue_self_only_loci"] = sum(s["category"] == "self_only" for s in support.values())
             evidence[name].update(rescue_receipt_sha256=receipt_hash,
@@ -867,8 +885,11 @@ def collect_model_changes(root, pairs, rescue_output=None):
     batch.check()
     if digest(root / "plan.json") != plan_hash:
         raise ValueError("Refinement plan changed while collecting model counts")
+    receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+    if digest(effective / "receipt.json") != receipt_sha:
+        raise ValueError("Refinement publication changed while collecting model counts")
     result = {"schema": 1, "plan_sha256": plan_hash,
-            "effective_receipt_sha256": digest(root / "effective/receipt.json"),
+            "effective_receipt_sha256": receipt_sha,
             "species": stats, "evidence": evidence,
             "units": "Prior missing-gene rescue counts unique source gene loci already present before refinement; repairs and additional isoforms count accepted coding paths, not unique loci."}
     if rescue_root is not None:

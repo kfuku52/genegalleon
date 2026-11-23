@@ -1002,17 +1002,32 @@ and the locus evidence alongside completeness.
 
 ### Compact method and UTR summary
 
-For an already audited reporting summary, draw the five-column method view with:
+The three-stage review writes the compact summary when the publication
+includes rescue-method and UTR evidence. The order is missing-gene rescue,
+model refinement, UTRs, BUSCO, and the two OMArk columns when the matching
+comparison is available. The bars show counts. The labels to the right show
+the percentage of final transcripts with UTRs, complete BUSCO groups,
+detected conserved HOGs, and consistent full-length proteins. The last label
+also gives the count of annotated protein-coding loci for that stage when
+available. For a transcriptome assembly, this count is the number of loci
+represented in the sequence set. The OMArk percentage uses the number of
+representative proteins evaluated by OMArk.
+
+For an already audited reporting summary, redraw the figure with:
 
 ```bash
 python workflow/support/gene_model_improvement_plot.py \
   --figure-data /path/to/figure_data.json --output /path/to/new-figures \
-  --refinement-output /path/to/refinement
+  --omark-comparison /path/to/refinement.review/omark_comparison.tsv
 ```
 
 This writes `busco_comparison.{pdf,png,svg}`, the consumed
 `improvement_figure_data.json`, and `improvement_method_provenance.json`.
-It runs neither predictors nor BUSCO. `--refinement-output` is optional when
+This redraw reuses saved BUSCO and OMArk results. Supply
+`--gene-totals /path/to/gene_totals.tsv` with columns `species`, `stage`, and
+`total_genes` for an older OMArk comparison that lacks annotation counts. Use
+`input`, `rescued`, and `refined` as stage values. OMArk is omitted if the
+comparison is absent. `--refinement-output` is optional when
 the supplied summary already has audited method counts; when present, it
 freshly verifies the frozen plan and prediction receipts and rederives the
 three refinement method groups. The summary must declare that same plan's
@@ -1032,8 +1047,8 @@ count. It requires `mode` (`proteins` or `transcriptome`), positive integer
 | `species`, `analysed` | Species label and a Boolean model-analysis status. |
 | `busco` | `pre_rescue`, `before` (after rescue), and `after` (after refinement), each with integer `single`, `duplicated`, `fragmented`, `missing` summing to `groups`. An unanalysed species needs only `pre_rescue`. |
 | `rescue` | `method_counts` for `synteny_based`, `miniprot`, `oriongeno`; `exclusive_intersections` with `+`-joined route names; `unique_loci` and `loci_supported_by_multiple_methods`. Optional `swissprot_support` partitions these same loci into `te_only`, `other_only`, `both`, `no_informative_hit`, `not_assessed`. All counts must reconcile to the same distinct adopted loci. |
-| `coding_paths` | `repairs`, `isoforms`, three `counts` in Miniprot-only / OrionGeno-only / both-methods order, and matching `colours`. |
-| `utr` | Positive `final_genes`; `sides` (`five_only`, `three_only`, `both`, `none`) and `origins` (`original_gff_only`, `oriongeno_only`, `both`, `none`), each summing to `final_genes`. These require independently audited source assignments. |
+| `coding_paths` | `repairs`, `isoforms`, and optional `architecture` containing `merges` and `splits`. The reporting snapshot can also retain audited nomination counts and colours. |
+| `utr` | Positive `final_genes` (the number of exported coding transcripts); `sides` (`five_only`, `three_only`, `both`, `none`) and `origins` (`original_gff_only`, `oriongeno_only`, `both`, `none`), each summing to `final_genes`. These require independently audited source assignments. |
 
 Unanalysed rows must set the three model fields to null. The top-level
 `coding_path_legend` contains `labels` `["Miniprot only", "OrionGeno only",
@@ -1043,25 +1058,18 @@ the verified predictions; the supplied revision/isoform totals must still agree.
 Donor-species support groups are a different measurement and are never relabelled
 as predictor methods. This reporting snapshot is not a model-admission input.
 
-The 7.2-inch figure has five equal columns: missing-gene rescue, refined coding
-paths, BUSCO groups, change in complete groups (S+D), and UTRs in final gene models.
-The two Miniprot routes form one exclusive blue stack, OrionGeno uses a separate
-green bar, and the lower warm/grey stack gives Swiss-Prot annotation of their
-non-redundant union. Historical inputs without Swiss-Prot counts show that union
-as not assessed, never as no informative hit. Refinement and UTR upper bars use the warm palette;
-their method/source lower bars use the blue palette. All bars have a common
-physical thickness. A baseline-only BUSCO bar stays in the top slot. BUSCO axes show group
-counts above and percentages below; nonnegative changes start at exactly zero.
-Unanalysed model panels show grey placeholders without a crossing zero line.
-Each bar group has a titled legend within its column. BUSCO shares one category
-legend, with top/middle/bottom identified as baseline/post-rescue/post-refinement.
-Legend fitting accounts for both PDF core-font and PNG metrics, including the
-space between UTR ends and UTR sources. If the legends and threshold notes need
-more room, the figure grows vertically while retaining its width, panel widths,
-row pitch and physical bar thickness; the resulting layout is checked again.
+The two Miniprot routes form one exclusive blue stack, OrionGeno uses a
+separate green bar, and the lower stack gives Swiss-Prot annotation of
+their combined loci. Historical inputs without Swiss-Prot counts show
+that union as unassessed. The refinement column stacks CDS repairs,
+merges, and splits in one bar with colour-matched counts underneath.
+The UTR column shows transcript counts by ends and source. BUSCO and
+OMArk show available stages from top to bottom in input, post-rescue,
+and post-refinement order. The model panels display `Not analyzed`
+for species that did not run genome model improvement.
 
-Optional top-level reporting metadata adds the dataset name and the thresholds
-below the plot. `busco_dataset` is the actual configured lineage name, for example
+Top-level reporting metadata can supply the dataset name. Use `--method-notes`
+to print recorded thresholds below the plot. `busco_dataset` is the actual configured lineage name, for example
 `embryophyta_odb12`. Copy `rescue_parameters` from the frozen rescue plan's
 `request.parameters`; the displayed fields are `minimum_coverage`,
 `minimum_identity`, `minimum_broad_coverage`, `minimum_lower_coverage_identity`,

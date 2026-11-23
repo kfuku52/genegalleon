@@ -365,6 +365,7 @@ def baseline(args, runner):
 
 def refinement(args, runner):
     root = args.refinement.resolve()
+    from refinement_figure_inputs import locus_totals
     from summarize_omark import parse_sum_file
 
     plan_data = (root / "plan.json").read_bytes()
@@ -373,21 +374,36 @@ def refinement(args, runner):
     effective = root / "effective"
     receipt = effective / "receipt.json"
     generation = ContentDigestCache.signature(receipt)
-    publication = json.loads(receipt.read_text())
+    receipt_data = receipt.read_bytes()
+    publication = json.loads(receipt_data)
     if publication["key"]["plan"] != hashlib.sha256(plan_data).hexdigest():
         raise ValueError(f"Completed effective publication belongs to a different refinement plan: {root}")
     mixed = bool(request.get("transcriptome_sources"))
     table = effective / "sequence/inputs.tsv" if mixed else effective / "inputs.tsv"
     augmented = augmentation_rows(request)
+    original_sources = {}
+    if augmented:
+        rescue_plan = Path(request["rescue_output"]) / "plan.json"
+        rescue_data = rescue_plan.read_bytes()
+        expected = request["files"][str(rescue_plan)]
+        if hashlib.sha256(rescue_data).hexdigest() != expected:
+            raise ValueError(f"Frozen rescue plan changed: {rescue_plan}")
+        original_sources = json.loads(rescue_data)["request"]["sources"]
+    genomic = {}
+    if mixed and "inputs.tsv" in publication["files"]:
+        genomic = {row["species"]: row for row in read_rows(effective / "inputs.tsv", publication["files"]["inputs.tsv"])}
     rows = []
     inputs = read_rows(table, publication["files"][str(table.relative_to(effective))])
     species = [row["species"] for row in inputs]
     if not species or len(set(species)) != len(inputs) or set(species) != set(request.get("target_species", plan["species"])):
         raise ValueError("Final OMArk input species differ from the refinement plan")
+    publication_hash = hashlib.sha256(receipt_data).hexdigest()
     for entry in inputs:
         name = entry["species"]
         keys = catalog_keys(runner, root, request, augmented, name)
         keys["refined"] = runner.protein(name, table.parent / entry["protein"])
+        counts = locus_totals(name, request, original_sources, request.get("sources", {}).get(name),
+                              genomic.get(name, entry), table.parent)
         summaries = {}
         for phase, key in keys.items():
             result = runner.result(name, key) / "omark" / (name + ".sum") if key != EMPTY_QUERY else None
@@ -399,6 +415,9 @@ def refinement(args, runner):
                           and stats["conserved_hogs"] == baseline["conserved_hogs"])
             rows.append({"species": name, "stage": phase, **stats, "hogs_comparable_to_input": int(comparable),
                          "delta_missing_hogs_from_input": stats["missing_hogs"] - baseline["missing_hogs"] if comparable else "",
+                         "annotated_gene_loci": counts.get(phase) or "",
+                         "refinement_plan_sha256": publication["key"]["plan"],
+                         "effective_receipt_sha256": publication_hash,
                          "protein_set_sha256": key, "database_sha256": runner.db_sha256,
                          "taxonomy_sha256": runner.taxonomy_sha256 or "",
                          **{name + "_version": version or sha for name, (version, sha) in runner.tools.items()},
