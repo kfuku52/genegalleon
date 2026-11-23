@@ -28,9 +28,8 @@ python workflow/support/validate_cafe_outputs.py \
 ```
 
 Before adopting a manifest-free fit or recording a new fit, the workflow
-checks species and topology, branch/family
-identities, and agreement of reconstructed extant counts with the supplied
-matrix. Foreign or duplicate families, malformed changes and ambiguous headers
+checks species, topology, dated branch lengths, branch and family identities,
+and agreement of reconstructed extant counts with the supplied matrix. Foreign or duplicate families, malformed changes and ambiguous headers
 are rejected. Input families legitimately omitted by CAFE, such as root-absent
 families, are reported as omissions and are not imputed as zeros. Native
 `FamilyID` and `#FamilyID` headers are supported. Ordinary reruns rely on
@@ -41,6 +40,10 @@ This semantic check cannot establish the gamma categories, optimisation settings
 or other historical parameters of an unrecorded fit. Preserve its original
 provenance. Explicit `artifact_legacy_policy=rebuild` still requests a new fit;
 validation does not prevent that intentional rebuild.
+
+New inference runs in a temporary directory. The previous fit stays available
+until the replacement passes the semantic check. This also rejects CAFE
+initialization failures that return a zero exit status with no native reports.
 
 ## GO analysis
 

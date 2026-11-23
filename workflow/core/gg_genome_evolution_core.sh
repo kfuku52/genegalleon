@@ -6542,20 +6542,22 @@ if [[ ${run_cafe} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_cafe}"
   if [[ ${cafe_inference_needs_update} -eq 1 ]]; then
-    if [[ -d "${dir_cafe_output}" ]]; then
-      rm -rf -- "${dir_cafe_output}"
-    fi
-    cafe5 \
-      --infile "${file_orthogroup_copy_number}" \
-      --tree "${file_dated_species_tree}" \
-      --n_gamma_cats "${n_gamma_cats_cafe}" \
-      --pvalue 0.05 \
-      --cores "${GG_TASK_CPUS}" \
-      --output_prefix "${dir_cafe_output}"
-    python "${gg_support_dir}/validate_cafe_outputs.py" \
-      --copy-number "${file_orthogroup_copy_number}" \
-      --tree "${file_dated_species_tree}" \
-      --output-dir "${dir_cafe_output}" || exit $?
+    (
+      cafe_work_dir=$(mktemp -d "${dir_cafe}/.inference.XXXXXXXX") || exit $?
+      trap 'rm -rf -- "${cafe_work_dir}"' EXIT
+      cafe5 \
+        --infile "${file_orthogroup_copy_number}" \
+        --tree "${file_dated_species_tree}" \
+        --n_gamma_cats "${n_gamma_cats_cafe}" \
+        --pvalue 0.05 \
+        --cores "${GG_TASK_CPUS}" \
+        --output_prefix "${cafe_work_dir}/results" || exit $?
+      python "${gg_support_dir}/validate_cafe_outputs.py" \
+        --copy-number "${file_orthogroup_copy_number}" \
+        --tree "${file_dated_species_tree}" \
+        --output-dir "${cafe_work_dir}/results" || exit $?
+      mv_out_replace_dir "${cafe_work_dir}/results" "${dir_cafe_output}"
+    ) || exit $?
     gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
     echo "Reusing saved CAFE inference. Skipping CAFE run."

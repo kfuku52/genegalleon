@@ -370,3 +370,26 @@ def test_regular_cli_still_requires_output_directory(tmp_path):
     assert proc.returncode != 0
     assert "--output_dir is required" in proc.stderr
     assert not list(tmp_path.iterdir())
+
+
+def test_failed_cafe_fit_preserves_previous_outputs(tmp_path):
+    core = GENOME_EVOLUTION_CORE.read_text()
+    start = core.index('    (\n      cafe_work_dir=$(mktemp')
+    end = core.index('    gg_artifact_record "${cafe_inference_provenance_args[@]}"', start)
+    fit = core[start:end]
+    previous = tmp_path / 'cafe_output'
+    previous.mkdir()
+    marker = previous / 'prior_results'
+    marker.write_text('previous fit\n')
+    env = {
+        **os.environ, 'dir_cafe': str(tmp_path), 'dir_cafe_output': str(previous),
+        'file_orthogroup_copy_number': 'copies.tsv', 'file_dated_species_tree': 'tree.nwk',
+        'n_gamma_cats_cafe': '4', 'GG_TASK_CPUS': '1', 'gg_support_dir': str(SCRIPT.parent),
+    }
+    # CAFE5 can exit zero when it fails to initialize and writes no reports.
+    shell = 'cafe5() { return 0; }\nmv_out_replace_dir() { exit 99; }\n' + fit
+    result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1, result.stderr
+    assert 'CAFE semantic validation failed' in result.stderr
+    assert marker.read_text() == 'previous fit\n'
+    assert list(tmp_path.iterdir()) == [previous]

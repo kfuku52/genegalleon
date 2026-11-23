@@ -9,6 +9,7 @@ import argparse
 import csv
 import io
 import json
+import math
 import re
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -49,8 +50,9 @@ def count(value, signed=False):
     return int(number)
 
 
-def clades(tree):
-    return {frozenset(t.name for t in node.get_terminals()) for node in tree.find_clades()}
+def branch_lengths(tree):
+    return {frozenset(t.name for t in node.get_terminals()): node.branch_length
+            for node in tree.find_clades() if node is not tree.root}
 
 
 def validate(copy_number, tree_path, output_dir):
@@ -60,11 +62,6 @@ def validate(copy_number, tree_path, output_dir):
     tips = [t.name for t in tree.get_terminals()]
     if any(not tip for tip in tips) or len(tips) != len(set(tips)) or set(tips) != input_species:
         raise ValueError("CAFE copy-number species do not match the dated species tree")
-    input_columns = [columns[species] for species in input_species]
-    read_count = lru_cache(maxsize=256)(count)
-    for row in inputs.values():
-        for index in input_columns:
-            read_count(row[index])
     root = Path(output_dir)
     species, inventory = branch_inventory(root / "Gamma_asr.tre")
     if species != input_species:
@@ -72,8 +69,22 @@ def validate(copy_number, tree_path, output_dir):
     reconstructed_tree = Phylo.read(io.StringIO(first_newick(root / "Gamma_asr.tre")), "newick")
     for tip in reconstructed_tree.get_terminals():
         tip.name = tip.name.replace("*", "").split("<", 1)[0]
-    if clades(reconstructed_tree) != clades(tree):
+    expected_lengths = branch_lengths(tree)
+    saved_lengths = branch_lengths(reconstructed_tree)
+    if saved_lengths.keys() != expected_lengths.keys():
         raise ValueError("Saved CAFE topology does not match the dated species tree")
+    # Native CAFE Newick uses the C++ stream default of six significant digits.
+    for branch, expected in expected_lengths.items():
+        saved = saved_lengths[branch]
+        if (expected is None or saved is None or not math.isfinite(expected)
+                or not math.isclose(saved, expected, rel_tol=5e-6)):
+            raise ValueError("Saved CAFE branch length differs from the dated species tree: "
+                             + ", ".join(sorted(branch)))
+    input_columns = [columns[species] for species in input_species]
+    read_count = lru_cache(maxsize=256)(count)
+    for row in inputs.values():
+        for index in input_columns:
+            read_count(row[index])
     branch_keys = {r["native_key"] for r in inventory}
     count_columns, counts = _read_table(root / "Gamma_count.tab")
     change_columns, changes = _read_table(root / "Gamma_change.tab")
@@ -113,7 +124,7 @@ def validate(copy_number, tree_path, output_dir):
             raise ValueError(f"Saved CAFE output contains foreign family identities: {name}")
     return {"validated": True, "species": len(species), "reconstructed_families": len(counts),
             "input_families_without_reconstruction": len(inputs) - len(counts),
-            "scope": "current taxa, topology, unique families and observed extant counts; historical fit settings require provenance"}
+            "scope": "current taxa, topology, branch lengths, unique families and observed extant counts; historical fit settings require provenance"}
 
 
 def main():

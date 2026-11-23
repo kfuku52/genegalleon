@@ -78,6 +78,15 @@ def test_count_domain_is_finite_nonnegative_integral(value):
         validator.count(value)
 
 
+def test_branch_length_matching_tolerates_native_rounding_only(tmp_path):
+    copies, tree, out = fixture(tmp_path)
+    tree.write_text("((A:1.0000041,B:1):1,C:2);\n")
+    assert validator.validate(copies, tree, out)["validated"]
+    tree.write_text("((A:1.1,B:1):1,C:2);\n")
+    with pytest.raises(ValueError, match="branch length differs.*A"):
+        validator.validate(copies, tree, out)
+
+
 def test_count_identity_is_not_rounded_through_binary_float():
     assert validator.count("9007199254740993") == 9007199254740993
 
