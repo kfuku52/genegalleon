@@ -337,7 +337,15 @@ def build_plan(args):
             donor_root = donor_root.resolve(strict=True)
             if root == donor_root or root.is_relative_to(donor_root) or donor_root.is_relative_to(root):
                 raise ValueError("Use separate output roots for the frozen donor pool and its targets")
-            donor_plan = load(donor_root)
+            donor_plan = load(donor_root, inspect_only=True)
+            donor_tools = donor_plan["request"]["tools"]
+            current_tools = identities()
+            if donor_tools != current_tools:
+                changed = sorted(name for name in donor_tools.keys() | current_tools.keys()
+                                 if name not in donor_tools or name not in current_tools
+                                 or donor_tools[name] != current_tools[name])
+                raise ValueError("Fixed donor panel tools changed (" + ", ".join(changed)
+                                 + "); prepare a new donor panel with the same source inputs")
             if donor_plan["request"].get("fixed_donor_pool"):
                 raise ValueError("A target-only plan cannot define the donor pool")
             species = sorted(set(targets) | set(donor_plan["species"]))
@@ -418,7 +426,7 @@ def build_plan(args):
         file_hashes, source_versions = freeze_sources(genomic_paths, other_paths=files)
         request = {"schema": SCHEMA, "sources": sources, "files": file_hashes, "parameters": params,
                    "species_profiles": profiles,
-                   "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
+                   "tools": current_tools if donor_plan is not None else identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
         if donor_plan:
@@ -851,7 +859,8 @@ def comparison_cache_key(root, plan, job, prepared_snapshot=None):
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
 
 
-def copy_verified_comparison(source, destination, key, hash_workers=1, *, receipt_sha256=None, share_checkpoint=False):
+def copy_verified_comparison(source, destination, key, hash_workers=1, *, receipt_sha256=None,
+                             share_checkpoint=False, share_members=()):
     """Hash source bytes while copying into a fresh stage, then rehash outputs.
 
     One invocation's source/receipt/path observations fence the complete copy;
@@ -872,12 +881,13 @@ def copy_verified_comparison(source, destination, key, hash_workers=1, *, receip
     if receipt["key"] != key:
         raise ValueError("Comparison cache incomplete or corrupted")
     linked = set()
-    if share_checkpoint:
+    if share_checkpoint or share_members:
         try:
             from rescue_checkpoint_storage import SHARED, link_member
         except ImportError:
             from .rescue_checkpoint_storage import SHARED, link_member
-        for relative in SHARED & receipt["files"].keys():
+        shareable = SHARED if share_checkpoint else frozenset(share_members)
+        for relative in shareable & receipt["files"].keys():
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             if link_member(source / relative, target):
@@ -892,7 +902,7 @@ def copy_verified_comparison(source, destination, key, hash_workers=1, *, receip
         target = destination / relative
         if relative in linked:
             if not os.path.samefile(path, target) or digest(target) != expected:
-                raise ValueError("Miniprot checkpoint changed during sharing")
+                raise ValueError("Predictor checkpoint changed during sharing")
             return expected
         target.parent.mkdir(parents=True, exist_ok=True)
         copied = hashlib.sha256()
@@ -1569,10 +1579,9 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         raise ValueError("Unknown rescue species")
     if phase not in {"all", "predict", "postprocess"}:
         raise ValueError("Unknown rescue phase: " + phase)
-    if phase != "all" and any(plan["request"].get(k) for k in
-                              ("admission_cache", "gemoma_jar", "oriongeno_genomewide")):
-        raise ValueError("Split miniprot rescue does not support admission replay, GeMoMa or native genome-wide transfer")
     request = plan['request']
+    if phase != "all" and (request.get("admission_cache") or request.get("gemoma_jar")):
+        raise ValueError("Split miniprot rescue does not support admission replay or GeMoMa")
     if name in request.get('native_genomewide_worker_imports', {}).get('workers', {}):
         import rescue_native_genomewide_reuse
         return rescue_native_genomewide_reuse.import_worker(root, plan, name, cpus, dependencies=dependencies)
@@ -1600,6 +1609,11 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         if revalidation_reason is None:
             return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies,
                                                  parser_proof=parser_proof)
+    native_available = name in (request.get('oriongeno') or {}).get('predictions', {})
+    if phase == "all" and request.get('oriongeno_genomewide') and native_available and not (
+            admission or request.get('gemoma_jar')):
+        _rescue(root, plan, name, cpus, interval_workers, "predict", dependencies)
+        phase = "postprocess"
     storage = output_storage(plan)
     diagnostics = storage.get("diagnostics", "legacy")
     donors = [name, *plan["donors"][name]]
@@ -1921,9 +1935,23 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                         raw['cds'] = checked['cds']
                     return checked
 
+                def run_native_search(queries, subjects, directory, threads):
+                    frozen_prediction = request['oriongeno']
+                    def search_guard():
+                        require_same_key(key, current_key())
+                        check_sources()
+                        annevo_gene_models.verify_inputs(frozen_prediction, [name], verification=native_sources)
+                    native_sources = FreshDigestBatch()
+                    search_key = {"rescue": key, "source": frozen_prediction['predictions'][name]['identity']}
+                    search = stage(root, Path('oriongeno_protein_search') / name, search_key,
+                                   lambda work: rescue_native_genomewide.run_protein_search(queries, subjects, work, threads),
+                                   guard=search_guard, hash_workers=threads, publication_guard=search_guard)
+                    copy_verified_comparison(search, directory, search_key, hash_workers=threads,
+                                             share_members=('pairs.tsv', 'native.pep', 'donors.pep'))
+
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
-                    plan['request']['oriongeno'], name, proteins, genome, placement_ownership,
-                    params, tmp, cpus=cpus, validate=checked_native_prediction)
+                    request['oriongeno'], name, proteins, genome, placement_ownership,
+                    params, tmp, cpus=cpus, validate=checked_native_prediction, search=run_native_search)
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
                 transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))

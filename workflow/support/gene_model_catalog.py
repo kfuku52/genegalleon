@@ -12,6 +12,7 @@ import contextlib
 import gzip
 import hashlib
 import inspect
+import io
 import json
 import os
 import shutil
@@ -447,6 +448,41 @@ def _attribute_parser(text):
     return {key: ",".join(dict.fromkeys(values)) for key, values in parsed.items()}
 
 
+def _coge_feature_identity(fields, parsed):
+    if fields[1] == "CoGe" and parsed.get("coge_fid"):
+        return (*fields[:8], tuple(sorted((key, value) for key, value in parsed.items() if key != "coge_fid")))
+    return None
+
+
+def collapse_coge_export_copies(text):
+    """Keep the first CoGe copy of each otherwise identical GFF feature."""
+    if "\tCoGe\t" not in text or "coge_fid=" not in text:
+        return text
+    seen = set()
+
+    def rows():
+        stream = io.StringIO(text)
+        for row in stream:
+            if row.rstrip("\r\n") == "##FASTA":
+                yield row
+                yield from stream
+                break
+            if row.startswith("#") or "\tCoGe\t" not in row or "coge_fid=" not in row:
+                yield row
+                continue
+            fields = row.rstrip("\r\n").split("\t", 8)
+            if len(fields) != 9:
+                yield row  # The usual GFF parser diagnoses malformed records.
+                continue
+            identity = _coge_feature_identity(fields, parse_gff_attributes(fields[8]))
+            if identity is None or identity not in seen:
+                yield row
+                if identity is not None:
+                    seen.add(identity)
+
+    return "".join(rows())
+
+
 class _CatalogNormaliser(CdsModelNormaliser):
     """Use typed source graph edges before percent decoding can erase commas.
 
@@ -461,17 +497,15 @@ class _CatalogNormaliser(CdsModelNormaliser):
         self.exons.clear()
         self.nodes.clear()
         self.parent_ids = defaultdict(set)
-        coge_blocks = set()
+        coge_features = set()
         for row in self.features:
-            if row["source"] == "CoGe" and row["feature"] in {"CDS", "exon"} and "coge_fid" in row["attributes"]:
-                # CoGe can emit the same coding feature in distinct export
-                # copies. Ignore only the database row ID when comparing them.
-                feature = (row["seqid"], row["feature"], row["start"], row["end"], row["strand"], row["phase"],
-                           tuple(sorted((k, v) for k, v in row["attributes"].items() if k != "coge_fid")))
-                if feature in coge_blocks:
+            fields = row["source_line"].split("\t", 8)
+            parsed = parse_gff_attributes(fields[8])
+            identity = _coge_feature_identity(fields, parsed)
+            if identity is not None:
+                if identity in coge_features:
                     continue
-                coge_blocks.add(feature)
-            parsed = parse_gff_attributes(row["source_line"].split("\t", 8)[8])
+                coge_features.add(identity)
             tid, gid = row["attributes"].get("transcript_id"), row["attributes"].get("gene_id")
             identifier = row["attributes"].get("ID")
             if not identifier and row["feature"] in {"mRNA", "transcript", "pseudogenic_transcript"}:

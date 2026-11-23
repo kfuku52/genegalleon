@@ -53,6 +53,7 @@ try:
         _formatted_id,
         _generated_annotation_source,
         build_catalog,
+        collapse_coge_export_copies,
         indexed_genome,
         validate_candidate,
         write_catalog,
@@ -89,6 +90,7 @@ except ImportError:
         _formatted_id,
         _generated_annotation_source,
         build_catalog,
+        collapse_coge_export_copies,
         indexed_genome,
         validate_candidate,
         write_catalog,
@@ -4047,7 +4049,7 @@ def finalize(root, value, *, cpus=1):
                     shutil.copyfileobj(handle, out)
             else:
                 shutil.copyfile(source['gff'], source_annotation)
-            original = source_annotation.read_bytes().decode('utf-8')
+            original = collapse_coge_export_copies(source_annotation.read_bytes().decode('utf-8'))
             source_graph = _gff_source_graph(original, retain_attributes=False)
             retired = retired_by_species.get(name, set())
             new_genes = new_genes_by_species.get(name, [])

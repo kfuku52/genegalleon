@@ -1162,6 +1162,31 @@ def test_source_annotation_archive_preserves_decoded_crlf_bytes(tmp_path, compre
     assert path.read_bytes() == before
 
 
+def test_coge_export_copies_share_the_same_catalog_and_effective_graph(tmp_path):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    path = Path(target['gff'])
+    annotation = (
+        'chr1\tCoGe\tgene\t1\t12\t.\t+\t.\tID=g',
+        'chr1\tCoGe\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g',
+        'chr1\tCoGe\texon\t1\t12\t.\t+\t.\tID=e1;Parent=t1',
+        'chr1\tCoGe\tCDS\t1\t12\t.\t+\t0\tID=c1;Parent=t1',
+    )
+    text = '##gff-version 3\n' + ''.join(f'{line};coge_fid={copy * 4 + i}\n'
+                  for copy in range(1, 4) for i, line in enumerate(annotation))
+    path.write_text(text)
+    root = tmp_path / 'run'
+    plan = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    effective = refinement.finalize(root, plan)
+    species = target['species']
+    for view in ('species_gff', 'analysis_gff', 'full_annotation'):
+        output = (effective / view / (species + '.gff3')).read_text()
+        assert output.count('\tmRNA\t') == output.count('\tCDS\t') == 1
+    assert (effective / 'source_annotation' / (species + '.gff3')).read_text() == text
+    assert (effective / 'species_transcript' / (species + '.fa')).read_text().splitlines()[1] == 'ATGAAACCCTAA'
+    assert (effective / 'analysis_cds' / (species + '.fa')).read_text().splitlines()[1] == 'ATGAAACCCTAA'
+
+
 @pytest.mark.parametrize("implicit, grouped", [(False, False), (True, False), (False, True)])
 def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changing_source(tmp_path, monkeypatch, implicit, grouped):
     inputs, edges, rows = tiny_inputs(tmp_path)

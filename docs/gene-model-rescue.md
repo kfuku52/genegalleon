@@ -834,6 +834,12 @@ PAF, query mappings, validated local models and targeted repair evidence under
 search work. The checkpoint excludes the temporary genome index. Its receipt
 binds the files to the frozen plan and prepared/comparison inputs.
 
+Fresh standard rescue with genome-wide OrionGeno evidence automatically writes
+the Miniprot checkpoint before validation. The native DIAMOND search publishes
+a separate `oriongeno_protein_search/SPECIES/` receipt before pair scoring. A
+retry uses both checkpoints after verifying their inputs and members. Admission
+replay and GeMoMa retain their existing execution paths.
+
 Large immutable predictor files are shared as hard links on the same
 filesystem. The postprocessing and prediction paths both remain available
 with their own verified receipts. When the filesystem cannot link the files,

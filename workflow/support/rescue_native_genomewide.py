@@ -77,7 +77,24 @@ def _candidate_protein_pairs(path, queries, subjects, minimum):
     return rejected, comparisons()
 
 
-def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None):
+def run_protein_search(queries, subjects, search_dir, cpus):
+    """Produce the complete DIAMOND pair table before alignment and validation."""
+    r = _r()
+    for file, sequences in (('native.pep', queries), ('donors.pep', subjects)):
+        with (search_dir / file).open('w') as out:
+            for token, protein in sequences.items():
+                out.write(f'>{token}\n{protein}\n')
+    r.run(['diamond', 'makedb', '--in', search_dir / 'donors.pep',
+           '--db', search_dir / 'donors', '--threads', cpus], search_dir, 'makedb')
+    r.run(['diamond', 'blastp', '--db', search_dir / 'donors', '--query', search_dir / 'native.pep',
+           '--out', search_dir / 'pairs.tsv', '--outfmt', '6', 'qseqid', 'sseqid',
+           '--ultra-sensitive', '--masking', '0', '--comp-based-stats', '0', '--evalue', '1000',
+           '--max-target-seqs', '0', '--max-hsps', '1', '--threads', cpus], search_dir, 'blastp')
+    (search_dir / 'donors.dmnd').unlink(missing_ok=True)
+
+
+def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None,
+             search=run_protein_search):
     """Search each eligible native isoform, retaining identical-protein aliases.
 
     There is no donor representation filter, candidate window or query cap. Search
@@ -91,7 +108,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     if not frozen or name not in frozen['predictions']:
         return [], {'contract': CONTRACT, 'native_paths': 0, 'paths': [], 'candidate_pairs': 0,
                     'native_prediction_available': False}
-    native, r = _native(), _r()
+    native = _native()
     native.verify_inputs(frozen, [name])
     prediction = frozen['predictions'][name]
     paths = native.read_paths(prediction['gff'], genome, engine='oriongeno')
@@ -137,16 +154,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     rejected_hits = Counter()
     comparisons = ()
     if queries:
-        for file, sequences in (('native.pep', queries), ('donors.pep', subjects)):
-            with (search_dir / file).open('w') as out:
-                for token, protein in sequences.items():
-                    out.write(f'>{token}\n{protein}\n')
-        r.run(['diamond', 'makedb', '--in', search_dir / 'donors.pep',
-               '--db', search_dir / 'donors', '--threads', cpus], search_dir, 'makedb')
-        r.run(['diamond', 'blastp', '--db', search_dir / 'donors', '--query', search_dir / 'native.pep',
-               '--out', search_dir / 'pairs.tsv', '--outfmt', '6', 'qseqid', 'sseqid',
-               '--ultra-sensitive', '--masking', '0', '--comp-based-stats', '0', '--evalue', '1000',
-               '--max-target-seqs', '0', '--max-hsps', '1', '--threads', cpus], search_dir, 'blastp')
+        search(queries, subjects, search_dir, cpus)
         rejected_hits, comparisons = _candidate_protein_pairs(search_dir / 'pairs.tsv', queries, subjects,
                                                                params['minimum_coverage'])
         for token, count in rejected_hits.items():
@@ -186,7 +194,6 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
                  aligned_unique_protein_pairs=aligned_pairs, candidate_pairs=len(results),
                  length_rejected_protein_hits=sum(rejected_hits.values()),
                  search_and_alignment_seconds=time.perf_counter() - started - validation_seconds)
-    (search_dir / 'donors.dmnd').unlink(missing_ok=True)
     return results, audit
 
 

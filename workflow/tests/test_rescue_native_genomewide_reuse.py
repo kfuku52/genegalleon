@@ -106,7 +106,7 @@ def test_compact_pair_selection_is_part_of_completed_worker_proof(producer):
     source, plan = producer
     plan['request']['oriongeno_genomewide'] = native_tests.native.CONTRACT
     module = source / 'workflow/support/rescue_native_genomewide.py'
-    assert reuse._COMPACT_PROTEIN_PAIRS_REUSE[1] == rescue.digest(module)
+    assert reuse._NATIVE_SEARCH_EQUIVALENT_SOURCES[-1] == rescue.digest(module)
     assert reuse.prove_contract(plan, source)['native_alignment_and_structure_unchanged']
     text = module.read_text()
     module.write_text(text.replace(' < minimum:', ' <= minimum:', 1))

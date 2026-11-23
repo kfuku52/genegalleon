@@ -25,12 +25,12 @@ def archived_sources(output):
             yield source
 
 
-# The compact hit index preserves the old sorted set of scored protein pairs,
-# length-rejected counts, and all downstream models. Qualify only the exact
-# verified source transition; other changes still need the function proof.
-_COMPACT_PROTEIN_PAIRS_REUSE = (
+# Hit compaction and checkpointing preserve the ordered, unique scored pairs,
+# length rejection and coding decisions. Qualify their exact source transitions.
+_NATIVE_SEARCH_EQUIVALENT_SOURCES = (
     '4f689c15a9ac56bd665dd6462dc2299a4ad14b28d6013d235e61136b06179931',
     '08ccc0a672ddc6a152bf95b1525fc7699c55f3323dee467bd0d31701d1fc49fa',
+    '95f9da7abb5773a102988bc1a0eeea189e70f8b413036060606c012e6863c07b',
 )
 
 
@@ -118,11 +118,12 @@ def prove_contract(previous_plan,producer_source):
     # These modules serve input provenance, cache replay or noncoding UTRs, not
     # the reused genomic/terminal/boundary/donor decisions. Actual source inputs
     # stay identical; a changed native coding parser is checked per target.
-    separate={'rescue_prediction_cache.py','transcript_utrs.py','genome_sequence_identity.py'}
+    separate={'rescue_prediction_cache.py','transcript_utrs.py','genome_sequence_identity.py','gene_model_catalog.py'}
     strict={name:field for name,field in replay.MODULES.items() if name not in separate}
     functions={'rescue_gene_models.py':('validate_model','check_interval','iter_miniprot'),
                'annevo_gene_models.py':replay.FUNCTIONS['annevo_gene_models.py'],
                'rescue_coding_paths.py':replay.FUNCTIONS['rescue_coding_paths.py'],
+               'gene_model_catalog.py':replay.FUNCTIONS['gene_model_catalog.py'],
                'input_generation_array_state.py':('digest','digest_paths','atomic_json')}
     bindings={**replay.MODULES,'rescue_gene_models.py':'implementation',
               'annevo_gene_models.py':'annevo_candidate_implementation',
@@ -162,8 +163,8 @@ def prove_contract(previous_plan,producer_source):
     if request.get('oriongeno_genomewide'):
         module = 'rescue_native_genomewide.py'
         old_hash, current_hash = observed[str(old / module)], observed[str(current / module)]
-        if old_hash != current_hash and (old_hash, current_hash) != _COMPACT_PROTEIN_PAIRS_REUSE:
-            names = ('nominate', '_candidate_protein_pairs', 'transfer_structure', 'finish_audit')
+        if old_hash != current_hash and not {old_hash, current_hash} <= set(_NATIVE_SEARCH_EQUIVALENT_SOURCES):
+            names = ('nominate', 'run_protein_search', '_candidate_protein_pairs', 'transfer_structure', 'finish_audit')
             try:
                 unchanged = _definitions(old / module, names) == _definitions(current / module, names)
             except ValueError as exc:

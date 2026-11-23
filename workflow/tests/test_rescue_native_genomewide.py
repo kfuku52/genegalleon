@@ -371,7 +371,24 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
         assert label not in {'miniprot_index', 'miniprot_genome'}
         return run(command, root, label, stdout)
     monkeypatch.setattr(rescue, 'run', guarded)
-    rescue.rescue(new, extended, target, 2)
+    with monkeypatch.context() as interrupted:
+        def stop_after_search(*args):
+            raise ValueError('Simulated interruption after DIAMOND')
+
+        interrupted.setattr(native, '_candidate_protein_pairs', stop_after_search)
+        with pytest.raises(ValueError, match='Simulated interruption after DIAMOND'):
+            rescue.rescue(new, extended, target, 2)
+    miniprot_checkpoint = new / 'miniprot_predictions' / target / 'receipt.json'
+    diamond_checkpoint = new / 'oriongeno_protein_search' / target / 'receipt.json'
+    frozen_searches = {path: path.read_bytes() for path in (miniprot_checkpoint, diamond_checkpoint)}
+    with monkeypatch.context() as retry:
+        def reuse_search(command, root, label, stdout=None):
+            assert label not in {'makedb', 'blastp'}, 'Retry repeated the completed native protein search'
+            return guarded(command, root, label, stdout)
+
+        retry.setattr(rescue, 'run', reuse_search)
+        rescue.rescue(new, extended, target, 2)
+    assert {path: path.read_bytes() for path in frozen_searches} == frozen_searches
     accepted = list(store.iter_accepted_models(new/'rescued'/target))
     assert len(accepted) == 1 and accepted[0]['sequence'] == coding[8]
     assert (old/'rescued'/target/'receipt.json').read_bytes() == original

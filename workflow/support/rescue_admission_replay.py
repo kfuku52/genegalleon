@@ -61,11 +61,13 @@ FUNCTIONS = {
                             'confirm_transferred_structure'),
     'rescue_coding_paths.py': ('coding_shape', 'coding_overlap', 'alignment_support', 'compatible_paths', 'original_ownership'),
     'input_generation_array_state.py': ('FreshDigestBatch', 'digest', 'digest_paths', 'atomic_json'),
+    'gene_model_catalog.py': ('indexed_genome', 'create_index'),
 }
 ALLOWED_TOOL_CHANGES = frozenset({'implementation', 'model_store_implementation', 'resolve_coding_paths_implementation',
                                 'annevo_candidate_implementation', 'state_implementation',
                                 'comparison_copy_proof_implementation', 'output_hashes_implementation',
-                                'admission_replay_implementation', 'admission_patch_implementation', 'model_protein_correspondence'})
+                                'admission_replay_implementation', 'admission_patch_implementation', 'model_protein_correspondence',
+                                'genome_index_implementation'})
 
 
 def replay_repair_targets(r, worker, files, tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
@@ -133,7 +135,9 @@ def prove_contract(previous_plan, producer_source):
         if before.get(field) != value:
             raise ValueError('Producer source is not bound to its plan: ' + filename)
         hashes[str(old / filename)] = value
-    for filename in MODULES:
+    # The catalog module also owns the FASTA indexer. Rescue uses only its
+    # indexed-genome entrypoint, so compare those two bound functions below.
+    for filename in MODULES.keys() - FUNCTIONS.keys():
         if hashes[str(old / filename)] != observed[str(current / filename)]:
             raise ValueError('Strict rescue evidence implementation changed: ' + filename)
     for filename, names in FUNCTIONS.items():
