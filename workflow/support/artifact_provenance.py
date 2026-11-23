@@ -51,6 +51,7 @@ from gene_family_output_store import (
     query_id_from_name,
     query_id_matchers,
     read_only_observation,
+    read_orthogroup_selection,
     record_family_output_inventory,
 )
 from orthofinder_output_store import logical_directory_exists as managed_directory_exists
@@ -533,7 +534,8 @@ def describe_optional_paths(
     return entries
 
 
-def gene_family_store_digest(root: Path, *, workers: int | None = None) -> tuple[str, int, int]:
+def gene_family_store_digest(root: Path, *, workers: int | None = None,
+                             orthogroups: frozenset[str] | None = None) -> tuple[str, int, int]:
     """Hash every logical member in canonical order with bounded I/O workers.
 
     Workflow calls use at most their allocated CPUs (capped at four). Small
@@ -542,7 +544,7 @@ def gene_family_store_digest(root: Path, *, workers: int | None = None) -> tuple
     requested = int(os.environ.get("GG_TASK_CPUS", "1")) if workers is None else workers
     if type(requested) is not int or requested < 1:
         raise ValueError("store digest workers must be a positive integer")
-    return _gene_family_collection_digest(root, workers=min(4, requested))
+    return _gene_family_collection_digest(root, workers=min(4, requested), orthogroups=orthogroups)
 
 
 def _store_artifact_digest(store, artifact):
@@ -575,26 +577,46 @@ def _store_member_digest(store, subdir, name):
     return artifact.logical_path, digest, size
 
 
-def _gene_family_collection_digest(root, subdir=None, *, workers=1):
+def _gene_family_collection_digest(root, subdir=None, *, workers=1, orthogroups=None):
     store = GeneFamilyOutputStore(root)
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
     pool = (concurrent.futures.ThreadPoolExecutor(max_workers=workers)
             if workers > 1 else contextlib.nullcontext(None))
+    selection_key = (hashlib.sha256("\n".join(sorted(orthogroups)).encode()).hexdigest()
+                     if orthogroups is not None else None)
+
+    def collection_subdirs():
+        if subdir is not None:
+            return (subdir,)
+        return tuple(s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR)
+
+    def names_in(selected):
+        if orthogroups is None:
+            return tuple(store.file_names(selected))
+        return tuple(store.orthogroup_file_names(selected, orthogroups))
+
     # Join every worker before the store closes its snapshot ZIP readers,
     # including exceptions while the coordinator combines member digests.
     with store.read_snapshot(), pool as executor:
-        subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
+        subdirs = collection_subdirs()
         memo = _DIGEST_OBSERVATION.get()
         if memo is not None:
-            memo.guard((str(store.root), "collection_subdirs", subdir), tuple(subdirs),
-                       scoped_digest_reader(lambda: tuple([subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR])))
+            if orthogroups is None:
+                memo.guard((str(store.root), "collection_subdirs", subdir), subdirs,
+                           scoped_digest_reader(collection_subdirs))
+            else:
+                # Each known subdirectory has its own member guard, including
+                # empty ones. Detect selected files in newly created directories.
+                memo.guard((str(store.root), "selection_new_subdirs", selection_key), (),
+                           scoped_digest_reader(lambda: tuple(
+                               s for s in collection_subdirs() if s not in subdirs and names_in(s))))
         for selected in subdirs:
-            names = store.file_names(selected)
+            names = names_in(selected)
             if memo is not None:
-                memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
-                           scoped_digest_reader(lambda selected=selected: tuple(store.file_names(selected))))
+                memo.guard((str(store.root), "collection_inventory", selected, selection_key), names,
+                           scoped_digest_reader(lambda selected=selected: names_in(selected)))
             context = contextvars.copy_context()
             def read_member(name, selected=selected, context=context):
                 return context.copy().run(_store_member_digest, store, selected, name)
@@ -694,15 +716,30 @@ def parse_gene_family_artifact_pairs(
     return parsed
 
 
+def describe_orthogroup_selection(path: Path, logical_root: Path, workspace_root: Path) -> dict[str, object]:
+    entry, = describe_paths([("orthogroup_selection", str(path))], logical_root, workspace_root)
+    return entry
+
+
 def describe_gene_family_stores(
-    pairs: list[tuple[str, str]], logical_root: Path, workspace_root: Path
+    pairs: list[tuple[str, str]], logical_root: Path, workspace_root: Path,
+    *, orthogroup_selection: Path | None = None,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     for label, raw_path in pairs:
         path = Path(raw_path)
         if not path.is_dir() or path.is_symlink():
             raise FileNotFoundError(path)
-        digest, size, member_count = gene_family_store_digest(path)
+        scope = {}
+        if orthogroup_selection is None:
+            digest, size, member_count = gene_family_store_digest(path)
+        else:
+            selection_entry = describe_orthogroup_selection(orthogroup_selection, logical_root, workspace_root)
+            orthogroups = read_orthogroup_selection(orthogroup_selection)
+            digest, size, member_count = gene_family_store_digest(path, orthogroups=orthogroups)
+            if describe_orthogroup_selection(orthogroup_selection, logical_root, workspace_root) != selection_entry:
+                raise ProvenanceError("Orthogroup selection changed while hashing the store")
+            scope["orthogroup_selection"] = selection_entry
         entries.append(
             {
                 "label": label,
@@ -711,6 +748,7 @@ def describe_gene_family_stores(
                 "sha256": digest,
                 "size_bytes": size,
                 "member_count": member_count,
+                **scope,
             }
         )
     return entries
@@ -884,6 +922,9 @@ def build_contract(
     workspace_root = args.workspace_root.absolute()
     input_pairs = parse_path_pairs(args.input, "--input")
     store_pairs = parse_path_pairs(args.input_gene_family_store, "--input-gene-family-store")
+    orthogroup_selection = getattr(args, "orthogroup_store_selection", None)
+    if orthogroup_selection is not None and not store_pairs:
+        raise ProvenanceError("An orthogroup selection requires a gene-family store input")
     store_subdir_pairs = parse_gene_family_subdir_pairs(
         args.input_gene_family_subdir, "--input-gene-family-subdir"
     )
@@ -907,7 +948,8 @@ def build_contract(
     parameters = normalized_parameters(args.parameter)
     described_inputs = (
         [] if skip_input_digests else describe_paths(input_pairs, logical_root, workspace_root)
-        + describe_gene_family_stores(store_pairs, logical_root, workspace_root)
+        + describe_gene_family_stores(store_pairs, logical_root, workspace_root,
+                                      orthogroup_selection=orthogroup_selection)
         + describe_gene_family_subdirs(store_subdir_pairs, logical_root, workspace_root)
         + describe_gene_family_artifacts(store_artifact_pairs, logical_root, workspace_root)
         + describe_logical_directories(logical_input_pairs, logical_root, workspace_root)
@@ -1647,6 +1689,15 @@ def audit_manifest(
                         digest, size, member_count = gene_family_subdir_digest(
                             store_path, str(entry.get("subdir", ""))
                         )
+                    elif "orthogroup_selection" in entry:
+                        selection = entry["orthogroup_selection"]
+                        selection_path = resolve_reference(selection, logical_root, workspace_root)
+                        if describe_orthogroup_selection(selection_path, logical_root, workspace_root) != selection:
+                            return "stale_input", "orthogroup_selection"
+                        digest, size, member_count = gene_family_store_digest(
+                            store_path, orthogroups=read_orthogroup_selection(selection_path))
+                        if describe_orthogroup_selection(selection_path, logical_root, workspace_root) != selection:
+                            return "stale_input", "orthogroup_selection"
                     else:
                         digest, size, member_count = gene_family_store_digest(store_path)
                 except FileNotFoundError:
@@ -2019,6 +2070,8 @@ def add_contract_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="LABEL=ROOT",
         help="Hash logical gene-family artifacts while ignoring ZIP/raw storage layout and provenance manifests",
     )
+    parser.add_argument("--orthogroup-store-selection", type=Path,
+                        help="Hash only the listed orthogroups in every gene-family store input")
     parser.add_argument(
         "--input-gene-family-subdir",
         action="append",

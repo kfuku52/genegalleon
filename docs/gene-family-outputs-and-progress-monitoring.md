@@ -142,6 +142,15 @@ written under `workspace/output/orthogroup/`.
 
 ### Database audit scope and scale
 
+Set `orthogroup_summary_selection` in `gg_gene_summary` to an explicit file
+with one completed orthogroup ID per line. Use the orthogroup database and HGT
+stages with the other summary stages disabled. The list must be a subset of
+the selected catalog. The database builder checks that each listed family has
+current statistics and tree-plot provenance and verifies its terminal tables
+and PDF. GeneGalleon writes the database and HGT results under
+`workspace/output/gene_summary/scoped_orthogroups/<selection-sha256>/`.
+Leave the setting empty for the ordinary summary.
+
 When the selected orthogroup count table is present, `gg_gene_summary` binds it
 as a database input and uses those exact, unique family IDs for both the audit
 and database import. Both statistics tables must cover every selected family.

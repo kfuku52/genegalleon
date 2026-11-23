@@ -14,8 +14,14 @@ import artifact_provenance as provenance
 import generate_orthogroup_database as database
 from artifact_audit_runtime import AuditProgress, source_identity
 from artifact_audit_runtime import signature as source_signature
-from gene_family_output_store import GeneFamilyOutputStore, orthogroup_id_from_name, orthogroup_ids_from_genecount
+from gene_family_output_store import (
+    GeneFamilyOutputStore,
+    orthogroup_id_from_name,
+    orthogroup_ids_from_genecount,
+    read_orthogroup_selection,
+)
 from shared_namespace_lock import namespace_lock
+from terminal_artifact_validation import verify_terminal_profile
 from workflow_observation import observe_files, record_contract_result, report_error
 
 
@@ -36,26 +42,38 @@ def catalog_store(root, record, mode):
     parameters = dict(provenance.parse_path_pairs(record.parameter, '--parameter'))
     scope = parameters.get('family_scope')
     if scope is None:
-        return GeneFamilyOutputStore(root), None
+        if record.orthogroup_store_selection is not None:
+            raise ValueError('Orthogroup store selection requires a selected catalog')
+        return GeneFamilyOutputStore(root), ()
     if scope != 'selected_orthogroups_v1' or mode != 'orthogroup' or record.family_id != 'orthogroup':
         raise ValueError('Invalid selected orthogroup database scope')
     catalog = inputs.get('family_catalog')
     if catalog is None:
         raise ValueError('Selected orthogroup database requires its bound family catalog')
     path = Path(catalog)
-    def identity():
-        before = source_signature(path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if source_signature(path) != before:
-            raise ValueError('Family catalog changed while reading')
+    def identity(source):
+        before = source_signature(source)
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        if source_signature(source) != before:
+            raise ValueError('Family selection input changed while reading')
         return before, digest
-    before = identity()
+    before = identity(path)
     families = orthogroup_ids_from_genecount(path)
     if not families or any(orthogroup_id_from_name(family) != family for family in families):
         raise ValueError('Family catalog must contain nonempty, exact orthogroup identities')
-    if identity() != before:
+    if identity(path) != before:
         raise ValueError('Family catalog changed before selection')
-    return CatalogStore(root, families), ((str(path.absolute()), 'family_catalog'), before, identity)
+    guards = [((str(path.absolute()), 'family_catalog'), before, lambda: identity(path))]
+    selection = record.orthogroup_store_selection
+    if selection is not None:
+        before = identity(selection)
+        selected = read_orthogroup_selection(selection)
+        if (before[1] != parameters.get('orthogroup_selection_sha256')
+                or identity(selection) != before or not selected.issubset(families)):
+            raise ValueError('Orthogroup selection changed or includes a family outside the selected catalog')
+        guards.append(((str(selection.absolute()), 'orthogroup_selection'), before, lambda: identity(selection)))
+        families = selected
+    return CatalogStore(root, families), guards
 
 
 def validate_destinations(audit, record, destination):
@@ -158,7 +176,7 @@ def run(audit_argv, database_argv, record_argv):
                           interval=audit.progress_interval, attempt_dir=os.environ.get('GG_OBSERVATION_ATTEMPT_DIR'),
                           workers=audit.workers, source_sha256=source_identity(provenance.SCRIPT_DIR)) as progress:
         try:
-            store, catalog_guard = catalog_store(root, record, audit.mode)
+            store, catalog_guards = catalog_store(root, record, audit.mode)
             with store.read_snapshot(), observe_files(), provenance.digest_observation(
                     workers=audit.workers, progress=progress, spill_guards=True) as memo:
                 bound_inputs = {str(Path(path).resolve()) for _, path in provenance.parse_path_pairs(record.input, '--input')}
@@ -167,8 +185,8 @@ def run(audit_argv, database_argv, record_argv):
                         raise ValueError('Reconciliation input missing from provenance record: ' + name)
                     memo.guard((identity[0], name), identity,
                                lambda name=name: database.reconciliation_input_identities(args)[name])
-                if catalog_guard is not None:
-                    memo.guard(*catalog_guard)
+                for guard in catalog_guards:
+                    memo.guard(*guard)
                 provenance._collect_audit_rows(audit, memo, progress, audit.workers, store, rows, inventory, revalidate=False)
                 if isinstance(store, CatalogStore):
                     if any(row['family_id'] not in store.families and row['family_id'] != '-' for row in rows):
@@ -180,6 +198,16 @@ def run(audit_argv, database_argv, record_argv):
                 # Structural or stale-policy failures are evaluated before any DB build.
                 if provenance.audit_failures(audit, rows):
                     raise ValueError('Gene-family artifact provenance audit failed')
+                if record.orthogroup_store_selection is not None:
+                    expected = {(family, step) for family in store.families
+                                for step in ('summary_statistics', 'tree_plot')}
+                    current = {(row['family_id'], row['step']) for row in rows if row['status'] == 'current'}
+                    if not expected.issubset(current):
+                        raise ValueError('Scoped summary requires current statistics and tree plot provenance for every family')
+                    for family in sorted(store.families):
+                        profile = verify_terminal_profile(store, family)
+                        if profile['state'] != 'verified':
+                            raise ValueError(f"Missing or invalid terminal artifact for {family}: {profile['detail']}")
                 if all(store.file_names(subdir) for subdir in ('stat_tree', 'stat_branch')):
                     progress.phase('database_build')
                     build = database._populate_database(args, parser, store)

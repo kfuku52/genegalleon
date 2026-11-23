@@ -547,6 +547,21 @@ def orthogroup_ids_from_genecount(path: Path) -> List[str]:
         return families
 
 
+def read_orthogroup_selection(path: Path) -> frozenset[str]:
+    """Read an explicit, nonempty set of exact orthogroup identities."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Orthogroup selection must be a regular file: {path}")
+    with path.open(encoding="ascii") as handle:
+        families = handle.read(1024 * 1024 + 1)
+    if len(families) > 1024 * 1024:
+        raise ValueError("Orthogroup selection exceeds 1 MiB")
+    identifiers = families.splitlines()
+    if (not identifiers or len(identifiers) != len(set(identifiers))
+            or any(orthogroup_id_from_name(family) != family for family in identifiers)):
+        raise ValueError("Orthogroup selection must contain unique, exact orthogroup IDs")
+    return frozenset(identifiers)
+
+
 def family_context(
     mode: str,
     query_dir: Optional[Path] = None,
@@ -2233,6 +2248,11 @@ class GeneFamilyOutputStore:
     def file_names(self, subdir: str) -> List[str]:
         with self._read_lock():
             return self._file_names_unlocked(subdir)
+
+    def orthogroup_file_names(self, subdir: str, families: frozenset[str]) -> List[str]:
+        with self._read_lock():
+            return self._file_names_unlocked(subdir, family_ids=families,
+                                             family_from_name=orthogroup_id_from_name)
 
     def artifacts(self, subdir: str) -> List[Artifact]:
         with self._read_lock():

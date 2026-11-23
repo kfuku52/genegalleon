@@ -44,6 +44,7 @@ csubst_scan_summary_min_unit_support
 csubst_scan_summary_min_lineage_support
 gene_family_source
 summary_output_dir
+orthogroup_summary_selection
 hgt_summary_contamination_dir
 hgt_summary_fimo_qvalue
 hgt_summary_output_dir

@@ -1519,6 +1519,66 @@ def test_selected_catalog_scopes_audit_and_database_without_removing_old_results
         pipeline.run(audit, db, record)
 
 
+def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(tmp_path):
+    import hashlib
+
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    import gene_family_database_pipeline as pipeline
+    from gene_family_output_store import GeneFamilyOutputStore
+
+    root = tmp_path / 'output/orthogroup'
+    global_root = tmp_path / 'output/.gg_global_artifacts'
+    output = tmp_path / 'output/gene_summary/scoped'
+    output.mkdir(parents=True)
+    source = tmp_path / 'selected.tsv'
+    source.write_text('Orthogroup\tsp\nOG0001\t2\nOG0002\t3\n')
+    selection = tmp_path / 'completed.txt'
+    selection.write_text('OG0001\n')
+    scope_hash = hashlib.sha256(selection.read_bytes()).hexdigest()
+    branch = root / 'stat_branch/OG0001_stat.branch.tsv'
+    tree = root / 'stat_tree/OG0001_stat.tree.tsv'
+    plot = root / 'tree_plot/OG0001_tree_plot.pdf'
+    for target, body in ((branch, 'branch_id\tnode_name\tnum_sp\tso_event\n0\tg1\t1\tL\n'),
+                         (tree, 'num_branch\tnum_spe\tnum_dup\tnum_sp\n1\t2\t0\t1\n'),
+                         (plot, '%PDF-1.7\n%%EOF\n')):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+    for step, files in (('summary_statistics', (branch, tree)), ('tree_plot', (plot,))):
+        assert p.dispatch(['record', '--workspace-root', str(tmp_path), '--logical-root', str(root),
+                           '--family-id', 'OG0001', '--step', step, '--manifest',
+                           str(root / 'artifact_provenance' / f'OG0001.{step}.json'),
+                           *(arg for file in files for arg in ('--output', f'{file.parent.name}={file}'))]) == 0
+    database, manifest, report = (output / name for name in ('database.db', 'database.json', 'audit.tsv'))
+    audit = ['--workspace-root', str(tmp_path), '--logical-root', str(root),
+             '--output-tsv', str(report), '--mode', 'orthogroup', '--progress-interval', '0']
+    db = ['--overwrite', '1', '--dbpath', str(database), '--dir_gene_family', str(root),
+          '--dir_stat_tree', str(tree.parent), '--dir_stat_branch', str(branch.parent)]
+    record = ['--workspace-root', str(tmp_path), '--logical-root', str(global_root),
+              '--family-id', 'orthogroup', '--step', 'gene_family_database', '--manifest', str(manifest),
+              '--input-gene-family-store', f'families={root}', '--output', f'database={database}',
+              '--input', f'family_catalog={source}', '--parameter', 'family_scope=selected_orthogroups_v1',
+              '--parameter', f'orthogroup_selection_sha256={scope_hash}',
+              '--orthogroup-store-selection', str(selection)]
+    assert pipeline.run(audit, db, record) == 0
+    assert not (root / 'gg_orthogroup.db').exists()
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT DISTINCT orthogroup FROM tree').fetchall() == [('OG0001',)]
+    saved = p.load_manifest(manifest)
+    store = GeneFamilyOutputStore(root)
+    omitted = root / 'new_stage/OG0002.newick'
+    omitted.parent.mkdir()
+    omitted.write_text('(a,b);')
+    assert p.audit_manifest(saved, store, global_root, tmp_path)[0] == 'current'
+    selection.write_text('OG0002\n')
+    assert p.audit_manifest(saved, store, global_root, tmp_path)[0] == 'stale_input'
+    selection.write_text('OG0001\n')
+    plot.unlink()
+    with pytest.raises(ValueError, match='audit failed|current statistics and tree plot provenance'):
+        pipeline.run(audit, db, record)
+    assert p.load_manifest(manifest) == saved
+
+
 def test_schema_specific_indexes_accept_empty_association_table(tmp_path, caplog):
     mod = load_module()
     mod.require_sqlalchemy()

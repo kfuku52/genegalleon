@@ -276,9 +276,32 @@ if [[ "${csubst_site_output_dir}" == "auto" ]]; then
   csubst_site_output_dir="${default_dir_convergent_sites}"
 fi
 
-mkdir -p "${summary_output_dir}"
-
 file_gene_family_db="${dir_gene_family}/gg_orthogroup.db"
+orthogroup_summary_selection="${orthogroup_summary_selection:-}"
+if [[ -n "${orthogroup_summary_selection}" ]]; then
+  if [[ "${gene_family_source}" != orthogroup || "${run_gene_family_database_build}" != 1 ||
+        "${run_family_completion_summary}" != 0 || "${run_presence_absence_summary}" != 0 ||
+        "${run_species_taxonomy}" != 0 || "${run_gene_annotation_database}" != 0 ||
+        "${run_reconciliation_summary}" != 0 || "${run_csubst_scan_aa_change_summary}" != 0 ||
+        "${run_csubst_scan_candidate_sites}" != 0 || "${run_csubst_site_convergence_summary}" != 0 ||
+        "${run_hgt_trait_focus}" != 0 || ! -f "${orthogroup_summary_selection}" ||
+        -L "${orthogroup_summary_selection}" ]]; then
+    echo "An orthogroup selection requires a regular list and the orthogroup database/HGT-only stages." >&2
+    exit 3
+  fi
+  scope_hash=$(sha256sum < "${orthogroup_summary_selection}") || exit $?
+  scoped_parent="${gg_workspace_output_dir}/gene_summary/scoped_orthogroups"
+  summary_output_dir="${scoped_parent}/${scope_hash%% *}"
+  hgt_summary_output_dir="${summary_output_dir}/hgt"
+  file_gene_family_db="${summary_output_dir}/gg_orthogroup.db"
+  for scoped_path in "${scoped_parent%/*}" "${scoped_parent}" "${summary_output_dir}" "${hgt_summary_output_dir}"; do
+    if [[ -L "${scoped_path}" ]]; then
+      echo "Scoped summary output cannot use a symbolic link: ${scoped_path}" >&2
+      exit 3
+    fi
+  done
+fi
+mkdir -p "${summary_output_dir}"
 resolve_orthogroup_genecount_selected() {
   local catalog
   catalog=$(gg_orthogroup_catalog_path) || return $?
@@ -902,6 +925,10 @@ run_gene_family_database_for_source() {
       --parameter "family_scope=selected_orthogroups_v1"
     )
   fi
+  if [[ -n "${orthogroup_summary_selection}" ]]; then
+    database_provenance_args+=(--orthogroup-store-selection "${orthogroup_summary_selection}"
+      --parameter "orthogroup_selection_sha256=${scope_hash%% *}")
+  fi
   gg_artifact_prepare_stage database_needs_update run_gene_family_database_build "${database_provenance_args[@]}" || return $?
   if [[ ${run_gene_family_database_build} -ne 1 ]]; then
     echo "Skipping database prep because run_gene_family_database_build=0."
@@ -1110,6 +1137,7 @@ run_hgt_summary_for_source() {
   hgt_gene_family_dir="${dir_gene_family}" \
   hgt_gene_family_mode="${gene_family_source}" \
   hgt_db_path="${file_gene_family_db}" \
+  hgt_orthogroup_store_selection="${orthogroup_summary_selection}" \
   hgt_output_dir="${hgt_summary_output_dir}" \
   run_hgt_eval="${run_hgt_candidate_summary}" \
   run_hgt_plot="${run_hgt_summary_plots}" \

@@ -463,6 +463,9 @@ hgt_context_provenance_args+=(
   --parameter "schema_version=1"
 )
 gg_artifact_add_input_if_present hgt_context_provenance_args "species_tree" "${hgt_species_tree_path}"
+if [[ -n "${hgt_orthogroup_store_selection:-}" ]]; then
+  hgt_context_provenance_args+=(--orthogroup-store-selection "${hgt_orthogroup_store_selection}")
+fi
 if [[ ${run_hgt_eval} -eq 1 && -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
   gg_artifact_prepare_stage hgt_context_needs_update run_hgt_eval "${hgt_context_provenance_args[@]}" || exit $?
   if [[ ${hgt_context_needs_update} -eq 1 ]]; then
