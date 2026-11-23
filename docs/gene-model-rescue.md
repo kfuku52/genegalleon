@@ -725,8 +725,9 @@ thresholds do not invalidate identical comparisons. GFF metadata edits can reuse
 a comparison only after the new plan prepares and verifies identical BED/protein
 files. The full frozen input and per-plan dependency checks remain in force.
 Locked, verified cache outputs are copied and rehashed into each plan; writable
-files are never hard linked. Corrupted entries are recomputed with the usual
-atomic publication and failure diagnostics. Existing results without cache keys
+files are never hard linked. Cache writers on separate nodes coordinate using
+atomic shared-filesystem operations. Corrupted entries are recomputed with the
+usual atomic publication and failure diagnostics. Existing results without cache keys
 remain valid within their original plan and are not relabelled for another plan.
 Updating the implementation/tool identities requires a new rescue output plan;
 finish an active plan with its frozen source. Older shared cache entries remain

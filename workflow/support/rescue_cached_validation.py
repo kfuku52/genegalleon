@@ -48,8 +48,19 @@ def _initialise(genome_path, code, params):
 
 def _batch(rows):
     genome, code, params, memo = _CONTEXT
-    result = [checked_prediction(model, memo, genome, code, params, protein) for model, protein in rows]
-    return result, os.getpid(), memo.diagnostics()
+    results = []
+    for model, protein in rows:
+        result = checked_prediction(model, memo, genome, code, params, protein)
+        # The caller already owns this evidence. Returning it over IPC would
+        # create a separate copy for each batch, held until rescue publication.
+        evidence = model['evidence']
+        if result['evidence'] == evidence:
+            del result['evidence']
+        raw = result['raw_prediction']
+        if raw['evidence'] == evidence:
+            del raw['evidence']
+        results.append(result)
+    return results, os.getpid(), memo.diagnostics()
 
 
 def validate_cached(models, genome, code, params, proteins, cpus, serial, audit):
@@ -79,16 +90,22 @@ def validate_cached(models, genome, code, params, proteins, cpus, serial, audit)
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn'),
             initializer=_initialise, initargs=(os.fsdecode(genome.filename), code, params)) as pool:
         def consume(item):
-            expected, future = item
+            inputs, future = item
             results, pid, snapshot = future.result()
-            if len(results) != expected:
+            if len(results) != len(inputs):
                 raise ValueError('Cached prediction validation batch changed record count')
             snapshots[pid] = snapshot
-            return results
+            for result, model in zip(results, inputs, strict=True):
+                evidence = model['evidence']
+                if 'evidence' not in result:
+                    result['evidence'] = evidence
+                if 'evidence' not in result['raw_prediction']:
+                    result['raw_prediction']['evidence'] = dict(evidence)
+                yield result
         remaining = chain(initial, models)
         while batch := list(islice(remaining, 64)):
             rows = [(model, proteins[model['evidence']['donor']][model['evidence']['query']]) for model in batch]
-            pending.append((len(rows), pool.submit(_batch, rows)))
+            pending.append((batch, pool.submit(_batch, rows)))
             audit['max_pending_batches'] = max(audit['max_pending_batches'], len(pending))
             if len(pending) >= workers * 2:
                 for result in consume(pending.popleft()):

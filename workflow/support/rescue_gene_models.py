@@ -93,7 +93,8 @@ try:
     from rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
     from rescue_source_verification import refresh_source_versions as refresh_source_versions
     from rescue_terminal_completion import complete_terminals
-    from species_labeling import assembly_only_species, extract_species_label
+    from shared_namespace_lock import namespace_lock
+    from species_labeling import assembly_only_species, species_label_for_input
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
     from . import busco_reference_quality as busco_reference_implementation
@@ -153,7 +154,8 @@ except ImportError:
     from .rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
     from .rescue_source_verification import refresh_source_versions as refresh_source_versions
     from .rescue_terminal_completion import complete_terminals
-    from .species_labeling import assembly_only_species, extract_species_label
+    from .shared_namespace_lock import namespace_lock
+    from .species_labeling import assembly_only_species, species_label_for_input
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
@@ -320,8 +322,9 @@ def build_plan(args):
         if (args.max_genome_queries < 0 or args.unanchored_min_species < 1
                 or args.terminal_max_extension < 1):
             raise ValueError("Invalid bounded genome-search or terminal-completion parameters")
-        species = sorted({extract_species_label(p.name) for p in args.cds_dir.iterdir()
-                          if p.is_file() and p.name.removesuffix(".gz").endswith((".fa", ".fas", ".fasta", ".fna"))})
+        fasta_suffixes = (".fa", ".fas", ".fasta", ".fna")
+        species = sorted({label for p in args.cds_dir.iterdir()
+                          if p.is_file() and (label := species_label_for_input(p.name, fasta_suffixes)) is not None})
         excluded = assembly_only_species(getattr(args, 'transcriptome_assembly_dir', None),
                                          args.gff_dir, args.genome_dir)
         species = [name for name in species if name not in excluded]
@@ -376,15 +379,15 @@ def build_plan(args):
         for name in targets:
             safe_token(name, "species")
             def discover(directory, suffixes, name=name):
-                matches = [p for p in directory.iterdir() if p.is_file() and extract_species_label(p.name) == name
-                           and p.name.removesuffix(".gz").endswith(suffixes)]
+                matches = [p for p in directory.iterdir()
+                           if p.is_file() and species_label_for_input(p.name, suffixes) == name]
                 if len(matches) != 1:
                     raise ValueError(f"Expected one {name} source in {directory}, found {len(matches)}")
                 return str(matches[0].resolve())
-            cds = discover(args.cds_dir, (".fa", ".fas", ".fasta", ".fna"))
+            cds = discover(args.cds_dir, fasta_suffixes)
             gff = discover(args.gff_dir, (".gff", ".gff3"))
             validate_gff(gff)
-            genome = discover(args.genome_dir, (".fa", ".fas", ".fasta", ".fna"))
+            genome = discover(args.genome_dir, fasta_suffixes)
             busco = discover(args.busco_dir, (".busco.short.txt",))
             code = codes.get(name, args.genetic_code)
             if code not in CodonTable.unambiguous_dna_by_id:
@@ -677,7 +680,8 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None, verify=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None, verify=None,
+          *, shared_cache=False):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -685,7 +689,10 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_
     lock.parent.mkdir(exist_ok=True)
     journal = lock.with_suffix(".publish.json")
     token = hashlib.sha256(str(relative).encode()).hexdigest()[:12]
-    with exclusive_lock(lock):
+    # A shared cache can have writers on different nodes even when their
+    # advisory file locks are client-local (for example on Lustre).
+    ownership = namespace_lock(lock, exclusive=True, timeout=86400) if shared_cache else exclusive_lock(lock)
+    with ownership:
         recover_publication(dest, journal, token)
         if guard:
             guard()
@@ -931,7 +938,7 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
         publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
         cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
                        lambda output: build_comparison(output, job, dirs, params, cpus), guard,
-                       **publication)
+                       shared_cache=True, **publication)
         copy_verified_comparison(cached, tmp, cache_key, hash_workers=cpus)
         atomic_json(tmp / "job.json", job)
         atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})

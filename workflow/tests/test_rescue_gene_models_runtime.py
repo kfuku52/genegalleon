@@ -897,6 +897,25 @@ def test_benchmark_rechecks_fallback_source_after_mapping(hidden_models, monkeyp
     assert not (output / "result.json").exists()
 
 
+@pytest.mark.parametrize('fasta_suffix', ['.fa', '.fas'])
+def test_rescue_plan_keeps_terminal_subgroup_on_bare_input_names(hidden_models, fasta_suffix):
+    root, names, _ = hidden_models
+    original = names[0]
+    subgroup = 'Oryza_sativa_aus_subgroup'
+    for role, extension in (('cds', fasta_suffix), ('genome', fasta_suffix),
+                            ('gff', '.gff3'), ('busco', '.busco.short.txt')):
+        source, = (root / role).glob(original + '.*')
+        source.rename(source.with_name(subgroup + extension))
+    tree = root / 'tree.nwk'
+    tree.write_text(tree.read_text().replace(original, subgroup))
+    output = root / 'subgroup'
+    cli('plan', '--cds-dir', root / 'cds', '--genome-dir', root / 'genome', '--gff-dir', root / 'gff',
+        '--busco-dir', root / 'busco', '--tree', tree, '--output', output)
+    plan = rescue.load(output)
+    assert subgroup in plan['species']
+    assert 'Oryza_sativa' not in plan['species']
+
+
 def test_comparison_cache_reuses_metadata_changes_and_binds_actual_inputs(hidden_models):
     root, names, _ = hidden_models
     first, _, _ = make_plan(hidden_models)

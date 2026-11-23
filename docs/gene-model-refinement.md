@@ -261,6 +261,12 @@ miniprot searches are cached by inputs and tool identity under
 and completed target directories available when adding targets. A new
 target does not invalidate existing results. A revised target or panel
 requires a new output directory; unchanged donor artifacts can still be reused.
+Shared-cache publications are serialized across compute nodes using atomic
+filesystem namespace operations, including when Lustre is mounted with
+`localflock`. Finish older jobs before sharing a cache with the current
+implementation. An interrupted writer can leave a lock with an owner record in
+the cache's `.locks` directory. Inspect it with `shared_namespace_lock.py inspect`
+and reconcile it only after the workspace's users have stopped.
 When targets have separate parent directories, set
 `GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE` (CLI `--comparison-cache` on
 `run`) to one shared directory to reuse matching genomic comparisons across

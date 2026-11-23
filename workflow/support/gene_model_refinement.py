@@ -855,7 +855,8 @@ def catalog_species(root, value, name):
 
         options = {'verify': _RECEIPT_SNAPSHOT.verify_reusable} if _RECEIPT_SNAPSHOT is not None else {}
         return rescue.stage(donor_cache(request), donor_catalog_relative(request, name),
-                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard, **options)
+                            donor_catalog_key(request, name), build_donor, guard, publication_guard=guard,
+                            shared_cache=True, **options)
 
     def build(tmp):
         transcriptome_source = value['request'].get('transcriptome_sources', {}).get(name)
@@ -1896,7 +1897,7 @@ def search_refinement_intervals(root, request, tmp, windows, proteins, genome, s
     def guard():
         load(root)
 
-    cache = rescue.stage(donor_cache(request), relative, key, build_raw, guard, publication_guard=guard)
+    cache = rescue.stage(donor_cache(request), relative, key, build_raw, guard, publication_guard=guard, shared_cache=True)
     receipt_path = cache / 'receipt.json'
     receipt_sha = digest(receipt_path)
     with ReceiptSnapshot(rescue.verified) as proof:

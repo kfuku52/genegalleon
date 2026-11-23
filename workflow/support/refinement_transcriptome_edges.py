@@ -73,7 +73,7 @@ def fixed_panel_edges(db, target, donors, executable, params, directory, cpus, c
                      '--threads', cpus], tmp, 'makedb')
 
         database = stage(cache, Path('diamond') / _key(donor_key), donor_key, build_database, guard,
-                         publication_guard=guard)
+                         publication_guard=guard, shared_cache=True)
         database_hash, database_files, database_proof = _publication(database, donor_key)
         lengths = _read_json(database / 'lengths.json', database_files['lengths.json'])
         database_proof.check()
@@ -101,7 +101,7 @@ def fixed_panel_edges(db, target, donors, executable, params, directory, cpus, c
             atomic_json(tmp / 'edges.json', rows)
 
         pair = stage(cache, Path('protein_pairs') / _key(pair_key), pair_key, build_pair, pair_guard,
-                     publication_guard=pair_guard)
+                     publication_guard=pair_guard, shared_cache=True)
         _, pair_files, pair_proof = _publication(pair, pair_key)
         edges.extend(_read_json(pair / 'edges.json', pair_files['edges.json']))
         pair_proof.check()
