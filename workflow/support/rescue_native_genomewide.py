@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import time
+from array import array
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -34,6 +35,46 @@ def _native():
     except ImportError:
         from . import annevo_gene_models
     return annevo_gene_models
+
+
+def _candidate_protein_pairs(path, queries, subjects, minimum):
+    """Retain hit IDs compactly and yield unique pairs in their original sort order."""
+    subject_ids = sorted(subjects)
+    subject_indexes = {token: index for index, token in enumerate(subject_ids)}
+    subject_lengths = [len(subjects[token].upper().removesuffix('*')) for token in subject_ids]
+    query_lengths = {token: len(protein) for token, protein in queries.items()}
+    candidates = defaultdict(lambda: array('I'))
+    rejected = Counter()
+    with path.open() as stream:
+        for line in stream:
+            fields = line.split()
+            if len(fields) != 2:
+                raise ValueError('Unknown genomewide protein search identifier')
+            q, s = fields
+            a, index = query_lengths.get(q), subject_indexes.get(s)
+            if a is None or index is None:
+                raise ValueError('Unknown genomewide protein search identifier')
+            b = subject_lengths[index]
+            # Even perfect pairing cannot align more residues than the shorter sequence.
+            if (a / b if a < b else b / a) < minimum:
+                rejected[q] += 1
+            else:
+                candidates[q].append(index)
+    # Exact short peptides need not seed a DIAMOND alignment.
+    by_sequence = {protein: subject_indexes[token] for token, protein in subjects.items()}
+    for q, protein in queries.items():
+        if protein in by_sequence:
+            candidates[q].append(by_sequence[protein])
+
+    def comparisons():
+        for q in sorted(candidates):
+            # Deduplicate only the current query, including hits also added by
+            # the exact-match pass. Never keep a Python set for every query.
+            for index in sorted(set(candidates.pop(q))):
+                s = subject_ids[index]
+                yield q, s, queries[q], subjects[s]
+
+    return rejected, comparisons()
 
 
 def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None):
@@ -91,10 +132,10 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
         raise ValueError('Genomewide native rescue has no external donor proteins')
     queries = {f'n{i}': protein for i, protein in enumerate(sorted(groups))}
     subjects = {f'd{i}': protein for i, protein in enumerate(sorted(donor_aliases))}
-    candidates = defaultdict(set)
     search_dir = Path(directory) / 'native_genomewide_search'
     search_dir.mkdir()
     rejected_hits = Counter()
+    comparisons = ()
     if queries:
         for file, sequences in (('native.pep', queries), ('donors.pep', subjects)):
             with (search_dir / file).open('w') as out:
@@ -106,40 +147,16 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
                '--out', search_dir / 'pairs.tsv', '--outfmt', '6', 'qseqid', 'sseqid',
                '--ultra-sensitive', '--masking', '0', '--comp-based-stats', '0', '--evalue', '1000',
                '--max-target-seqs', '0', '--max-hsps', '1', '--threads', cpus], search_dir, 'blastp')
-        query_lengths = {token: len(protein) for token, protein in queries.items()}
-        subject_lengths = {token: len(protein.upper().removesuffix('*')) for token, protein in subjects.items()}
-        minimum = params['minimum_coverage']
-        with (search_dir / 'pairs.tsv').open() as stream:
-            for line in stream:
-                fields = line.split()
-                if len(fields) != 2 or fields[0] not in queries or fields[1] not in subjects:
-                    raise ValueError('Unknown genomewide protein search identifier')
-                q, s = fields
-                a, b = query_lengths[q], subject_lengths[s]
-                # Even perfect pairing cannot align more residues than the shorter sequence.
-                upper_coverage = a / b if a < b else b / a
-                if upper_coverage < minimum:
-                    rejected_hits[q] += 1
-                else:
-                    candidates[q].add(s)
-        # Exact short peptides need not seed a DIAMOND alignment. Preserve all
-        # exact matches independently of the search program's seeding heuristic.
-        by_sequence = {protein: token for token, protein in subjects.items()}
-        for token, protein in queries.items():
-            if protein in by_sequence:
-                candidates[token].add(by_sequence[protein])
+        rejected_hits, comparisons = _candidate_protein_pairs(search_dir / 'pairs.tsv', queries, subjects,
+                                                               params['minimum_coverage'])
         for token, count in rejected_hits.items():
             for path in groups[queries[token]]:
                 rows[path['native_transcript_id']].update(status='evaluated', length_rejected_protein_hits=count)
-    aligned_pairs = sum(map(len, candidates.values()))
-    def comparisons():
-        # Preserve the original tuple order and release completed query groups.
-        for q in sorted(candidates):
-            for s in sorted(candidates.pop(q)):
-                yield q, s, queries[q], subjects[s]
+    aligned_pairs = 0
     results = []
     validation_seconds = 0.0
-    for q, s, score in native._scored_pairs(comparisons(), cpus):
+    for q, s, score in native._scored_pairs(iter(comparisons), cpus):
+        aligned_pairs += 1
         alignment = {**score.as_dict(), 'junction_information_available': False,
                      'score_basis': 'protein_only_without_donor_junctions'}
         problems = (['oriongeno_alignment_bounded'] if score.bounded else [])

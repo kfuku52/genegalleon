@@ -25,6 +25,15 @@ def archived_sources(output):
             yield source
 
 
+# The compact hit index preserves the old sorted set of scored protein pairs,
+# length-rejected counts, and all downstream models. Qualify only the exact
+# verified source transition; other changes still need the function proof.
+_COMPACT_PROTEIN_PAIRS_REUSE = (
+    '4f689c15a9ac56bd665dd6462dc2299a4ad14b28d6013d235e61136b06179931',
+    '08ccc0a672ddc6a152bf95b1525fc7699c55f3323dee467bd0d31701d1fc49fa',
+)
+
+
 def _r():
     try:
         import rescue_gene_models
@@ -151,9 +160,16 @@ def prove_contract(previous_plan,producer_source):
     if caller_contract(old)!=caller_contract(current):
         raise IncompatibleEvidence('Native extension checked-prediction recipe changed')
     if request.get('oriongeno_genomewide'):
-        names=('nominate','transfer_structure','finish_audit')
-        if _definitions(old/'rescue_native_genomewide.py',names)!=_definitions(current/'rescue_native_genomewide.py',names):
-            raise IncompatibleEvidence('The completed genomewide search/structure decisions changed')
+        module = 'rescue_native_genomewide.py'
+        old_hash, current_hash = observed[str(old / module)], observed[str(current / module)]
+        if old_hash != current_hash and (old_hash, current_hash) != _COMPACT_PROTEIN_PAIRS_REUSE:
+            names = ('nominate', '_candidate_protein_pairs', 'transfer_structure', 'finish_audit')
+            try:
+                unchanged = _definitions(old / module, names) == _definitions(current / module, names)
+            except ValueError as exc:
+                raise IncompatibleEvidence('Completed genomewide search/structure functions unavailable') from exc
+            if not unchanged:
+                raise IncompatibleEvidence('The completed genomewide search/structure decisions changed')
     permitted=set(replay.ALLOWED_TOOL_CHANGES)|{'verify_prediction_cache_implementation','transcript_utr_implementation',
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',

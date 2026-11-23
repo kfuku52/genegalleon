@@ -120,6 +120,25 @@ def test_coverage_prefilter_preserves_threshold_and_accounts_for_rejected_hits(t
         assert path['candidate_records'] == 0
 
 
+def test_compact_pairs_keep_sorted_unique_ids_and_rejection_multiplicity(tmp_path):
+    hits = tmp_path / 'pairs.tsv'
+    query = {'n2': 'M', 'n10': 'MMM', 'n3': 'MAG'}
+    subject = {'d2': 'MMM', 'd10': 'MAM', 'd3': 'M'}
+    hits.write_text('n2 d2\nn10 d2\nn2 d2\nn10 d10\nn10 d2\n')
+    rejected, pairs = native._candidate_protein_pairs(hits, query, subject, 0.7)
+    assert rejected == {'n2': 2}
+    assert list(pairs) == [('n10', 'd10', 'MMM', 'MAM'), ('n10', 'd2', 'MMM', 'MMM'),
+                           ('n2', 'd3', 'M', 'M')]
+
+
+@pytest.mark.parametrize('bad_hit', ['n00 d0', 'n0 d00', 'n0', 'n0 d0 d1'])
+def test_compact_pairs_reject_malformed_or_unknown_hit_tokens(tmp_path, bad_hit):
+    hits = tmp_path / 'pairs.tsv'
+    hits.write_text(bad_hit + '\n')
+    with pytest.raises(ValueError, match='Unknown genomewide protein search identifier'):
+        native._candidate_protein_pairs(hits, {'n0': 'M'}, {'d0': 'M'}, 0.7)
+
+
 def test_identical_isoforms_keep_both_native_ids_but_one_gene_model(tmp_path):
     models, audit, _ = evaluate(tmp_path, aliases=True)
     assert sum(m['status'] == 'accepted' for m in models) == 1
