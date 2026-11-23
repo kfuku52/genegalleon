@@ -1,5 +1,6 @@
 import csv
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -231,6 +232,63 @@ def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
     assert trait_input_check in core
     assert 'cafe5 \\' in core
     assert '--infile "${file_orthogroup_copy_number}"' in core
+
+
+def test_stage_prepares_once_reuses_and_preserves_previous_matrix_on_failure(tmp_path):
+    support = SCRIPT.parent
+    core = GENOME_EVOLUTION_CORE.read_text()
+    stage = core[core.index('task="Orthogroup copy-number matrix preparation"'):core.index("task='CAFE analysis'")]
+    matrix_dir = tmp_path / "output/copies"
+    matrix = matrix_dir / "orthogroup_copy_number.tsv"
+    counts = tmp_path / "counts.tsv"
+    counts.write_text("besthit_0.95\tOrthogroup\tsp1\tsp2\nhit\tOG1\t1\t2\n")
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("(sp1:1,sp2:1);\n")
+    env = {
+        **os.environ, "gg_workspace_dir": str(tmp_path), "gg_workspace_output_dir": str(matrix_dir.parent),
+        "gg_support_dir": str(support), "genome_evolution_provenance_dir": str(tmp_path / "provenance"),
+        "dir_orthogroup_copy_number": str(matrix_dir), "file_orthogroup_copy_number": str(matrix),
+        "file_orthogroup_genecount_selected": str(counts), "file_dated_species_tree": str(tree),
+        "orthogroup_copy_number_max_size_differential": "10", "run_cafe": "1",
+        "run_orthogroup_copy_number_trait_pgls": "0", "run_orthogroup_copy_number_trait_selection": "0",
+        "run_copy_number_quality_diagnostics": "0",
+        "MPLCONFIGDIR": str(tmp_path / "mplconfig"),
+    }
+    prelude = f'''set -euo pipefail
+source {shlex.quote(str(support / "gg_util.sh"))}
+gg_artifact_server_request() {{ python "$@"; }}
+gg_step_start() {{ :; }}
+gg_step_skip() {{ :; }}
+'''
+
+    def run_stage(**options):
+        return subprocess.run(["bash", "-c", prelude + stage], cwd=tmp_path,
+                              env={**env, **options}, capture_output=True, text=True, timeout=60)
+
+    first = run_stage()
+    assert first.returncode == 0, first.stdout + first.stderr
+    started = f"Starting {SCRIPT} at "
+    assert first.stdout.count(started) == 1
+    previous = {p.name: p.read_bytes() for p in matrix_dir.iterdir()}
+    replay = run_stage()
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert started not in replay.stdout
+    counts.write_text(counts.read_text().replace("\t1\t2\n", "\t0.5\t2\n"))
+    rejected = run_stage(artifact_stale_policy="rebuild")
+    assert rejected.returncode != 0 and "fractional copy numbers" in rejected.stderr
+    assert {p.name: p.read_bytes() for p in matrix_dir.iterdir()} == previous
+    assert not list(matrix_dir.parent.glob("copies.work.*"))
+
+    manifest = tmp_path / "provenance/orthogroup.copy_number.json"
+    manifest.unlink()
+    counts.write_text("besthit_0.95\tOrthogroup\tsp1\tsp1\tsp2\nhit\tOG1\t1\t9\t2\n")
+    disabled = run_stage(run_cafe="0")
+    assert disabled.returncode == 0, disabled.stdout + disabled.stderr
+    assert not manifest.exists()
+    rejected = run_stage()
+    assert rejected.returncode != 0 and "duplicate column names" in rejected.stderr
+    assert not manifest.exists()
+    assert {p.name: p.read_bytes() for p in matrix_dir.iterdir()} == previous
 
 
 @pytest.mark.parametrize("compressed", [False, True])

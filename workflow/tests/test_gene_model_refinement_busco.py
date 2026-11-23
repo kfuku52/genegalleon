@@ -2,9 +2,7 @@
 
 import gzip
 import json
-import os
 import shutil
-import subprocess
 from importlib import import_module
 from pathlib import Path
 from xml.etree import ElementTree
@@ -555,6 +553,13 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
             "evalue": 1e-7, "query_coverage": .6, "target_coverage": .65, "minimum_alignment": 55,
             "score_fraction": .95, "max_hits": 40, "sensitivity": 7,
         }}
+    without_donor = grouped and swissprot
+    if without_donor:
+        tested = changes["species"]["Species_a"]
+        tested["rescue_support_counts"]["both"] -= 1
+        tested["rescue_support_groups"]["multiple"] -= 1
+        tested["rescue_support_groups"][busco.ORIONGENO_WITHOUT_DONOR] = 1
+        tested["rescue_oriongeno_without_donor_loci"] = 1
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
     from xml.etree import ElementTree
@@ -578,7 +583,10 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]
     rescue_upper = [b for b in rescue_bars if b[4] == -.20]
     rescue_lower = [b for b in rescue_bars if b[4] == .20]
-    assert len(rescue_upper) == 4 and sum(b[1] for b in rescue_upper) == 11
+    assert len(rescue_upper) == 4 + without_donor and sum(b[1] for b in rescue_upper) == 11
+    if without_donor:
+        assert rescue_upper[-1][1:4] == (1, 10, busco.RESCUE_NO_DONOR_COLOUR)
+        assert busco.RESCUE_NO_DONOR_LABEL in displayed
     assert len(rescue_lower) == 5 and sum(b[1] for b in rescue_lower) == 11
     assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [0, 0, 0, 0, 11])
     assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 0, 0, 0, 0])
@@ -612,7 +620,7 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 6
     with pytest.raises(ValueError, match="sum to the rescued"):
         busco.plot_comparison(rows, tmp_path, changes)
-    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 5
+    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 5 - without_donor
     changes["species"]["Species_a"]["accepted_path_support_counts"]["self_only"] = 2
     with pytest.raises(ValueError, match="sum to the accepted"):
         busco.plot_comparison(rows, tmp_path, changes)
@@ -782,35 +790,3 @@ def test_busco_cli_keeps_reports_outside_immutable_publications(tmp_path, monkey
         busco.main()
     assert exc.value.code == 2
     assert "Report must be separate from the immutable refinement tree" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("enabled", [0, 1])
-@pytest.mark.parametrize("trailing_slash", [False, True])
-def test_input_generation_finisher_wires_review_and_bounds_busco_resources(tmp_path, enabled, trailing_slash):
-    core = Path(__file__).resolve().parents[1] / "core/gg_input_generation_core.sh"
-    function = core.read_text().split("finish_gene_model_refinement() {", 1)[1].split("\n}\n", 1)[0]
-    log = tmp_path / "commands.txt"
-    script = """set -euo pipefail
-python() { printf '%s\\n' "$*" >> "$COMMAND_LOG"; }
-ensure_shared_busco_lineage_ready() { busco_lineage_resolved=embryophyta_odb12; }
-ensure_busco_download_path() { printf '%s\\n' /db; }
-gg_memory_parallel_job_cap() { printf '%s\\n' 2; }
-finish_gene_model_refinement() {""" + function + "\n}\nfinish_gene_model_refinement\n"
-    env = dict(os.environ, COMMAND_LOG=str(log), run_species_busco=str(enabled), gg_support_dir="/support",
-               run_gene_model_rescue_swissprot="0", gene_model_rescue_dir="/rescue", gene_model_refinement_rescue_dir="",
-               gene_model_refinement_inputs="",
-               gene_model_refinement_dir="/refinement/" if trailing_slash else "/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
-               species_busco_parallel_jobs="auto", task_plan_output="/plan", gg_workspace_dir="/workspace",
-               GG_MEM_TOOL_GB="64", species_busco_memory_gb_per_job="16", busco_lineage_resolved="")
-    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    commands = log.read_text().splitlines()
-    assert " finalize " in commands[0] and " qc " in commands[1]
-    assert "plot_gene_model_refinement.py" in commands[2] and "--cds-dir /all-cds" in commands[2]
-    assert "--report /refinement.review " in commands[2]
-    if enabled:
-        assert "gene_model_refinement_busco.py" in commands[3]
-        assert "--jobs 2 --cpus 4" in commands[3]
-        assert "--report /refinement.review/busco" in commands[3]
-    else:
-        assert len(commands) == 3

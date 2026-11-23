@@ -1230,6 +1230,16 @@ def plot_candidates(rows, output, tree=None, alpha=0.05, duplication_threshold=N
     plt.close(fig)
 
 
+def plot_wgd_evidence(rows, output, tree, *, focal_rows=(), **options):
+    from matplotlib import style
+
+    # Match the original and redrawn PNGs even in a process that rendered other plots.
+    with style.context("default"):
+        plot_candidates(rows, output, tree=tree, focal_rows=focal_rows, **options)
+        cross_plots = plot_cross_ks(focal_rows, output)
+    return ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png", *cross_plots]
+
+
 def replot(args):
     source = args.evidence.resolve()
     output = args.output.resolve()
@@ -1309,11 +1319,10 @@ def replot(args):
     with tempfile.TemporaryDirectory(prefix=".wgd-replot-", dir=output.parent) as scratch:
         staged = Path(scratch) / "plots"
         staged.mkdir()
-        plot_candidates(candidates, staged, tree=tree, alpha=params["alpha"],
-                        duplication_threshold=params["min_duplication_score"] if plan.get("gene_trees") else None,
-                        focal_rows=focal, ds_method=params.get("cross_ks_method", "yn00"),
-                        count_overlay=overlay, count_alpha=overlay_alpha, **render)
-        plot_cross_ks(focal, staged)
+        plot_wgd_evidence(candidates, staged, tree, alpha=params["alpha"],
+                          duplication_threshold=params["min_duplication_score"] if plan.get("gene_trees") else None,
+                          focal_rows=focal, ds_method=params.get("cross_ks_method", "yn00"),
+                          count_overlay=overlay, count_alpha=overlay_alpha, **render)
         if overlay:
             write_table(staged / "count_overlay.tsv", overlay, COUNT_OVERLAY_FIELDS)
         for hashes, subject in ((inputs, "input"), (implementation, "implementation")):
@@ -1401,7 +1410,6 @@ def run_analysis(plan, output, cpus):
     phase_diagnostics = ()
     traced_ks_hits = ()
     orientation = ()
-    plot_names = ["wgd_candidates.pdf", "wgd_species_tree.pdf", "wgd_species_tree.png"]
     if tree_mode:
         age_sources = plan.get("cross_ks_sources", {})
         cross = reverse = None
@@ -1625,19 +1633,20 @@ def run_analysis(plan, output, cpus):
         focal_rows = cross_ks.run(output, cpus, candidates, estimate, write_table, traced_ks_hits, terminal=terminal,
                                   rooted_copy=rooted_copy, run_tool=run_tool, tree_archive=plan["gene_trees"],
                                   method_label=CROSS_DS_REPORT_LABELS.get(ds_method, plan["tools"]["ds"]["method"]))
-        plot_names += plot_cross_ks(focal_rows, output)
         for row in candidates:
             status = row["cross_ks_status"]
             age_summary[status] = age_summary.get(status, 0) + 1
     write_table(output / "wgd_events.tsv", candidates, list(candidates[0]))
-    plot_candidates(candidates, output, tree=tree, alpha=p["alpha"],
-                    duplication_threshold=p["min_duplication_score"] if tree_mode else None,
-                    focal_rows=focal_rows, region_rows=region_summary,
-                    matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
-                    phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
-                    terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation,
-                    copy_holdout=cross_ks.copy_holdout_rows if cross_ks else (), ds_method=p.get("cross_ks_method", "yn00"),
-                    count_overlay=count_overlay, count_alpha=count_alpha)
+    plot_names = plot_wgd_evidence(
+        candidates, output, tree, alpha=p["alpha"],
+        duplication_threshold=p["min_duplication_score"] if tree_mode else None,
+        focal_rows=focal_rows, region_rows=region_summary,
+        matched_trios=read_table(output / "cross_ks_matched_trios.tsv") if cross_ks else (),
+        phase_diagnostics=phase_diagnostics, common_outgroups=cross_ks.outgroup_rows if cross_ks else (),
+        terminal_rows=cross_ks.terminal_rows if cross_ks else (), orientation_rows=orientation,
+        copy_holdout=cross_ks.copy_holdout_rows if cross_ks else (), ds_method=p.get("cross_ks_method", "yn00"),
+        count_overlay=count_overlay, count_alpha=count_alpha,
+    )
     verify(plan)
     write_json(output / "summary.json", {"schema_version": 1, "plan": plan,
         "output_hashes": {path.name: digest(path) for path in sorted(output.iterdir())

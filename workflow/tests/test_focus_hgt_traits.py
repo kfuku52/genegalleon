@@ -145,12 +145,12 @@ def test_direction_is_evaluated_once_after_pfam_before_multiple_traits(source, m
     saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=[], C_gene=['PF01053']))
     taxonomy = saved_species_taxonomy(source[0].parent/'taxonomy.tsv')
     calls = []
-    original = focus_hgt_direction.filter_events
+    original = focus_hgt_direction.filter_with_rules
     def capture(events, *args):
         calls.append({r['event_id'] for r in events})
         assert all(r['pfam_filter_status'] == 'passed' and 'focus_trait' not in r for r in events)
         return original(events, *args)
-    monkeypatch.setattr(focus_hgt_direction, 'filter_events', capture)
+    monkeypatch.setattr(focus_hgt_direction, 'filter_with_rules', capture)
     before = taxonomy.read_bytes()
     report = generate_filtered(*source, plots=False, gene_family_root=root,
                                direction_filter=direction, species_taxonomy=taxonomy)
@@ -2255,17 +2255,27 @@ def test_generic_direction_rejects_missing_identities_rank_and_implicit_enabling
         filter_events([], dict(A=('A',), B=('B',)), saved_species_taxonomy(tmp_path/'taxonomy.tsv'), 'custom', rules)
 
 
-def test_generic_focus_reuses_ancestors_with_one_event_id_and_seals_rules(source):
+def test_generic_focus_reuses_ancestors_with_one_event_id_and_seals_rules(source, monkeypatch):
+    import focus_hgt_direction
+    reads = []
+    read_rules = focus_hgt_direction.read_rules
+
+    def track_read(path):
+        reads.append(Path(path))
+        return read_rules(path)
+
+    monkeypatch.setattr(focus_hgt_direction, 'read_rules', track_read)
     rules = custom_direction_rules(source[0].parent/'rules.json')
     taxonomy = kingdom_taxonomy(source[0].parent/'taxonomy.tsv')
     report = generate(*source, plots=False, direction_filter='custom', direction_rules=rules, species_taxonomy=taxonomy)
+    assert reads == [rules]
     output = source[-1]
     events = read_tsv(output/'traits/binary/all_category1/events.tsv')[1]
     assert {r['event_id'] for r in events} == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
     assert next(r for r in events if r['event_id'] == 'OG1:3:2')['recipient_clade_tip_labels'] == 'A; B'
     assert report['shared_direction_filter']['rules_sha256']
     assert json.loads((output/'direction_rules.json').read_text()) == json.loads(rules.read_text())
-    assert str(rules.resolve()) in report['inputs_sha256']
+    assert report['inputs_sha256'][str(rules.resolve())] == report['shared_direction_filter']['rules_sha256']
     # An ancestor has one aggregate identity even though both tip contexts retain it.
     assert len(read_tsv(output/'traits/binary/tips/A/ancestral_recipient_events.tsv')[1]) == 1
     assert len(read_tsv(output/'traits/binary/tips/B/ancestral_recipient_events.tsv')[1]) == 1

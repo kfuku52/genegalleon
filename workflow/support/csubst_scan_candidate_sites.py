@@ -31,6 +31,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import csubst_site_wrapper as site_wrapper  # noqa: E402, I001
+from content_digest_cache import ContentDigestCache
 from csubst_scan_support import (  # noqa: E402
     ANALYTICAL_P_COLUMN, SUPPORT_BH_COLUMNS, SUPPORT_BH_POLICY, SUPPORT_BH_SCOPE, SUPPORT_Q_COLUMN,
     rate_testable_mask, support_filtered_bh, validate_minimum, validated_analytical_pvalues, validated_counts,
@@ -822,6 +823,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
             csubst_nonsyn_recode=nonsyn_recode,
             convergent_sites=[target_site],
             file_tree_plot_out=str(cache_dir / focused_name),
+            site_artifacts=artifacts,
         )
         shutil.rmtree(iqtree_anc_dir, ignore_errors=True)
         for temporary_name in (
@@ -1253,16 +1255,16 @@ def archive_matches_source(
     probability_threshold=None,
 ):
     archive_path = Path(archive_path)
-    if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
+    if not archive_path.is_file():
         return False
+    source_summary = Path(source_summary)
     metadata_member = f"{archive_path.stem}/package_metadata.tsv"
     candidate_manifest_member = f"{archive_path.stem}/candidate_manifest.tsv"
     skipped_manifest_member = f"{archive_path.stem}/skipped_candidates.tsv"
     try:
+        archive_identity = ContentDigestCache.signature(archive_path)
         with zipfile.ZipFile(archive_path, "r") as archive:
             files, _directories = validated_members(archive, archive_path, archive_path.stem)
-            if archive.testzip() is not None:
-                return False
             member_names = {info.filename for info in files}
             root_prefix = f"{archive_path.stem}/"
             required_top_level = {
@@ -1275,6 +1277,31 @@ def archive_matches_source(
                 return False
             with archive.open(metadata_member) as handle:
                 package_metadata = pd.read_csv(handle, sep="\t", dtype=str)
+            if package_metadata.shape[0] != 1:
+                return False
+            recorded_probability = package_metadata.loc[0, "probability_column"]
+            recorded_threshold = float(package_metadata.loc[0, "probability_threshold"])
+            if recorded_probability not in PROBABILITY_COLUMNS or not np.isfinite(recorded_threshold) or not 0 <= recorded_threshold <= 1:
+                return False
+            if probability_column is None and expected_candidates is not None and expected_candidates.attrs.get("support_bh_metadata"):
+                probability_column = SUPPORT_Q_COLUMN
+            if probability_column is not None and recorded_probability != probability_column:
+                return False
+            if probability_threshold is not None and recorded_threshold != probability_threshold:
+                return False
+            recorded_lineage_support = int(package_metadata.loc[0, "min_lineage_support"]) if "min_lineage_support" in package_metadata else 0
+            recorded_unit_support = int(package_metadata.loc[0, "min_support"])
+            if recorded_unit_support < 0 or recorded_lineage_support < 0:
+                return False
+            if recorded_lineage_support != minimum_lineage_support:
+                return False
+            if minimum_support is not None and recorded_unit_support != minimum_support:
+                return False
+            # Reject stale reports before opening candidate tables and large payloads.
+            # Producer and runtime versions in this row are diagnostic only.
+            summary_identity = ContentDigestCache.signature(source_summary)
+            if package_metadata.loc[0, "source_summary_sha256"] != file_sha256(source_summary):
+                return False
             with archive.open(candidate_manifest_member) as handle:
                 candidate_manifest = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
             with archive.open(skipped_manifest_member) as handle:
@@ -1293,18 +1320,6 @@ def archive_matches_source(
             if "min_lineage_support" not in skipped_manifest:
                 skipped_manifest["min_lineage_support"] = "0"
                 skipped_manifest = skipped_manifest.loc[:, SKIPPED_CANDIDATE_COLUMNS]
-            if package_metadata.shape[0] != 1:
-                return False
-            recorded_probability = package_metadata.loc[0, "probability_column"]
-            recorded_threshold = float(package_metadata.loc[0, "probability_threshold"])
-            if recorded_probability not in PROBABILITY_COLUMNS or not np.isfinite(recorded_threshold) or not 0 <= recorded_threshold <= 1:
-                return False
-            if probability_column is None and expected_candidates is not None and expected_candidates.attrs.get("support_bh_metadata"):
-                probability_column = SUPPORT_Q_COLUMN
-            if probability_column is not None and recorded_probability != probability_column:
-                return False
-            if probability_threshold is not None and recorded_threshold != probability_threshold:
-                return False
             if not candidate_manifest["probability_column"].eq(recorded_probability).all():
                 return False
             observed_probabilities = np.array([float(value) for value in candidate_manifest["probability_value"]])
@@ -1330,14 +1345,6 @@ def archive_matches_source(
                     if metadata is None or any(str(package_metadata.loc[0].get(key)) != str(value)
                                                for key, value in metadata.items()):
                         return False
-            recorded_lineage_support = int(package_metadata.loc[0, "min_lineage_support"]) if "min_lineage_support" in package_metadata else 0
-            recorded_unit_support = int(package_metadata.loc[0, "min_support"])
-            if recorded_unit_support < 0 or recorded_lineage_support < 0:
-                return False
-            if recorded_lineage_support != minimum_lineage_support:
-                return False
-            if minimum_support is not None and recorded_unit_support != minimum_support:
-                return False
             if "selection_min_support" in candidate_manifest and not (
                 pd.to_numeric(candidate_manifest["selection_min_support"], errors="coerce").eq(recorded_unit_support)
                 & pd.to_numeric(candidate_manifest["selection_min_lineage_support"], errors="coerce").eq(recorded_lineage_support)
@@ -1392,10 +1399,8 @@ def archive_matches_source(
                     return False
                 if not archive_site_outputs_are_complete(archive, output_manifests[index]):
                     return False
-        # Tool, runtime, container, and GeneGalleon versions are diagnostic
-        # provenance only. Cache invalidation is driven by source content,
-        # declared report parameters, and required per-family input signatures.
-        return package_metadata.loc[0, "source_summary_sha256"] == file_sha256(source_summary)
+        return (ContentDigestCache.signature(archive_path) == archive_identity
+                and ContentDigestCache.signature(source_summary) == summary_identity)
     except Exception:
         return False
 

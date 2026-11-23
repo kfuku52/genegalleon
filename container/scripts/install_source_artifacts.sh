@@ -33,7 +33,7 @@ for source_name in "${sources[@]}"; do
 done
 
 # Both IQ-TREE entrypoints and the external worker come from one source build.
-# The separate IQ2MC-compatible PAML artifact remains required by species dating.
+# Species dating uses the separate upstream PAML MCMCtree artifact.
 micromamba run -n base python -m nwkit.iqtree_library check --interface library \
   > /opt/pg/logs/iqtree3_library_worker.json
 micromamba run -n base python -m pip check

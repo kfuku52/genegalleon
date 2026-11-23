@@ -4,13 +4,23 @@ Inputs are the verified BUSCO rows and model-change summary. Rescue counts
 gene loci; refinement counts accepted coding paths. Swiss-Prot protein
 support stays separate from genomic repeat-overlap evidence.
 """
+import csv
+import io
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from gene_model_improvement_summary import plot_method_summary
+from gene_model_improvement_summary import (
+    METHODS,
+    ORIGIN_COLOURS,
+    PATH_METHOD_LABELS,
+    PHASES,
+    omark_comparison_counts,
+    plot_method_summary,
+)
+from gene_model_refinement_busco import RESCUE_NO_DONOR_COLOUR, RESCUE_NO_DONOR_LABEL
 from matplotlib.text import Text
 
 STATUS_COLOURS = ("#000000", "#B22222", "#666666", "#CCCCCC")
@@ -54,8 +64,85 @@ def _donors(value, field, path=False):
                                 original["balanced_only"], original["both"]), strict=True))
 
 
+def stage_gene_totals(tsv, field="total_genes"):
+    counts = {}
+    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t"):
+        count = row.get(field)
+        if not count:
+            continue
+        key = row["species"], row["stage"]
+        value = int(count)
+        if key in counts or value <= 0:
+            raise ValueError(f"Invalid annotated gene total for {key}")
+        counts[key] = value
+    return counts
+
+
+def _publication_quality(report, changes):
+    path = report.parent / "omark_comparison.tsv"
+    if not path.is_file():
+        return {}
+    tsv = path.read_text()
+    rows = list(csv.DictReader(io.StringIO(tsv), delimiter="\t"))
+    identity_fields = ("refinement_plan_sha256", "effective_receipt_sha256")
+    identities = tuple(changes[key] for key in ("plan_sha256", "effective_receipt_sha256"))
+    if not rows or any(tuple(row.get(field) for field in identity_fields) != identities for row in rows):
+        return {}
+    return {
+        "omark": omark_comparison_counts(tsv),
+        "gene_totals": stage_gene_totals(tsv, "annotated_gene_loci") or None,
+    }
+
+
+def plot_publication_summary(rows, output, changes):
+    """Use the compact figure when the staged report has method and UTR evidence."""
+    data = []
+    for row in rows:
+        species = row["species"]
+        analysed = row["refinement_status"] == "analysed"
+        entry = dict(species=species, analysed=analysed,
+                     busco={phase: row[phase + "_result"] for phase in PHASES},
+                     rescue=None, coding_paths=None, utr=None)
+        if not analysed:
+            entry["busco_refined_assessed"] = True
+            data.append(entry)
+            continue
+        model = changes["species"][species]
+        annotation = model.get("figure_annotation")
+        totals = model["prior_rescued_loci"]
+        intersections = model.get("rescue_method_intersections", {})
+        if (annotation is None or sum(intersections.values()) != totals
+                or any(set(key.split("+")) - set(METHODS) for key in intersections)):
+            return False
+        repairs, isoforms = annotation["repairs"]
+        paths = dict(repairs=repairs, isoforms=isoforms, architecture=annotation["architecture"])
+        counts = {method: sum(n for key, n in intersections.items() if method in key.split("+")) for method in METHODS}
+        entry.update(
+            utr=annotation["utr"], coding_paths=paths, rescue={
+                "method_counts": counts,
+                "unique_loci": totals,
+                "exclusive_intersections": intersections,
+                "loci_supported_by_multiple_methods": sum(n for key, n in intersections.items() if "+" in key),
+                "swissprot_support": model.get("rescue_swissprot_groups"),
+            },
+        )
+        data.append(entry)
+    scores = rows[0]["before_result"]
+    quality = _publication_quality(output, changes) if "effective_receipt_sha256" in changes else {}
+    phases = "input, after rescue, after refinement"
+    plot_method_summary({
+        "mode": scores["mode"], "groups": scores["total"], "busco_dataset": scores["lineage"],
+        "species": data, "utr_include_selected": True,
+        "coding_path_legend": {"labels": list(PATH_METHOD_LABELS), "colours": list(ORIGIN_COLOURS)},
+    }, output, omark_label=f"BUSCO{' and OMArk' if quality else ''}, top to bottom: {phases}", **quality)
+    return True
+
+
 def plot_staged_comparison(rows, output, changes):
-    """Render four equal panels; preserve signed changes and unavailable rows."""
+    """Render the staged publication and keep legacy donor-only reports readable."""
+    output = Path(output)
+    if plot_publication_summary(rows, output, changes):
+        return
     totals = {r[p + "_result"]["total"] for r in rows for p in ("pre_rescue", "before", "after")}
     if len(totals) != 1 or next(iter(totals)) <= 0:
         raise ValueError("Count axes require the same positive BUSCO group total")
@@ -122,6 +209,9 @@ def plot_staged_comparison(rows, output, changes):
                 for key, colour in zip(keys, DONOR_COLOURS, strict=True):
                     rescue_axis.barh(i - .20, donors[key], left=left, height=.32, color=colour)
                     left += donors[key]
+                count = value.get("rescue_oriongeno_without_donor_loci", 0)
+                if count:
+                    rescue_axis.barh(i - .20, count, left=left, height=.32, color=RESCUE_NO_DONOR_COLOUR)
             else:
                 rescue_axis.barh(i - .20, rescued, height=.32, color="#5275b5")
             rescue_axis.annotate(str(rescued), (rescued, i - .20), xytext=(2, 0), textcoords="offset points", va="center")
@@ -193,7 +283,12 @@ def plot_staged_comparison(rows, output, changes):
             return y
 
         top = 4.33
-        end = legend(0, top, "Donor groups\n(upper bars)", DONOR_KEYS, DONOR_COLOURS, DONOR_LABELS)
+        rescue_keys, rescue_colours, rescue_labels = DONOR_KEYS, DONOR_COLOURS, DONOR_LABELS
+        if any(v.get("rescue_oriongeno_without_donor_loci") for v in stats.values()):
+            rescue_keys = (*rescue_keys, "oriongeno_without_donor")
+            rescue_colours = (*rescue_colours, RESCUE_NO_DONOR_COLOUR)
+            rescue_labels = (*rescue_labels, RESCUE_NO_DONOR_LABEL)
+        end = legend(0, top, "Donor groups\n(upper bars)", rescue_keys, rescue_colours, rescue_labels)
         swiss_end = legend(0, end - .13, "Swiss-Prot support\n(lower bars)", SWISS_KEYS, SWISS_COLOURS, SWISS_LABELS)
         end = legend(1, top, "Coding-path type\n(upper bars)", ("repair", "isoform"), ("#187d97", "#d38b21"), ("Repair path", "Added isoform"))
         path_end = legend(1, end - .13, "Donor groups\n(lower bars)", (*DONOR_KEYS, "other_interspecies"),
@@ -233,7 +328,7 @@ def plot_staged_comparison(rows, output, changes):
 
 
 def main():
-    """Redraw the five-column method/UTR view without running scientific stages."""
+    """Redraw the compact summary without running scientific stages."""
     import argparse
     import hashlib
     import json
@@ -246,7 +341,16 @@ def main():
     parser.add_argument("--output", required=True, type=Path, help="Separate figure output directory")
     parser.add_argument("--refinement-output", type=Path,
                         help="Reclassify path methods from receipt-bound refinement predictions")
+    parser.add_argument("--omark-comparison", type=Path, help="Existing three-stage OMArk comparison TSV")
+    parser.add_argument("--gene-totals", type=Path, help="Audited TSV with species, stage and total_genes")
+    parser.add_argument("--omark-label", default="", help="Single-line stage annotation")
+    parser.add_argument("--method-notes", action="store_true", help="Include the recorded methods under the legends")
+    parser.add_argument("--notes-in-caption", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.gene_totals and not args.omark_comparison:
+        parser.error("--gene-totals requires --omark-comparison")
+    if "\n" in args.omark_label or args.method_notes and args.notes_in_caption:
+        parser.error("Use a single-line stage annotation and one mode for method notes")
     output = args.output.resolve()
     if args.refinement_output is not None:
         root = args.refinement_output.resolve()
@@ -255,7 +359,8 @@ def main():
     source = args.figure_data.resolve()
     targets = ("improvement_figure_data.json", "improvement_method_provenance.json",
                "busco_comparison.pdf", "busco_comparison.png", "busco_comparison.svg")
-    if source in {output / name for name in targets}:
+    inputs = {path.resolve() for path in (source, args.omark_comparison, args.gene_totals) if path is not None}
+    if inputs.intersection(output / name for name in targets):
         parser.error("Figure output must not overwrite its reporting input")
     raw = source.read_bytes()
     source_sha = hashlib.sha256(raw).hexdigest()
@@ -273,7 +378,29 @@ def main():
         from refinement_path_methods import collect_path_methods
         data, methods = collect_path_methods(data, args.refinement_output, verification=verification)
         provenance["path_methods"] = methods
-    plot_method_summary(data, output)
+    options = {}
+    if args.method_notes:
+        options["show_method_notes"] = True
+    if args.omark_label:
+        options["omark_label"] = args.omark_label
+    if args.omark_comparison:
+        omark_path = args.omark_comparison.resolve()
+        quality = omark_path.read_bytes()
+        quality_sha = hashlib.sha256(quality).hexdigest()
+        verification.read([omark_path], expected={str(omark_path): quality_sha})
+        tsv = quality.decode()
+        options["omark"] = omark_comparison_counts(tsv)
+        totals = stage_gene_totals(tsv, "annotated_gene_loci")
+        provenance["omark_comparison_sha256"] = quality_sha
+        if args.gene_totals:
+            totals_path = args.gene_totals.resolve()
+            raw_totals = totals_path.read_bytes()
+            totals_sha = hashlib.sha256(raw_totals).hexdigest()
+            verification.read([totals_path], expected={str(totals_path): totals_sha})
+            totals = stage_gene_totals(raw_totals.decode())
+            provenance["gene_totals_sha256"] = totals_sha
+        options["gene_totals"] = totals or None
+    plot_method_summary(data, output, **options)
     verification.check()
     atomic_json(output / "improvement_figure_data.json", data)
     atomic_json(output / "improvement_method_provenance.json", provenance)

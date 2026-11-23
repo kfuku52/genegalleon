@@ -33,6 +33,7 @@ gene_model_refinement_transcriptome_inputs="${gene_model_refinement_transcriptom
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
 gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
 gene_model_refinement_rna="${gene_model_refinement_rna:-}"
+gene_model_refinement_accession_rna="${gene_model_refinement_accession_rna-auto}"
 gene_model_refinement_split_model_merges="${gene_model_refinement_split_model_merges:-}"
 gene_model_refinement_model_repairs="${gene_model_refinement_model_repairs:-}"
 gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
@@ -71,6 +72,7 @@ gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
 gene_model_rescue_model_repair_targets="${gene_model_rescue_model_repair_targets:-}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
 gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
+gene_model_rescue_oriongeno_without_donor="${gene_model_rescue_oriongeno_without_donor:-0}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
 gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
@@ -79,6 +81,8 @@ require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
+run_species_omark="${run_species_omark:-0}"
+omark_db_path="${omark_db_path:-auto}"
 species_busco_mode="${species_busco_mode:-transcriptome}"
 busco_timeout_seconds="${busco_timeout_seconds:-0}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
@@ -181,9 +185,9 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${input_generation_mode}" in
-  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
+  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize|refinement_omark|refinement_omark_baseline) ;;
   *)
-    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
+    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_predict|rescue_postprocess|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize|refinement_omark|refinement_omark_baseline)"
     exit 1
     ;;
 esac
@@ -219,6 +223,7 @@ for binary_flag_name in \
   run_validate_inputs \
   run_cds_fx2tab \
   run_species_busco \
+  run_species_omark \
   run_gene_model_refinement \
   run_gene_model_rescue \
   run_gene_model_rescue_swissprot \
@@ -307,6 +312,26 @@ dir_species_summary_shards="${input_generation_tmp_root}/species_summary_shards"
 dir_task_stats_shards="${input_generation_tmp_root}/task_stats_shards"
 dir_task_meta_shards="${input_generation_tmp_root}/task_meta_shards"
 file_busco_lineage_resolved="${input_generation_tmp_root}/busco_lineage.resolved.txt"
+
+run_refinement_omark() {
+  local database scratch status=0
+  local -a selection=(--refinement "${gene_model_refinement_dir}" --report "${gene_model_refinement_dir%/}.review/omark_comparison.tsv")
+  if [[ "${input_generation_mode}" == refinement_omark_baseline ]]; then
+    selection=(--baseline "${gene_model_refinement_dir}" --task-index "${GG_ARRAY_TASK_ID}")
+  fi
+  database=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}") || return $?
+  scratch=$(mktemp -d "${download_tmp_root}/omark.XXXXXX") || return $?
+  python "${gg_support_dir}/species_omark.py" "${selection[@]}" \
+    --db "${database}" --cache "${omark_cache_dir:-${gg_workspace_output_dir}/species_omark_cache}" \
+    --scratch "${scratch}" --threads "${GG_TASK_CPUS}" || status=$?
+  rm -rf -- "${scratch}"
+  return "${status}"
+}
+
+if [[ "${input_generation_mode}" == refinement_omark || "${input_generation_mode}" == refinement_omark_baseline ]]; then
+  run_refinement_omark
+  exit $?
+fi
 
 if [[ -z "${download_dir}" ]]; then
   download_dir="${input_generation_tmp_root}/input_download_cache"
@@ -2700,6 +2725,11 @@ prepare_gene_model_rescue() {
   local oriongeno_inputs
   oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
   [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
+  case "${gene_model_rescue_oriongeno_without_donor}" in
+    0) ;;
+    1) [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-without-donor) ;;
+    *) echo "gene_model_rescue_oriongeno_without_donor must be 0 or 1." >&2; return 1 ;;
+  esac
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_rescue_diagnostics}" ]] || rescue_args+=(--diagnostics "${gene_model_rescue_diagnostics}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
@@ -2816,6 +2846,15 @@ prepare_gene_model_refinement() {
   [[ -z "${rna_bam_dir}" ]] || refinement_args+=(--rna-bam-dir "${rna_bam_dir}")
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  local accession_rna="${gene_model_refinement_accession_rna-auto}"
+  if [[ "${accession_rna}" == auto ]]; then
+    accession_rna="${gg_workspace_input_dir}/refinement_accession_rna/inputs.tsv"
+    if [[ ${genomic_inputs} -eq 1 && "${gene_model_refinement_mode}" == conservative && -f "${accession_rna}" ]]; then
+      refinement_args+=(--accession-rna "${accession_rna}")
+    fi
+  elif [[ -n "${accession_rna}" ]]; then
+    refinement_args+=(--accession-rna "${accession_rna}")
+  fi
   [[ -z "${gene_model_refinement_split_model_merges}" ]] || refinement_args+=(--split-model-merges "${gene_model_refinement_split_model_merges}")
   [[ -z "${gene_model_refinement_model_repairs}" ]] || refinement_args+=(--model-repairs "${gene_model_refinement_model_repairs}")
   if [[ ${genomic_inputs} -eq 1 ]]; then
@@ -2831,6 +2870,7 @@ prepare_gene_model_refinement() {
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
+  if [[ ${run_species_omark} -eq 1 ]]; then run_refinement_omark || return $?; fi
   if [[ -s "${gene_model_refinement_dir}/effective/sequence/inputs.tsv" ]]; then
     echo "Selected sequence inputs: ${gene_model_refinement_dir}/effective/sequence/inputs.tsv"
     [[ -s "${gene_model_refinement_dir}/effective/inputs.tsv" ]] || return 0

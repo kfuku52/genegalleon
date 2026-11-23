@@ -261,6 +261,12 @@ miniprot searches are cached by inputs and tool identity under
 and completed target directories available when adding targets. A new
 target does not invalidate existing results. A revised target or panel
 requires a new output directory; unchanged donor artifacts can still be reused.
+Shared-cache publications are serialized across compute nodes using atomic
+filesystem namespace operations, including when Lustre is mounted with
+`localflock`. Finish older jobs before sharing a cache with the current
+implementation. An interrupted writer can leave a lock with an owner record in
+the cache's `.locks` directory. Inspect it with `shared_namespace_lock.py inspect`
+and reconcile it only after the workspace's users have stopped.
 When targets have separate parent directories, set
 `GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE` (CLI `--comparison-cache` on
 `run`) to one shared directory to reuse matching genomic comparisons across
@@ -312,6 +318,7 @@ Important settings:
 | `gene_model_refinement_transcriptome_inputs` | blank | Assembly coding isoforms and their gene assignments, paired with `gene_model_refinement_edges`. |
 | `gene_model_refinement_rescue_dir` | blank | Explicit frozen synteny plan to reuse. |
 | `gene_model_refinement_rna` | blank | Target whole coding RNA-path evidence TSV. |
+| `gene_model_refinement_accession_rna` | `auto` | Discover `refinement_accession_rna/inputs.tsv` under workspace inputs, or use the configured manifest. Blank disables discovery. |
 | `gene_model_refinement_rna_bam_dir` | `auto` | Discover RNA BAMs under the workspace input directory, or use the configured directory. Blank disables discovery. |
 | `gene_model_refinement_assembly_dir` | `auto` | Discover standard transcriptome assembly output. Blank disables discovery. |
 | `gene_model_refinement_split_model_merges` | blank | Reviewed split-model candidates from a completed rescue publication. |
@@ -384,14 +391,28 @@ publication when the annotation, OrionGeno input and homology settings match.
 The rescue `split-candidates` command can recreate that publication from
 existing rescue outputs.
 
-The genomic ownership, splice and ORF checks apply to all routes. A native
-OrionGeno path bridging two or more complete source ORFs requires at least
-80% in-frame retention of every fragment, full cross-fragment protein support
-from at least two external donor species, and at least two distinct
-whole-CDS RNA witnesses from the target species. A whole-CDS RNA witness for
-any original complete path holds the candidate. Competing paths and protected
-annotations remain unresolved. Target RNA checks query shortlisted paths in
-indexed BAMs or use the supplied whole-CDS RNA table.
+Genomic ownership, splice and ORF checks apply to every route. An original CDS
+with usable translation, a start, an in-frame stop and no initial phase offset
+counts as complete even if its GFF record carries a partial flag.
+
+Two or more complete source ORFs can be joined when two external donor species
+project the same genomic coding path. A full-length donor alignment must cover
+the junction between consecutive fragments. Each source peptide must align to a
+distinct, ordered part of that donor, and at least 90% of its aligned residues
+must survive in the joined CDS. At least two species must pass these protein
+checks. Unique full-length fragment hits to separate collinear genes within
+10 kb in a donor hold the join. Refinement can disregard such a pair when
+all corresponding intervals place both hits elsewhere, at least three species
+project the joined CDS from the same protein that supports both source fragments,
+and two of those proteins lie within conserved flanks. For competing joins
+of exactly the same source genes, these positive checks can identify one path
+when all qualifying projections for every rival come from outside its flanks. The same residue checks apply to joins
+retaining less than 80% of any source CDS in frame. Every fragment must retain
+at least two-thirds of its coding bases. In the absence of matching projections,
+OrionGeno joins of complete ORFs require at least 80% in-frame retention and
+two distinct target RNA molecules spanning the joined CDS. An observed complete
+original transcript holds the join in either route. Competing paths and protected
+annotations remain unresolved.
 
 `effective/split_model_merges.json` records the adoption basis and the matching
 OrionGeno transcripts or source reference locus. RNA-supported merges also
@@ -413,11 +434,26 @@ least 45% identity, 65% coverage on both proteins and 60% of the longer protein
 paired to a residue. In at least two donor species (or the configured
 independent-species minimum, if greater), the hits must be to distinct genes on
 the same chromosome and strand, in the same transcriptional order, within 10 kb.
-The eligible donors must occupy at least two different sister branches along
+A pair 10–100 kb apart can also contribute when both genes are consecutive
+in the representative annotation. This route requires at least three donor species,
+no opposing fusion hit, and consecutive pairs inside conserved flanks in at least
+two species. Each outer anchor is within 500 kb of its target boundary and the
+corresponding donor interval spans at most 1 Mb. The eligible donors must occupy at least two different sister branches along
 the target lineage. At the nearest ancestor with informative donors, at least
 one donor must support the split. A source-like full-length donor annotation
-is recorded as opposing evidence. Donors with both architectures do not count
-towards split support. A nearest donor whose fusion model is supported by at
+is recorded as opposing evidence. Donors with unresolved support for both
+architectures do not count towards split support. If the nearest informative group contains both
+architectures, refinement holds the candidate for review. For runs with
+rescue synteny, refinement examines the existing flanks of opposing hits when
+enough donor species have collinear split copies. Two conserved flanks must
+identify a unique corresponding interval to classify a hit. A donor with all
+spanning hits outside the interval can be excluded as opposing evidence. Two
+split-supporting species and a fusion annotation within the corresponding
+interval trigger review. Independent accession RNA can confirm the split in
+this case. Two whole-CDS RNA witnesses for a fusion within that interval hold
+the split even when the donor is more distant.
+
+A nearest donor whose fusion model is supported by at
 least two matching whole-CDS RNA witnesses in `--rna` holds the candidate for
 review. A qualifying lower-scoring isoform of the same donor locus can
 also supply this RNA evidence. RNA from a different paralog cannot veto
@@ -435,13 +471,65 @@ configured `taxonomy_species_tree` for direct genomic inputs. A run lacking a
 species tree reports candidates for review. Competing splits or model edits
 also leave the locus unresolved.
 
-If target RNA is available, refinement checks only fusion candidates that pass
-the comparative screen. RNA BAM queries require a primary, strand-matched
-read spanning the intact CDS, including its fusion splice. Duplicate read
-names across BAMs count once. The same path can be supplied via `--rna` with
+If target RNA is available, refinement checks candidates supported by
+comparative evidence or held for conflicting nearest donors. The same indexed
+BAM pass checks for a primary, strand-matched read spanning the intact CDS,
+including its fusion splice, and for reads spanning the exact diagnostic
+junction. Duplicate read names across BAMs count once.
+The same path can be supplied via `--rna` with
 counts from independent molecules. One whole-CDS witness holds the split for
-review and two or more support retaining the fused model. A missing RNA input
-or zero validated witnesses contributes no evidence to the decision.
+review and two or more support retaining the fused model. Two primary
+RNA fragments with distinct alignment extents, MAPQ of at least 30 and at
+least 16 aligned bases on each side of the exact splice also hold the split
+for review. A missing RNA input or zero validated witnesses contributes no
+evidence to the decision.
+
+#### RNA evidence from another accession
+
+Supply `--accession-rna inputs.tsv` to the refinement planner, or configure
+`gene_model_refinement_accession_rna`. The tab-separated manifest has one row
+per evidence accession and uses the target's existing species identifier.
+Each row configures the data files and provenance for the entire accession.
+
+```tsv
+species	target_accession	evidence_accession	gtf	protein	rna_sources
+Solanum_lycopersicum	Heinz 1706	M82	TomatoRTD_transfix.gtf.zip	TomatoRTD_transfeat_coding_pep.zip	SJ:isoseq&rnaseq
+```
+
+Paths are relative to the manifest or absolute. The GTF needs exon rows with
+quoted `gene_id` and `transcript_id` attributes. Each protein FASTA ID must
+identify the corresponding GTF transcript. Files can be plain text, gzip,
+or ZIP with a single GTF or FASTA inside. The comma-separated `rna_sources`
+values name the GTF column-2 labels that document independent RNA support.
+Use transcript-supported sources, with accession identity and labels checked
+against the provider's metadata.
+
+RNA from another accession can resolve a split supported on different sister
+branches when donor annotations conflict.
+Both validated replacement proteins must match full-length proteins exactly
+at a unique pair of loci in the other accession. The matching RNA-supported
+transcripts must be nonoverlapping, on the same contig and strand, and in the
+same transcriptional order within 10 kb. An RNA-supported transcript with
+exons in both matched models, or a full-length supported fusion, leaves the
+conflict unresolved. Target RNA retains priority. Donor species remain the
+units of comparative support.
+
+When comparative split support is sparse or confined to one sister branch,
+the accession evidence also requires two flanking genes. Among the nearest ten
+representatives on each side, the closest qualifying protein must be unique in
+the target and map to a single RNA-supported accession locus. The two accession
+flanks must bracket the candidate on one chromosome within 1 Mb, in either order.
+The same check can identify a projected join or a longer CDS. Each join needs
+two independent donor projections and at least two-thirds in-frame retention per
+fragment. A longer CDS requires projections from two species assigned to the source
+locus by synteny or reciprocal protein matching, at least 90%
+in-frame retention and a gain of at least 15 residues and 10% of the source protein.
+A supported original protein at the corresponding accession locus, a target RNA
+witness for the original CDS, or replicated target reads at a lost splice hold
+the repair. Competing CDS paths for identical source loci can be resolved if
+exactly one path matches. Distinct CDS paths encoding the same matched protein
+remain ambiguous. Existing adoption records include the accession transcripts
+and the flanking genes used for these decisions.
 
 The representative CDS, protein, and GFF views publish the two new genes.
 `effective/fused_model_split_decisions.json` records split and fusion support,
@@ -450,6 +538,13 @@ the nearest informative donors, and the decision for each tested candidate.
 coordinates (zero-based, half-open), OrionGeno transcripts, and CDS hashes.
 Source views retain the input annotation. The check reuses rescue protein and
 coordinate inputs without rerunning whole-genome Miniprot.
+
+A completed rescue run can supply its augmented annotation, existing native
+predictions, and verified synteny comparisons to a fresh refinement plan.
+Refinement verifies comparison receipts and member bytes under the frozen
+rescue plan before consulting its own comparison backend. A comparison
+missing from an older rescue backend can be restored with the source and
+plan that produced that run.
 
 ### Reviewed split-model merges
 
@@ -502,6 +597,36 @@ It preserves that transcript ID and CDS coordinates. Automatic changes are
 recorded with their evidence in `effective/model_repairs.json`. The standard
 rescue and conservative refinement commands use this behavior without target
 or approval tables.
+
+#### Repairing individual coding isoforms
+
+Default conservative refinement compares each proposed CDS with the source
+transcripts at its genomic locus. It considers shared splice junctions,
+in-frame coding overlap and matching termini. A revision must match one
+source coding path unambiguously. Transcripts with identical CDS coordinates
+and phases can share a revision while keeping their own IDs and UTRs.
+Protected source annotations and proposals that overlap a conflicting locus
+remain unresolved. A phase-only correction applies to an individual
+transcript only when its CDS rows can be edited independently.
+
+An accepted new coding path gets a transcript ID under the original gene in
+`effective/full_annotation/`. The original transcripts remain there.
+Admission requires a verified genomic ORF and qualifying homology from at
+least two other species (or the configured minimum if higher). The evidence
+must also support the change through a conserved CDS gain, a donor-supported
+native extension of a partial transcript, whole-CDS target RNA, or a matching
+RNA-derived translation at a uniquely anchored locus in another accession.
+
+The representative map and downstream FASTAs keep one sequence per gene.
+A unique repair of the current transcript can become representative when
+the source is partial or the revised path has direct RNA evidence.
+RNA evidence for both paths preserves the original representative.
+For unresolved paralog correspondence, promotion of that transcript requires
+whole-CDS target RNA or accession RNA together with independent syntenic
+projections. A directly supported revision of a different transcript can
+replace the current representative when it wins the configured representative
+comparison. The existing `model_repairs.json` records the original transcript
+IDs, changed CDS blocks and whether the repaired transcript became representative.
 
 ### Reviewed single-locus model repairs
 
@@ -883,17 +1008,32 @@ and the locus evidence alongside completeness.
 
 ### Compact method and UTR summary
 
-For an already audited reporting summary, draw the five-column method view with:
+The three-stage review writes the compact summary when the publication
+includes rescue-method and UTR evidence. The order is missing-gene rescue,
+model refinement, UTRs, BUSCO, and the two OMArk columns when the matching
+comparison is available. The bars show counts. The labels to the right show
+the percentage of final transcripts with UTRs, complete BUSCO groups,
+detected conserved HOGs, and consistent full-length proteins. The last label
+also gives the count of annotated protein-coding loci for that stage when
+available. For a transcriptome assembly, this count is the number of loci
+represented in the sequence set. The OMArk percentage uses the number of
+representative proteins evaluated by OMArk.
+
+For an already audited reporting summary, redraw the figure with:
 
 ```bash
 python workflow/support/gene_model_improvement_plot.py \
   --figure-data /path/to/figure_data.json --output /path/to/new-figures \
-  --refinement-output /path/to/refinement
+  --omark-comparison /path/to/refinement.review/omark_comparison.tsv
 ```
 
 This writes `busco_comparison.{pdf,png,svg}`, the consumed
 `improvement_figure_data.json`, and `improvement_method_provenance.json`.
-It runs neither predictors nor BUSCO. `--refinement-output` is optional when
+This redraw reuses saved BUSCO and OMArk results. Supply
+`--gene-totals /path/to/gene_totals.tsv` with columns `species`, `stage`, and
+`total_genes` for an older OMArk comparison that lacks annotation counts. Use
+`input`, `rescued`, and `refined` as stage values. OMArk is omitted if the
+comparison is absent. `--refinement-output` is optional when
 the supplied summary already has audited method counts; when present, it
 freshly verifies the frozen plan and prediction receipts and rederives the
 three refinement method groups. The summary must declare that same plan's
@@ -913,8 +1053,8 @@ count. It requires `mode` (`proteins` or `transcriptome`), positive integer
 | `species`, `analysed` | Species label and a Boolean model-analysis status. |
 | `busco` | `pre_rescue`, `before` (after rescue), and `after` (after refinement), each with integer `single`, `duplicated`, `fragmented`, `missing` summing to `groups`. An unanalysed species needs only `pre_rescue`. |
 | `rescue` | `method_counts` for `synteny_based`, `miniprot`, `oriongeno`; `exclusive_intersections` with `+`-joined route names; `unique_loci` and `loci_supported_by_multiple_methods`. Optional `swissprot_support` partitions these same loci into `te_only`, `other_only`, `both`, `no_informative_hit`, `not_assessed`. All counts must reconcile to the same distinct adopted loci. |
-| `coding_paths` | `repairs`, `isoforms`, three `counts` in Miniprot-only / OrionGeno-only / both-methods order, and matching `colours`. |
-| `utr` | Positive `final_genes`; `sides` (`five_only`, `three_only`, `both`, `none`) and `origins` (`original_gff_only`, `oriongeno_only`, `both`, `none`), each summing to `final_genes`. These require independently audited source assignments. |
+| `coding_paths` | `repairs`, `isoforms`, and optional `architecture` containing `merges` and `splits`. The reporting snapshot can also retain audited nomination counts and colours. |
+| `utr` | Positive `final_genes` (the number of exported coding transcripts); `sides` (`five_only`, `three_only`, `both`, `none`) and `origins` (`original_gff_only`, `oriongeno_only`, `both`, `none`), each summing to `final_genes`. These require independently audited source assignments. |
 
 Unanalysed rows must set the three model fields to null. The top-level
 `coding_path_legend` contains `labels` `["Miniprot only", "OrionGeno only",
@@ -924,25 +1064,18 @@ the verified predictions; the supplied revision/isoform totals must still agree.
 Donor-species support groups are a different measurement and are never relabelled
 as predictor methods. This reporting snapshot is not a model-admission input.
 
-The 7.2-inch figure has five equal columns: missing-gene rescue, refined coding
-paths, BUSCO groups, change in complete groups (S+D), and UTRs in final gene models.
-The two Miniprot routes form one exclusive blue stack, OrionGeno uses a separate
-green bar, and the lower warm/grey stack gives Swiss-Prot annotation of their
-non-redundant union. Historical inputs without Swiss-Prot counts show that union
-as not assessed, never as no informative hit. Refinement and UTR upper bars use the warm palette;
-their method/source lower bars use the blue palette. All bars have a common
-physical thickness. A baseline-only BUSCO bar stays in the top slot. BUSCO axes show group
-counts above and percentages below; nonnegative changes start at exactly zero.
-Unanalysed model panels show grey placeholders without a crossing zero line.
-Each bar group has a titled legend within its column. BUSCO shares one category
-legend, with top/middle/bottom identified as baseline/post-rescue/post-refinement.
-Legend fitting accounts for both PDF core-font and PNG metrics, including the
-space between UTR ends and UTR sources. If the legends and threshold notes need
-more room, the figure grows vertically while retaining its width, panel widths,
-row pitch and physical bar thickness; the resulting layout is checked again.
+The two Miniprot routes form one exclusive blue stack, OrionGeno uses a
+separate green bar, and the lower stack gives Swiss-Prot annotation of
+their combined loci. Historical inputs without Swiss-Prot counts show
+that union as unassessed. The refinement column stacks CDS repairs,
+merges, and splits in one bar with colour-matched counts underneath.
+The UTR column shows transcript counts by ends and source. BUSCO and
+OMArk show available stages from top to bottom in input, post-rescue,
+and post-refinement order. The model panels display `Not analyzed`
+for species that did not run genome model improvement.
 
-Optional top-level reporting metadata adds the dataset name and the thresholds
-below the plot. `busco_dataset` is the actual configured lineage name, for example
+Top-level reporting metadata can supply the dataset name. Use `--method-notes`
+to print recorded thresholds below the plot. `busco_dataset` is the actual configured lineage name, for example
 `embryophyta_odb12`. Copy `rescue_parameters` from the frozen rescue plan's
 `request.parameters`; the displayed fields are `minimum_coverage`,
 `minimum_identity`, `minimum_broad_coverage`, `minimum_lower_coverage_identity`,
@@ -1039,8 +1172,13 @@ or publication step.
 Selected sequence, synteny and CDS-resolution caches are separated by manifest
 identity and sequence view. Use separate workflow output directories when
 running different bundles against the same final analysis artifacts.
-Input verification freshly hashes every publication member once per boundary,
-sharing reads between role paths and receipt entries while checking mutations.
+`verify-inputs` without a field checks every member of the publication. With a
+field it verifies the supplied manifest against its publication receipt and
+hashes the requested files. Layout fields verify the directories and shared
+tables they return. For one exact file, use
+`verify-inputs --inputs effective/inputs.tsv --field cds --species Species_name`.
+Kallisto uses this lookup. Paired fractionation reads the requested species'
+CDS, GFF and representative map, and BUSCO input pairing verifies the CDS role.
 FASTA indices retain the decompressed UTF-8 byte total as private metadata for
 selected TBLASTN database sizes. Existing indices receive one atomic rebuild
 under `ensure`; public schema 2 manifests and extracted sequences are unchanged.
@@ -1099,6 +1237,61 @@ concurrent task.
 The final index copies the verified initial SQLite index and applies the
 accepted predictions to that copy. This reuses the original catalog import
 and preserves the initial index for restart and inspection.
+
+## Comparing representative proteomes with OMArk
+
+Set `run_species_omark=1` in input generation to evaluate the representatives
+after refinement finalization. For a completed publication, run only the comparison
+with the existing refinement directory and workspace:
+
+```bash
+GG_INPUT_INPUT_GENERATION_MODE=refinement_omark \
+GG_INPUT_GENE_MODEL_REFINEMENT_DIR=/path/to/refinement \
+bash workflow/gg_input_generation_entrypoint.sh
+```
+
+To evaluate input representatives before refinement finishes, select
+`input_generation_mode=refinement_omark_baseline` and point
+`gene_model_refinement_dir` at a plan with completed species catalogues.
+Run one array task per species in plan order (`GG_ARRAY_TASK_ID`, starting at 1).
+A previous catalogue for the same original inputs is also suitable. Each task
+excludes that catalogue's newly rescued loci and caches only the input result.
+Use the same OMArk database and cache for the final comparison. It derives the
+representatives from the current catalogue and reuses matching protein sets.
+
+The table at `<refinement>.review/omark_comparison.tsv` has one row per species
+and evaluated stage. The input and rescued stages use the catalogue's baseline
+transcript and its admitted translation, one protein per locus. The input stage
+excludes loci appended by this rescue. Genomic targets without rescue and
+CDS-only targets have input and refined rows. The refined stage uses the exact
+published representative proteins, including the mixed cohort in
+`effective/sequence/inputs.tsv`.
+
+The table reports protein counts, taxonomically consistent full-length proteins
+(count and percentage), fragment and partial counts across placements, the
+selected clade, conserved HOGs and missing HOGs. The missing-HOG delta is
+relative to input and is populated only for a matching clade and HOG
+denominator. A stage with zero admitted proteins has empty HOG fields.
+Each evaluated row links to OMArk's native summary.
+
+Both workflows use `output/species_omark_cache` in their shared workspace.
+To share results across workspaces, set `omark_cache_dir` to the same absolute
+directory in both. Select the same database with `omark_db_path` (default
+`auto`). With `run_species_omark=1`, genome evolution reuses matching results
+and exposes the usual paths under `genome_evolution/omamer_search` and
+`genome_evolution/omark` as links. Keep the shared cache accessible while using
+these outputs. Previously generated local results retain the legacy workflow's
+reuse policy.
+
+Reuse matches species, protein IDs and amino-acid sequences, OMAmer database
+content, the ETE taxonomy database used to select the clade, and tool versions
+and executables. Record order, descriptions, wrapping
+and a terminal stop are normalised before search. A CDS translation that yields
+a different protein set gets its own result. Each distinct result is published
+only when both tools succeed. Unchanged database and catalogue files use the
+existing digest cache where file timestamps permit. The comparison consumes
+the published locus catalogue and effective proteins, without replaying
+predictors or checking genome and GFF contents.
 
 ## Three-stage BUSCO
 

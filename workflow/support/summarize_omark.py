@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import re
+import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import pandas
@@ -85,6 +88,7 @@ def build_arg_parser():
         default="omark_summary.tsv",
         help="Output TSV path.",
     )
+    parser.add_argument("--selection", type=Path, help="Current genome-evolution OMArk selection")
     return parser
 
 
@@ -215,9 +219,12 @@ def parse_sum_file(sum_path: Path) -> dict:
 def find_sum_files(omark_outdir: Path):
     if not omark_outdir.exists():
         return []
+    paths = set(omark_outdir.rglob("*.sum"))
+    # Shared per-species result directories can be symlinks.
+    paths.update(omark_outdir.glob("*/*.sum"))
     return sorted(
         path
-        for path in omark_outdir.rglob("*.sum")
+        for path in paths
         if path.is_file() and not any(part.startswith(".") for part in path.parts)
     )
 
@@ -228,11 +235,27 @@ def main():
 
     omark_outdir = Path(args.omark_outdir).expanduser().resolve()
     outfile = Path(args.outfile).expanduser().resolve()
-    rows = [parse_sum_file(sum_path) for sum_path in find_sum_files(omark_outdir)]
-    df = pandas.DataFrame(rows, columns=HEADER)
-    df = df.sort_values(["species", "sum_file"], kind="mergesort").reset_index(drop=True)
-    outfile.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(outfile, sep="\t", index=False)
+    from fasta_sequence_store import exclusive_lock
+    with exclusive_lock(args.selection.parent / ".omark.lock") if args.selection else nullcontext():
+        if args.selection:
+            from species_omark import result_directory
+            state = json.loads(args.selection.read_text())
+            directory = args.selection.parent / state["cache"]
+            rows = []
+            for name, key in state["queries"].items():
+                result = result_directory(directory, name, state["contract"], key)
+                row = parse_sum_file(result / "omark" / (name + ".sum"))
+                row.update(species=name, sum_file=str(omark_outdir / name / (name + ".sum")))
+                rows.append(row)
+        else:
+            rows = [parse_sum_file(sum_path) for sum_path in find_sum_files(omark_outdir)]
+        df = pandas.DataFrame(rows, columns=HEADER)
+        df = df.sort_values(["species", "sum_file"], kind="mergesort").reset_index(drop=True)
+        outfile.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=outfile.parent) as tmp:
+            temporary = Path(tmp) / "summary.tsv"
+            df.to_csv(temporary, sep="\t", index=False)
+            temporary.replace(outfile)
 
 
 if __name__ == "__main__":

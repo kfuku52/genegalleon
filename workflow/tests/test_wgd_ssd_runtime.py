@@ -68,6 +68,15 @@ def run_core(workspace, **overrides):
     return subprocess.run(["bash", str(CORE)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
 
 
+def replot_with_custom_style(args):
+    import matplotlib
+
+    with matplotlib.rc_context({"font.size": 9, "axes.facecolor": "lightgray"}):
+        replot(args)
+        assert matplotlib.rcParams["font.size"] == 9
+        assert matplotlib.rcParams["axes.facecolor"] == "lightgray"
+
+
 def test_real_native_count_synteny_ds_and_node_classification_with_cache(tmp_path):
     workspace = tmp_path / "workspace"
     fixture(workspace)
@@ -280,7 +289,7 @@ def test_wgd_stage_can_plot_duplication_score_without_genomes(tmp_path, holdout)
         assert "count_overlay.tsv" in summary["output_hashes"]
         redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
                                  count_overlay_model=None)
-        replot(redraw)
+        replot_with_custom_style(redraw)
         assert (redraw.output / "wgd_species_tree.png").read_bytes() == (root / "wgd_species_tree.png").read_bytes()
         assert (redraw.output / "count_overlay.tsv").read_bytes() == (root / "count_overlay.tsv").read_bytes()
         assert (redraw.output / "plot_provenance.json").is_file()
@@ -435,7 +444,7 @@ def test_wgd_stage_uses_cross_anchors_in_candidate_plot(tmp_path, ds_method):
         assert "cross_synteny_matched_paths=1" in (classification / "classified_gene_tree.nhx").read_text()
         redraw = SimpleNamespace(evidence=root, output=tmp_path / "redraw", count_overlay_table=None,
                                  count_overlay_model=None)
-        replot(redraw)
+        replot_with_custom_style(redraw)
         for name in ("wgd_species_tree.png", "wgd_cross_ks.png"):
             assert (redraw.output / name).read_bytes() == (root / name).read_bytes()
     assert str(workspace / "boot.zip") in summary["plan"]["input_hashes"]

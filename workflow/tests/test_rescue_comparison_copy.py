@@ -2,7 +2,9 @@
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -172,3 +174,39 @@ def test_checkpoint_cleanup_preserves_receipts_and_retires_only_verified_copies(
         assert rescue.verified(worker, key)
         assert list(deduplicate(tmp_path, apply=True))[0]['freed_bytes'] == 0
     assert rescue.digest(worker / 'receipt.json') == receipt
+
+
+def test_shared_cache_serializes_writers_without_client_local_flock(tmp_path, monkeypatch):
+    def ineffective_flock(_):
+        pytest.fail('Shared cache used a client-local advisory lock')
+
+    monkeypatch.setattr(rescue, 'exclusive_lock', ineffective_flock)
+    first_started, contender_started, first_finished = Event(), Event(), Event()
+    calls = []
+
+    def first_builder(directory):
+        calls.append('first')
+        first_started.set()
+        assert first_finished.wait(timeout=10)
+        (directory / 'data').write_text('complete')
+
+    def second():
+        contender_started.set()
+
+        def unexpected_builder(_):
+            pytest.fail('Second writer rebuilt a verified cache entry')
+
+        return rescue.stage(tmp_path, Path('shared'), {'key': 1}, unexpected_builder, shared_cache=True)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(rescue.stage, tmp_path, Path('shared'), {'key': 1}, first_builder,
+                                shared_cache=True)
+        assert first_started.wait(timeout=10)
+        competing = executor.submit(second)
+        assert contender_started.wait(timeout=10)
+        first_finished.set()
+        directory = first.result(timeout=10)
+        assert competing.result(timeout=10) == directory
+    assert calls == ['first']
+    assert (directory / 'data').read_text() == 'complete'
+    assert rescue.verified(directory, {'key': 1})

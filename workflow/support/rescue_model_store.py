@@ -6,10 +6,12 @@ The manifest is an index, not an independent trust anchor: verified readers bind
 it and their consumed members to the enclosing producer receipt. A streaming
 reader must be exhausted to complete its checksum and generation fence.
 """
+import errno
 import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -18,7 +20,7 @@ import sys
 import tempfile
 from collections import OrderedDict, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 from itertools import batched, chain, islice
 from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
@@ -241,13 +243,9 @@ def _unpack(envelope, body, *, _context_owned=False, _body_decoded=False):
     # Copies must be independent: callers routinely modify CDS/evidence/status.
     shared = body if _body_decoded else json.loads(body)
     context = envelope["context"]
-    if _context_owned:
-        # Streaming readers decoded this envelope exclusively for this record.
-        # Retain finite-number/UTF-8 validation without decoding its context a
-        # second time. Mutable shared-body containers are already private to this
-        # record, including when its immutable DNA strings came from the cache.
-        _json(context)
-    else:
+    # Owned contexts were decoded by _decode_line or written to our private
+    # partial spool with _json. Other callers still need a validated private copy.
+    if not _context_owned:
         context = json.loads(_json(context))
     if "raw_order" in envelope:
         if "raw_prediction" not in shared or "raw_prediction" not in context:
@@ -613,6 +611,33 @@ def _readonly(path):
     return sqlite3.connect(Path(path).as_uri() + "?mode=ro&immutable=1", uri=True)
 
 
+@contextmanager
+def _open_body_database(path, expected=None, *, verify_source=False):
+    """Use a private, byte-verified SQLite copy for random reads on shared storage."""
+    with ExitStack() as resources:
+        readable = path
+        if expected is not None:
+            source = _stat(path)
+            scratch = Path(tempfile.gettempdir())
+            if scratch.stat().st_dev != source[0] and shutil.disk_usage(scratch).free >= source[2]:
+                try:
+                    directory = resources.enter_context(tempfile.TemporaryDirectory(
+                        prefix="gg-model-bodies-", dir=scratch))
+                    copied = Path(directory) / path.name
+                    shutil.copyfile(path, copied)
+                except OSError as error:
+                    if error.errno not in {errno.ENOSPC, errno.EDQUOT}:
+                        raise
+                    resources.close()
+                else:
+                    if _digest(copied) != expected or _stat(path) != source:
+                        raise ValueError("Model-store body database changed during scratch copy")
+                    readable = copied
+            if readable == path and verify_source and _digest(path) != expected:
+                raise ValueError(f"Model-store checksum changed: {path.name}")
+        yield resources.enter_context(closing(_readonly(readable)))
+
+
 class _Bodies:
     def __init__(self, db, codec):
         self.db = db
@@ -732,7 +757,7 @@ class _HashReader:
 
 def _record_lines(path, codec, expected=None):
     with Path(path).open("rb") as raw:
-        reader = _HashReader(raw)
+        reader = raw if expected is None else _HashReader(raw)
         if codec == "gzip":
             handle = gzip.GzipFile(fileobj=reader, mode="rb")
         else:
@@ -747,11 +772,27 @@ def _record_lines(path, codec, expected=None):
             raise ValueError("Model-store shard checksum changed")
 
 
+def _finite_float(token):
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("Nonfinite number in model-store record")
+    return value
+
+
+_ENVELOPE_DECODER = json.JSONDecoder(parse_float=_finite_float, parse_constant=_finite_float)
+
+
 def _decode_line(line):
     try:
-        return json.loads(line)
+        text = line.decode(json.detect_encoding(line))
+        envelope = _ENVELOPE_DECODER.decode(text)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Malformed model-store JSONL record") from error
+    # Literal text has already passed Unicode decoding. Escapes can introduce a
+    # lone surrogate; validate those uncommon records before handing off ownership.
+    if "\\u" in text:
+        _json(envelope)
+    return envelope
 
 
 def _lines(path, codec, expected=None):
@@ -801,7 +842,7 @@ def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
         for index, shard in enumerate(manifest["shards"]):
             member = f"{prefix}/{shard['path']}"
             output = Path(directory) / str(index)
-            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected[member],
+            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected.get(member),
                                                 shard["first"], shard["count"], predicate, output)))
             if len(pending) >= workers * 2:
                 yield from consume()
@@ -824,10 +865,10 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
             raise ValueError("Model IDs must be a collection of strings")
     root, store = _layout(directory)
     key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify or verification is not None else None)
-    if key is not None:
+    if frozen_key:
         _check_key(directory, key, kind)
     paths = {p: _member(root, p) for p in key["files"]} if key is not None else {}
-    stats = {p: _stat(path) for p, path in paths.items()}
+    stats = {p: _stat(path) for p, path in paths.items()} if verification is None else {}
     if verification is not None:
         expected = {str(path): key["files"][member] for member, path in paths.items()}
         expected[str(root / "receipt.json")] = key["producer_receipt_sha256"]
@@ -856,17 +897,27 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
     else:
         manifest, _ = _manifest(store)
         prefix = store.relative_to(root).as_posix()
+        revision_member = f"{prefix}/revision.sqlite" if kind == "revision" else None
         if key is not None and verification is None:
             for member, path in paths.items():
-                if not member.endswith((".jsonl.gz", ".jsonl.zst")) and _digest(path) != key["files"][member]:
+                if (member != revision_member and not member.endswith((".jsonl.gz", ".jsonl.zst"))
+                        and _digest(path) != key["files"][member]):
                     raise ValueError(f"Model-store checksum changed: {member}")
         if kind in {"accepted", "revision"}:
-            db = _readonly(store / f"{kind}.sqlite")
-            try:
+            path = store / f"{kind}.sqlite"
+            if revision_member is not None and key is not None:
+                # The overlay's body lookups are random even though its
+                # envelopes are consumed in ordinal order. Verify the local
+                # copy, or the source when no separate scratch is available.
+                database = _open_body_database(path, key["files"][revision_member],
+                                               verify_source=verification is None)
+            else:
+                database = closing(_readonly(path))
+            with database as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
                 count = 0
                 for ordinal, blob in db.execute("SELECT ordinal,envelope FROM entries ORDER BY ordinal"):
-                    envelope = json.loads(_decompress(blob, manifest["codec"]))
+                    envelope = _decode_line(_decompress(blob, manifest["codec"]))
                     if envelope.get("ordinal") != ordinal:
                         raise ValueError("Model-store overlay order changed")
                     record = bodies.unpack(envelope, context_owned=True)
@@ -877,21 +928,21 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                         yield (ordinal, record) if with_ordinals else record
                 if count != manifest["counts"][kind]:
                     raise ValueError("Model-store overlay count changed")
-            finally:
-                db.close()
         elif kind == "partial":
             yield from _partials(root, store, manifest, key)
         elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
               and len(manifest["shards"]) >= scan_workers * 2):
-            with closing(_readonly(store / "bodies.sqlite")) as db:
+            with _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
-                for envelope in _selected_shard_rows(prefix, manifest, paths, key["files"], context_filter, scan_workers):
+                checksums = key["files"] if verification is None else {}
+                for envelope in _selected_shard_rows(prefix, manifest, paths, checksums, context_filter, scan_workers):
                     record = bodies.unpack(envelope, context_owned=True)
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
         else:
-            db = _readonly(store / "bodies.sqlite")
-            try:
+            stage_bodies = context_filter is not None or verification is not None
+            checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and stage_bodies else None
+            with _open_body_database(store / "bodies.sqlite", checksum) as db:
                 bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
                     count = 0
@@ -922,11 +973,9 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                         raise ValueError("Model-store shard count changed")
                 if ordinal != manifest["counts"]["models"]:
                     raise ValueError("Model-store candidate count changed")
-            finally:
-                db.close()
     if key is not None:
         _check_key(directory, key, kind)
-        if any(_stat(path) != stats[member] for member, path in paths.items()):
+        if any(_stat(paths[member]) != identity for member, identity in stats.items()):
             raise ValueError("Model-store member changed during consumption")
     if verification is not None:
         verification.check()
@@ -1007,16 +1056,18 @@ def _partial_entries(root, store, manifest, key, refs):
             raise ValueError("Missing model-store partial line reference")
 
 
-def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model_ids=None):
+def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model_ids=None, verification=None):
     """Read ordered candidates, optionally materializing only given model IDs.
 
     ID selection preserves repeated matches and still consumes/checksums every
-    source shard and the complete body database. As with every streaming reader,
-    exhaust it to finish the generation fence. Unselected bodies are not decoded
+    source shard and the complete body database. A caller can share its live
+    verification batch when it has already hashed those members. This also
+    enables a verified scratch copy for body lookups. Exhaust the iterator
+    to finish the generation fence. Unselected bodies are not decoded
     or layout-validated; use the default full reader for a complete layout audit.
     """
     return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key,
-                 model_ids=model_ids)
+                 model_ids=model_ids, verification=verification)
 
 
 def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None, scan_workers=1):
@@ -1026,7 +1077,9 @@ def iter_model_items(directory, *, context_filter=None, frozen_key=None, verific
     DNA bodies need not be restored, but every raw shard and body database is
     freshly hashed. Exhaust before consuming decisions or publishing a result.
     Parallel scans require a picklable predicate without side effects and use
-    bounded batches of private scratch files for selected rows.
+    bounded batches of private scratch files for selected rows. A selective
+    scan uses a checksum-verified body database copy when the temporary
+    directory is on a separate filesystem with sufficient space.
     """
     if type(scan_workers) is not int or scan_workers < 1:
         raise ValueError("Model-store scan workers must be a positive integer")

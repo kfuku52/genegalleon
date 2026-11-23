@@ -1,5 +1,6 @@
 """Lossless compact publications, selective integrity, and legacy interoperability."""
 import copy
+import errno
 import gzip
 import hashlib
 import json
@@ -15,7 +16,7 @@ from workflow.support import rescue_model_store as store
 def receipt(directory):
     files = {p.relative_to(directory).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in directory.rglob("*") if p.is_file() and p.name != "receipt.json"}
-    (directory / "receipt.json").write_text(json.dumps({"key": {"species": "test"}, "files": files}))
+    (directory / "receipt.json").write_text(json.dumps({"key": {"species": "test"}, "files": files}, sort_keys=True))
 
 
 def model(i=0, status="proposal"):
@@ -40,6 +41,32 @@ def published(tmp_path, records, *, partial=None, revisions=None, codec="gzip"):
     return directory, manifest
 
 
+@pytest.mark.parametrize("token", [b"NaN", b"-Infinity", b"1e999", b'"\\ud800"', b'{"\\udfff":0}'])
+def test_model_envelope_rejects_invalid_nested_values(token):
+    with pytest.raises(ValueError):
+        store._decode_line(b'{"context":{"nested":[' + token + b']}}\n')
+
+
+def test_model_envelope_preserves_unicode_and_float_values():
+    text = '{"context":{"literal":"植物","escaped":"\\ud83c\\udf31","x":-2.5e-10}}'
+    for encoding in ("utf-8", "utf-16"):
+        assert store._decode_line(text.encode(encoding)) == json.loads(text)
+
+
+@pytest.mark.parametrize("codec", ["gzip", "zstd"])
+def test_externally_verified_shards_skip_only_the_second_digest(tmp_path, monkeypatch, codec):
+    if codec == "zstd":
+        pytest.importorskip("zstandard")
+    path = tmp_path / "shard"
+    path.write_bytes(store._compress(b'{"context":{}}\n', codec, 1))
+    with pytest.raises(ValueError, match="checksum changed"):
+        list(store._lines(path, codec, "0" * 64))
+    def redundant_digest(*args):
+        pytest.fail("unexpected second shard hash")
+    monkeypatch.setattr(store, "_HashReader", redundant_digest)
+    assert list(store._lines(path, codec)) == [{"context": {}}]
+
+
 @pytest.mark.parametrize("codec", ["gzip", "auto", "zstd"])
 def test_exact_all_records_fields_order_and_raw_binding(tmp_path, codec):
     if codec == "zstd":
@@ -57,6 +84,82 @@ def test_exact_all_records_fields_order_and_raw_binding(tmp_path, codec):
     assert manifest["counts"]["bodies"] == 1
     assert manifest["codec"] in {"gzip", "zstd"}
     assert list(store.iter_models(directory / "model_store")) == original
+
+
+def even_candidate(context):
+    return int(context["query"].removeprefix("query")) % 2 == 0
+
+
+@pytest.mark.parametrize("reader", ["raw_cache", "selective", "parallel_selective", "revision"])
+@pytest.mark.parametrize("fault", [None, "full", "corrupt", "source_replaced"])
+def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reader, fault):
+    from workflow.support.input_generation_array_state import FreshDigestBatch
+
+    records = [model(i) for i in range(8)]
+    directory, _ = published(tmp_path, records, revisions=records if reader == "revision" else None)
+    filename = "revision.sqlite" if reader == "revision" else "bodies.sqlite"
+    original = directory / "model_store" / filename
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    real_stat, real_copy, real_open = store._stat, store.shutil.copyfile, store._readonly
+    opened = []
+
+    def separate_device(path):
+        stats = real_stat(path)
+        return (-1, *stats[1:]) if path == original else stats
+
+    def copy_body(source, destination):
+        if fault == "full":
+            destination.write_bytes(b"partial")
+            raise OSError(errno.ENOSPC, "No space")
+        real_copy(source, destination)
+        if fault == "corrupt":
+            destination.write_bytes(b"corrupt")
+        elif fault == "source_replaced":
+            replacement = original.with_name("replacement.sqlite")
+            real_copy(source, replacement)
+            replacement.replace(original)
+
+    def traced(path):
+        opened.append(path)
+        if fault == "full":
+            assert not any(scratch.glob("gg-model-bodies-*"))
+        return real_open(path)
+
+    monkeypatch.setattr(store, "_stat", separate_device)
+    monkeypatch.setattr(store.tempfile, "gettempdir", lambda: str(scratch))
+    monkeypatch.setattr(store.shutil, "copyfile", copy_body)
+    monkeypatch.setattr(store, "_readonly", traced)
+    if reader == "raw_cache":
+        rows = store.iter_models(directory, verification=FreshDigestBatch())
+        expected = records
+    elif reader == "revision":
+        rows = store.iter_revision_models(directory, frozen_key=store.frozen_model_store_key(directory, kind="revision"))
+        expected = records
+    else:
+        workers = 2 if reader == "parallel_selective" else 1
+        rows = store.iter_model_items(directory, context_filter=even_candidate, scan_workers=workers)
+        expected = [(i, records[i]) for i in range(0, len(records), 2)]
+    if fault in {"corrupt", "source_replaced"}:
+        with pytest.raises(ValueError, match="changed during scratch copy"):
+            list(rows)
+        assert not opened
+    else:
+        assert list(rows) == expected
+        assert len(opened) == 1
+        assert opened[0] == original if fault == "full" else scratch in opened[0].parents
+    assert not any(scratch.iterdir())
+
+
+def test_revision_overlay_checks_source_if_scratch_is_on_same_device(tmp_path, monkeypatch):
+    records = [model(0)]
+    directory, _ = published(tmp_path, records, revisions=records)
+    key = store.frozen_model_store_key(directory, kind="revision")
+    original = directory / "model_store/revision.sqlite"
+    monkeypatch.setattr(store.tempfile, "gettempdir", lambda: str(tmp_path))
+    original.write_bytes(original.read_bytes() + b"corrupt")
+    with pytest.raises(ValueError, match="checksum changed: revision.sqlite"):
+        list(store.iter_revision_models(directory, frozen_key=key))
 
 
 def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):

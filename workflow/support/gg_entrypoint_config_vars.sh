@@ -126,6 +126,8 @@ cdskit_localize_model
 cdskit_localize_no_model_download
 cdskit_localize_organism_group
 clipkit_binary
+clipkit_gaps
+clipkit_mode
 clipkit_source_manifest
 csubst_cutoff_stat
 csubst_exhaustive_until
@@ -529,8 +531,10 @@ mcmc_birth_death_sampling
 mcmc_parallel_jobs
 mcmc_seed
 mcmc_burnin
+mcmc_burnin_percentages
 mcmc_clock_model
 mcmc_nsample
+mcmc_max_generations
 mcmc_sampfreq
 min_gene_orthogroup_grampa
 min_num_gene
@@ -538,6 +542,7 @@ min_num_species
 min_percent_species_coverage
 n_gamma_cats_cafe
 nucleotide_model
+omark_cache_dir
 omark_db_path
 orthogroup_copy_number_max_size_differential
 orthogroup_copy_number_trait
@@ -647,6 +652,9 @@ EOF
       ;;
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
+run_species_omark
+omark_db_path
+omark_cache_dir
 run_gene_model_refinement
 gene_model_refinement_dir
 gene_model_refinement_policy
@@ -659,6 +667,7 @@ gene_model_refinement_transcriptome_inputs
 gene_model_refinement_edges
 gene_model_refinement_rescue_dir
 gene_model_refinement_rna
+gene_model_refinement_accession_rna
 gene_model_refinement_split_model_merges
 gene_model_refinement_model_repairs
 gene_model_annevo_inputs
@@ -702,6 +711,7 @@ gene_model_rescue_genome_fallback
 gene_model_rescue_model_repair_targets
 gene_model_rescue_max_genome_queries
 gene_model_rescue_unanchored_min_species
+gene_model_rescue_oriongeno_without_donor
 gene_model_rescue_terminal_max_extension
 gene_model_rescue_terminal_max_unaligned_c_overhang
 gene_model_rescue_gemoma_jar
@@ -828,8 +838,14 @@ kallisto_reference
 max_assembly_input_fastq_size
 mode_transcriptome_assembly
 orf_aggregation_level
+orf_catalog_rescue
+orf_homology_split
+orf_representative_mode
 protocol_rna_seq
 remove_amalgkit_fastq_after_completion
+rnaspades_group_audit
+rnaspades_junction_table
+rnaspades_locus_table
 transcriptome_getfastq_cache_dir
 transcriptome_metadata_input_subdir
 transcriptome_tmp_max_bytes

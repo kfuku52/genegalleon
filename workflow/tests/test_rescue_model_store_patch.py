@@ -152,9 +152,9 @@ def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeyp
     source, _ = published(tmp_path, [model(0), model(1)])
     from workflow.support import rescue_model_store_patch as patch
     original, changed = patch._copy, False
-    def replace(*args):
+    def replace(*args, **kwargs):
         nonlocal changed
-        original(*args)
+        original(*args, **kwargs)
         if not changed and args[0].name.startswith('models-000000.'):
             changed = True
             path = source / 'model_store/bodies.sqlite'
@@ -294,3 +294,48 @@ def test_new_partial_candidates_append_without_changing_old_partial_references(t
     assert result['counts']['partial'] == before['counts']['partial'] + 2
     assert result['partial_ordered'] == before['partial_ordered']
     assert {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()} == original
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+def test_appended_shards_preserve_ordinals_and_partial_locations(tmp_path, monkeypatch, workers):
+    from workflow.support import rescue_model_store_patch as patch
+
+    monkeypatch.setattr(patch, 'APPEND_SHARD_BYTES', 900)
+    rows = [model(i) for i in range(24)]
+    source, before = published(tmp_path, rows[:2])
+    output = tmp_path / 'appended'
+    result = patch.patch_model_store(source, output, {}, appended=rows[2:],
+                                     append_partial_evidence=True, publication_workers=workers)
+    receipt(output)
+    added = result['shards'][len(before['shards']):]
+    assert len(added) > 1
+    first = 2
+    for shard in added:
+        assert shard['first'] == first
+        first += shard['count']
+    assert first == len(rows)
+    assert list(store.iter_models(output)) == rows
+    assert list(store.iter_partial_models(output)) == rows[1::2]
+
+
+
+@pytest.mark.parametrize('member', ['shard', 'partial.sqlite'])
+def test_copied_unchanged_member_is_checked_at_publication(tmp_path, monkeypatch, member):
+    from workflow.support import rescue_model_store_patch as patch
+
+    source, manifest = published(tmp_path, [model(0), model(1)])
+    name = manifest['shards'][0]['path'] if member == 'shard' else member
+    copy = patch._copy
+
+    def corrupt_destination(src, dst, expected, *, verify_destination=True):
+        copy(src, dst, expected, verify_destination=verify_destination)
+        if src.name == name:
+            assert not verify_destination
+            dst.write_bytes(b'damaged after copy')
+
+    monkeypatch.setattr(patch, '_copy', corrupt_destination)
+    output = tmp_path / 'output'
+    with pytest.raises(ValueError, match='differs at publication'):
+        patch.patch_model_store(source, output, {})
+    assert not list(output.iterdir())
+    assert list(store.iter_models(source)) == [model(0), model(1)]

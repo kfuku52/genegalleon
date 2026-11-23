@@ -23,6 +23,13 @@ OrionGeno and ANNEVO detect gzip inputs by their bytes as well as the `.gz`
 suffix, and unpack them only in temporary prediction storage. This also handles
 compressed public files named `.fa`; original source bytes and hashes are retained.
 
+The frozen-cohort acquisition step checks the downloaded or local source hash,
+then repairs [unambiguous missing FASTA record separators](input-conventions.md)
+on its private input copy. Healthy genomes are copied byte for byte. For a
+repair, `genome.acquired.json` includes the source and repaired hashes and
+insertion offsets from the original decoded stream. Use a fresh acquisition
+workspace to repair a malformed genome already bound in an older cohort.
+
 ## Native prediction
 
 Run the genome annotation entrypoint in an explicitly allocated CUDA GPU job.

@@ -196,7 +196,7 @@ def test_safe_directory_clear_helper_is_used_for_mcmctree_dirs():
     text = _read_text(script)
     assert "clear_directory_contents_safe()" in text
     assert 'clear_directory_contents_safe "$(dirname "${file_iq2mc_ctl}")"' in text
-    assert '--store "${dir_mcmctree2}/runs"' in text
+    assert '--run-store "${dir_mcmctree2}/runs"' in text
 
 
 def test_support_python_shebangs_use_python3():
@@ -612,7 +612,9 @@ def test_genome_evolution_core_runs_mcmctree_time_scaling_in_scratch():
         '-te "${iq2mc_scaled_constraint_tree}"',
         'scale_mcmctree_calibrations_file "${iq2mc_work_dir}/iq2mc.rooted.nwk" "${file_iq2mc_rooted_tree}" "${mcmctree_time_scale_factor}" "up"',
         'mcmctree_work_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.work.XXXXXX")',
-        'extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
+        'extract_scaled_mcmctree_figtree "${mcmctree_run_output}/FigTree.tre" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"',
+        'mcmctree_run_args+=(--burnin-percentages "${mcmctree_burnin_percentages}")',
+        '--parameter "burnin_percentages=${mcmctree_burnin_percentages}"',
         "Raw chains, executed controls and logs are retained in mcmctree_main/runs.",
     ]
     for token in expected_tokens:
@@ -1176,8 +1178,7 @@ def test_genome_evolution_exposes_omark_controls_and_summary_stage():
     assert 'dir_species_omark="${dir_genome_evolution}/omark"' in core
     assert 'file_species_omark_summary_table="${dir_genome_evolution}/omark_summary_table/omark_summary.tsv"' in core
     assert 'ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"' in core
-    assert "omamer search \\" in core
-    assert "omark \\" in core
+    assert 'python "${gg_support_dir}/species_omark.py"' in core
     assert 'python "${gg_support_dir}/summarize_omark.py" \\' in core
 
 
@@ -1563,9 +1564,9 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         'bound_params="${bound_params} --lower-bound ${mcmctree_params[2]}"',
         'bound_params="${bound_params} --upper-bound ${mcmctree_params[3]}"',
         'left_right="--left-species ${mcmctree_params[0]} --right-species ${mcmctree_params[1]}"',
-        "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree ${left_right} ${bound_params})",
+        "tree_string=$(printf '%s\\n' \"${tree_string}\" | nwkit mcmctree-tree ${left_right} ${bound_params})",
         'echo -e "${tree_string}" > "tmp.constrained.tree.nwk"',
-        'nwkit mcmctree \\n    --infile "${file_undated_species_tree}"',
+        'nwkit mcmctree-tree \\n    --infile "${file_undated_species_tree}"',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found string-concatenated mcmctree args token: {token}"
@@ -1580,8 +1581,8 @@ def test_genome_evolution_core_uses_array_args_for_nwkit_mcmctree_constraints():
         '--right-species "${mcmctree_params[1]}"',
         'nwkit_args+=(--lower-bound "${mcmctree_params[2]}")',
         'nwkit_args+=(--upper-bound "${mcmctree_params[3]}")',
-        'echo "nwkit mcmctree params: ${nwkit_args[*]}"',
-        'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")',
+        'echo "nwkit mcmctree-tree params: ${nwkit_args[*]}"',
+        'tree_string=$(printf \'%s\\n\' "${tree_string}" | nwkit mcmctree-tree "${nwkit_args[@]}")',
         'printf \'%s\\n\' "${tree_string}" > "tmp.constrained.tree.nwk"',
     ]
     for token in expected_tokens:
@@ -2085,9 +2086,6 @@ def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
     for token in csubst_banned:
         assert token not in csubst_wrapper
     assert "(og_indices.shape[0] > args.max_per_og) and (args.max_per_og > 0)" in csubst_wrapper
-    assert "(not os.path.exists(dir_out)) and (not os.path.exists(out_zip))" in csubst_wrapper
-    assert "elif os.path.exists(dir_out):" in csubst_wrapper
-    assert "csubst_site_archive_is_complete(out_zip)" in csubst_wrapper
 
 
 def test_gene_evolution_core_uses_csubst_search_namespace():
@@ -2379,16 +2377,6 @@ def test_genome_annotation_core_guards_array_task_id_before_task_index_math():
     assert guard in text
     assert task_index in text
     assert text.index(guard) < text.index(task_index)
-
-
-def test_genome_annotation_core_follows_symlinked_species_cds_for_discovery_and_validation():
-    script = CORE_DIR / "gg_genome_annotation_core.sh"
-    text = _read_text(script)
-
-    assert "find -H \"${dir_sp_cds}\" -maxdepth 1 -type f ! -name '.*'" in text
-    assert 'check_species_cds_dir "${dir_sp_cds%/}/."' in text
-    assert 'check_if_species_files_unique "${dir_sp_cds%/}/."' in text
-    assert 'check_species_cds "${gg_workspace_dir}"' not in text
 
 
 def test_genome_annotation_core_multispecies_summary_requires_real_summary_inputs():

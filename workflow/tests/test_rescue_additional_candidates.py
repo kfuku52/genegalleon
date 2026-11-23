@@ -443,6 +443,21 @@ def test_verified_cache_reuses_predictions_not_acceptance(tmp_path):
     assert {"sequence", "status", "support", "quality_evidence", "problems", "model_id"}.isdisjoint(rows[0])
 
 
+def test_prediction_replay_only_needs_proteins_from_bound_prepared_receipts(tmp_path):
+    old, new, _, region = cache_fixture(tmp_path)
+    positions = old / "prepared" / "D" / "positions.json"
+    positions.write_text("{}")
+    plan = rebind_fixture_plan(old, lambda plan: None)
+    key = frozen_prediction_cache_key(old)
+    positions.unlink()
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+    assert cache.candidate_ids() == {"region1"}
+    assert len(list(cache.iter_models())) == 1
+    (old / "prepared" / "D" / "genes.pep").write_text(">D_q\nMAD\n")
+    with pytest.raises(ValueError, match="content changed"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+
+
 def test_frozen_cache_metadata_reads_plan_and_selected_receipt_once(tmp_path, monkeypatch):
     from workflow.support import rescue_prediction_cache as implementation
     old, _, _, _ = cache_fixture(tmp_path)
@@ -636,19 +651,24 @@ def test_cache_unsafe_receipt_path_is_rejected(tmp_path):
         frozen_prediction_cache_key(old)
 
 
-def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
+@pytest.mark.parametrize("native_inputs,enable", [("", "1"), ("/native inputs.tsv", "1"), ("/native inputs.tsv", "0")])
+def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path, native_inputs, enable):
     from workflow.support.entrypoint_config_schema import parse_entrypoint
     root = Path(__file__).resolve().parents[2]
     new_parameters = {"prediction_cache": ("", "old verified predictions"), "max_genome_queries": ("20000", "17"),
                       "unanchored_min_species": ("1", "3"), "terminal_max_extension": ("300", "180"),
                       "terminal_max_unaligned_c_overhang": ("2", "1")}
     metadata = {parameter.name: parameter for parameter in parse_entrypoint("gg_input_generation_entrypoint.sh")}
+    admission = metadata["gene_model_rescue_oriongeno_without_donor"]
+    assert admission.default == "1"
     overrides = {}
     for suffix, (default, value) in new_parameters.items():
         name = "gene_model_rescue_" + suffix
         assert metadata[name].default == default
         assert metadata[name].environment == "GG_INPUT_" + name.upper()
         overrides[metadata[name].environment] = value
+    overrides[admission.environment] = enable
+    overrides["GG_INPUT_GENE_MODEL_ORIONGENO_INPUTS"] = native_inputs
     core = (root / "workflow/core/gg_input_generation_core.sh").read_text()
     defaults = core[core.index('gene_model_rescue_tree='):core.index('require_cds=')]
     function = core[core.index('resolve_oriongeno_candidate_inputs() {'):core.index('\ngene_model_rescue_busco_species() {')]
@@ -675,6 +695,9 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     arguments = capture.read_text().splitlines()
+    assert ("--oriongeno-without-donor" in arguments) is bool(native_inputs and enable == "1")
+    if native_inputs:
+        assert arguments[arguments.index("--oriongeno-inputs") + 1] == native_inputs
     for suffix, (_, value) in new_parameters.items():
         flag = "--" + suffix.replace("_", "-")
         assert arguments[arguments.index(flag) + 1] == value
@@ -741,3 +764,26 @@ def test_refinement_input_discovery_ignores_partial_downloads_and_recognizes_gen
     (assemblies / 'Plant_example_isoform.fa.gz').touch()
     (genomes / 'Plant_example.fna').symlink_to(real_genome)
     assert scan() == [str(assemblies.parent), 'genome']
+
+
+def test_length_deficit_proposals_preserve_reciprocal_ranking(tmp_path):
+    path = tmp_path/'alignments'
+    rows = [
+        ('n','subject',1,100,31,130,110), ('n','runner',1,100,1,100,85),
+        ('internal','gap',1,100,1,130,120),
+        ('tied','subject',1,100,31,130,100), ('tied','runner',1,100,31,130,99)]
+    for target_is_a in (False, True):
+        lines = []
+        targets = dict.fromkeys(('n','internal','tied'),100)
+        donors = dict.fromkeys(('subject','runner','gap'),130)
+        for target, donor, a,b,c,d, score in rows:
+            if not target_is_a:
+                target, donor, a,b,c,d = donor,target,c,d,a,b
+            lines.append(f'{target} {donor} 75 100 10 0 {a} {b} {c} {d} 1e-40 {score}\n')
+        path.write_text(''.join(lines))
+        opts = dict(min_identity=.5, coverage_a=.65, coverage_b=.65)
+        lengths = (targets,donors) if target_is_a else (donors,targets)
+        original = list(reciprocal_matches(path,*lengths,**opts))
+        extra = []
+        assert list(reciprocal_matches(path,*lengths,**opts,terminal_hits=extra,target_is_a=target_is_a)) == original
+        assert set(extra) == {('n','subject','N'),('internal','gap','internal')}

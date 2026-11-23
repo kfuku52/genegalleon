@@ -25,6 +25,7 @@ from cdskit.codonutil import get_codon_table_components
 from cdskit.pad import process_record_padding
 from content_digest_cache import cached_sha256_file
 from fasta_sequence_store import fasta_records
+from format_species_constants import INVALID_ID_CHARS
 from gff2genestat import disable_structure, process_single_gff
 from input_generation_array_state import FreshDigestBatch
 from workflow_observation import path_signature
@@ -201,7 +202,7 @@ def resolve_records(records, traits, genomic, code):
     return output, decisions
 
 
-def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
+def resolve(cds, gff, genome, output_dir, code=1, representative_map=None, *, species=None):
     cds, output_dir = Path(cds), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / cds.name
@@ -221,6 +222,9 @@ def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
                 'implementation': {name: digest(support / name) for name in
                                    ['cds_resolution.py', 'gff2genestat.py', 'gff_feature_structure.py',
                                     'representative_selection.py']}}
+    if species is not None:
+        contract['species'] = species
+        contract['identifier_pattern'] = INVALID_ID_CHARS.pattern
     with (output_dir / (cds.name + '.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if meta_path.exists():
@@ -229,6 +233,13 @@ def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
                 if old.get('output_sha256') == digest(destination) and old.get('traits_sha256') == digest(traits_path):
                     return destination, traits_path, report_path
         records = list(fasta_records(cds))
+        if species is not None:
+            if not records:
+                raise ValueError(f'No CDS sequences in {cds}')
+            prefix = species + '_'
+            for identifier, header, _sequence in records:
+                if not identifier.startswith(prefix) or identifier == prefix or INVALID_ID_CHARS.search(header):
+                    raise ValueError(f'Invalid CDS header for {species} in {cds}: {header!r}')
         if len({record[0] for record in records}) != len(records):
             raise ValueError('Duplicate CDS identifier')
         traits = pd.DataFrame(columns=TRAIT_COLUMNS)
@@ -405,6 +416,7 @@ def backup_family_outputs(workspace, family):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cds')
+    parser.add_argument('--species', help='Require CDS headers to use this species prefix and a gene identifier.')
     parser.add_argument('--gff')
     parser.add_argument('--representative-map')
     parser.add_argument('--genome')
@@ -430,7 +442,7 @@ def main():
         if not args.cds:
             parser.error('--cds is required')
         resolve(args.cds, args.gff, args.genome, args.output_dir, args.genetic_code,
-                representative_map=args.representative_map)
+                representative_map=args.representative_map, species=args.species)
 
 
 if __name__ == '__main__':

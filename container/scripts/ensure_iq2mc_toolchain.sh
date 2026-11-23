@@ -14,7 +14,7 @@ jobs=${GG_BUILD_JOBS:-$(nproc)}
 if [[ "${jobs}" -lt 1 ]]; then
   jobs=1
 fi
-paml_repo_url=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+paml_repo_url=${PAML_REPO_URL:-https://github.com/abacus-gene/paml.git}
 paml_repo_ref=${PAML_REPO_REF:-master}
 paml_repo_sha=${PAML_REPO_SHA:-}
 

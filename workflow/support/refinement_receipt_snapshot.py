@@ -198,11 +198,16 @@ class ReceiptSnapshot:
         Return presence separately from JSON null. An unreceipted sidecar is
         never used as evidence; absence permits the caller's legacy path.
         """
+        raw = self.read_member(filename, expected, member)
+        return (False, None) if raw is None else (True, json.loads(raw))
+
+    def read_member(self, filename, expected, member):
+        """Read an optional member tied to a verified receipt generation."""
         self.verify({filename: expected})
         path = Path(filename).absolute()
         _previous, proof, files = self.entries[path]
         if member not in files:
-            return False, None
+            return None
         try:
             raw = (path.parent / member).read_bytes()
             proof.check()
@@ -214,7 +219,7 @@ class ReceiptSnapshot:
         except ReceiptChanged as exc:
             self.failure = exc
             raise
-        return True, json.loads(raw)
+        return raw
 
     def check(self, receipts):
         self._open()

@@ -68,6 +68,34 @@ ALLOWED_TOOL_CHANGES = frozenset({'implementation', 'model_store_implementation'
                                 'admission_replay_implementation', 'admission_patch_implementation', 'model_protein_correspondence'})
 
 
+def replay_repair_targets(r, worker, files, tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
+    """Reuse receipted local projections and align only newly nominated donor/locus pairs."""
+    def key(row):
+        return row['species'], row['gene_id'], row['donor'], row['query']
+
+    pending = {key(row): row for row in targets}
+    checked = []
+    archives = sorted({Path(member).parent for member in files if member.startswith('model_repair_search/')
+                       and Path(member).name in ('targets.json', r.LOCAL_RECORDS, r.INTERVAL_ARCHIVE)})
+    for archive in archives:
+        if not all((archive / item).as_posix() in files for item in ('targets.json', r.LOCAL_RECORDS, r.INTERVAL_ARCHIVE)):
+            raise ValueError('Incomplete receipted model repair search')
+        if pending:
+            recorded = {key(row) for row in json.loads((worker / archive / 'targets.json').read_text())}
+            common = [pending.pop(k) for k in sorted(pending.keys() & recorded)]
+            if common:
+                checked.extend(r.replay_model_repair_search(worker / archive, common, ownership, proteins, genome, code, params))
+    if pending:
+        archive = Path('model_repair_search')
+        if archive in archives:
+            # Content addressing makes additional archives reproducible across successive replays.
+            label = hashlib.sha256(json.dumps(sorted(pending)).encode()).hexdigest()
+            archive /= 'additional-' + label
+        checked.extend(r.search_model_repair_targets(tmp, list(pending.values()), existing, ownership, proteins,
+                                                     genome, code, params, cpus, archive_name=archive))
+    return checked
+
+
 def _r():
     try:
         import rescue_gene_models
@@ -94,6 +122,8 @@ def prove_contract(previous_plan, producer_source):
                 'annevo_gene_models.py': 'annevo_candidate_implementation',
                 'rescue_coding_paths.py': 'resolve_coding_paths_implementation',
                 'input_generation_array_state.py': 'state_implementation'}
+    if 'source_verification_implementation' in before:
+        bindings['rescue_source_verification.py'] = 'source_verification_implementation'
     hashes = {}
     batch = r.FreshDigestBatch()
     observed = batch.read([*[old / filename for filename in bindings],
@@ -110,6 +140,8 @@ def prove_contract(previous_plan, producer_source):
         if _definitions(old / filename, names) != _definitions(current / filename, names):
             raise ValueError('Rescue replay function changed: ' + filename)
     permitted = set(ALLOWED_TOOL_CHANGES)
+    if 'source_verification_implementation' not in before:
+        permitted.add('source_verification_implementation')
     # This route is absent from legacy plans. Once used, its implementation is
     # strict evidence and cannot change during an admission-only replay.
     if not previous_plan['request'].get('oriongeno_genomewide'):
@@ -155,25 +187,46 @@ def _legacy_annotation_history(plan):
 
 
 def build_plan(previous_output, producer_source, output, *, native_extension=False,
-               completed_output=None, completed_producer_source=None):
+               completed_output=None, completed_producer_source=None, automatic=False, compact_diagnostics=False,
+               oriongeno_additions=False):
     r = _r()
     previous, root = Path(previous_output).resolve(strict=True), Path(output).resolve()
     if root == previous or previous in root.parents or root in previous.parents or root.exists():
         raise ValueError('Admission replay requires a new, disjoint output directory')
     prior = r.load(previous, inspect_only=True)
-    if native_extension:
+    if prior['request'].get('oriongeno_without_donor'):
+        message = 'Donor-free OrionGeno models require ordinary planning with --prediction-cache, not donor admission replay'
+        if automatic:
+            from rescue_native_genomewide_reuse import IncompatibleEvidence
+            raise IncompatibleEvidence(message)
+        raise ValueError(message)
+    if oriongeno_additions:
+        from rescue_oriongeno_admission import contract
+
+        if not prior['request'].get('oriongeno'):
+            raise ValueError('OrionGeno additions require frozen native predictions')
+        proof = {'scope': 'oriongeno_additions', 'policy': contract()}
+    elif native_extension:
         if prior['request'].get('oriongeno_genomewide'):
             raise ValueError('Native evidence extension requires the pre-genomewide producer')
         import rescue_native_genomewide_reuse
-        proof=rescue_native_genomewide_reuse.prove_contract(prior,producer_source)
+        try:
+            proof = rescue_native_genomewide_reuse.prove_contract(prior, producer_source)
+        except FileNotFoundError as exc:
+            raise rescue_native_genomewide_reuse.IncompatibleEvidence('Archived producer source is incomplete') from exc
     else:
+        if compact_diagnostics:
+            raise ValueError('Diagnostic conversion requires a native extension')
         if completed_output or completed_producer_source:
             raise ValueError('Completed imports require the explicit native extension route')
         proof = prove_contract(prior, producer_source)
     frozen = r.frozen_prediction_cache_key(previous)
     if set(frozen['species']) != set(prior['species']):
         raise ValueError('Admission replay requires all completed producer workers')
-    if any(row.get('model_store', {}).get('format') != store.FORMAT for row in frozen['species'].values()):
+    compact = sum(row.get('model_store', {}).get('format') == store.FORMAT for row in frozen['species'].values())
+    if automatic and not compact:
+        raise rescue_native_genomewide_reuse.IncompatibleEvidence('No compact producer publications')
+    if not automatic and compact != len(frozen['species']):
         raise ValueError('Admission replay requires compact raw publications')
     plan = copy.deepcopy(prior)
     plan['output'] = str(root)
@@ -183,22 +236,32 @@ def build_plan(previous_output, producer_source, output, *, native_extension=Fal
                                          'contract': proof, 'species': frozen['species'],
                                          'annotation_history': _legacy_annotation_history(prior)}
     plan['request'].pop('integration_reclassification', None)
+    if oriongeno_additions:
+        plan['request']['oriongeno_without_donor'] = proof['policy']
     if native_extension:
         import rescue_native_genomewide
         plan['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
-        if bool(completed_output)!=bool(completed_producer_source):
-            raise ValueError('Completed native workers require their archived producer source')
+        if automatic:
+            plan['request']['admission_cache']['automatic'] = True
+        if compact_diagnostics:
+            plan['request']['admission_cache']['compact_diagnostics'] = True
+            plan['request']['output_storage'] = {**r.output_storage(prior), 'diagnostics': 'summary'}
         if completed_output:
-            plan['request']['native_genomewide_worker_imports']=rescue_native_genomewide_reuse.freeze_completed(
-                plan,completed_output,completed_producer_source)
+            try:
+                plan['request']['native_genomewide_worker_imports'] = rescue_native_genomewide_reuse.freeze_completed(
+                    plan, completed_output, completed_producer_source)
+            except rescue_native_genomewide_reuse.IncompatibleEvidence as exc:
+                raise ValueError('Cannot import completed native workers: ' + str(exc)) from exc
     metadata = {}
     for name in ('selection.nwk', 'quality.tsv', 'references.nwk', 'references.tsv'):
         metadata[name] = (previous / name).read_bytes()
     plan['request']['admission_cache']['metadata_sha256'] = {
         name: hashlib.sha256(raw).hexdigest() for name, raw in metadata.items()}
     r.require_same_key(frozen, r.frozen_prediction_cache_key(previous))
+    r.require_same_key(frozen['plan_sha256'], r.plan_digest(previous, prior))
     if any(r.digest(previous / name) != sha for name, sha in plan['request']['admission_cache']['metadata_sha256'].items()):
         raise ValueError('Admission metadata changed during plan creation')
+    r.refresh_source_versions(plan)
     root.mkdir(parents=True)
     for name, raw in metadata.items():
         (root / name).write_bytes(raw)
@@ -216,7 +279,12 @@ def previous_context(root, plan):
     if r.plan_digest(previous, prior) != cache['plan_sha256']:
         raise ValueError('Admission producer plan changed')
     native=cache['contract'].get('scope')=='native_genomewide_extension'
-    if native:
+    additions = cache['contract'].get('scope') == 'oriongeno_additions'
+    if additions:
+        from rescue_oriongeno_admission import contract
+
+        proof = {'scope': 'oriongeno_additions', 'policy': contract()}
+    elif native:
         import rescue_native_genomewide
         import rescue_native_genomewide_reuse
         proof=rescue_native_genomewide_reuse.prove_contract(prior,cache['contract']['producer_source'])
@@ -230,11 +298,18 @@ def previous_context(root, plan):
     expected['request']['prediction_cache'] = plan['request']['prediction_cache']
     expected['request']['admission_cache'] = cache
     expected['request'].pop('integration_reclassification', None)
+    if additions:
+        expected['request']['oriongeno_without_donor'] = proof['policy']
     if native:
         expected['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
+        if cache.get('compact_diagnostics'):
+            expected['request']['output_storage'] = {**r.output_storage(prior), 'diagnostics': 'summary'}
         if 'native_genomewide_worker_imports' in plan['request']:
             expected['request']['native_genomewide_worker_imports']=plan['request']['native_genomewide_worker_imports']
-    r.require_same_key(expected, plan)
+    # Generation hints are refreshed by the planner. The source SHA-256 values
+    # in the inherited request remain part of this exact comparison.
+    expected.pop('source_versions', None)
+    r.require_same_key(expected, {k: v for k, v in plan.items() if k != 'source_versions'})
     r.require_same_key(plan['request']['prediction_cache'], r.frozen_prediction_cache_key(previous))
     for name, sha in cache['metadata_sha256'].items():
         if r.digest(root / name) != sha or r.digest(previous / name) != sha:
@@ -247,7 +322,7 @@ def prepare(root, plan, cpus):
     r = _r()
     previous, prior = previous_context(root, plan)
     old_hash, new_hash = r.plan_digest(previous, prior), r.plan_digest(root, plan)
-    inputs = r.FreshDigestBatch()
+    inputs = r.RescueSourceBatch(plan)
     def guard():
         inputs.check()
         r.require_same_key(old_hash, r.plan_digest(previous, prior))
@@ -361,7 +436,7 @@ def _rewrite_table(source, destination, updates, appended, make_row, count, *, a
             writer.writerows(make_row(m) for m in appended)
 
 
-def rescue(root, plan, name, cpus, *, dependencies):
+def rescue(root, plan, name, cpus, *, dependencies, parser_proof=None):
     r = _r()
     from gene_model_catalog import indexed_genome
     from input_generation_array_state import FreshDigestBatch
@@ -373,10 +448,10 @@ def rescue(root, plan, name, cpus, *, dependencies):
         raise ValueError('Admission worker generation changed')
     old_receipt, observed_sha = store._receipt(old_worker)
     r.require_same_key(frozen['receipt_sha256'], observed_sha)
-    r.require_same_key(old_receipt['key'], r.rescue_key(previous, prior, name))
+    r.require_same_key(old_receipt['key'], r.rescue_key(previous, prior, name, dependency_snapshot=dependencies))
     raw_key = store.frozen_model_store_key(old_worker)
     batch = FreshDigestBatch()
-    source_proof = FreshDigestBatch()
+    source_proof = r.RescueSourceBatch(plan)
     expected = {str(old_worker / member): sha for member, sha in old_receipt['files'].items()}
     expected[str(old_worker / 'receipt.json')] = frozen['receipt_sha256']
     expected.update(plan['request']['admission_cache']['contract']['source_files'])
@@ -419,6 +494,14 @@ def rescue(root, plan, name, cpus, *, dependencies):
         diagnostic = _diagnostics()
         summary = (json.loads((old_worker / diagnostic.SUMMARY).read_text())
                    if diagnostic.SUMMARY in old_receipt['files'] else None)
+        audit_path = diagnostic.legacy_table(old_worker, 'audit.tsv')
+        quality_path = diagnostic.legacy_table(old_worker, 'quality_flags.tsv')
+        if summary is None:
+            if (audit_path is None or quality_path is None
+                    or not {audit_path.name, quality_path.name} <= old_receipt['files'].keys()):
+                raise ValueError('Admission producer lacks diagnostics covered by its receipt')
+            if plan['request']['admission_cache'].get('compact_diagnostics'):
+                summary = diagnostic.summarize_legacy(audit_path, quality_path, tmp, counts['raw_records'])
         prior_diagnostics = diagnostic.summarize(current.values()) if summary is not None else None
         for model in current.values():
             reset_admission(model)
@@ -442,7 +525,7 @@ def rescue(root, plan, name, cpus, *, dependencies):
             if plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension':
                 import rescue_native_genomewide_reuse
                 additions, native_audit = rescue_native_genomewide_reuse.fresh_candidates(
-                    root, plan, name, proteins, genome, ownership, params, tmp, cpus, models)
+                    plan, name, proteins, genome, ownership, params, tmp, cpus, models, parser_proof=parser_proof)
                 extra.extend(additions)
                 models.extend(additions)
             placement = r.reassess_unanchored_models(models, params['unanchored_min_species'],
@@ -457,13 +540,10 @@ def rescue(root, plan, name, cpus, *, dependencies):
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
             r.atomic_json(tmp / 'split_model_candidates.json', r.split_model_candidates(
                 models, ownership, name, genome=genome, code=source['genetic_code'], params=params, proteins=proteins))
-            search_archive = old_worker / 'model_repair_search'
-            targeted = []
-            if any(member.startswith('model_repair_search/') for member in old_receipt['files']):
-                targets = [*r.verify_model_repair_targets(plan).get(name, []),
-                           *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
-                targeted = r.replay_model_repair_search(search_archive, targets, ownership, proteins,
-                                                        genome, source['genetic_code'], params)
+            targets = [*r.verify_model_repair_targets(plan).get(name, []),
+                       *r.automatic_model_repair_targets(root, plan, name, proteins, params)]
+            targeted = replay_repair_targets(r, old_worker, old_receipt['files'], tmp, targets, existing,
+                                             ownership, proteins, genome, source['genetic_code'], params, cpus)
             r.atomic_json(tmp / 'model_repair_candidates.json',
                           r.model_repair_candidates(chain(models, targeted), ownership, name, source['gff']))
             r.verify_model_repair_targets(plan)
@@ -481,10 +561,12 @@ def rescue(root, plan, name, cpus, *, dependencies):
                                                           'problems': list(m['problems'])}}
                 revisions.setdefault(shape, {**m, 'support': []})['support'].append(evidence)
         changed = {i: m for i, m in current.items() if hashlib.sha256(store._json(m)).digest() != fingerprints[i]}
+        writing_started = time.perf_counter()
         manifest = patch_model_store(old_worker, tmp, changed, appended=extra,
                                      revisions=revisions.values(), frozen_key=raw_key,
                                      append_partial_evidence=native_audit is not None,
                                      publication_workers=min(cpus, 4))
+        model_store_seconds = time.perf_counter() - writing_started
         # Copy every other receipt member without truncating a shared inode.
         mutable = {'audit.tsv', 'quality_flags.tsv', 'audit.tsv.gz', 'quality_flags.tsv.gz',
                    diagnostic.SUMMARY, 'search_inputs.json', 'placement_audit.json',
@@ -513,11 +595,6 @@ def rescue(root, plan, name, cpus, *, dependencies):
             r.atomic_json(tmp / diagnostic.SUMMARY,
                           diagnostic.replace_counts(summary, prior_diagnostics, changed_diagnostics))
         else:
-            audit_path = diagnostic.legacy_table(old_worker, 'audit.tsv')
-            quality_path = diagnostic.legacy_table(old_worker, 'quality_flags.tsv')
-            if (audit_path is None or quality_path is None
-                    or not {audit_path.name, quality_path.name} <= old_receipt['files'].keys()):
-                raise ValueError('Admission producer lacks diagnostics covered by its receipt')
             _rewrite_table(audit_path, tmp / audit_path.name, current, extra, diagnostic.audit_row,
                            counts['raw_records'], allow_tail=True)
             _rewrite_table(quality_path, tmp / quality_path.name, current, extra, diagnostic.quality_row,
@@ -541,6 +618,7 @@ def rescue(root, plan, name, cpus, *, dependencies):
                       'source_worker': str(old_worker), 'source_receipt_sha256': frozen['receipt_sha256'],
                       'counts': dict(counts), 'changed_records': len(changed), 'appended_records': len(extra),
                       'published_counts': manifest['counts'], 'full_stream_verified': True,
-                      'admitted_cds_freshly_validated': True, 'wall_seconds': time.perf_counter() - started})
+                      'admitted_cds_freshly_validated': True, 'model_store_seconds': model_store_seconds,
+                      'wall_seconds': time.perf_counter() - started})
     return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus,
                    publication_guard=publication_guard)

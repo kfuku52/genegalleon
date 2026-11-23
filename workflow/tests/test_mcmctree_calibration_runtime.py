@@ -189,19 +189,33 @@ def test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache(tm
     tree.write_text("((a:0.1,b:0.1)'B(0.1,0.2,0.025,0.025)':0.1,c:0.2)'B(0.3,0.4,0.025,0.025)';\n")
     subprocess.run(["iqtree3", "-s", str(alignment), "-te", str(tree), "-m", "JC", "-T", "1",
                     "--dating", "mcmctree", "--mcmc-bds", "1,1,0.5", "--mcmc-iter", "20,2,40",
-                    "--prefix", str(tmp_path / "iq2mc"), "--seed", "37"],
-                   check=True, capture_output=True, timeout=60)
+                    "--prefix", "iq2mc", "--seed", "37"],
+                   cwd=tmp_path, check=True, capture_output=True, timeout=60)
     control = tmp_path / "iq2mc.mcmctree.ctl"
-    # Use the existing GeneGalleon normalizer, keeping any PAML adaptation in
-    # the same code path as a normal workflow execution.
-    core = (SUPPORT.parent / "core/gg_genome_evolution_core.sh").read_text()
-    functions = core[core.index("mcmctree_requires_bdparas_flag() {"):core.index("iq2mc_option_supported() {")]
-    control.write_text(control.read_text().replace("FossilErrprint", "FossilErr\nprint"))
-    subprocess.run(["bash", "-c", functions + '\n dir_tmp="$1"; normalize_mcmctree_ctl_for_installed_paml "$2"',
-                    "test", str(tmp_path), str(control)], check=True, capture_output=True)
     args = SimpleNamespace(control=control, tree=tmp_path / "iq2mc.rooted.nwk",
                            alignment=tmp_path / "iq2mc.dummy.phy", hessian=tmp_path / "iq2mc.mcmctree.hessian",
                            outdir=tmp_path / "experiments", manifest=None, chains=2, seed=1729, time_scale=time_scale)
+    if time_scale == "1":
+        # The main runner consumes the unmodified output of official IQ-TREE.
+        template = tmp_path / "main_template"
+        template.mkdir()
+        paths = (args.control, args.tree, args.alignment, args.hessian)
+        for path in paths:
+            (template / path.name).write_bytes(path.read_bytes())
+        status = tmp_path / "main_results/convergence.json"
+        output = tmp_path / "main_results/mcmctree.out"
+        run = subprocess.run(
+            ["nwkit", "mcmctree-run", "--control", str(template / control.name),
+             "--out-dir", str(tmp_path / "main_results"), "--run-store", str(tmp_path / "main_runs"),
+             "--max-generations", "100"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert run.returncode == 0, run.stdout + run.stderr
+        report = json.loads(status.read_text())
+        assert report["completed_chains"] == 4 and report["pooled_samples"] == 160
+        assert report["reason"] == "generation_limit"
+        assert "FigTree" in output.read_text()
+        assert all((template / p.name).read_bytes() == p.read_bytes() for p in paths)
     from decimal import Decimal
 
     from mcmctree_time_scale import scale_calibration_labels, scale_ctl_rootage_text
@@ -221,6 +235,10 @@ def test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache(tm
     assert 0.25 * float(time_scale) < public_root["median"] < 0.5 * float(time_scale)
     assert public_root["unit"] == "Ma"
     assert "checkpoint = 0" in next(directory.glob("*/prior/chain_*/mcmctree.ctl")).read_text()
+    posterior = next(directory.glob("*/posterior/chain_*/mcmctree.ctl")).read_text()
+    assert "usedata = 2 ../../../inputs/hessian" in posterior
+    assert "BDparas = 1 1 0.5 C" in posterior
+    assert "hessianfile" not in posterior and "ckpfile" not in posterior
     assert all(path.read_bytes() == before for path, before in originals.items())
     assert experiments.run_experiments(args) == directory
     sample = next(directory.glob("*/prior/chain_*/mcmc.txt"))

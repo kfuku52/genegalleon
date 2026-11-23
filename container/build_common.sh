@@ -18,7 +18,7 @@ gg_initialize_build_source_defaults() {
   BUSCO_MIRROR_REPO_URL=${BUSCO_MIRROR_REPO_URL:-}
   BUSCO_REPO_REF=${BUSCO_REPO_REF:-${GG_SOURCE_BUSCO_REPO_REF}}
   BUSCO_REPO_SHA=${BUSCO_REPO_SHA:-}
-  PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
+  PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/abacus-gene/paml.git}
   IQTREE_REPO_URL=${IQTREE_REPO_URL:-https://github.com/iqtree/iqtree3.git}
   ASTER_REPO_URL=${ASTER_REPO_URL:-https://github.com/chaoszhang/ASTER.git}
   PAML_REPO_REF=${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}

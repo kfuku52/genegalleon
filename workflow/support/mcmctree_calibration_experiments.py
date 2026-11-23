@@ -26,6 +26,7 @@ from mcmctree_calibration_audit import (
     reviewed_rows,
     tree_text,
 )
+from mcmctree_chains import paml_control_values
 from mcmctree_time_scale import scale_calibration_labels, scale_ctl_rootage_text
 
 
@@ -34,19 +35,6 @@ def file_hash(path):
 
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
-
-
-def control_values(text):
-    values = {}
-    for line in text.splitlines():
-        line = re.split(r"[\*#]", line, maxsplit=1)[0].strip()
-        if not line:
-            continue
-        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)", line)
-        if not match or match[1] in values:
-            raise ValueError(f"Malformed or duplicate control setting: {line}")
-        values[match[1]] = match[2].strip()
-    return values
 
 
 def scenarios(tree, manifest=None):
@@ -187,7 +175,7 @@ def run_experiments(args):
     if not scale.is_finite() or scale <= 0:
         raise ValueError("Time scale must be finite and positive.")
     control_text = args.control.read_text(encoding="utf-8")
-    values = control_values(scale_ctl_rootage_text(control_text, scale, "down"))
+    values = paml_control_values(scale_ctl_rootage_text(control_text, scale, "down"), "../../../inputs/hessian")
     if values.get("usedata", "").split()[0:1] != ["2"]:
         raise ValueError("Experiments require IQ2MC approximate-likelihood inputs (usedata=2).")
     for key in ("burnin", "sampfreq", "nsample"):
@@ -212,6 +200,7 @@ def run_experiments(args):
                 "mcmctree_sha256": file_hash(executable), "nwkit_version": importlib.metadata.version("nwkit"),
                 "posterior_version": r_version, "python_adapter_sha256": file_hash(__file__),
                 "audit_adapter_sha256": file_hash(Path(__file__).with_name("mcmctree_calibration_audit.py")),
+                "control_adapter_sha256": file_hash(Path(__file__).with_name("mcmctree_chains.py")),
                 "time_scale_adapter_sha256": file_hash(Path(__file__).with_name("mcmctree_time_scale.py")),
                 "r_adapter_sha256": file_hash(Path(__file__).with_name("mcmctree_calibration_diagnostics.R"))}
     run_dir = args.outdir.resolve() / digest(json_text(contract).encode())
@@ -262,8 +251,7 @@ def run_experiments(args):
                     chain_values.update(seed=str(args.seed + (scenario_index * 2 + target_index) * args.chains + chain_index),
                                         seqfile="../../../inputs/alignment", treefile="tree.nwk",
                                         outfile="mcmctree.out", mcmcfile="mcmc.txt", print="1",
-                                        hessianfile="../../../inputs/hessian", ckpfile="mcmctree.ckp", checkpoint="0",
-                                        usedata="0" if target == "prior" else "2 ../../../inputs/hessian")
+                                        checkpoint="0", usedata="0" if target == "prior" else values["usedata"])
                     (chain_dir / "tree.nwk").write_text(f"{len(scenario_tree)} 1\n" + scaled_tree, encoding="utf-8")
                     (chain_dir / "mcmctree.ctl").write_text("\n".join(f"{key} = {value}" for key, value in chain_values.items()) + "\n", encoding="utf-8")
                     started = time.monotonic()

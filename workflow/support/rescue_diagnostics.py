@@ -2,6 +2,7 @@
 import csv
 import gzip
 from collections import Counter
+from itertools import chain
 from pathlib import Path
 
 AUDIT = ('candidate', 'donor_gene', 'status', 'reasons', 'coverage', 'identity', 'model_id')
@@ -42,6 +43,46 @@ def summarize(models):
     for model in models:
         update(counts, model)
     return counts
+
+
+def summarize_legacy(audit, quality, destination, model_count):
+    """Recover old counters and unresolved queries without decoding model bodies."""
+    counts = new_counts()
+    unresolved = 0
+    with text_open(audit, 'r') as stream:
+        rows = csv.reader(stream, delimiter='\t')
+        if tuple(next(rows)) != AUDIT:
+            raise ValueError('Unknown rescue audit header')
+        for _ in range(model_count):
+            row = next(rows, ())
+            if len(row) != len(AUDIT):
+                raise ValueError('Admission audit/model count differs')
+            counts['status_counts'][row[2]] += 1
+            if row[3]:
+                counts['reason_counts'].update(row[3].split(','))
+        first = next(rows, None)
+        if first is not None:
+            def missing():
+                nonlocal unresolved
+                for row in chain((first,), rows):
+                    if tuple(row) != unresolved_row(*row[:2]):
+                        raise ValueError('Invalid unresolved tail in rescue audit')
+                    unresolved += 1
+                    yield row[:2]
+            write_table(destination / UNRESOLVED, AUDIT[:2], missing())
+    with text_open(quality, 'r') as stream:
+        rows = csv.reader(stream, delimiter='\t')
+        if tuple(next(rows)) != QUALITY:
+            raise ValueError('Unknown rescue quality header')
+        for _ in range(model_count):
+            row = next(rows, ())
+            if len(row) != len(QUALITY):
+                raise ValueError('Admission quality/model count differs')
+            if row[7]:
+                counts['quality_flag_counts'].update(row[7].split(','))
+        if next(rows, None) is not None:
+            raise ValueError('Admission quality/model count differs')
+    return {'schema': 1, **counts, 'unresolved_queries': unresolved}
 
 
 def replace_counts(summary, before, after):

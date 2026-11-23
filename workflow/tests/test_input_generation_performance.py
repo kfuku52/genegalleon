@@ -453,3 +453,27 @@ def test_final_qc_session_rejects_change_between_validators(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "argv", argv)
     assert reuse.main() == 1
     assert all(not path.exists() for path in output_paths)
+
+
+def test_scoped_batch_checks_requested_paths_then_fences_every_member(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+    batch = state.FreshDigestBatch(scoped_reads=True)
+    visited = []
+    check_paths = batch._check_paths
+
+    def counted(paths):
+        paths = list(paths)
+        visited.extend(paths)
+        check_paths(paths)
+
+    monkeypatch.setattr(batch, '_check_paths', counted)
+    for i in range(32):
+        path = tmp_path / str(i)
+        path.write_text(str(i))
+        batch.read([path])
+    batch.check()
+    assert len(visited) == 64
+    (tmp_path / '0').write_text('changed')
+    batch.read([tmp_path / '31'])
+    with pytest.raises(OSError, match='changed while hashing'):
+        batch.check()

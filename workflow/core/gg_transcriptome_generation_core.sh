@@ -1451,16 +1451,14 @@ bind_amalgkit_getfastq_completion_manifest() {
 
   python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import hashlib
 import json
-import math
 import os
 import pathlib
 import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastq
+from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
@@ -1502,14 +1500,6 @@ def file_contract(raw_value):
     return {"path": value, "size": size, "sha256": checksum}
 
 
-def positive_number(value):
-    try:
-        numeric = float(value)
-        return math.isfinite(numeric) and numeric > 0
-    except (TypeError, ValueError):
-        return False
-
-
 def stats_contract(run):
     value = "{}/getfastq_stats.tsv".format(run)
     relative = pathlib.PurePosixPath(value)
@@ -1526,29 +1516,11 @@ def stats_contract(run):
         or path.stat().st_size == 0
     ):
         raise SystemExit("Completed amalgkit run has unsafe getfastq statistics: {}".format(run))
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
-    matching_rows = [
-        row for row in rows
-        if str(row.get("run", "") or "").strip() == run
-    ]
-    if len(matching_rows) != 1:
-        raise SystemExit("Completed amalgkit run has ambiguous getfastq statistics: {}".format(run))
-    row = matching_rows[0]
-    if not positive_number(row.get("num_written")) or not any(
-        positive_number(row.get(column_name))
-        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
-    ):
-        raise SystemExit("Completed amalgkit run has unusable getfastq statistics: {}".format(run))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("getfastq statistics changed while binding: {}".format(run))
-    return {"path": value, "size": after.st_size, "sha256": digest.hexdigest()}
+    try:
+        size, checksum = quant_stats_digest(path, run)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    return {"path": value, "size": size, "sha256": checksum}
 
 
 def quarantine_unbound_fastqs(bound_paths):
@@ -1673,16 +1645,19 @@ validate_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
 
-  python - "${completion_manifest}" "${metadata_tsv}" <<'PY'
+  local support_dir
+  support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
+
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
 import csv
-import gzip
-import hashlib
 import json
-import math
 import os
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, sys.argv[3])
+from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
@@ -1706,42 +1681,6 @@ if not (
 ):
     raise SystemExit("amalgkit getfastq completion manifest is not complete: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
-
-
-def validate_fastq_gzip(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-        return False
-    try:
-        with gzip.open(path, "rb") as handle:
-            record_count = 0
-            while True:
-                header = handle.readline()
-                if not header:
-                    break
-                if not header.startswith(b"@") or len(header.rstrip(b"\r\n")) < 2:
-                    return False
-                sequence_length = 0
-                while True:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    if line.startswith(b"+"):
-                        break
-                    sequence_length += len(line.rstrip(b"\r\n"))
-                if sequence_length == 0:
-                    return False
-                quality_length = 0
-                while quality_length < sequence_length:
-                    line = handle.readline()
-                    if not line:
-                        return False
-                    quality_length += len(line.rstrip(b"\r\n"))
-                if quality_length != sequence_length:
-                    return False
-                record_count += 1
-            return record_count > 0
-    except (EOFError, OSError, ValueError):
-        return False
 
 
 def validate_file_contract(contract, run, seen_paths):
@@ -1774,27 +1713,17 @@ def validate_file_contract(contract, run, seen_paths):
         or not path.is_file()
     ):
         raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
-    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+    if path.stat().st_size != expected_size:
         raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
-    if not validate_fastq_gzip(path):
-        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
-    seen_paths.add(value)
-
-
-def positive_number(value):
     try:
-        numeric = float(value)
-        return math.isfinite(numeric) and numeric > 0
-    except (TypeError, ValueError):
-        return False
+        complete, size, checksum = proof_fastq(path)
+    except FastqChanged:
+        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
+    if size != expected_size or checksum != expected_sha256:
+        raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
+    seen_paths.add(value)
 
 
 def validate_stats_contract(contract, run, seen_paths):
@@ -1824,24 +1753,14 @@ def validate_stats_contract(contract, run, seen_paths):
         or not path.is_file()
     ):
         raise SystemExit("Completion manifest getfastq statistics path changed: {}".format(value))
-    before = path.stat()
-    digest = hashlib.sha256(path.read_bytes())
-    after = path.stat()
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SystemExit("Completion manifest getfastq statistics changed while validating: {}".format(value))
-    if after.st_size != expected_size or digest.hexdigest() != expected_sha256:
+    if path.stat().st_size != expected_size:
         raise SystemExit("Completion manifest getfastq statistics content contract changed: {}".format(value))
-    with path.open("rt", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
-    matching_rows = [row for row in rows if str(row.get("run", "") or "").strip() == run]
-    if len(matching_rows) != 1:
-        raise SystemExit("Completion manifest getfastq statistics are ambiguous for run: {}".format(run))
-    row = matching_rows[0]
-    if not positive_number(row.get("num_written")) or not any(
-        positive_number(row.get(column_name))
-        for column_name in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
-    ):
-        raise SystemExit("Completion manifest getfastq statistics are unusable for quant: {}".format(run))
+    try:
+        size, checksum = quant_stats_digest(path, run)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    if size != expected_size or checksum != expected_sha256:
+        raise SystemExit("Completion manifest getfastq statistics content contract changed: {}".format(value))
     seen_paths.add(value)
 
 
@@ -2210,12 +2129,13 @@ if manifest.get("schema_version") in {2, 3, 4} and isinstance(manifest.get("runs
                 continue
             if path.is_symlink() or not path.is_file() or path.resolve(strict=True) != path:
                 raise SystemExit("Refusing to preserve an unsafe drifted FASTQ path: {}".format(value))
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            if path.stat().st_size == expected_size and digest.hexdigest() == expected_sha256:
-                continue
+            if path.stat().st_size == expected_size:
+                digest = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if path.stat().st_size == expected_size and digest.hexdigest() == expected_sha256:
+                    continue
             backup = next_backup(path, ".pre_integrity_recovery")
             os.replace(path, backup)
             print("Preserved drifted FASTQ before bounded recovery: {}".format(backup))
@@ -3168,7 +3088,7 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
 
     last_exc = None
     for attempt in range(1, 6):
-        source_digest = hashlib.md5()
+        source_digest = hashlib.md5() if expected_md5 else None
         source_bytes = 0
         retain_resumable_part = False
         try:
@@ -3267,7 +3187,8 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
                         with gzip.GzipFile(fileobj=raw_out, mode="wb") as gzip_out:
                             chunk = first_chunk
                             while chunk:
-                                source_digest.update(chunk)
+                                if source_digest is not None:
+                                    source_digest.update(chunk)
                                 source_bytes += len(chunk)
                                 gzip_out.write(chunk)
                                 chunk = response.read(DOWNLOAD_CHUNK_BYTES)
@@ -3292,25 +3213,17 @@ def download_fastq_atomically(dest: Path, url: str, expected_md5: str = "") -> N
 
             if source_is_gzip:
                 source_bytes = part.stat().st_size
-                actual_md5 = file_md5(part)
-            else:
-                actual_md5 = source_digest.hexdigest()
-            if expected_md5 and actual_md5 != expected_md5:
-                retain_resumable_part = False
-                raise ValueError(
-                    "checksum mismatch expected={} actual={} bytes={}".format(
-                        expected_md5,
-                        actual_md5,
-                        source_bytes,
+            if expected_md5:
+                actual_md5 = file_md5(part) if source_is_gzip else source_digest.hexdigest()
+                if actual_md5 != expected_md5:
+                    retain_resumable_part = False
+                    raise ValueError(
+                        "checksum mismatch expected={} actual={} bytes={}".format(
+                            expected_md5, actual_md5, source_bytes,
+                        )
                     )
-                )
             if not is_valid_fastq_gzip(part):
-                raise ValueError(
-                    "incomplete FASTQ gzip actual_md5={} bytes={}".format(
-                        actual_md5,
-                        source_bytes,
-                    )
-                )
+                raise ValueError("incomplete FASTQ gzip bytes={}".format(source_bytes))
             publish_partial()
             return
         except Exception as exc:  # pragma: no cover - network retry integration
@@ -4185,6 +4098,7 @@ fi
 
 task='De novo transcriptome assembly'
 assembly_needs_update=0
+rnaspades_graph_prefix="${dir_transcriptome_assembly_output}/rnaspades_graph/${sp_ub}"
 gg_artifact_contract_init assembly_provenance_args "transcriptome_assembly" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.assembly.json"
 assembly_provenance_args+=(
   --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
@@ -4198,6 +4112,13 @@ assembly_provenance_args+=(
 )
 if [[ "${effective_assembly_method}" == rnaspades && "${protocol_rna_seq}" == mixed ]]; then
   assembly_provenance_args+=(--parameter "mixed_library_selection=all")
+fi
+if [[ "${effective_assembly_method}" == rnaspades ]]; then
+  assembly_provenance_args+=(
+    --optional-output "paths=${rnaspades_graph_prefix}.paths.gz"
+    --optional-output "graph=${rnaspades_graph_prefix}.fastg.gz"
+    --optional-output "graph_kmer=${rnaspades_graph_prefix}.kmer.txt"
+  )
 fi
 gg_artifact_prepare_stage assembly_needs_update run_assembly "${assembly_provenance_args[@]}" || exit $?
 if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
@@ -4499,7 +4420,29 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
           echo "Failed to generate tmp.isoform.fa.gz from rnaSPAdes output: ${rnaspades_transcript_fasta}. Exiting."
           exit 1
         fi
-        mv_out "tmp.isoform.fa.gz" "${file_isoform}"
+        if [[ "${rnaspades_transcript_fasta##*/}" == transcripts.fasta ]]; then
+          rnaspades_final_k=0
+          for kdir in "${dir_tmp}/rnaspades_output"/K*; do
+            if [[ -d "${kdir}" && "${kdir##*/}" =~ ^K([1-9][0-9]*)$ && ${BASH_REMATCH[1]} -gt ${rnaspades_final_k} ]]; then
+              rnaspades_final_k=${BASH_REMATCH[1]}
+            fi
+          done
+          if [[ ${rnaspades_final_k} -eq 0 || ! -s rnaspades_output/transcripts.paths || ! -s rnaspades_output/assembly_graph.fastg ]]; then
+            echo "Missing rnaSPAdes graph, transcript paths, or final k-mer directory." >&2
+            exit 1
+          fi
+          gzip -c rnaspades_output/transcripts.paths > tmp.rnaspades.paths.gz
+          gzip -c rnaspades_output/assembly_graph.fastg > tmp.rnaspades.fastg.gz
+          printf '%s\n' "${rnaspades_final_k}" > tmp.rnaspades.kmer.txt
+          mv_out_bundle "tmp.isoform.fa.gz" "${file_isoform}" \
+            tmp.rnaspades.paths.gz "${rnaspades_graph_prefix}.paths.gz" \
+            tmp.rnaspades.fastg.gz "${rnaspades_graph_prefix}.fastg.gz" \
+            tmp.rnaspades.kmer.txt "${rnaspades_graph_prefix}.kmer.txt" || exit $?
+        else
+          printf 'none\n' > tmp.rnaspades.kmer.txt
+          mv_out_bundle "tmp.isoform.fa.gz" "${file_isoform}" \
+            tmp.rnaspades.kmer.txt "${rnaspades_graph_prefix}.kmer.txt" || exit $?
+        fi
       else
         echo "rnaSPAdes did not produce a supported transcript fasta under: ${dir_tmp}/rnaspades_output."
         echo "Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta"
@@ -4616,6 +4559,54 @@ fi
 
 task='Longest CDS extraction'
 disable_if_no_input_file "run_longestcds" "${file_isoform}"
+longestcds_selection="longest"
+orf_representative_mode="${orf_representative_mode:-homology-orfs}"
+orf_catalog_rescue="${orf_catalog_rescue:-auto}"
+orf_homology_split="${orf_homology_split:-off}"
+rnaspades_group_audit="${rnaspades_group_audit:-no}"
+rnaspades_locus_table="${rnaspades_locus_table:-}"
+rnaspades_junction_table="${rnaspades_junction_table:-}"
+case "${orf_representative_mode}" in
+  length|homology|homology-orfs) ;;
+  *)
+    echo "Invalid orf_representative_mode=${orf_representative_mode}; expected length, homology, or homology-orfs." >&2
+    exit 2
+    ;;
+esac
+case "${orf_homology_split}" in
+  off) ;;
+  report|apply)
+    if [[ "${orf_representative_mode}" != homology-orfs ||
+        "${effective_assembly_method}" != rnaspades || "${orf_aggregation_level}" != i ]]; then
+      echo "orf_homology_split requires homology-orfs and rnaSPAdes aggregation level i." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "Invalid orf_homology_split=${orf_homology_split}; expected off, report, or apply." >&2
+    exit 2
+    ;;
+esac
+orf_catalog_rescue_enabled=no
+case "${orf_catalog_rescue}" in
+  off) ;;
+  auto|on)
+    if [[ "${orf_representative_mode}" == homology-orfs &&
+          ( "${effective_assembly_method}" == rnaspades || "${effective_assembly_method}" == trinity ) &&
+          "${orf_aggregation_level}" == i && "${orf_homology_split}" == off ]]; then
+      if [[ "${orf_catalog_rescue}" == on || -z "${rnaspades_locus_table}" ]]; then
+        orf_catalog_rescue_enabled=yes
+      fi
+    elif [[ "${orf_catalog_rescue}" == on ]]; then
+      echo "orf_catalog_rescue=on requires homology-orfs, Trinity or rnaSPAdes aggregation level i, and orf_homology_split=off." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "Invalid orf_catalog_rescue=${orf_catalog_rescue}; expected auto, on, or off." >&2
+    exit 2
+    ;;
+esac
 longestcds_needs_update=0
 gg_artifact_contract_init longestcds_provenance_args "transcriptome_longest_cds" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.longest_cds.json"
 longestcds_provenance_args+=(
@@ -4624,10 +4615,98 @@ longestcds_provenance_args+=(
   --output "longest_transcript=${file_longestcds_transcript}"
   --parameter "assembly_method=${effective_assembly_method}"
   --parameter "orf_aggregation_level=${orf_aggregation_level}"
+  --parameter "orf_selection=${longestcds_selection}"
   --parameter "genetic_code=${genetic_code}"
 )
 if [[ "${effective_assembly_method}" == 'rna-bloom2' ]]; then
   longestcds_provenance_args+=(--input "corset_clusters=${file_corset_clusters}")
+fi
+rnaspades_group_args=()
+rnaspades_unconditional_loci=""
+if [[ "${orf_homology_split}" == off && "${orf_catalog_rescue_enabled}" == no ]]; then
+  rnaspades_unconditional_loci="${rnaspades_locus_table}"
+fi
+if [[ "${rnaspades_group_audit}" != no || -n "${rnaspades_unconditional_loci}${rnaspades_junction_table}" ]]; then
+  if [[ "${rnaspades_group_audit}" != no && "${rnaspades_group_audit}" != yes ]] ||
+    [[ "${effective_assembly_method}" != rnaspades || "${orf_aggregation_level}" != i ]]; then
+    echo "rnaSPAdes group auditing requires assembly_method=rnaspades, orf_aggregation_level=i, and rnaspades_group_audit=yes or no." >&2
+    exit 2
+  fi
+  rnaspades_group_prefix="${dir_transcriptome_assembly_output}/rnaspades_group_audit/${sp_ub}"
+  longestcds_provenance_args+=(
+    --parameter "rnaspades_grouping_policy=1"
+    --output "rnaspades_groups=${rnaspades_group_prefix}.groups.tsv"
+    --output "rnaspades_group_audit=${rnaspades_group_prefix}.audit.tsv"
+  )
+  rnaspades_final_k=""
+  if [[ -s "${rnaspades_graph_prefix}.kmer.txt" ]]; then
+    rnaspades_final_k=$(cat "${rnaspades_graph_prefix}.kmer.txt")
+  fi
+  if [[ "${rnaspades_final_k}" =~ ^[1-9][0-9]*$ && -s "${rnaspades_graph_prefix}.paths.gz" && -s "${rnaspades_graph_prefix}.fastg.gz" ]]; then
+    rnaspades_group_args+=(
+      --paths "${rnaspades_graph_prefix}.paths.gz"
+      --fastg "${rnaspades_graph_prefix}.fastg.gz"
+      --kmer_size "${rnaspades_final_k}"
+    )
+    longestcds_provenance_args+=(
+      --input "paths=${rnaspades_graph_prefix}.paths.gz"
+      --input "graph=${rnaspades_graph_prefix}.fastg.gz"
+      --input "graph_kmer=${rnaspades_graph_prefix}.kmer.txt"
+    )
+  elif [[ "${rnaspades_group_audit}" == yes || -n "${rnaspades_junction_table}" ]]; then
+    echo "The rnaSPAdes graph audit requires the archived FASTG, transcript paths, and final k-mer size." >&2
+    exit 1
+  fi
+  if [[ -n "${rnaspades_unconditional_loci}" ]]; then
+    rnaspades_group_args+=(--locus_table "${rnaspades_unconditional_loci}")
+    longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_unconditional_loci}")
+  fi
+  if [[ -n "${rnaspades_junction_table}" ]]; then
+    rnaspades_group_args+=(--junction_table "${rnaspades_junction_table}")
+    longestcds_provenance_args+=(--input "rnaspades_junctions=${rnaspades_junction_table}")
+  fi
+fi
+if [[ "${orf_representative_mode}" != length && ( ${run_longestcds} -eq 1 || -e "${file_longestcds}" ) ]]; then
+  orf_swissprot_db=$(ensure_uniprot_sprot_db "${gg_workspace_dir}") || exit $?
+  orf_cdskit_version=$(cdskit --version) || exit $?
+  orf_diamond_version=$(diamond version) || exit $?
+  orf_selection_report="${dir_transcriptome_assembly_output}/orf_representative_selection/${sp_ub}_orf_selection.tsv"
+  longestcds_provenance_args+=(
+    --input "swissprot_db=${orf_swissprot_db}.dmnd"
+    --output "orf_selection_report=${orf_selection_report}"
+    --parameter "orf_representative_mode=${orf_representative_mode}"
+    --parameter "orf_homology_policy=3"
+    --parameter "orf_cdskit_version=${orf_cdskit_version}"
+    --parameter "orf_diamond_version=${orf_diamond_version}"
+  )
+  if [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+    longestcds_provenance_args+=(--input "swissprot_targets=${orf_swissprot_db}.pep")
+    if [[ -n "${rnaspades_locus_table}" ]]; then
+      longestcds_provenance_args+=(--input "rnaspades_loci=${rnaspades_locus_table}")
+    fi
+  fi
+  if [[ "${orf_homology_split}" != off ]]; then
+    orf_split_prefix="${dir_transcriptome_assembly_output}/orf_homology_split/${sp_ub}"
+    longestcds_provenance_args+=(
+      --output "orf_homology_split_groups=${orf_split_prefix}.groups.tsv"
+      --output "orf_homology_split_audit=${orf_split_prefix}.audit.tsv"
+      --parameter "orf_homology_split=${orf_homology_split}"
+      --parameter "orf_homology_split_policy=1"
+    )
+    if [[ "${orf_homology_split}" == report ]]; then
+      longestcds_provenance_args+=(
+        --output "orf_homology_split_preview=${orf_split_prefix}.preview.tsv"
+        --parameter "orf_homology_split_preview_policy=1"
+      )
+    fi
+  fi
+  if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+    orf_catalog_rescue_report="${dir_transcriptome_assembly_output}/orf_catalog_rescue/${sp_ub}.tsv"
+    longestcds_provenance_args+=(
+      --output "orf_catalog_rescue_report=${orf_catalog_rescue_report}"
+      --parameter "orf_catalog_rescue_policy=1"
+    )
+  fi
 fi
 gg_artifact_prepare_stage longestcds_needs_update run_longestcds "${longestcds_provenance_args[@]}" || exit $?
 if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
@@ -4675,10 +4754,32 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
   fi
 
   longestcds_tmp="${sp_ub}.tmp.longestcds.raw.fa"
+  aggregate_args=(-x "${aggregate_expression}")
+  homology_group_args=(--expression "${aggregate_expression}")
+  rnaspades_split=no
+  if (( ${#rnaspades_group_args[@]} )); then
+    cdskit regroup --seq_file "${file_isoform}" "${rnaspades_group_args[@]}" \
+      --out_file "${sp_ub}.tmp.groups.tsv" --report "${sp_ub}.tmp.group_audit.tsv" || exit $?
+    if [[ -n "${rnaspades_unconditional_loci}" ]]; then
+      rnaspades_split=$(python "${gg_support_dir}/rnaspades_group_ids.py" normalize \
+        "${sp_ub}.tmp.groups.tsv" "${sp_ub}.tmp.group_audit.tsv" \
+        "${sp_ub}" "${sp_ub}.tmp.normalized_groups.tsv") || exit $?
+    fi
+  fi
+  if [[ "${rnaspades_split}" == yes ]]; then
+    aggregate_args=(--group_table "${sp_ub}.tmp.normalized_groups.tsv")
+    homology_group_args=(--group-table "${sp_ub}.tmp.normalized_groups.tsv")
+  fi
+  alternate_orf_args=()
+  if [[ "${orf_representative_mode}" == homology-orfs ]]; then
+    alternate_orf_args=(--alternate_orfs "${sp_ub}.tmp.alternate_orfs.fa")
+  fi
   if ! cdskit longestorf \
     --seq_file "${sp_ub}.tmp.renamed.fa" \
     --out_file "${longestcds_tmp}" \
     --codon_table "${genetic_code}" \
+    --selection "${longestcds_selection}" \
+    "${alternate_orf_args[@]}" \
     --annotate_seq_name no \
     --threads "${GG_TASK_CPUS}"; then
     echo "Error: cdskit longestorf failed."
@@ -4690,11 +4791,61 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
     exit 1
   fi
 
-  seqkit rmdup --by-seq "${longestcds_tmp}" |
+  if [[ "${rnaspades_split}" == yes ]]; then
+    seqkit rmdup --by-seq "${longestcds_tmp}" |
+      python "${gg_support_dir}/rnaspades_group_ids.py" restore-split-candidates \
+        "${sp_ub}.tmp.normalized_groups.tsv" "${longestcds_tmp}"
+  else
+    seqkit rmdup --by-seq "${longestcds_tmp}"
+  fi |
     cdskit pad --codon_table "${genetic_code}" |
     seqkit sort --by-name --threads "${GG_TASK_CPUS}" |
-    cdskit aggregate -x "${aggregate_expression}" \
-      > "${sp_ub}.tmp.aggregated.fa"
+    if [[ "${orf_representative_mode}" == length ]]; then
+      cdskit aggregate "${aggregate_args[@]}" > "${sp_ub}.tmp.aggregated.fa"
+    else
+      cat > "${sp_ub}.tmp.baseline_orfs.fa"
+    fi
+  if [[ "${orf_representative_mode}" != length ]]; then
+    homology_args=()
+    if [[ "${orf_representative_mode}" == homology-orfs ]]; then
+      homology_args=(--alternates "${sp_ub}.tmp.alternate_orfs.fa")
+    fi
+    if [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+      homology_args+=(
+        --split-mode "${orf_homology_split}" --split-transcripts "${file_isoform}"
+        --split-assembler "${effective_assembly_method}"
+        --split-species "${sp_ub}" --split-extra-baseline "${longestcds_tmp}"
+        --split-targets "${orf_swissprot_db}.pep"
+      )
+      if [[ -n "${rnaspades_locus_table}" ]]; then
+        homology_args+=(--split-loci "${rnaspades_locus_table}")
+      fi
+    fi
+    if [[ "${orf_homology_split}" != off ]]; then
+      homology_args+=(
+        --split-report "${sp_ub}.tmp.homology_split_audit.tsv"
+        --split-groups "${sp_ub}.tmp.normalized_groups.tsv"
+      )
+      if [[ "${orf_homology_split}" == report ]]; then
+        homology_args+=(--split-preview "${sp_ub}.tmp.homology_split_preview.tsv")
+      fi
+    fi
+    if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+      homology_args+=(
+        --rescue-report "${sp_ub}.tmp.catalog_rescue.tsv"
+        --rescue-groups "${sp_ub}.tmp.normalized_groups.tsv"
+      )
+    fi
+    python "${gg_support_dir}/transcriptome_homology.py" \
+      --baseline "${sp_ub}.tmp.baseline_orfs.fa" "${homology_args[@]}" \
+      --orf-transcripts "${sp_ub}.tmp.renamed.fa" \
+      --database "${orf_swissprot_db}.dmnd" "${homology_group_args[@]}" \
+      --genetic-code "${genetic_code}" --cpus "${GG_TASK_CPUS}" \
+      --output "${sp_ub}.tmp.ranked_orfs.fa" --report "${sp_ub}.tmp.orf_selection.tsv" || exit $?
+    # Preserve the source transcript ID in the published CDS and cDNA pair.
+    sed -E '/^>/ {s/[[:space:]].*//; s/\.cdskit-orf-[0-9]+$//;}' \
+      "${sp_ub}.tmp.ranked_orfs.fa" > "${sp_ub}.tmp.aggregated.fa"
+  fi
 
   awk '/^>/ {sub(/^>/, "", $0); sub(/[[:space:]].*$/, "", $0); sub(/\.p[0-9].*$/, "", $0); print}' \
     "${sp_ub}.tmp.aggregated.fa" > "${sp_ub}.tmp.aggregated.transcript_id.txt"
@@ -4706,10 +4857,49 @@ if [[ ${longestcds_needs_update} -eq 1 && ${run_longestcds} -eq 1 ]]; then
       --pattern-file "${sp_ub}.tmp.aggregated.transcript_id.txt" \
       "${sp_ub}.tmp.renamed.fa" \
       --out-file "${sp_ub}.tmp.longestcds.transcript.fa.gz"
-    mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
-    sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa" |
+    if [[ "${rnaspades_split}" == yes || "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+      python "${gg_support_dir}/rnaspades_group_ids.py" rename-selected \
+        "${sp_ub}.tmp.normalized_groups.tsv" "${sp_ub}.tmp.aggregated.fa"
+    else
+      sed -e "s/[[:space:]].*//" -e "s/${aggregate_expression}//" "${sp_ub}.tmp.aggregated.fa"
+    fi |
       seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${sp_ub}.tmp.longestcds.fa.gz"
-    mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+    if (( ${#rnaspades_group_args[@]} )) || [[ "${orf_homology_split}" != off || "${orf_catalog_rescue_enabled}" == yes ]]; then
+      longestcds_bundle=(
+        "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
+        "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+      )
+      if (( ${#rnaspades_group_args[@]} )); then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.groups.tsv" "${rnaspades_group_prefix}.groups.tsv"
+          "${sp_ub}.tmp.group_audit.tsv" "${rnaspades_group_prefix}.audit.tsv"
+        )
+      fi
+      if [[ "${orf_homology_split}" != off ]]; then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.normalized_groups.tsv" "${orf_split_prefix}.groups.tsv"
+          "${sp_ub}.tmp.homology_split_audit.tsv" "${orf_split_prefix}.audit.tsv"
+        )
+      fi
+      if [[ "${orf_homology_split}" == report ]]; then
+        longestcds_bundle+=(
+          "${sp_ub}.tmp.homology_split_preview.tsv" "${orf_split_prefix}.preview.tsv"
+        )
+      fi
+      if [[ "${orf_catalog_rescue_enabled}" == yes ]]; then
+        longestcds_bundle+=("${sp_ub}.tmp.catalog_rescue.tsv" "${orf_catalog_rescue_report}")
+      fi
+      if [[ "${orf_representative_mode}" != length ]]; then
+        longestcds_bundle+=("${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}")
+      fi
+      mv_out_bundle "${longestcds_bundle[@]}" || exit $?
+    else
+      mv_out "${sp_ub}.tmp.longestcds.transcript.fa.gz" "${file_longestcds_transcript}"
+      mv_out "${sp_ub}.tmp.longestcds.fa.gz" "${file_longestcds}"
+      if [[ "${orf_representative_mode}" != length ]]; then
+        mv_out "${sp_ub}.tmp.orf_selection.tsv" "${orf_selection_report}"
+      fi
+    fi
   else
     echo "Output file not detected for the task: ${task}"
   fi
@@ -5073,18 +5263,23 @@ task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
 file_kallisto_reference_fasta=""
 if [[ ${kallisto_reference} == 'species_cds' ]]; then
-  dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
   if [[ -n "${representative_inputs}" ]]; then
-    dir_kallisto_species_cds=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
-      --inputs "${representative_inputs}" --field cds) || exit 1
-  fi
-  kallisto_ref_candidates=()
-  mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
-  if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
-    file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
-  elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
-    echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
-    exit 1
+    # Existing outputs can still trigger a provenance check or automatic rebuild.
+    if [[ ${run_amalgkit_quant} -eq 1 || -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ||
+          -e "${dir_amalgkit_quant}/${sp_ub}" || -e "${dir_amalgkit_quant}/${sp_ub}.zip" ]]; then
+      file_kallisto_reference_fasta=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+        --inputs "${representative_inputs}" --field cds --species "${sp_ub}") || exit 1
+    fi
+  else
+    dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
+    kallisto_ref_candidates=()
+    mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
+    if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
+      file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
+    elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
+      echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
+      exit 1
+    fi
   fi
 elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
   file_kallisto_reference_fasta=${file_longestcds_transcript}

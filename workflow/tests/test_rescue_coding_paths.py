@@ -815,7 +815,8 @@ def test_finalize_exports_alternatives_under_one_gene_and_keeps_original_ids(tmp
     plan = {'species': [name], 'common_references': [], 'request': {'sources': {name: {
         'species': name, 'fasta': str(cds), 'gff': str(gff), 'genome': str(genome), 'genetic_code': 1,
         'quality': {'complete_pct': 90}}}}}
-    monkeypatch.setattr(rescue, 'plan_digest', lambda *_: 'frozen-plan')
+    plan['request']['files'] = {str(path): rescue.digest(path) for path in (cds, gff, genome)}
+    monkeypatch.setattr(rescue, 'plan_digest', lambda _root, _plan, *, verification=None: 'frozen-plan')
     original_stage = rescue.stage
     def stage(output, destination, key, builder, guard, **kwargs):
         if Path(output) != root:
@@ -857,3 +858,18 @@ def test_finalize_exports_alternatives_under_one_gene_and_keeps_original_ids(tmp
     alternate, = [c for c in rescued['candidates'] if c.get('rescue_alternative_coding_path')]
     assert alternate['origin'] == 'predicted' and not alternate['quality']['representative_eligible']
     assert catalog['summary']['rescue_alternative_coding_paths'] == 1
+
+
+def test_coding_overlap_matches_interval_pairs_on_both_strands():
+    from importlib import import_module
+    overlap = import_module('rescue_coding_paths').coding_overlap
+    for strand in ('+','-'):
+        for step in (8, 22):
+            a = [[i, i+12, i%3] for i in range(0, 200, step)]
+            b = [[i, i+13, i%3] for i in range(2, 214, 19)]
+            if strand == '-':
+                a.reverse()
+                b.reverse()
+            path = dict(seqid='chr',strand=strand)
+            pairs = [overlap({**path,'cds':[x]}, {**path,'cds':[y]}) for x in a for y in b]
+            assert overlap({**path,'cds':a}, {**path,'cds':b}) == tuple(map(sum,zip(*pairs,strict=True)))

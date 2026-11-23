@@ -231,25 +231,11 @@ diagonal_bound=${pair_values[19]}
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
 dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 representative_map=""
-if [[ -n "${representative_inputs}" ]]; then
-  representative_layout=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
-    --inputs "${representative_inputs}" --field layout) || exit 1
-  IFS=$'\t' read -r dir_sp_cds representative_protein_dir dir_sp_gff representative_genome_dir \
-    representative_map representative_genetic_codes representative_extra <<< "${representative_layout}"
-  if [[ -n "${representative_extra}" || -z "${representative_genetic_codes}" ]]; then
-    echo "Invalid representative input layout." >&2
-    exit 1
-  fi
-fi
-target_cds=$(resolve_species_file "${dir_sp_cds}" "${target_species}" "target CDS") || exit 1
-target_gff=$(resolve_species_file "${dir_sp_gff}" "${target_species}" "target GFF") || exit 1
 query_cds=""
 query_gff=""
 target_selected_reader_receipt=""
 query_selected_reader_receipt=""
 if [[ "${analysis_mode}" == "compare" ]]; then
-  query_cds=$(resolve_species_file "${dir_sp_cds}" "${query_species}" "query CDS") || exit 1
-  query_gff=$(resolve_species_file "${dir_sp_gff}" "${query_species}" "query GFF") || exit 1
   dir_result="${gg_workspace_output_dir}/kffractbias/${analysis_id}"
   dir_provenance="${gg_workspace_output_dir}/artifact_provenance/kffractbias"
   artifact_stage="fractionation_bias_compare"
@@ -258,8 +244,8 @@ else
   dir_provenance="${gg_workspace_output_dir}/artifact_provenance/genome_evolution/self_fractionation_bias"
   artifact_stage="genome_evolution_self_fractionation_bias"
 fi
-if [[ -n "${representative_map}" ]]; then
-  selected_reader_args=(--inputs "${representative_inputs}" --species "${target_species}"
+if [[ -n "${representative_inputs}" ]]; then
+  selected_reader_args=(--published --inputs "${representative_inputs}" --species "${target_species}"
     --cache-root "${gg_workspace_output_dir}/.gg_cache")
   if [[ "${analysis_mode}" == "compare" ]]; then
     selected_reader_args+=(--species "${query_species}")
@@ -274,14 +260,14 @@ if [[ -n "${representative_map}" ]]; then
     echo "Invalid selected fractionation reader species count." >&2
     exit 1
   fi
-  IFS=$'\t' read -r target_cds target_gff target_selected_reader_receipt selected_reader_extra <<< "${selected_reader_rows[0]}"
-  if [[ -z "${target_selected_reader_receipt}" || -n "${selected_reader_extra}" ]]; then
+  IFS=$'\t' read -r target_cds target_gff target_selected_reader_receipt representative_map selected_reader_extra <<< "${selected_reader_rows[0]}"
+  if [[ -z "${target_selected_reader_receipt}" || -z "${representative_map}" || -n "${selected_reader_extra}" ]]; then
     echo "Invalid selected fractionation reader layout." >&2
     exit 1
   fi
   if [[ "${analysis_mode}" == "compare" ]]; then
-    IFS=$'\t' read -r query_cds query_gff query_selected_reader_receipt selected_reader_extra <<< "${selected_reader_rows[1]}"
-    if [[ -z "${query_selected_reader_receipt}" || -n "${selected_reader_extra}" ]]; then
+    IFS=$'\t' read -r query_cds query_gff query_selected_reader_receipt query_representative_map selected_reader_extra <<< "${selected_reader_rows[1]}"
+    if [[ -z "${query_selected_reader_receipt}" || "${query_representative_map}" != "${representative_map}" || -n "${selected_reader_extra}" ]]; then
       echo "Invalid selected query fractionation reader layout." >&2
       exit 1
     fi
@@ -291,6 +277,13 @@ if [[ -n "${representative_map}" ]]; then
   target_attribute="ID"
   query_feature="gene"
   query_attribute="ID"
+else
+  target_cds=$(resolve_species_file "${dir_sp_cds}" "${target_species}" "target CDS") || exit 1
+  target_gff=$(resolve_species_file "${dir_sp_gff}" "${target_species}" "target GFF") || exit 1
+  if [[ "${analysis_mode}" == "compare" ]]; then
+    query_cds=$(resolve_species_file "${dir_sp_cds}" "${query_species}" "query CDS") || exit 1
+    query_gff=$(resolve_species_file "${dir_sp_gff}" "${query_species}" "query GFF") || exit 1
+  fi
 fi
 file_genes="${dir_result}/${analysis_id}.genes.tsv"
 file_windows="${dir_result}/${analysis_id}.windows.tsv"

@@ -32,6 +32,9 @@ SMOKE_NODE_IDS = {
     "workflow/tests/test_busco_hmmsearch_wrapper.py::test_gg_run_busco_with_metaeuk_modified_fas_compat_wraps_busco_env",
     "workflow/tests/test_busco_hmmsearch_wrapper.py::test_gg_busco_stderr_matches_known_metaeuk_modified_fas_bug",
     "workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_single_mode_end_to_end",
+    "workflow/tests/test_input_generation_refinement_finisher.py::test_finisher_wires_review_and_bounds_busco_resources",
+    "workflow/tests/test_input_generation_refinement_finisher.py::test_finisher_reuses_swissprot_annotation_and_forwards_verified_audit",
+    "workflow/tests/test_input_generation_refinement_finisher.py::test_finisher_runs_omark_after_qc_and_propagates_failure",
 }
 SMOKE_FILES = {node_id.split("::", 1)[0].rsplit("/", 1)[-1] for node_id in SMOKE_NODE_IDS}
 
@@ -144,11 +147,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(getattr(pytest.mark, lane))
             if lane == "runtime":
                 item.add_marker(pytest.mark.slow)
-        if item.nodeid in SMOKE_NODE_IDS:
+        is_smoke = item.nodeid.split("[", 1)[0] in SMOKE_NODE_IDS
+        if is_smoke:
             item.add_marker(pytest.mark.smoke)
 
-        duplicate_smoke = suite in {"integration-download", "integration-workflow"} and item.nodeid in SMOKE_NODE_IDS
-        missing_smoke = suite == "smoke" and item.nodeid not in SMOKE_NODE_IDS
+        duplicate_smoke = is_smoke and suite in {"fast", "integration-download", "integration-workflow"}
+        missing_smoke = suite == "smoke" and not is_smoke
         shard = config.gg_shard
         other_shard = shard is not None and int.from_bytes(
             hashlib.sha256(item.nodeid.encode()).digest()[:8], "big"

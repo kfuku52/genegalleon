@@ -24,6 +24,7 @@ from artifact_provenance import audit_manifest, load_manifest, resolve_reference
 from format_species_common import provider_raw_dir
 from format_species_constants import FASTA_EXTENSIONS
 from gene_family_output_store import GeneFamilyOutputStore
+from genome_fasta_repair import repair_audit, repair_bound_genome
 from runtime_asset_io import atomic_json, file_sha
 from shared_namespace_lock import namespace_lock
 
@@ -37,7 +38,7 @@ ANNOTATION_RUN_FLAGS = ('COLLECT_GFF_INFO', 'BUSCO_CDS', 'UNIPROT_ANNOTATION', '
 
 def matches_formatted_cds(filename, species):
     """Match the complete frozen ID and a known CDS/FASTA filename suffix."""
-    suffixes = {role + extension for role in ('', '.cds') for extension in FASTA_EXTENSIONS}
+    suffixes = {role + extension for role in ('', '.cds', '_gff3.derived.cds') for extension in FASTA_EXTENSIONS}
     return filename.startswith(species) and filename[len(species):].lower() in suffixes
 
 
@@ -69,15 +70,43 @@ def select(manifest, task):
     return members[task - 1]
 
 
-def bind(source, target, *, expected_sha256=None):
+def _verified_input_sha256(path, expected_sha256, expected_md5):
+    if expected_md5:
+        sha256 = hashlib.sha256()
+        md5 = hashlib.md5(usedforsecurity=False)
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+                sha256.update(chunk)
+                md5.update(chunk)
+        if md5.hexdigest() != expected_md5:
+            raise ValueError('Downloaded genome does not match the published MD5')
+        actual = sha256.hexdigest()
+    else:
+        actual = file_sha(path)
+    if expected_sha256 is not None and actual != expected_sha256:
+        raise ValueError('Source changed while preparing native input')
+    return actual
+
+
+def bind(source, target, *, expected_sha256=None, expected_md5=None, prepare=None, prior_repair=None):
+    """Publish or reuse a verified private copy and return its SHA256 for the receipt."""
     source = physical(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     physical(target.parent, directory=True)
-    expected = expected_sha256 or file_sha(source)
     if target.exists() or target.is_symlink():
-        if target.is_symlink() or file_sha(physical(target)) != expected:
+        actual = _verified_input_sha256(source, expected_sha256, expected_md5)
+        if target.is_symlink():
             raise ValueError(f'Conflicting native input: {target}')
-        return
+        bound = file_sha(physical(target))
+        if bound == actual:
+            return bound
+        if prior_repair and prior_repair.get('source_sha256') == actual and prior_repair.get('output_sha256') == bound:
+            return bound
+        if prepare is None:
+            raise ValueError(f'Conflicting native input: {target}')
+        expected_sha256 = actual
+    if expected_sha256 is None and not expected_md5:
+        expected_sha256 = file_sha(source)
     # A hardlink to the source changes its ctime and invalidates another
     # command's live source proof. Publish a verified private copy instead.
     fd, name = tempfile.mkstemp(prefix='.cohort-input-', dir=target.parent)
@@ -88,13 +117,15 @@ def bind(source, target, *, expected_sha256=None):
                 shutil.copyfileobj(inp, out, 8 * 1024 * 1024)
             out.flush()
             os.fsync(out.fileno())
-        if file_sha(pending) != expected:
-            raise ValueError('Source changed while preparing native input')
+        actual = _verified_input_sha256(pending, expected_sha256, expected_md5)
+        if prepare is not None:
+            actual = prepare(pending, actual)
         try:
             os.link(pending, target)
         except FileExistsError:
-            if target.is_symlink() or file_sha(physical(target)) != expected:
+            if target.is_symlink() or file_sha(physical(target)) != actual:
                 raise ValueError(f'Conflicting native input: {target}') from None
+        return actual
     finally:
         pending.unlink(missing_ok=True)
 
@@ -161,11 +192,16 @@ def entrypoint(manifest, name, env):
 
 def acquire(manifest, member, workspace):
     source = member['source']
+    expected_sha256 = source.get('sha256')
+    expected_md5 = None
     if source.get('local_path'):
-        genome = physical(source['local_path'])
-        if file_sha(genome) != source['sha256']:
-            raise ValueError('Previously acquired genome has changed')
+        genome = source['local_path']
+        if not expected_sha256:
+            raise ValueError('Local genome requires a SHA256 digest')
     else:
+        expected_md5 = source.get('md5')
+        if expected_md5 and source.get('archive_member'):
+            raise ValueError('The published MD5 of an archive cannot verify an extracted genome')
         row_path = workspace / 'genome.download.tsv'
         row = dict(provider='direct', id=member['species'], species_key=member['species'],
                    genome_url=source['url'], genome_filename=member['filename'],
@@ -184,18 +220,35 @@ def acquire(manifest, member, workspace):
                      'SPECIES_TAXONOMY', 'GENERATE_SPECIES_TRAIT', 'GENE_MODEL_RESCUE', 'GENE_MODEL_REFINEMENT'):
             env['GG_INPUT_RUN_' + flag] = '0'
         entrypoint(manifest, 'gg_input_generation', env)
-        genome = physical(provider_raw_dir('direct', workspace / 'raw', member['species']) / member['filename'])
-        if source.get('md5'):
-            digest = hashlib.md5(usedforsecurity=False)
-            with genome.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                    digest.update(chunk)
-            if source.get('archive_member') or digest.hexdigest() != source['md5']:
-                raise ValueError('Downloaded genome does not match the published MD5')
+        genome = provider_raw_dir('direct', workspace / 'raw', member['species']) / member['filename']
     target = workspace / 'input/species_genome' / member['filename']
-    bind(genome, target, expected_sha256=source.get('sha256') or file_sha(genome))
-    atomic_json(workspace / 'genome.acquired.json',
-                dict(species=member['species'], source=source, path=str(target), sha256=file_sha(target)))
+    receipt_path = workspace / 'genome.acquired.json'
+    receipt = dict(species=member['species'], source=source, path=str(target))
+    prior = None
+    if receipt_path.exists() or receipt_path.is_symlink():
+        saved = json.loads(physical(receipt_path).read_text())
+        previous = saved.get('fasta_boundary_repair')
+        if (isinstance(previous, dict) and previous.get('schema_version') == 1
+                and previous.get('kind') == 'genegalleon-fasta-boundary-repair'
+                and previous.get('output_sha256') == saved.get('sha256')
+                and previous.get('insertions') and all(saved.get(k) == v for k, v in receipt.items())):
+            prior = previous
+
+    def prepare(pending, source_sha):
+        edits = repair_bound_genome(pending)
+        if not edits:
+            return source_sha
+        digest = file_sha(pending)
+        receipt['fasta_boundary_repair'] = repair_audit(
+            source_sha, digest, edits, newline_mode='zero-based decoded stream with original newlines')
+        return digest
+
+    digest = bind(genome, target, expected_sha256=expected_sha256, expected_md5=expected_md5,
+                  prepare=prepare, prior_repair=prior)
+    if (prior is not None and prior['output_sha256'] == digest and prior['source_sha256'] != digest
+            and 'fasta_boundary_repair' not in receipt):
+        receipt['fasta_boundary_repair'] = prior
+    atomic_json(receipt_path, dict(receipt, sha256=digest))
 
 
 def audit(path, workspace, step, species, *, support_root=None):
@@ -220,8 +273,12 @@ def annotate(manifest, member, workspace, phase):
     prediction = workspace / 'output/genome_prediction/oriongeno' / species
     phase_workspace = workspace
     if phase == 'busco':
-        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species)
-        formatted = audit(prediction / 'format.provenance.json', workspace, 'genome_annotation_oriongeno_format', species)
+        support_root = manifest.get('prediction_support_root')
+        support = Path(support_root) if support_root else None
+        audit(prediction / 'prediction.provenance.json', workspace, 'genome_annotation_oriongeno_prediction', species,
+              support_root=support)
+        formatted = audit(prediction / 'format.provenance.json', workspace, 'genome_annotation_oriongeno_format', species,
+                          support_root=support)
         entry = next(e for e in formatted['outputs'] if e['label'] == 'formatted')
         directory = resolve_reference(entry, workspace / 'output/.gg_global_artifacts', workspace)
         phase_workspace = workspace / 'busco'
@@ -312,14 +369,15 @@ def main():
     if file_sha(path) != args.manifest_sha256:
         parser.error('Cohort manifest changed')
     manifest = json.loads(path.read_text())
-    if args.phase == 'format':
+    has_prediction_runtime = args.prediction_runtime_root is not None or args.prediction_runtime_manifest_sha256 is not None
+    if args.phase == 'format' or (args.phase == 'busco' and has_prediction_runtime):
         if args.prediction_runtime_root is None or args.prediction_runtime_manifest_sha256 is None:
-            parser.error('Format resumption requires its original prediction runtime')
+            parser.error('Resumption requires the complete original prediction runtime binding')
         previous = annotation_runtime(manifest, 'predict', args.prediction_runtime_root,
                                       args.prediction_runtime_manifest_sha256)
         manifest = {**manifest, 'prediction_support_root': str(Path(previous['runtime_root']) / 'workflow/support')}
-    elif args.prediction_runtime_root is not None or args.prediction_runtime_manifest_sha256 is not None:
-        parser.error('Original prediction runtime is only valid for format resumption')
+    elif has_prediction_runtime:
+        parser.error('Original prediction runtime is only valid for format or BUSCO resumption')
     manifest = acquisition_runtime(manifest, args.phase, args.acquisition_runtime_root,
                                    args.acquisition_runtime_manifest_sha256)
     manifest = annotation_runtime(manifest, args.phase, args.annotation_runtime_root,

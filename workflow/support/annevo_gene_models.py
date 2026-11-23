@@ -359,10 +359,10 @@ def confirm_transferred_structure(native_models, transferred):
         donor, query = key(model)[1:3]
         return {**model, 'problems': [], 'support': [],
                 'evidence': {**model.get('evidence', {}), 'donor': donor, 'query': query}}
-    native_models = iter(native_models)
-    first = next(native_models, None)
-    if first is None:
+    native_models = list(native_models)
+    if not native_models:
         return
+    needed = {key(model) for model in native_models}
     by_query = defaultdict(list)
     allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
     for model in transferred:
@@ -371,9 +371,11 @@ def confirm_transferred_structure(native_models, transferred):
                        ('annevo', 'oriongeno', 'retained_annotation_candidate'))
                 or set(model.get('problems', ())) - allowed):
             continue
-        by_query[key(model)].append(model)
+        query = key(model)
+        if query in needed:
+            by_query[query].append(model)
     junction_index = {}
-    for model in chain((first,), native_models):
+    for model in native_models:
         engine = next(e for e in ('annevo', 'oriongeno') if model.get('evidence', {}).get(e))
         model['problems'] = [p for p in model['problems'] if p != engine + '_unconfirmed_coding_structure']
         whole_path = model.get('evidence', {}).get('genome_only')

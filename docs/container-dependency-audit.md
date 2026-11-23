@@ -28,7 +28,7 @@ use the official source artifact, whose revision is recorded separately.
 
 | Dependency | Active consumer or reason |
 | --- | --- |
-| IQ2MC-compatible PAML/MCMCtree source build | `gg_genome_evolution_core.sh` still prepares IQ2MC input and runs the species-tree MCMCtree analysis. NWKIT now handles gene-tree dating, not this separate species-tree fit. |
+| Upstream PAML/MCMCtree source build | `gg_genome_evolution_core.sh` uses IQ-TREE's IQ2MC output for the species-tree MCMCtree analysis. NWKIT handles gene-tree dating. |
 | Conda PAML | `gg_gene_evolution_core.sh` still runs `codeml` for two-ratio models. The source artifact installs MCMCtree only. |
 | kfl1ou | Removed after migration to NWKIT native OU inference. |
 | `ape`, `Rcpp`, `nlme` | kfl1ou imports ape/Rcpp; ape itself imports nlme/Rcpp. Tree and plotting helpers also use ape. |

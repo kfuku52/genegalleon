@@ -197,6 +197,8 @@ def test_fastq_restart_at_gzip_member_boundary_requires_complete_source(
     if checksum and recovery == "changed":
         digest = hashlib.md5(expected).hexdigest()
     namespace = _fallback_definition_namespace()  # No in-memory state survives the restart.
+    if not checksum:
+        namespace["file_md5"] = lambda path: pytest.fail(f"Unexpected MD5 scan without a provider checksum: {path}")
     namespace["download_fastq_atomically"](dest, url, digest)
     assert dest.read_bytes() == expected
     assert gzip.decompress(dest.read_bytes()) == gzip.decompress(expected)
@@ -1004,6 +1006,44 @@ def test_fastq_proof_rejects_same_byte_replacement_during_validation(tmp_path, m
     monkeypatch.setattr(fastq_proof, "_complete_fastq", replace_after_parsing)
     with pytest.raises(fastq_proof.FastqChanged):
         fastq_proof.proof_fastq(path)
+
+
+@pytest.mark.parametrize("payload", [
+    pytest.param(gzip.compress(b"@read\nACGT\n+\n!!!\n", mtime=0), id="short-quality"),
+    pytest.param(gzip.compress(b"@read\nACGT\n+\n!!!!\n", mtime=0)[:-5], id="truncated-gzip"),
+])
+def test_full_validator_rejects_invalid_fastq_even_when_digest_matches(tmp_path, payload):
+    root = tmp_path / "getfastq"
+    run_dir = root / "RUN1"
+    run_dir.mkdir(parents=True)
+    metadata = tmp_path / "metadata.tsv"
+    _metadata(metadata, ["RUN1"])
+    fastq = run_dir / "RUN1.amalgkit.fastq.gz"
+    fastq.write_bytes(payload)
+    contract = {"path": fastq.relative_to(root).as_posix(), "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest()}
+    manifest = {"schema_version": 3, "read_source": "public-original", "status": "complete",
+                "run_count": 1, "runs": [{"run": "RUN1", "status": "complete", "files": [contract]}]}
+    (root / "getfastq_completion.json").write_text(json.dumps(manifest))
+
+    result = _run_manifest_validator(metadata, root)
+    assert result.returncode != 0
+    assert "complete gzip/FASTQ" in result.stderr
+
+
+def test_quant_stats_digest_covers_rows_after_matching_run(tmp_path):
+    from workflow.support.fastq_proof import quant_stats_digest
+
+    path = tmp_path / "getfastq_stats.tsv"
+    content = (b"run\tnum_written\tbp_rrna_in\tnote\r\n"
+               b'RUN1\t2\t8\t"line one\r\nline two"\r\n'
+               + b"OTHER\t1\t4\tunused\r\n" * 1000)
+    path.write_bytes(content)
+    assert quant_stats_digest(path, "RUN1") == (len(content), hashlib.sha256(content).hexdigest())
+    with path.open("ab") as handle:
+        handle.write(b"RUN1\t1\t4\tduplicate\r\n")
+    with pytest.raises(ValueError, match="ambiguous"):
+        quant_stats_digest(path, "RUN1")
 
 
 def test_amalgkit_manifest_rejects_nonfinite_quant_statistics(tmp_path):

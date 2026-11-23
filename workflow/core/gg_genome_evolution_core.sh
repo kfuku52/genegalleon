@@ -1054,17 +1054,8 @@ run_shared_species_omark_stage() {
   local task="OMArk analysis of species-wise protein input files"
   local source_species_input_dir=""
   local -a source_species_input_fasta=()
-  local -a species_input_fasta=()
-  local -a input_species_set=()
-  local -a existing_species_dirs=()
-  local protein_full protein_file sp_ub omamer_out omark_outdir sum_file omamer_query
-  local input_species existing_dir existing_species existing_found
-  local omark_db_file=""
-  local missing_omark_outputs=0
-  local omark_needs_update=0
-  local -a omark_provenance_args=()
-  local -a omamer_query_files=()
-
+  local -a omark_args=() legacy_args=()
+  local source species status=0 legacy=0 needs_update=0
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
   fi
@@ -1085,130 +1076,47 @@ run_shared_species_omark_stage() {
     exit 1
   fi
 
-  mapfile -t input_species_set < <(gg_species_names_from_fasta_dir "${source_species_input_dir}")
-  gg_artifact_contract_init omark_provenance_args "genome_evolution_species_omark" "all_species" "${genome_evolution_provenance_dir}/omark.species.json"
-  omark_provenance_args+=(
-    --input "species_sequences=${source_species_input_dir}"
-    --parameter "input_sequence_mode=${input_sequence_mode}"
-    --parameter "genetic_code=${genetic_code}"
-    --parameter "omark_db_path=${omark_db_path}"
-  )
-  gg_artifact_add_input_if_present omark_provenance_args "species_genetic_code" "${file_species_genetic_code}"
-  for input_species in "${input_species_set[@]}"; do
-    omark_provenance_args+=(
-      --output "omamer_${input_species}=${dir_species_omamer}/${input_species}.omamer"
-      --output "summary_${input_species}=${dir_species_omark}/${input_species}/${input_species}.sum"
+  for source in "${source_species_input_fasta[@]}"; do
+    species=$(gg_species_name_from_path "$(basename "${source}")") || return $?
+    omark_args+=(--input "${species}" "${source}")
+    if [[ -d "${dir_species_omark}/${species}" && ! -L "${dir_species_omark}/${species}" ]]; then legacy=1; fi
+    legacy_args+=(
+      --output "omamer_${species}=${dir_species_omamer}/${species}.omamer"
+      --output "summary_${species}=${dir_species_omark}/${species}/${species}.sum"
     )
   done
-  gg_artifact_prepare_stage omark_needs_update run_species_omark "${omark_provenance_args[@]}" || return $?
-  if [[ ${omark_needs_update} -ne 1 ]]; then
-    for protein_full in "${source_species_input_fasta[@]}"; do
-      echo "Skipped OMArk: $(basename "${protein_full}")"
-    done
-    echo "$(date): End: ${task}"
-    return 0
+  # Honour the existing reuse policy for pre-cache, local results. They
+  # cannot seed the shared store: their tool and DB identities are unknown.
+  if [[ ${legacy} -eq 1 ]]; then
+    local -a contract=()
+    gg_artifact_contract_init contract "genome_evolution_species_omark" "all_species" "${genome_evolution_provenance_dir}/omark.species.json"
+    contract+=(--input "species_sequences=${source_species_input_dir}"
+      --parameter "input_sequence_mode=${input_sequence_mode}" --parameter "genetic_code=${genetic_code}"
+      --parameter "omark_db_path=${omark_db_path}")
+    gg_artifact_add_input_if_present contract "species_genetic_code" "${file_species_genetic_code}"
+    gg_artifact_prepare_stage needs_update run_species_omark "${contract[@]}" "${legacy_args[@]}" || return $?
+    if [[ ${needs_update} -eq 0 ]]; then
+      for source in "${source_species_input_fasta[@]}"; do echo "Skipped OMArk: $(basename "${source}")"; done
+      return 0
+    fi
+    clear_directory_contents_safe "${dir_species_omark}" || return $?
+    clear_directory_contents_safe "${dir_species_omamer}" || return $?
   fi
-  if [[ -d "${dir_species_omamer}" ]]; then
-    clear_directory_contents_safe "${dir_species_omamer}" || return 1
+  omark_db_resolved=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}") || return $?
+  omark_args+=(--genome "${dir_genome_evolution}" --db "${omark_db_resolved}"
+    --cache "${omark_cache_dir:-${gg_workspace_output_dir}/species_omark_cache}"
+    --scratch "${dir_tmp}/omamer_queries" --threads "${GG_TASK_CPUS}")
+  [[ ${delete_tmp_dir} -eq 1 ]] || omark_args+=(--keep-query)
+  if [[ "${source_species_input_dir}" == "${dir_sp_cds}" ]]; then
+    omark_args+=(--cds-signature "${shared_protein_input_signature}")
+    [[ ${species_protein_ready} -eq 0 ]] || omark_args+=(--translated "${dir_sp_protein}")
   fi
-  if [[ -d "${dir_species_omark}" ]]; then
-    clear_directory_contents_safe "${dir_species_omark}" || return 1
-  fi
-  ensure_dir "${dir_species_omamer}"
-  ensure_dir "${dir_species_omark}"
-
-  mapfile -t existing_species_dirs < <(find "${dir_species_omark}" -maxdepth 1 -mindepth 1 -type d ! -name '.*' | sort)
-  for existing_dir in "${existing_species_dirs[@]}"; do
-    existing_species=$(basename "${existing_dir}")
-    existing_found=0
-    for input_species in "${input_species_set[@]}"; do
-      if [[ "${input_species}" == "${existing_species}" ]]; then
-        existing_found=1
-        break
-      fi
-    done
-    if [[ ${existing_found} -eq 0 ]]; then
-      echo "Removing stale OMArk output for species not in current input: ${existing_dir}"
-      rm -rf -- "${existing_dir}"
-      rm -f -- "${dir_species_omamer}/${existing_species}.omamer"
-    fi
-  done
-  for input_species in "${input_species_set[@]}"; do
-    omamer_out="${dir_species_omamer}/${input_species}.omamer"
-    sum_file="${dir_species_omark}/${input_species}/${input_species}.sum"
-    if [[ ! -s "${omamer_out}" || ! -s "${sum_file}" ]]; then
-      missing_omark_outputs=1
-      break
-    fi
-  done
-  if [[ ${missing_omark_outputs} -ne 1 ]]; then
-    for protein_full in "${source_species_input_fasta[@]}"; do
-      echo "Skipped OMArk: $(basename "${protein_full}")"
-    done
-    echo "$(date): End: ${task}"
-    return 0
-  fi
-
-  if ! omark_db_file=$(ensure_omark_database "${gg_workspace_dir}" "${omark_db_path}"); then
-    echo "Failed to prepare OMArk database: ${omark_db_path}"
-    exit 1
-  fi
-  omark_db_resolved="${omark_db_file}"
-  prepare_species_protein_tmp
-  mapfile -t species_input_fasta < <(gg_find_fasta_files "${dir_sp_protein}" 1)
-
-  for protein_full in "${species_input_fasta[@]}"; do
-    protein_file=$(basename "${protein_full}")
-    sp_ub=$(gg_species_name_from_path_or_dot "${protein_file}")
-    omamer_out="${dir_species_omamer}/${sp_ub}.omamer"
-    omark_outdir="${dir_species_omark}/${sp_ub}"
-    sum_file="${omark_outdir}/${sp_ub}.sum"
-
-    if [[ -s "${omamer_out}" && -s "${sum_file}" ]]; then
-      echo "Skipped OMArk: ${protein_file}"
-      continue
-    fi
-
-    gg_step_start "${task}: ${protein_file}"
-    ensure_dir "${omark_outdir}"
-    if [[ ! -s "${omamer_out}" ]]; then
-      # Derived search input is computation scratch, not an OMArk result.
-      # Keep it outside the directory fingerprinted by the summary stage.
-      if [[ -L "${dir_tmp}/omamer_queries" ]]; then
-        echo "Refusing symlinked OMAmer query scratch." >&2
-        exit 1
-      fi
-      omamer_query="${dir_tmp}/omamer_queries/${sp_ub}.query.fa"
-      if [[ -L "${omamer_query}" ]]; then
-        echo "Refusing symlinked OMAmer query input: ${omamer_query}" >&2
-        exit 1
-      fi
-      stage_species_protein_fasta "${protein_full}" "${omamer_query}"
-      omamer_query_files+=("${omamer_query}")
-      omamer search \
-        --db "${omark_db_file}" \
-        --query "${omamer_query}" \
-        --out "${omamer_out}"
-    fi
-    if [[ ! -s "${omamer_out}" ]]; then
-      echo "OMAmer search output was not created: ${omamer_out}"
-      exit 1
-    fi
-
-    if [[ ! -s "${sum_file}" ]]; then
-      omark \
-        -f "${omamer_out}" \
-        -d "${omark_db_file}" \
-        -o "${omark_outdir}"
-    fi
-    if [[ ! -s "${sum_file}" ]]; then
-      echo "OMArk summary output was not created: ${sum_file}"
-      exit 1
-    fi
-  done
-  gg_artifact_record "${omark_provenance_args[@]}"
-  if [[ ${delete_tmp_dir} -eq 1 && ${#omamer_query_files[@]} -gt 0 ]]; then
-    rm -f -- "${omamer_query_files[@]}"
+  python "${gg_support_dir}/species_omark.py" "${omark_args[@]}" || status=$?
+  if [[ ${status} -eq 75 && "${source_species_input_dir}" == "${dir_sp_cds}" && ${species_protein_ready} -eq 0 ]]; then
+    prepare_species_protein_tmp || return $?
+    python "${gg_support_dir}/species_omark.py" "${omark_args[@]}" --translated "${dir_sp_protein}" || return $?
+  elif [[ ${status} -ne 0 ]]; then
+    return "${status}"
   fi
   echo "$(date): End: ${task}"
 }
@@ -1229,6 +1137,14 @@ run_shared_omark_summary_stage() {
   fi
 
   ensure_dir "${dir_species_omark}"
+  if [[ -f "${dir_genome_evolution}/.omark-inputs.json" ]]; then
+    # The shared result directories are immutable. Only the small summaries
+    # are needed here, including in a later summary-only invocation.
+    ensure_parent_dir "${file_species_omark_summary_table}"
+    python "${gg_support_dir}/summarize_omark.py" --omark_outdir "${dir_species_omark}" \
+      --selection "${dir_genome_evolution}/.omark-inputs.json" --outfile "${file_species_omark_summary_table}"
+    return $?
+  fi
   gg_artifact_contract_init omark_summary_provenance_args "genome_evolution_omark_summary" "all_species" "${genome_evolution_provenance_dir}/omark.summary.json"
   omark_summary_provenance_args+=(
     --output "summary=${file_species_omark_summary_table}"
@@ -1857,95 +1773,6 @@ extract_mcmctree_conversion_inputs() {
   nwkit convert --infile "$1" --outfile "$2/mcmctree_no95CI.nwk" --to newick --age-ci drop
 }
 
-mcmctree_requires_bdparas_flag() {
-  local probe_dir
-  local probe_stdout
-  local probe_stderr
-  local rc
-  probe_dir=$(mktemp -d "${dir_tmp}/tmp.mcmctree.bdparas_probe.XXXXXX")
-  probe_stdout="${probe_dir}/stdout.txt"
-  probe_stderr="${probe_dir}/stderr.txt"
-  printf '%s\n' "3 1" "((a,b)'B(0.1,0.2,0.025,0.025)',c);" > "${probe_dir}/tree.nwk"
-  cat > "${probe_dir}/dummy.phy" << 'EOF'
-3 4
-a    ACGT
-b    ACGT
-c    ACGT
-EOF
-  cat > "${probe_dir}/mcmctree.ctl" << 'EOF'
-seed = 1
-seqfile = dummy.phy
-treefile = tree.nwk
-outfile = mcmctree.out
-mcmcfile = mcmc.txt
-ndata = 1
-seqtype = 0
-usedata = 0
-clock = 2
-RootAge = <0.3
-model = 4
-alpha = 0.5
-ncatG = 5
-cleandata = 1
-BDparas = 1 1 0.5
-kappa_gamma = 6 2
-alpha_gamma = 1 1
-rgene_gamma = 2 20 1
-sigma2_gamma = 1 10 1
-burnin = 1
-sampfreq = 1
-nsample = 1
-EOF
-  if (
-    cd "${probe_dir}"
-    mcmctree mcmctree.ctl > "${probe_stdout}" 2> "${probe_stderr}"
-  ); then
-    rc=0
-  else
-    rc=$?
-  fi
-  if [[ ${rc} -ne 0 ]] && grep -q "BDparas: expect flag" "${probe_stderr}"; then
-    rm -rf -- "${probe_dir}"
-    return 0
-  fi
-  rm -rf -- "${probe_dir}"
-  return 1
-}
-
-normalize_mcmctree_ctl_for_installed_paml() {
-  local ctl_file=$1
-  if [[ ! -s "${ctl_file}" ]]; then
-    return 0
-  fi
-  if ! mcmctree_requires_bdparas_flag; then
-    return 0
-  fi
-  python - "${ctl_file}" << 'PY'
-from __future__ import annotations
-
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-lines = path.read_text(encoding="utf-8").splitlines()
-updated = []
-pattern = re.compile(
-    r"^(\s*BDparas\s*=\s*)"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"(\s*(?:#.*)?)$"
-)
-for line in lines:
-    match = pattern.match(line)
-    if match:
-        line = "".join(match.groups()[:-1]) + " M" + match.group(5)
-    updated.append(line)
-path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-PY
-}
-
 iq2mc_option_supported() {
   local candidate=$1
   local resolved_candidate
@@ -2491,15 +2318,15 @@ busco_grampa() {
 }
 
 grampa_locus_provenance() {
-  local -n contract=$1
+  local -n locus_provenance_args=$1
   local output_root=$2
-  contract+=(--parameter "locus_model=${grampa_locus_model}"
+  locus_provenance_args+=(--parameter "locus_model=${grampa_locus_model}"
     --parameter "locus_species_tree=${grampa_locus_species_tree}"
     --parameter "locus_h2=${grampa_locus_h2}"
     --parameter "locus_bootstrap=${grampa_locus_bootstrap}"
     --parameter "locus_null_calibration=${grampa_locus_null_calibration}")
   if [[ -n "${grampa_locus_model}" ]]; then
-    contract+=(--input "locus_config=${grampa_locus_model}"
+    locus_provenance_args+=(--input "locus_config=${grampa_locus_model}"
       --input "locus_species=${grampa_locus_species_tree}"
       --optional-output "locus_bundle=${output_root}/locus")
   fi
@@ -3330,7 +3157,7 @@ if [[ ${run_mcmctree1} -eq 1 || ${run_mcmctree2} -eq 1 ]]; then
   fi
   if ! command -v mcmctree > /dev/null 2>&1; then
     echo "Error: mcmctree command was not found."
-    echo "Please install the IQ2MC-compatible mcmctree binary."
+    echo "Please install upstream PAML's mcmctree binary."
     exit 1
   fi
   echo "Using IQ2MC binary: ${iq2mc_binary}"
@@ -4429,7 +4256,7 @@ if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]
     if [[ -n "${species_label_map_tsv}" ]]; then
       nwkit_args+=(--species-map-tsv "${species_label_map_tsv}")
     fi
-    nwkit mcmctree "${nwkit_args[@]}"
+    nwkit mcmctree-tree "${nwkit_args[@]}"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
       mv_out "tmp.constrained.tree.nwk" "${file_constrained_tree}"
     fi
@@ -4464,8 +4291,8 @@ if [[ ${constrained_tree_needs_update} -eq 1 && ${run_constrained_tree} -eq 1 ]]
       if [[ "${mcmctree_params[3]}" != "-" ]]; then
         nwkit_args+=(--upper-bound "${mcmctree_params[3]}")
       fi
-      echo "nwkit mcmctree params: ${nwkit_args[*]}"
-      tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree "${nwkit_args[@]}")
+      echo "nwkit mcmctree-tree params: ${nwkit_args[*]}"
+      tree_string=$(printf '%s\n' "${tree_string}" | nwkit mcmctree-tree "${nwkit_args[@]}")
     done
     printf '%s\n' "${tree_string}" > "tmp.constrained.tree.nwk"
     if [[ -s "tmp.constrained.tree.nwk" ]]; then
@@ -4604,8 +4431,14 @@ fi
 
 task="IQ2MC step 3 (MCMCtree dating run)"
 mcmctree_parallel_jobs_effective="${mcmc_parallel_jobs:-4}"
-if [[ ! "${mcmctree_parallel_jobs_effective}" =~ ^[1-4]$ ]]; then
-  echo "Invalid mcmc_parallel_jobs; expected an integer from 1 to 4." >&2
+mcmctree_max_generations="${mcmc_max_generations:-auto}"
+mcmctree_burnin_percentages="${mcmc_burnin_percentages:-}"
+if [[ "${mcmctree_max_generations}" != "auto" && ! "${mcmctree_max_generations}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid mcmc_max_generations; expected auto or a positive integer." >&2
+  exit 2
+fi
+if [[ ! "${mcmctree_parallel_jobs_effective}" =~ ^[1-9][0-9]{0,9}$ ]] || (( mcmctree_parallel_jobs_effective > 2147483647 )); then
+  echo "Invalid mcmc_parallel_jobs; expected a positive integer worker budget." >&2
   exit 2
 fi
 if [[ ! "${mcmc_seed:-1729}" =~ ^[1-9][0-9]{0,9}$ ]] || (( ${mcmc_seed:-1729} < 1 || ${mcmc_seed:-1729} > 2147483642 )); then
@@ -4662,9 +4495,16 @@ mcmctree_provenance_args+=(
   --parameter "chains=4"
   --parameter "seed=${mcmc_seed:-1729}"
   --parameter "diagnostics=rank_rhat_1.01_bulk_tail_400_warn"
-  --input "chain_runner=${gg_support_dir}/mcmctree_chains.py"
-  --input "diagnostic_adapter=${gg_support_dir}/mcmctree_diagnostics.R"
+  --parameter "chain_runner=nwkit_adaptive_mcmctree_v1"
+  --parameter "max_generations=${mcmctree_max_generations}"
 )
+if [[ -n "${mcmctree_burnin_percentages}" ]]; then
+  mcmctree_provenance_args+=(--parameter "burnin_percentages=${mcmctree_burnin_percentages}")
+fi
+mcmctree_executable=$(command -v mcmctree || true)
+if [[ -n "${mcmctree_executable}" ]]; then
+  gg_artifact_add_input_if_present mcmctree_provenance_args executable "$(realpath "${mcmctree_executable}")"
+fi
 # Only public-unit artifacts are recovery sources. Never use the internal
 # scaled working directory, or overwrite a present (possibly corrupt) output.
 mcmctree_recovery_dir=""
@@ -4715,27 +4555,24 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
   scale_mcmctree_calibrations_file "${file_iq2mc_rooted_tree}" "${mcmctree_work_dir}/$(basename "${file_iq2mc_rooted_tree}")" "${mcmctree_time_scale_factor}" "down"
   cd "${mcmctree_work_dir}" || exit 1
 
-  # Ensure MCMCtree emits CI-rich summaries (including 95% HPD annotations in FigTree output).
-  ctl_basename="$(basename "${file_iq2mc_ctl}")"
-  sed -i -e "s/FossilErrprint/FossilErr\\nprint/g" "${ctl_basename}"
-  if ! grep -q "^print[[:space:]]*=" "${ctl_basename}"; then
-    echo "print = 1" >> "${ctl_basename}"
+  mcmctree_run_output="${mcmctree_work_dir}/nwkit"
+  mcmctree_run_args=(
+    --control "${mcmctree_work_dir}/$(basename "${file_iq2mc_ctl}")"
+    --out-dir "${mcmctree_run_output}"
+    --run-store "${dir_mcmctree2}/runs"
+    --seed "${mcmc_seed:-1729}"
+    --jobs "${mcmctree_parallel_jobs_effective}"
+  )
+  if [[ "${mcmctree_max_generations}" != "auto" ]]; then
+    mcmctree_run_args+=(--max-generations "${mcmctree_max_generations}")
   fi
-  normalize_mcmctree_ctl_for_installed_paml "${ctl_basename}"
-
-  if ! python "${gg_support_dir}/mcmctree_chains.py" \
-    --template "${mcmctree_work_dir}" --control "${ctl_basename}" \
-    --store "${dir_mcmctree2}/runs" \
-    --output "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" \
-    --status "${dir_mcmctree2}/convergence.json" \
-    --seed "${mcmc_seed:-1729}" --jobs "${mcmctree_parallel_jobs_effective}" \
-    --time-factor "${mcmctree_time_scale_factor}"; then
+  if [[ -n "${mcmctree_burnin_percentages}" ]]; then
+    mcmctree_run_args+=(--burnin-percentages "${mcmctree_burnin_percentages}")
+  fi
+  if ! nwkit mcmctree-run "${mcmctree_run_args[@]}"; then
     echo "Error: IQ2MC step 3 failed."
     exit 1
-  elif [[ ! -s "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" ]]; then
-    echo "Error: IQ2MC step 3 did not generate $(basename "${file_mcmctree_raw_output}")."
-    exit 1
-  elif extract_scaled_mcmctree_figtree "${mcmctree_work_dir}/$(basename "${file_mcmctree_raw_output}")" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"; then
+  elif extract_scaled_mcmctree_figtree "${mcmctree_run_output}/FigTree.tre" "${mcmctree_work_dir}/FigTree.tre" "${mcmctree_time_scale_factor}"; then
     validate_mcmctree_figtree "${mcmctree_work_dir}/FigTree.tre" || exit $?
     {
       echo "GeneGalleon ran MCMCTree in an internal scaled time unit."
@@ -4744,9 +4581,11 @@ if [[ ${mcmctree_needs_update} -eq 1 && ${run_mcmctree2} -eq 1 ]]; then
       echo "The FigTree block below is converted back to the original public time unit."
       cat "${mcmctree_work_dir}/FigTree.tre"
     } > "${mcmctree_work_dir}/public-summary.out"
+    python "${gg_support_dir}/mcmctree_status.py" bind --tree "${mcmctree_work_dir}/FigTree.tre" \
+      --status "${mcmctree_run_output}/convergence.json" --time-factor "${mcmctree_time_scale_factor}" || exit $?
     mv_out_bundle "${mcmctree_work_dir}/FigTree.tre" "${file_mcmctree_figtree_tre}" \
-      "${mcmctree_work_dir}/public-summary.out" "${file_mcmctree_raw_output}" || exit $?
-    python "${gg_support_dir}/mcmctree_status.py" bind --tree "${file_mcmctree_figtree_tre}" --status "${dir_mcmctree2}/convergence.json" || exit $?
+      "${mcmctree_work_dir}/public-summary.out" "${file_mcmctree_raw_output}" \
+      "${mcmctree_run_output}/convergence.json" "${dir_mcmctree2}/convergence.json" || exit $?
   else
     echo "Error: Failed to extract an original-unit FigTree tree block from MCMCTree output."
     exit 1
@@ -4766,11 +4605,8 @@ fi
 task="MCMCtree calibration diagnostics"
 if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
   gg_step_start "${task}"
-  calibration_diagnostic_work=$(mktemp -d "${dir_tmp}/calibration-diagnostics.XXXXXX")
-  cp_out "${file_iq2mc_ctl}" "${calibration_diagnostic_work}/mcmctree.ctl"
-  normalize_mcmctree_ctl_for_installed_paml "${calibration_diagnostic_work}/mcmctree.ctl"
   calibration_diagnostic_args=(
-    --control "${calibration_diagnostic_work}/mcmctree.ctl"
+    --control "${file_iq2mc_ctl}"
     --tree "${file_iq2mc_rooted_tree}"
     --alignment "${file_iq2mc_dummy_phy}"
     --hessian "${file_iq2mc_hessian}"
@@ -4783,7 +4619,6 @@ if [[ "${run_mcmctree_calibration_diagnostics}" == "1" ]]; then
     calibration_diagnostic_args+=(--manifest "${mcmctree_calibration_manifest}")
   fi
   python "${gg_support_dir}/mcmctree_calibration_experiments.py" "${calibration_diagnostic_args[@]}" || exit $?
-  rm -rf -- "${calibration_diagnostic_work}"
 else
   gg_step_skip "${task}"
 fi
@@ -6609,32 +6444,42 @@ run_orthogroup_copy_number_stage=0
 if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 || ${run_copy_number_quality_diagnostics} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
-if [[ ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
-  # Validate current raw counts even when a prepared matrix is being reused.
-  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
-    --genecount "${file_orthogroup_genecount_selected}" \
-    --dated_species_tree "${file_dated_species_tree}" \
-    --validate-only || exit $?
-fi
+copy_number_manifest="${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
 copy_number_needs_update=0
-gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number.json"
+gg_artifact_contract_init copy_number_provenance_args "orthogroup_copy_number" "all_orthogroups" "${copy_number_manifest}"
 copy_number_provenance_args+=(
   --input "selected_gene_counts=${file_orthogroup_genecount_selected}"
   --input "dated_species_tree=${file_dated_species_tree}"
   --output "copy_number=${file_orthogroup_copy_number}"
   --parameter "max_size_differential=${orthogroup_copy_number_max_size_differential}"
 )
-gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage "${copy_number_provenance_args[@]}" || exit $?
+if [[ ${run_orthogroup_copy_number_stage} -eq 1 || -e "${copy_number_manifest}" ||
+  "${artifact_stale_policy:-stop}" == rebuild || "${artifact_legacy_policy:-adopt}" != adopt ]]; then
+  # gg-cache-guard: audited - preflight for adoption or explicit stale reuse; provenance decides reuse below.
+  if [[ -e "${file_orthogroup_copy_number}" && (
+    ( ! -e "${copy_number_manifest}" && "${artifact_legacy_policy:-adopt}" == adopt ) ||
+    ( ${run_orthogroup_copy_number_stage} -eq 1 && -e "${copy_number_manifest}" && "${artifact_stale_policy:-stop}" == reuse )
+  ) ]]; then
+    python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+      --genecount "${file_orthogroup_genecount_selected}" \
+      --dated_species_tree "${file_dated_species_tree}" \
+      --validate-only || exit $?
+  fi
+  gg_artifact_prepare_stage copy_number_needs_update run_orthogroup_copy_number_stage "${copy_number_provenance_args[@]}" || exit $?
+fi
 if [[ ${copy_number_needs_update} -eq 1 && ${run_orthogroup_copy_number_stage} -eq 1 ]]; then
   gg_step_start "${task}"
-  if [[ -d "${dir_orthogroup_copy_number}" ]]; then
-    rm -rf -- "${dir_orthogroup_copy_number}"
-  fi
-  python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
-    --genecount "${file_orthogroup_genecount_selected}" \
-    --dated_species_tree "${file_dated_species_tree}" \
-    --output_dir "${dir_orthogroup_copy_number}" \
-    --max_size_differential "${orthogroup_copy_number_max_size_differential}"
+  (
+    ensure_parent_dir "${dir_orthogroup_copy_number}" || exit $?
+    copy_number_work_dir=$(mktemp -d "${dir_orthogroup_copy_number}.work.XXXXXX") || exit $?
+    trap 'rm -rf -- "${copy_number_work_dir}"' EXIT
+    python "${gg_support_dir}/prepare_orthogroup_copy_number.py" \
+      --genecount "${file_orthogroup_genecount_selected}" \
+      --dated_species_tree "${file_dated_species_tree}" \
+      --output_dir "${copy_number_work_dir}/results" \
+      --max_size_differential "${orthogroup_copy_number_max_size_differential}" || exit $?
+    mv_out_replace_dir "${copy_number_work_dir}/results" "${dir_orthogroup_copy_number}"
+  ) || exit $?
   gg_artifact_record "${copy_number_provenance_args[@]}"
   echo "$(date): End: ${task}"
 else
@@ -6660,20 +6505,12 @@ cafe_provenance_args+=(
 # Keep the native inference contract separate from rendering. A failed plot
 # must not delete a completed CAFE fit or force the optimizer to run again.
 # Existing aggregate manifests are still checked before adopting a substage.
-# A manifest-free native fit must also match this input before it can be
-# adopted. Generic artifact adoption alone establishes no scientific identity.
-# gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
-if [[ ${run_cafe} -eq 1 && "${artifact_legacy_policy:-adopt}" != rebuild && ! -s "${genome_evolution_provenance_dir}/cafe.inference.json" && -s "${dir_cafe_output}/Gamma_asr.tre" && -s "${dir_cafe_output}/Gamma_count.tab" && -s "${dir_cafe_output}/Gamma_change.tab" && -s "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -s "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
-  python "${gg_support_dir}/validate_cafe_outputs.py" \
-    --copy-number "${file_orthogroup_copy_number}" \
-    --tree "${file_dated_species_tree}" \
-    --output-dir "${dir_cafe_output}" || exit $?
-fi
 if [[ -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
   gg_artifact_prepare_stage cafe_needs_update run_cafe "${cafe_provenance_args[@]}" || exit $?
 fi
+cafe_inference_manifest="${genome_evolution_provenance_dir}/cafe.inference.json"
 cafe_inference_needs_update=0
-gg_artifact_contract_init cafe_inference_provenance_args "cafe_inference" "all_orthogroups" "${genome_evolution_provenance_dir}/cafe.inference.json"
+gg_artifact_contract_init cafe_inference_provenance_args "cafe_inference" "all_orthogroups" "${cafe_inference_manifest}"
 cafe_inference_provenance_args+=(
   --input "copy_number=${file_orthogroup_copy_number}"
   --input "dated_species_tree=${file_dated_species_tree}"
@@ -6685,7 +6522,22 @@ cafe_inference_provenance_args+=(
   --parameter "gamma_categories=${n_gamma_cats_cafe}"
   --parameter "pvalue=0.05"
 )
-gg_artifact_prepare_stage cafe_inference_needs_update run_cafe "${cafe_inference_provenance_args[@]}" || exit $?
+if [[ ${run_cafe} -eq 1 || -e "${cafe_inference_manifest}" ||
+  "${artifact_stale_policy:-stop}" == rebuild || "${artifact_legacy_policy:-adopt}" != adopt ]]; then
+  # A manifest-free native fit must also match this input before it can be
+  # adopted. Generic artifact adoption alone establishes no scientific identity.
+  # gg-cache-guard: audited - validation-only preflight; file presence never establishes reuse here.
+  if [[ (
+    ( ! -e "${cafe_inference_manifest}" && "${artifact_legacy_policy:-adopt}" == adopt ) ||
+    ( ${run_cafe} -eq 1 && -e "${cafe_inference_manifest}" && "${artifact_stale_policy:-stop}" == reuse )
+  ) && -e "${dir_cafe_output}/Gamma_asr.tre" && -e "${dir_cafe_output}/Gamma_count.tab" && -e "${dir_cafe_output}/Gamma_change.tab" && -e "${dir_cafe_output}/Gamma_branch_probabilities.tab" && -e "${dir_cafe_output}/Gamma_family_results.txt" ]]; then
+    python "${gg_support_dir}/validate_cafe_outputs.py" \
+      --copy-number "${file_orthogroup_copy_number}" \
+      --tree "${file_dated_species_tree}" \
+      --output-dir "${dir_cafe_output}" || exit $?
+  fi
+  gg_artifact_prepare_stage cafe_inference_needs_update run_cafe "${cafe_inference_provenance_args[@]}" || exit $?
+fi
 if [[ ${run_cafe} -eq 1 ]]; then
   gg_step_start "${task}"
   ensure_dir "${dir_cafe}"
@@ -6706,11 +6558,7 @@ if [[ ${run_cafe} -eq 1 ]]; then
       --output-dir "${dir_cafe_output}" || exit $?
     gg_artifact_record "${cafe_inference_provenance_args[@]}"
   else
-    python "${gg_support_dir}/validate_cafe_outputs.py" \
-      --copy-number "${file_orthogroup_copy_number}" \
-      --tree "${file_dated_species_tree}" \
-      --output-dir "${dir_cafe_output}" || exit $?
-    echo "CAFE inference outputs verified. Skipping CAFE run."
+    echo "Reusing saved CAFE inference. Skipping CAFE run."
   fi
 
   cafe_plots_needs_update=0

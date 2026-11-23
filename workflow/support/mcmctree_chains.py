@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+from nwkit.mcmctree_runner import paml_control_values
+
 STOP = threading.Event()
 PROCESSES = set()
 
@@ -150,7 +152,7 @@ def reusable_attempt(chain, receipt, index, seed):
     return None
 
 
-def run_chain(root, template, files, binary, index, seed, expected, frequency):
+def run_chain(root, template, files, binary, index, seed, expected, frequency, checkpoint):
     chain = root / f'chain-{index:02d}'
     chain.mkdir(exist_ok=True)
     receipt = chain / 'completed.json'
@@ -164,7 +166,7 @@ def run_chain(root, template, files, binary, index, seed, expected, frequency):
         for path in files:
             shutil.copy2(path, attempt / path.name)
         (attempt / 'run.ctl').write_text(control(template, seed=seed, print=1,
-                                                outfile='chain.out', mcmcfile='mcmc.txt', checkpoint=1))
+                                                outfile='chain.out', mcmcfile='mcmc.txt', checkpoint=checkpoint))
         print(f'MCMCtree chain {index}: seed={seed}, evidence={attempt}', flush=True)
         code = execute(binary, attempt, 'run.ctl')
         state['exit_code'] = code
@@ -222,7 +224,13 @@ def run(args):
         raise ValueError('seed must be 1..2147483642 and jobs must be 1..4')
     template_dir = args.template.resolve()
     files = sorted(p for p in template_dir.iterdir() if p.is_file())
-    template = (template_dir / args.control).read_text()
+    values = paml_control_values((template_dir / args.control).read_text())
+    template = ''.join(f'{key} = {value}\n' for key, value in values.items())
+    checkpoint_options = values.get('checkpoint', '0').split()[1:]
+    if len(checkpoint_options) == 2:
+        # Each parallel chain must write its own checkpoint in its attempt directory.
+        checkpoint_options[1] = Path(checkpoint_options[1]).name
+    checkpoint = ' '.join(['1', *checkpoint_options])
     expected = positive_control_integer(template, 'nsample')
     frequency = positive_control_integer(template, 'sampfreq')
     binary = Path(shutil.which('mcmctree') or '').resolve()
@@ -245,7 +253,7 @@ def run(args):
             save_json(args.status, running)
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, args.jobs)) as pool:
                 tasks = [pool.submit(run_chain, root, template, files, str(binary), i + 1,
-                                     args.seed + i, expected, frequency) for i in range(4)]
+                                     args.seed + i, expected, frequency, checkpoint) for i in range(4)]
                 attempts = [task.result() for task in tasks]
             if STOP.is_set():
                 save_json(args.status, {'state': 'interrupted', 'run': str(root), 'policy': 'warn'})

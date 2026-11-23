@@ -731,7 +731,8 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
     for workflow_name, build_job_name, prepare_job_name in cases:
         jobs = load_workflow(workflow_name)["jobs"]
         build_job = jobs[build_job_name]
-        hash_step = named_step(build_job, "Compute build input hash")
+        hash_job = jobs[prepare_job_name] if workflow_name == "container-ghcr.yml" else build_job
+        hash_step = named_step(hash_job, "Compute build input hash")
         build_step = next(
             step for step in build_job["steps"] if str(step.get("uses", "")).startswith("docker/build-push-action@")
         )
@@ -746,8 +747,15 @@ def test_container_workflows_embed_version_and_shared_build_input_hash():
         assert 'echo "value=$(' not in hash_step["run"]
         assert 'echo "runtime_value=$(' not in hash_step["run"]
         assert "GG_VERSION=${{ needs." + prepare_job_name + ".outputs.gg_version }}" in build_args
-        assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
-        assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args
+        if workflow_name == "container-ghcr.yml":
+            assert "GG_BUILD_PLATFORMS" not in hash_step["env"]
+            assert hash_job["outputs"]["build_input"] == "${{ steps.build-input.outputs.value }}"
+            assert hash_job["outputs"]["runtime_input"] == "${{ steps.build-input.outputs.runtime_value }}"
+            assert "BUILD_INPUT_HASH=${{ needs.prepare-build.outputs.build_input }}" in build_args
+            assert "RUNTIME_INPUT_HASH=${{ needs.prepare-build.outputs.runtime_input }}" in build_args
+        else:
+            assert "BUILD_INPUT_HASH=${{ steps.build-input.outputs.value }}" in build_args
+            assert "RUNTIME_INPUT_HASH=${{ steps.build-input.outputs.runtime_value }}" in build_args
         assert (
             "SECURITY_REFRESH_EPOCH=${{ needs."
             + prepare_job_name
@@ -760,17 +768,14 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     jobs = workflow["jobs"]
     prepare = jobs["prepare-build"]
     decision = step_run(prepare, "Decide whether a scheduled build is needed")
-    runtime_contracts = step_run(jobs["build-and-push"], "Validate repository-owned runtime contracts")
 
     assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
     assert workflow["on"]["schedule"] == [{"cron": "0 19 * * *"}]
     assert prepare["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     for name in ("Set up Docker Buildx", "Login to GHCR"):
         assert named_step(prepare, name)["if"] == "github.event_name == 'schedule'"
-    for name in ("Preflight env coverage check", "Resolve image tags"):
+    for name in ("Preflight env coverage check", "Resolve image tags", "Compute build input hash"):
         assert named_step(prepare, name)["if"] == "steps.decision.outputs.should_build == '1'"
-    assert "GG_BUILD_PLATFORMS=linux/amd64" in decision
-    assert "GG_BUILD_PLATFORMS=linux/arm64" in decision
     assert decision.count("--print-common-revision") == 2
     assert 'GG_BUILD_VCS_REF="${published_revision}"' in decision
     assert 'security_refresh_epoch="$(date -u +%F)"' in decision
@@ -784,12 +789,100 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
     assert "container/scripts/check_published_build_input.py" in decision
     assert jobs["build-and-push"]["if"] == "needs.prepare-build.outputs.should_build == '1'"
     assert jobs["build-and-push"]["strategy"]["fail-fast"] == "true"
-    assert set(jobs["publish-manifest"]["needs"]) == {"prepare-build", "build-and-push"}
-    assert "needs.build-and-push.result == 'success'" in jobs["publish-manifest"]["if"]
     assert "build-input hash calculation failed during preflight" in decision
     assert "/actions/workflows/container-ghcr.yml/runs" not in decision
-    assert "workflow/tests/run_checks.py runtime --workers=4" in runtime_contracts
-    assert '"${IMAGE}@${DIGEST}"' in runtime_contracts
+
+
+def test_daily_publisher_runs_finisher_smoke_before_build_preparation():
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    prepare = jobs["prepare-build"]
+    smoke = named_step(prepare, "Smoke-test input generation refinement")
+    resolve = named_step(prepare, "Resolve moving source revisions")
+    assert prepare["steps"].index(smoke) < prepare["steps"].index(resolve)
+    assert "if" not in smoke and "continue-on-error" not in smoke
+    assert "run_checks.py smoke workflow/tests/test_input_generation_refinement_finisher.py" in smoke["run"]
+    assert jobs["build-and-push"]["needs"] == "prepare-build"
+    assert jobs["build-and-push"]["if"] == "needs.prepare-build.outputs.should_build == '1'"
+
+
+def test_daily_publish_waits_for_both_platform_runtime_checks():
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    build = jobs["build-and-push"]
+    validation = jobs["validate-platform"]
+    publish = jobs["publish-manifest"]
+    assert set(validation["needs"]) == {"prepare-build", "build-and-push"}
+    assert validation["permissions"] == {"contents": "read", "packages": "read"}
+    assert validation["strategy"]["fail-fast"] == "false"
+    assert validation["strategy"]["matrix"] == build["strategy"]["matrix"]
+    assert {entry["platform"] for entry in validation["strategy"]["matrix"]["include"]} == {
+        "linux/amd64", "linux/arm64",
+    }
+    export = named_step(build, "Export platform digest")
+    assert export["env"]["DIGEST_OUTPUT"] == "${{ matrix.digest_output }}"
+    for entry in build["strategy"]["matrix"]["include"]:
+        output = entry["digest_output"]
+        assert build["outputs"][output] == f"${{{{ steps.{export['id']}.outputs.{output} }}}}"
+    validate_step = named_step(validation, "Validate repository-owned runtime contracts")
+    assert validate_step["env"]["DIGEST"] == "${{ needs.build-and-push.outputs[matrix.digest_output] }}"
+    assert set(publish["needs"]) == {"prepare-build", "build-and-push", "validate-platform"}
+    assert "needs.validate-platform.result == 'success'" in publish["if"]
+    assert "needs.publish-manifest.result == 'success'" in jobs["prime-sif-cache"]["if"]
+
+
+@pytest.mark.parametrize("digest", ["", "bad-digest", "sha256:" + "a" * 64])
+def test_daily_runtime_validation_requires_an_exact_digest(tmp_path, digest):
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    command = step_run(jobs["validate-platform"], "Validate repository-owned runtime contracts")
+    fake_docker = 'docker() { printf "%s\\n" "$@"; }\n'
+    result = subprocess.run(["bash", "-c", fake_docker + command], capture_output=True, text=True, env={
+        **os.environ,
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "IMAGE": "ghcr.io/example/genegalleon",
+        "PLATFORM": "linux/arm64",
+        "DIGEST": digest,
+    })
+    if digest.startswith("sha256:"):
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines()[-8:] == [
+            "ghcr.io/example/genegalleon@" + digest,
+            "python", "workflow/tests/run_checks.py", "runtime", "--workers=4", "-x",
+            "--durations=25", "--durations-min=0.5",
+        ]
+        assert "--platform\nlinux/arm64\n" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "digest" in result.stdout
+        assert "ghcr.io/" not in result.stdout
+
+
+@pytest.mark.parametrize("arm64_digest", ["", "sha256:" + "b" * 64, "sha256:" + "a" * 64])
+def test_daily_manifest_uses_two_distinct_validated_digests(arm64_digest):
+    jobs = load_workflow("container-ghcr.yml")["jobs"]
+    step = named_step(jobs["publish-manifest"], "Create and push multi-arch manifest")
+    amd64_digest = "sha256:" + "b" * 64
+    image = "ghcr.io/example/genegalleon"
+    fake_docker = """
+docker() {
+    if [[ "$3" == inspect ]]; then return 1; fi
+    printf '%s\\n' "$@"
+}
+"""
+    assert step["env"]["AMD64_DIGEST"] == "${{ needs.build-and-push.outputs.amd64_digest }}"
+    assert step["env"]["ARM64_DIGEST"] == "${{ needs.build-and-push.outputs.arm64_digest }}"
+    result = subprocess.run(["bash", "-c", fake_docker + step["run"]], capture_output=True, text=True, env={
+        **os.environ,
+        "IMAGE": image,
+        "SHA_TAG": "sha-abcdef0",
+        "IMMUTABLE_TAG": "20261117-abcdef0-fedcba987654",
+        "AMD64_DIGEST": amd64_digest,
+        "ARM64_DIGEST": arm64_digest,
+    })
+    if arm64_digest and arm64_digest != amd64_digest:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines()[-2:] == [f"{image}@{arm64_digest}", f"{image}@{amd64_digest}"]
+    else:
+        assert result.returncode != 0
+        assert result.stdout.splitlines() == ["Expected two distinct platform digests."]
 
 
 @pytest.mark.parametrize(("event", "published", "should_build"), [
@@ -808,31 +901,31 @@ def test_container_build_decision_uses_resolved_inputs(tmp_path, event, publishe
                     scripts / "check_published_build_input.py")
     snapshot = "a" * 40
     revision = "b" * 40
-    hashes = {"linux/amd64": "1" * 64, "linux/arm64": "2" * 64}
+    expected_hash = "1" * 64
     (scripts / "compute_build_input_hash.sh").write_text(
         '[[ "$KFU52_NWKIT_REPO_SHA" == "$SNAPSHOT_REVISION" ]] || exit 1\n'
         '[[ "$GG_BUILD_VCS_REF" == "$PUBLISHED_REVISION" ]] || exit 1\n'
-        'case "$GG_BUILD_PLATFORMS" in\n'
-        + "".join(f"{platform}) echo {digest} ;;\n" for platform, digest in hashes.items())
-        + '*) exit 1 ;;\nesac\n'
+        'echo "$GG_BUILD_VCS_REF" >> "$HASH_CALLS"\n'
+        f'echo "{expected_hash}"\n'
     )
     (tmp_path / "VERSION").write_text("1.2.3\n")
     metadata = {
         platform: {"config": {"Labels": {
             "org.opencontainers.image.revision": revision,
-            "io.genegalleon.build-input": digest,
+            "io.genegalleon.build-input": expected_hash,
         }}}
-        for platform, digest in hashes.items()
+        for platform in ("linux/amd64", "linux/arm64")
     }
     if published == "outdated":
         metadata["linux/arm64"]["config"]["Labels"]["io.genegalleon.build-input"] = "old"
     output = tmp_path / "outputs"
     docker_calls = tmp_path / "docker_calls"
+    hash_calls = tmp_path / "hash_calls"
     env = {
         **os.environ,
         "EVENT_NAME": event, "REPOSITORY": "example/genegalleon",
         "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
-        "DOCKER_CALLS": str(docker_calls), "IMAGE_METADATA": json.dumps(metadata),
+        "DOCKER_CALLS": str(docker_calls), "HASH_CALLS": str(hash_calls), "IMAGE_METADATA": json.dumps(metadata),
         "IMAGE_AVAILABLE": str(int(published != "unavailable")),
         "SNAPSHOT_REVISION": snapshot, "KFU52_NWKIT_REPO_SHA": snapshot, "PUBLISHED_REVISION": revision,
     }
@@ -849,6 +942,10 @@ docker() {
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert outputs["should_build"] == should_build, result.stderr
     assert docker_calls.exists() == (event == "schedule")
+    if event == "schedule" and published != "unavailable":
+        assert hash_calls.read_text().splitlines() == [revision]
+    else:
+        assert not hash_calls.exists()
 
 
 def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks():
@@ -858,9 +955,9 @@ def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks()
     prepared = named_step(prime, "Prepare validated SIF for subsequent commit checks")
     assert prepared["uses"] == "./.github/actions/validate-sif"
     assert "immutable_tag" in prepared["with"]["image-ref"]
-    assert prepared["with"]["runtime-input"] == "${{ needs.build-and-push.outputs.runtime_input }}"
+    assert prepared["with"]["runtime-input"] == "${{ needs.prepare-build.outputs.runtime_input }}"
     assert prepared["with"]["workers"] == "4"
-    assert "steps.build-input.outputs.runtime_value" in daily["build-and-push"]["outputs"]["runtime_input"]
+    assert "steps.build-input.outputs.runtime_value" in daily["prepare-build"]["outputs"]["runtime_input"]
     assert named_step(prime, "Restore exact validation SIF")["with"] == named_step(
         commit, "Restore exact validation SIF"
     )["with"]

@@ -4,58 +4,52 @@ Saved dated trees can be redrawn with spelled-out interval legends, geological
 period backgrounds and dataset-labelled BUSCO panels. See
 [Dated-tree presentation](dated-tree-presentation.md).
 
-Species dating runs four independently initialized MCMCtree chains, with separate
-burn-in and distinct explicit seeds. `mcmc_parallel_jobs=4` runs all four
-concurrently when at least four CPUs are allocated. The workflow caps concurrent
-chains at `GG_TASK_CPUS`; lower this setting further to reduce memory use.
-Each child uses one OpenMP thread. `mcmc_seed=1729` supplies the first seed; the
-remaining seeds are 1730, 1731, and 1732. Changing the seed changes the run identity.
-The existing burn-in, sampling-frequency and sample-count options apply per chain.
+The container builds IQ-TREE 3 and PAML's MCMCtree from their respective upstream
+branches. GeneGalleon uses IQ-TREE's IQ2MC mode to estimate branch lengths,
+the gradient and Hessian, then adapts the generated control for upstream MCMCtree.
+The execution control passes the Hessian path in `usedata = 2` and makes the
+IQ2MC conditional birth–death prior explicit. An explicit `C` or `M` in the
+input control is preserved. The original IQ2MC files remain reusable together,
+including the matching rooted tree and dummy alignment. Updating MCMCtree alone
+does not require regenerating the IQ2MC inputs.
 
-Diagnostics are **warnings, not downstream gates**. All four complete chains are
-checked using R `posterior`: rank-normalized split/folded R-hat < 1.01, bulk ESS
->= 400 and tail ESS >= 400 for every sampled parameter except the iteration
-index. Mean and 2.5%/97.5% quantile MCSE are also written. Missing dependencies,
-undefined diagnostics (including constant parameters), and unequal chain lengths
-are reported as `diagnostic_failed`. Diagnostic thresholds do not prove model
-adequacy or convergence. Tail ESS uses 5%/95% quantiles; it does not measure HPD
-endpoint precision. The quantile MCSE columns are in the original internal units.
+Species dating calls `nwkit mcmctree-run` for four independently initialized
+chains. `mcmc_parallel_jobs` sets the worker budget for sampling and diagnostics
+and is capped by the allocated CPUs. Sampling uses up to four workers, with one
+thread per child. Additional workers can compute R diagnostics in parallel.
+The default budget is four. `mcmc_seed=1729` supplies the first seed. The burn-in,
+sampling interval, and minimum saved samples use
+`mcmc_burnin`, `mcmc_sampfreq`, and `mcmc_nsample`. The default minimum is
+2,020,000 generations per chain.
 
-Diagnostics are retained in separate `diagnostics-*` attempts, including the R
-session information; `convergence.json` identifies the current diagnostic directory.
-Even with fewer than four complete chains, available chains are diagnosed when at
-least two remain, but the overall status stays `incomplete`.
+NWKIT diagnoses all four complete chains with rank-normalized R-hat < 1.01,
+bulk ESS >= 400 and tail ESS >= 400. It checks the initial run, extends when
+needed, and checks again using all evenly spaced draws. Intermediate checks
+compute R-hat and ESS. The final diagnostics also report MCSE. Set
+`mcmc_max_generations` to bound the total generations per chain including
+burn-in. With `auto`, the cap is the burn-in plus 64 times the initial sampling
+generations within PAML’s limits. Near the stopping criteria, NWKIT checks more
+frequently. Set `mcmc_burnin_percentages="2.5,5,10,20,40"` to try excluding
+the same initial window from all chains when the full traces fall short. The
+smallest passing cutoff is checked again after adding draws, and a full trace
+that passes has priority. The `sample_window` in the tree’s convergence JSON
+records the original burn-in, effective cutoff and generations used. See the
+[NWKIT guide](https://github.com/kfuku52/nwkit/blob/master/docs/guides/MCMCTREE_RUN.md).
 
-The MCMCtree sample file already excludes burn-in; GeneGalleon does not discard it
-a second time. All valid recorded rows are retained, including any initial saved
-state emitted by PAML. Files must be finite, have increasing iteration indices,
-and reach the configured final iteration before a chain is marked complete.
-
-Complete chains are pooled and summarized with PAML's `print=-1` mode. The published
-FigTree tree and its HPD intervals therefore come from the pooled sample, not an
-average of separately computed interval endpoints. If some chains fail, complete
-chains still produce a provisional summary with state `incomplete`. If none
-complete, or the pooled tree cannot be generated/validated, no new usable result
-can be published. Numerical or file failures are not converted into valid trees.
+NWKIT resumes each chain from its own final checkpoint and pools the draws to
+generate a FigTree tree with 95% HPD intervals. GeneGalleon converts that tree to
+the original analysis units. At the generation limit, an unmet convergence
+criterion produces a provisional tree with an advisory status. A failed chain,
+diagnostic, or pooled summary preserves the previous published tree.
 
 ## Evidence and restart
 
-`output/species_tree/mcmctree_main/runs/<run-id>/` permanently retains the exact
-internal-unit inputs, executed controls, independent raw sample files, full PAML
-output, stdout/stderr, checkpoints, seeds, exit/failure state, and diagnostic
-outputs. `manifest.json` hashes the inputs, executable and diagnostic adapters
-and records the public/internal time factor. Each chain has separate attempt
-directories. The ordinary temporary-directory cleanup does not remove this store.
-Rebuilds do not erase earlier runs. Archive/delete evidence only deliberately.
-
-Rerunning identical inputs reuses completed chains after verifying their stored
-hashes (including stdout/stderr). Corrupt or incomplete restart receipts cannot
-certify a chain. Incomplete or corrupted chains are rerun from their original seed into a
-new attempt, retaining the previous attempt. This is a chain-level restart, not
-binary checkpoint continuation. A resumed segment is never counted as a new
-independent chain. PAML binary checkpoint continuation requires separate validation
-of the installed dependency's RNG and sample-boundary behavior; checkpoints are
-retained as evidence but are not automatically spliced by GeneGalleon.
+`output/species_tree/mcmctree_main/runs/<run-id>/` retains inputs in internal
+units, executed controls, samples, logs, checkpoints and diagnostics. The run
+manifest records input and binary hashes. Rebuilding with the same inputs and
+settings reuses completed chain segments. An interrupted segment starts again
+from its preceding verified checkpoint. Changing the inputs or sampling
+settings creates a separate run directory.
 
 `mcmctree_main/convergence.json` records the advisory state and the run location.
 After conversion, `dated_species_tree.nwk.convergence.json` travels beside the
@@ -65,12 +59,11 @@ warns; diagnostic status does not block old trees. Existing artifact stale-input
 policies still apply when an implementation or input changes. The genome and gene workflows warn when consuming
 provisional dated trees, including runs that skip the MCMC producer. Raw public
 `iq2mc.mcmctree.out` remains a public-unit tree summary for existing consumers;
-the true unmodified PAML output is retained under `runs/`. Failed summary creation
-is recorded as `failed`, rather than leaving a successful convergence label. Public
-tree files are replaced as a bundle only after successful summary conversion and
-validation; a failed attempt preserves the previous public files. Cached tree
-conversions refresh their advisory metadata when the verified source tree is unchanged.
-SIGTERM/SIGINT stop the child process groups and retain interruption evidence.
+the unmodified PAML output is retained under `runs/`. GeneGalleon publishes the
+public summary and convergence record together after conversion and validation.
+Cached tree conversions refresh their advisory metadata when the verified source
+tree is unchanged. SIGTERM and SIGINT stop active sampler processes and retain
+completed segments for restart.
 
 The separate, opt-in calibration experiments documented in
 [species-tree-calibrations.md](species-tree-calibrations.md) remain independent of
@@ -79,9 +72,9 @@ this main-run diagnostic workflow and do not replace its public tree.
 ## Runtime and interpretation
 
 The container R environment includes `r-posterior`. Rebuild the runtime to install
-it; absence is an advisory diagnostic failure, not evidence of convergence.
-Tests in `test_mcmctree_chains.py` exercise real PAML, warning-only publication,
-chain reuse, corruption handling and diagnostic fixtures in a GeneGalleon runtime.
+it. The runner requires this package to compute convergence diagnostics.
+Runtime tests exercise the NWKIT command on real IQ2MC inputs and check the
+public time scale and advisory status.
 
 The four chains increase MCMC CPU time roughly fourfold at unchanged lengths;
 wall time depends on concurrent resources and memory pressure. No speedup is

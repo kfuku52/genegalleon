@@ -1,7 +1,10 @@
-"""Validate wrapped gzip FASTQ and bind the exact compressed bytes."""
+"""Validate getfastq reads and quantification statistics while hashing them."""
 
+import csv
 import gzip
 import hashlib
+import io
+import math
 import os
 import stat
 import zlib
@@ -11,7 +14,7 @@ class FastqChanged(OSError):
     """The input changed while deriving its proof."""
 
 
-class _DigestingReader:
+class _DigestingReader(io.BufferedIOBase):
     def __init__(self, handle):
         self.handle = handle
         self.digest = hashlib.sha256()
@@ -20,6 +23,11 @@ class _DigestingReader:
         data = self.handle.read(size)
         self.digest.update(data)
         return data
+
+    def readable(self):
+        return True
+
+    read1 = read
 
 
 def _complete_fastq(handle):
@@ -58,7 +66,7 @@ def _identity(info):
 
 def _parse_gzip(file):
     try:
-        with gzip.GzipFile(fileobj=file, mode="rb") as handle:
+        with gzip.GzipFile(fileobj=file, mode="rb") as stream, io.BufferedReader(stream) as handle:
             return _complete_fastq(handle)
     except (EOFError, OSError, ValueError, zlib.error):
         return False
@@ -82,3 +90,33 @@ def proof_fastq(path):
         if _identity(before) != _identity(os.fstat(raw.fileno())) or _identity(before) != _identity(current):
             raise FastqChanged(path)
         return True, before.st_size, reader.digest.hexdigest()
+
+
+def _positive_number(value):
+    try:
+        number = float(value)
+        return math.isfinite(number) and number > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def quant_stats_digest(path, run):
+    """Return the size and SHA-256 of the same bytes used to validate the run."""
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as raw:
+        before = os.fstat(raw.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"Expected regular getfastq statistics for run: {run}")
+        reader = _DigestingReader(raw)
+        with io.TextIOWrapper(reader, encoding="utf-8", newline="") as handle:
+            rows = (row for row in csv.DictReader(handle, delimiter="\t")
+                    if str(row.get("run") or "").strip() == run)
+            row = next(rows, None)
+            if row is None or next(rows, None) is not None:
+                raise ValueError(f"Missing or ambiguous getfastq statistics for run: {run}")
+        if not _positive_number(row.get("num_written")) or not any(
+            _positive_number(row.get(column)) for column in ("bp_fastp_in", "bp_rrna_in", "bp_contam_in")
+        ):
+            raise ValueError(f"Found unusable getfastq statistics for run: {run}")
+        if _identity(before) != _identity(os.fstat(raw.fileno())) or _identity(before) != _identity(path.lstat()):
+            raise ValueError(f"getfastq statistics changed while validating: {path}")
+        return before.st_size, reader.digest.hexdigest()

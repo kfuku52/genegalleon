@@ -219,8 +219,8 @@ def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False,
            "annevo_no_download": "1" if no_download else "0", "annevo_runtime_manifest": manifest, "annevo_model_profile": profile,
            "annevo_taxonomy_db": taxonomy_db, "annevo_taxid_map": taxid_map}
     command = ('source "$gg_support_dir/gg_util.sh"; gg_validate_genome_annotation_backend; '
-               'gg_generate_annevo_annotation; check_species_cds_dir "$dir_sp_cds/."; gg_check_annevo_cds_directory; '
-               'python "$gg_support_dir/cds_resolution.py" --cds "$file_sp_cds" --gff "$file_sp_gff" '
+               'gg_generate_annevo_annotation; '
+               'python "$gg_support_dir/cds_resolution.py" --cds "$file_sp_cds" --species "$sp_ub" --gff "$file_sp_gff" '
                '--genome "$file_sp_genome" --genetic-code "$genetic_code" '
                '--output-dir "$gg_workspace_output_dir/resolved"; '
                'printf "LAYOUT=%s\\t%s\\t%s\\n" "$file_sp_cds" "$file_sp_gff" "$file_sp_genome"')
@@ -407,34 +407,36 @@ def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, suc
         assert result.stdout.splitlines() == expected
 
 
-def test_completed_cds_validation_stamp_reuses_only_unchanged_input_content(tmp_path):
-    cds = tmp_path / 'cds'
+def test_annotation_reads_only_selected_cds_and_rejects_ambiguous_names(tmp_path):
+    cds = tmp_path / 'inputs'
     cds.mkdir()
-    fasta = cds / 'Test_species.fa'
-    fasta.write_text('>Test_species_gene1\nATGAAATAA\n')
-    text = CORE.read_text()
-    start = text.index('species_cds_validation_signature=$(\n')
-    end = text.index('# Preserve previous manifest-bound results', start)
-    stage = text[start:end]
-    log = tmp_path / 'validation_calls'
-    shell = ('set -euo pipefail\nsource "$gg_support_dir/gg_util.sh"\n'
-             'check_species_cds_dir() { printf "checked\\n" >> "$validation_log"; }\n'
-             'check_if_species_files_unique() { :; }\n'
-             'species_cds_validation_inputs=("$validation_input")\n' + stage)
-    env = {**os.environ, 'gg_support_dir': str(SUPPORT), 'dir_sp_cds': str(cds),
-           'dir_tmp': str(tmp_path), 'validation_input': str(fasta), 'validation_log': str(log),
-           'genome_annotation_backend': 'none'}
-    for _ in range(2):
-        result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True, timeout=20)
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert log.read_text().splitlines() == ['checked']
-    stamps = list(tmp_path.glob('species_cds_validation.*.ok'))
-    assert len(stamps) == 1 and len(stamps[0].read_text().strip()) == 64
-    fasta.write_text(fasta.read_text() + '>Test_species_gene2\nATGAAGTAA\n')
-    result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert log.read_text().splitlines() == ['checked', 'checked']
-    assert len(list(tmp_path.glob('species_cds_validation.*.ok'))) == 2
+    selected = cds / 'Alpha_one.fa'
+    selected.write_text('>Alpha_one_g1\nATGAAATAA\n')
+    (cds / 'Beta_two.fa.gz').write_bytes(b'invalid gzip')
+    alias = tmp_path / 'linked_cds'
+    alias.symlink_to(cds, target_is_directory=True)
+    core = CORE.read_text()
+    discovery = core[core.index('infiles=()\nif [[ "${genome_annotation_backend}"'):
+                     core.index('if [[ -n "${file_representative_genetic_code}"')]
+    resolution = core[core.index('ensure_dir "${dir_sp_tmp}"\ncd "${dir_sp_tmp}"'):
+                      core.index('task="Gene trait extraction from gff files"')]
+    env = {**os.environ, 'gg_support_dir': str(SUPPORT), 'genome_annotation_backend': 'none',
+           'dir_sp_cds': str(alias), 'dir_tmp': str(tmp_path / 'tmp'), 'dir_sp_tmp': str(tmp_path / 'tmp/task'),
+           'gg_workspace_output_dir': str(tmp_path / 'out'), 'genetic_code': '1', 'file_sp_genome': '',
+           'file_sp_gff': '', 'representative_map': '', 'representative_annotation_cache': ''}
+    def run(task):
+        return subprocess.run(['bash', '-c', 'set -euo pipefail\nsource "$gg_support_dir/gg_util.sh"\n'
+                               + discovery + resolution], env={**env, 'GG_ARRAY_TASK_ID': str(task)},
+                              capture_output=True, text=True, timeout=30)
+    first = run(1)
+    assert first.returncode == 0, first.stdout + first.stderr
+    output = tmp_path / 'out/species_cds_resolved' / selected.name
+    assert output.read_bytes() == selected.read_bytes()
+    assert run(2).returncode != 0
+    (cds / 'Alpha_one.cds.fa').write_bytes(selected.read_bytes())
+    duplicate = run(1)
+    assert duplicate.returncode != 0 and 'Multiple input FASTAs' in duplicate.stderr
+    assert output.read_bytes() == selected.read_bytes()
 
 
 def test_generated_cds_scope_keeps_audits_but_rejects_additional_fasta(tmp_path):
@@ -443,10 +445,11 @@ def test_generated_cds_scope_keeps_audits_but_rejects_additional_fasta(tmp_path)
     selected = cds / 'Test_species.fa'
     selected.write_text('>Test_species_gene1\nATGAAATAA\n')
     (cds / 'Test_species.fa.cds-normalisation.json').write_text('{}')
-    command = 'source "$gg_support_dir/gg_util.sh"; gg_check_annevo_cds_directory'
-    environment = {'gg_support_dir': str(SUPPORT), 'dir_sp_cds': str(cds), 'file_sp_cds': str(selected)}
+    command = 'source "$gg_support_dir/gg_util.sh"; gg_resolve_formatted_cds "$dir_sp_cds" Test_species'
+    environment = {'gg_support_dir': str(SUPPORT), 'dir_sp_cds': str(cds)}
     first = source_function(command, env=environment)
     assert first.returncode == 0, first.stderr
+    assert first.stdout.strip() == str(selected)
     extra = cds / 'Other_species.fa'
     extra.write_text('>Other_species_gene1\nATGAAATAA\n')
     failed = source_function(command, env=environment)

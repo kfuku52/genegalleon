@@ -94,6 +94,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     candidates = defaultdict(set)
     search_dir = Path(directory) / 'native_genomewide_search'
     search_dir.mkdir()
+    rejected_hits = Counter()
     if queries:
         for file, sequences in (('native.pep', queries), ('donors.pep', subjects)):
             with (search_dir / file).open('w') as out:
@@ -105,19 +106,31 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
                '--out', search_dir / 'pairs.tsv', '--outfmt', '6', 'qseqid', 'sseqid',
                '--ultra-sensitive', '--masking', '0', '--comp-based-stats', '0', '--evalue', '1000',
                '--max-target-seqs', '0', '--max-hsps', '1', '--threads', cpus], search_dir, 'blastp')
-        subject_tokens = {token: token for token in subjects}
+        query_lengths = {token: len(protein) for token, protein in queries.items()}
+        subject_lengths = {token: len(protein.upper().removesuffix('*')) for token, protein in subjects.items()}
+        minimum = params['minimum_coverage']
         with (search_dir / 'pairs.tsv').open() as stream:
             for line in stream:
                 fields = line.split()
                 if len(fields) != 2 or fields[0] not in queries or fields[1] not in subjects:
                     raise ValueError('Unknown genomewide protein search identifier')
-                candidates[fields[0]].add(subject_tokens[fields[1]])
+                q, s = fields
+                a, b = query_lengths[q], subject_lengths[s]
+                # Even perfect pairing cannot align more residues than the shorter sequence.
+                upper_coverage = a / b if a < b else b / a
+                if upper_coverage < minimum:
+                    rejected_hits[q] += 1
+                else:
+                    candidates[q].add(s)
         # Exact short peptides need not seed a DIAMOND alignment. Preserve all
         # exact matches independently of the search program's seeding heuristic.
         by_sequence = {protein: token for token, protein in subjects.items()}
         for token, protein in queries.items():
             if protein in by_sequence:
                 candidates[token].add(by_sequence[protein])
+        for token, count in rejected_hits.items():
+            for path in groups[queries[token]]:
+                rows[path['native_transcript_id']].update(status='evaluated', length_rejected_protein_hits=count)
     aligned_pairs = sum(map(len, candidates.values()))
     def comparisons():
         # Preserve the original tuple order and release completed query groups.
@@ -154,6 +167,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     audit.update(unique_query_proteins=len(queries), unique_donor_proteins=len(subjects),
                  external_donor_records=sum(map(len, donor_aliases.values())),
                  aligned_unique_protein_pairs=aligned_pairs, candidate_pairs=len(results),
+                 length_rejected_protein_hits=sum(rejected_hits.values()),
                  search_and_alignment_seconds=time.perf_counter() - started - validation_seconds)
     (search_dir / 'donors.dmnd').unlink(missing_ok=True)
     return results, audit
@@ -161,22 +175,32 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
 
 def finish_audit(audit, models):
     """Account for every native path after the actual shared admission decision."""
-    outcomes = defaultdict(list)
+    outcomes = {}
     for model in models:
-        if model.get('search') == SEARCH:
-            outcomes[model['evidence']['oriongeno']['native_transcript_id']].append(model)
+        if model.get('search') != SEARCH:
+            continue
+        evidence = model['evidence']
+        token = evidence['oriongeno']['native_transcript_id']
+        if token not in outcomes:
+            outcomes[token] = Counter(), set(), set(), set()
+        statuses, reasons, donors, identifiers = outcomes[token]
+        statuses[model['status']] += 1
+        reasons.update(model['problems'])
+        if model['status'] in {'accepted', 'duplicate_support', 'accepted_alternative_path'}:
+            donors.add(evidence['donor'])
+            if model.get('model_id'):
+                identifiers.add(model['model_id'])
     for row in audit['paths']:
         if row['status'] != 'evaluated':
             continue
-        records = outcomes[row['native_transcript_id']]
-        if not records:
+        statuses, reasons, donors, identifiers = outcomes.get(row['native_transcript_id'], ({}, set(), (), ()))
+        if row.get('length_rejected_protein_hits'):
+            reasons.add('low_reciprocal_coverage')
+        elif not statuses:
             raise ValueError('Evaluated native path disappeared before admission')
-        admitted = [m for m in records if m['status'] in {'accepted', 'duplicate_support', 'accepted_alternative_path'}]
-        row.update(status='admitted' if admitted else 'not_admitted',
-                   candidate_records=len(records), admission_statuses=dict(Counter(m['status'] for m in records)),
-                   reasons=sorted({p for m in records for p in m['problems']}),
-                   external_donor_species=sorted({m['evidence']['donor'] for m in admitted}),
-                   model_ids=sorted({m['model_id'] for m in admitted if m.get('model_id')}))
+        row.update(status='admitted' if donors else 'not_admitted',
+                   candidate_records=sum(statuses.values()), admission_statuses=dict(statuses),
+                   reasons=sorted(reasons), external_donor_species=sorted(donors), model_ids=sorted(identifiers))
     audit['path_status_counts'] = dict(Counter(row['status'] for row in audit['paths']))
     audit['native_gene_counts'] = dict(Counter(
         status for status in audit['path_status_counts']
@@ -240,25 +264,35 @@ def transfer_structure(models, proteins, genome, code, params, directory, *, cpu
     return predictions
 
 
-def build_plan(previous_output, output, *, producer_source=None, completed_output=None, completed_producer_source=None):
-    """Freeze a new ordinary raw replay plus the explicit native search scope.
-
-    Prepared donor proteins and synteny are imported as frozen scientific inputs,
-    not asserted to be newly produced by the current formatter. Prediction-cache
-    verification still checks their bytes, all source inputs and Miniprot identity.
-    """
+def build_plan(previous_output, output, *, producer_source=None, completed_output=None,
+               completed_producer_source=None, compact_diagnostics=False):
+    """Prefer verified coding evidence, retaining ordinary raw cache replay."""
     r = _r()
+    import rescue_admission_replay
+    import rescue_native_genomewide_reuse
+
+    if completed_producer_source and not completed_output:
+        raise ValueError('A completed producer source requires its output directory')
     if producer_source:
-        import rescue_admission_replay
-        return rescue_admission_replay.build_plan(previous_output,producer_source,output,native_extension=True,
-            completed_output=completed_output,completed_producer_source=completed_producer_source)
-    if completed_output or completed_producer_source:
-        raise ValueError('Completed native workers require the explicit validated-evidence producer source')
+        return rescue_admission_replay.build_plan(
+            previous_output, producer_source, output, native_extension=True,
+            completed_output=completed_output, completed_producer_source=completed_producer_source,
+            compact_diagnostics=compact_diagnostics)
     previous, root = Path(previous_output).resolve(strict=True), Path(output).resolve()
+    reason = 'Archived producer source unavailable'
+    for source in rescue_native_genomewide_reuse.archived_sources(previous):
+        try:
+            return rescue_admission_replay.build_plan(
+                previous, source, root, native_extension=True, automatic=True,
+                completed_output=completed_output, completed_producer_source=completed_producer_source,
+                compact_diagnostics=compact_diagnostics)
+        except rescue_native_genomewide_reuse.IncompatibleEvidence as exc:
+            reason = str(exc)
     if root.exists() or root == previous or previous in root.parents or root in previous.parents:
         raise ValueError('Native genomewide extension requires a new disjoint output directory')
     prior = r.load(previous, inspect_only=True)
-    if not prior['request'].get('oriongeno') or prior['request'].get('admission_cache'):
+    if (not prior['request'].get('oriongeno') or prior['request'].get('admission_cache')
+            or prior['request'].get('oriongeno_genomewide')):
         raise ValueError('Native extension requires an ordinary completed native rescue')
     frozen = r.frozen_prediction_cache_key(previous)
     if set(frozen['species']) != set(prior['species']):
@@ -273,14 +307,22 @@ def build_plan(previous_output, output, *, producer_source=None, completed_outpu
     plan['request']['oriongeno_genomewide'] = CONTRACT
     plan['request']['native_genomewide_parent'] = {
         'root': str(previous), 'plan_sha256': frozen['plan_sha256'],
+        'validated_reuse_unavailable': reason,
         'prepared': {n: r.digest(previous / 'prepared' / n / 'receipt.json') for n in prior['species']},
         'synteny': {j['id']: r.digest(previous / 'synteny' / j['id'] / 'receipt.json') for j in prior['synteny_jobs']}}
+    if compact_diagnostics:
+        plan['request']['native_genomewide_parent']['compact_diagnostics'] = True
+        plan['request']['output_storage'] = {**r.output_storage(prior), 'diagnostics': 'summary'}
+    if completed_output:
+        plan['request']['native_genomewide_worker_imports'] = rescue_native_genomewide_reuse.freeze_completed(
+            plan, completed_output, completed_producer_source)
     metadata = {name: (previous / name).read_bytes()
                 for name in ('selection.nwk', 'quality.tsv', 'references.nwk', 'references.tsv')}
     plan['request']['native_genomewide_parent']['metadata_sha256'] = {
         name: hashlib.sha256(raw).hexdigest() for name, raw in metadata.items()}
     r.require_same_key(frozen, r.frozen_prediction_cache_key(previous))
     r.require_same_key(frozen['plan_sha256'], r.plan_digest(previous, prior))
+    r.refresh_source_versions(plan)
     root.mkdir(parents=True)
     for name, raw in metadata.items():
         (root / name).write_bytes(raw)
@@ -290,14 +332,22 @@ def build_plan(previous_output, output, *, producer_source=None, completed_outpu
 
 def prepare(root, plan, cpus):
     """Import complete receipted stages, with full byte validation during copy."""
-    r = _r()
     if plan['request'].get('admission_cache'):
         import rescue_admission_replay
+        rescue_admission_replay.prepare(root, plan, cpus)
+    else:
+        _prepare_raw(root, plan, cpus)
+    completed = plan['request'].get('native_genomewide_worker_imports', {}).get('workers', {})
+    if completed:
         import rescue_native_genomewide_reuse
-        rescue_admission_replay.prepare(root,plan,cpus)
-        for name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
-            rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
-        return
+        r = _r()
+        with r.ReceiptSnapshot(lambda directory, key: r.verified(directory, key, hash_workers=cpus)) as deps:
+            for name in completed:
+                rescue_native_genomewide_reuse.import_worker(root, plan, name, cpus, dependencies=deps)
+
+
+def _prepare_raw(root, plan, cpus):
+    r = _r()
     parent = plan['request']['native_genomewide_parent']
     previous = Path(parent['root'])
     prior = r.load(previous, inspect_only=True)
@@ -306,11 +356,19 @@ def prepare(root, plan, cpus):
     expected = copy.deepcopy(prior)
     expected['output'] = str(root)
     expected['request']['tools'] = plan['request']['tools']
-    for key in ('prediction_cache', 'oriongeno_genomewide', 'native_genomewide_parent'):
+    if parent.get('compact_diagnostics'):
+        expected['request']['output_storage'] = {**r.output_storage(prior), 'diagnostics': 'summary'}
+    for key in ('prediction_cache', 'oriongeno_genomewide', 'native_genomewide_parent',
+                'native_genomewide_worker_imports'):
+        if key not in plan['request']:
+            continue
         expected['request'][key] = plan['request'][key]
-    r.require_same_key(expected, plan)
+    # Generation hints are refreshed by the planner. The source SHA-256 values
+    # in the inherited request remain part of this exact comparison.
+    expected.pop('source_versions', None)
+    r.require_same_key(expected, {k: v for k, v in plan.items() if k != 'source_versions'})
     r.require_same_key(CONTRACT, plan['request']['oriongeno_genomewide'])
-    batch = r.FreshDigestBatch()
+    batch = r.RescueSourceBatch(plan)
     def guard():
         batch.check()
         r.require_same_key(old_sha, r.plan_digest(previous, prior))

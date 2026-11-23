@@ -80,8 +80,10 @@ from format_species_writers import (
     write_genome_stream_gzip,
     write_gff_lines_gzip,
 )
+from genome_fasta_repair import repair_audit
 from genome_sequence_identity import mask_genome_sequence
 from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
+from runtime_asset_io import atomic_json, file_sha
 
 CDS_GFF_GROUPING_AUDIT_VERSION = 18
 
@@ -969,10 +971,15 @@ def format_genome(task, output_dir, overwrite, dry_run):
         return {"status": "dry-run", "output_path": output_path, "written": 0}
 
     written = 0
+    repairs = []
+    source_sha = None
 
     def write_genome_stream(handle, width):
-        nonlocal written
+        nonlocal written, source_sha
+        from format_species_annotation.genome_intervals import stat_identity
         from format_species_annotation.reference import genome_fragments
+
+        before = stat_identity(genome_path)
         organelles = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
         retained, has_sequence, tail = False, False, ""
 
@@ -982,7 +989,7 @@ def format_genome(task, output_dir, overwrite, dry_run):
             elif retained and not has_sequence and width == 60:
                 handle.write("\n")
 
-        for kind, text in genome_fragments(genome_path, strict=False):
+        for kind, text in genome_fragments(genome_path, strict=False, repairs=repairs):
             if kind == "header":
                 finish_record()
                 tail, has_sequence = "", False
@@ -1001,9 +1008,19 @@ def format_genome(task, output_dir, overwrite, dry_run):
                     handle.write("\n".join(sequence[pos:pos + width] for pos in range(0, end, width)) + "\n")
                 tail = sequence[end:]
         finish_record()
+        if repairs:
+            source_sha = file_sha(genome_path)
+            if stat_identity(genome_path) != before:
+                raise OSError("Genome FASTA changed during boundary repair: " + str(genome_path))
 
     if genome_path is not None:
         write_genome_stream_gzip(output_path, write_genome_stream)
+        receipt = output_path.with_name("." + output_path.name + ".fasta-boundary-repair.json")
+        if repairs:
+            atomic_json(receipt, repair_audit(source_sha, file_sha(output_path), repairs,
+                                             newline_mode="zero-based decoded stream with universal newlines"))
+        else:
+            receipt.unlink(missing_ok=True)
         return {"status": "write", "output_path": output_path, "written": written}
 
     def write_genbank_genome(handle, width):

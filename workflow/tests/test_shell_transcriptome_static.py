@@ -1,7 +1,9 @@
 # ruff: noqa: E501
 
 import re
+import subprocess
 
+import pytest
 from shell_static_helpers import CORE_DIR, WORKFLOW_DIR
 from shell_static_helpers import function_body as _function_body
 from shell_static_helpers import read_text as _read_text
@@ -399,8 +401,51 @@ def test_transcriptome_core_uses_current_cdskit_longestorf_interface():
     assert '--seq_file "${sp_ub}.tmp.renamed.fa"' in text
     assert '--out_file "${longestcds_tmp}"' in text
     assert '--codon_table "${genetic_code}"' in text
+    assert 'longestcds_selection="longest"' in text
+    assert '--selection "${longestcds_selection}"' in text
+    assert '--parameter "orf_selection=${longestcds_selection}"' in text
     assert "--annotate_seq_name no" in text
     assert "cdskit longestcds" not in text
+
+
+def test_transcriptome_representative_selection_defaults_match_core():
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+
+    assert 'orf_representative_mode="homology-orfs"' in entrypoint
+    assert 'orf_representative_mode="${orf_representative_mode:-homology-orfs}"' in core
+    assert 'orf_catalog_rescue="auto"' in entrypoint
+    assert 'orf_catalog_rescue="${orf_catalog_rescue:-auto}"' in core
+
+
+@pytest.mark.parametrize(("assembler", "policy", "level", "mode", "locus_table", "expected"), [
+    ("trinity", "auto", "i", "homology-orfs", "", "yes"),
+    ("trinity", "on", "i", "homology-orfs", "", "yes"),
+    ("trinity", "off", "i", "homology-orfs", "", "no"),
+    ("trinity", "auto", "g", "homology-orfs", "", "no"),
+    ("trinity", "auto", "i", "length", "", "no"),
+    ("rnaspades", "auto", "i", "homology-orfs", "", "yes"),
+    ("rnaspades", "auto", "i", "homology-orfs", "loci.tsv", "no"),
+    ("rna-bloom2", "auto", "i", "homology-orfs", "", "no"),
+])
+def test_transcriptome_catalog_rescue_policy(assembler, policy, level, mode, locus_table, expected):
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    policy_block = core[core.index("orf_catalog_rescue_enabled=no\n"):core.index("longestcds_needs_update=0\n")]
+    setup = """
+effective_assembly_method=$1
+orf_catalog_rescue=$2
+orf_aggregation_level=$3
+orf_representative_mode=$4
+rnaspades_locus_table=$5
+orf_homology_split=off
+"""
+    result = subprocess.run(
+        ["bash", "-c", setup + policy_block + 'printf "%s" "$orf_catalog_rescue_enabled"',
+         "catalog-rescue", assembler, policy, level, mode, locus_table],
+        check=True, text=True, capture_output=True,
+    )
+    assert result.stdout == expected
+    assert '--split-assembler "${effective_assembly_method}"' in core
 
 
 def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():

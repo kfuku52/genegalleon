@@ -41,6 +41,23 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize("second_phase", ["0", "1"])
+def test_duplicate_coge_feature_ids_do_not_duplicate_coding_bases(tmp_path, second_phase):
+    coding = "ATGAAACCCTAA"
+    original = row("gene", 1, 12, "g") + row("mRNA", 1, 12, "t", parent="g")
+    parts = row("CDS", 1, 12, "cds", parent="t", phase="0").rstrip("\n") + ";coge_fid=1\n"
+    parts += row("CDS", 1, 12, "cds", parent="t", phase=second_phase).rstrip("\n") + ";coge_fid=2\n"
+    paths = fixture(tmp_path, ">g\n" + coding + "\n", (original + parts).replace("\ts\t", "\tCoGe\t"), coding)
+    before = digest(paths[1])
+    value = MODULE.build_catalog("Species_target", *paths)
+    model = value["loci"][0]["candidates"][0]
+    if second_phase == "0":
+        assert model["cds"] == coding and model["quality"]["usable"]
+    else:
+        assert model["quality"]["structure_problem"] == "overlapping_cds"
+    assert digest(paths[1]) == before
+
+
 @pytest.mark.parametrize('status,policy', [('ambiguous', 'longest_cds_then_coding_shape'),
                                            ('supported_priority', 'validated_donor_rank')])
 def test_rescue_representative_provenance_keeps_locus_and_path_support_distinct(tmp_path, status, policy):

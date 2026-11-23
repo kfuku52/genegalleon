@@ -1,5 +1,28 @@
 # Synteny-guided gene-model rescue
 
+## Admit OrionGeno models at uncovered loci
+
+The input-generation entrypoint enables this route when OrionGeno inputs
+are available. Set `GG_INPUT_GENE_MODEL_RESCUE_ORIONGENO_WITHOUT_DONOR=0`
+to disable it. With the independent CLI, pass
+`plan --oriongeno-without-donor --oriongeno-inputs native.tsv`.
+This adds a route after ordinary rescue. It reads the
+verified OrionGeno GFF on the target assembly and checks the genomic ORF,
+CDS phase, splice junctions, and assembly gaps. Existing and already rescued
+coding loci keep priority. The longest valid CDS per OrionGeno gene is selected
+with a stable transcript-ID tie break. Competing same-strand coding loci
+remain unresolved. A species without a native prediction retains ordinary rescue.
+
+The GFF marks these additions as `rescue_admission=oriongeno_without_donor`.
+`oriongeno_without_donor.json` records the decision for each native gene.
+These models contribute zero donor support and leave orthology and expected
+copy unassigned. Cross-species rescue and refinement retain their own gates.
+To extend a completed rescue with frozen OrionGeno inputs, run
+`rescue_gene_models.py oriongeno-extend --previous-output old --output new`.
+This keeps the audited donor-supported calls, copies the verified prepared and
+synteny stages, and appends the new rows to the compact model store. It does
+not repeat Miniprot, DIAMOND or OrionGeno. Use a separate output directory.
+
 ## Evaluate native predictions outside nominated regions
 
 The independent CLI's opt-in `plan --oriongeno-genomewide --oriongeno-inputs
@@ -14,8 +37,10 @@ cannot provide independent donor support.
 
 DIAMOND searches unique translated proteins with `--ultra-sensitive`, no masking
 or composition correction, E-value 1000 and no target cap. Exact protein matches
-are also included independently of seeding. All returned sequence pairs pass the
-existing global reciprocal-coverage alignment. Identical sequences share this
+are also included independently of seeding. The ratio of the shorter to the
+longer protein length bounds the reciprocal coverage. Search hits below the
+existing minimum on that bound are counted in the native audit. The remaining
+pairs pass the existing global alignment. Identical sequences share this
 computation, while donor identifiers, native isoforms and genomic copies remain
 distinct. No search hit means no hit under this declared search, not proof of
 biological absence or an exhaustive comparison of every possible alignment.
@@ -45,22 +70,42 @@ The original Miniprot binary must match for raw prediction-cache reuse. Native
 donor alignment, genomic QC and admission run freshly; no native GPU prediction
 is repeated. Complete all species before the ordinary `finalize` command.
 
-For large completed compact stores, add `--producer-source /archive/producer`
-to `native-genomewide-plan` to reuse already validated coding evidence. The
-archived source must match the producer plan and prove unchanged genomic,
-homology, terminal, boundary and native coding-structure decisions. A changed
-UTR parser must reconstruct identical coding paths from each actual frozen
-native GFF. Unknown or changed strict evidence stops this route. Prepared donor
-proteins and every old publication member are freshly byte-verified; strict
-rejections remain recorded. The genomewide donor search and Miniprot structure
-confirmation run freshly. Placement and locus admission run on the combined
-old and new evidence, and admitted CDS pass fresh genomic QC.
+When a `source/workflow/support` archive is available in or next to
+`--previous-output`, the extension tries to reuse previously validated coding
+evidence. The archive must match the producer plan and prove unchanged genomic,
+homology, terminal, boundary and native coding-structure decisions. An explicit
+`--producer-source /archive/producer` requires this proof. With automatic
+discovery, an unavailable or incompatible source uses ordinary raw prediction
+revalidation. A legacy worker, or a changed UTR parser that produces different
+coding paths from that species' frozen native GFF, also uses ordinary
+revalidation. The plan and existing worker audits report the reuse decision.
 
-Completed workers from an identical genomewide scope may be independently copied
-with `--completed-output /data/pilot --completed-producer-source /archive/pilot`.
-Their original plan, source contract and worker receipt remain explicit in
-`completed_native_worker_import.json`. Changed scientific scope, admission rules
-or worker bytes prevent import. Neither route edits its producer generation.
+Prepared inputs and previous worker members used as validated evidence are
+freshly byte-verified. Strict rejections remain recorded. Genomewide donor
+search, Miniprot structure confirmation, placement and admission on the
+combined evidence all run freshly. Admitted CDS pass fresh genomic QC. Appended candidates are written in bounded
+shards in ordinal order. Use `native-genomewide-plan --diagnostics summary` to
+convert retained legacy diagnostic tables into counters and exportable
+unresolved-query records.
+
+During raw prediction replay and selective scans of a verified compact store, the reader uses a private
+copy of the SQLite body database in the job's temporary directory when that
+directory is on a different filesystem and has enough free space. It compares
+the copied bytes to the frozen receipt before opening SQLite and removes the
+copy on close. Raw prediction replay shares its current input verification with the
+store reader so previously hashed source members need only identity checks during the replay.
+Refinement uses the same temporary-copy check for the compact `revision.sqlite`
+overlay before looking up its candidate bodies.
+If temporary storage fills, the reader continues from the
+verified source database. During admission patching, unchanged copied files
+are checked against their source digests as part of the final manifest scan.
+
+`--completed-output /data/pilot` imports the workers already complete when
+the plan is made, provided their genomewide scientific scope and decision
+rules match. Use `--completed-producer-source /archive/pilot` when the source
+archive is elsewhere. Later workers finishing in the producer do not change
+this set. Each import retains its exact producer plan and worker receipt in
+`completed_native_worker_import.json`. The producer outputs are read-only.
 
 Each worker publishes `oriongeno_genomewide.json`, accounting for every native
 transcript as original overlap, invalid translation, no protein-search hit,
@@ -250,6 +295,13 @@ tool identities (including executable and alignment/annotation source hashes)
 and comparison indices. Post-rescue BUSCO never changes this
 selection. Changed inputs/settings/tools require a new output directory.
 
+On supported Linux Lustre mounts, planning hashes each source genome, CDS and GFF
+and records its filesystem, FID and flushed data version in the existing plan.
+Workers reuse the SHA-256 while the same object, path and version match. A new
+generation triggers a fresh content hash. Older plans and other filesystems use
+fresh hashes in each worker. Publication checks cover all consumed inputs.
+This also applies to new plans derived from archived raw predictions.
+
 ## Candidate and model evidence
 
 Pair comparisons use JCVI/DIAMOND; self comparisons use JCVI/LAST alignment and
@@ -356,7 +408,10 @@ cover at least two-thirds of the sole owner's coding bases and share at least
 three-quarters of their own coding bases with that owner. Paths with unchanged
 coordinates are included only when their declared phases conflict. These
 publications are available for review even when the prediction has an
-unresolved placement flag.
+unresolved placement flag. At loci with multiple coding transcripts, rescue also
+checks overlap against individual transcript CDSs when the combined locus
+intervals dilute support. Refinement assigns the resulting candidate to its
+source transcript using splice and reading-frame evidence.
 
 Rescue also searches automatically at existing loci when two or more
 reference species have longer, unambiguous internal anchors in their syntenic
@@ -369,6 +424,16 @@ nominate the same search. These matches must cover at least 90% of the shorter
 target and 75% of the donor, and both proteins must have a unique best partner.
 Refinement can adopt a reciprocal-match extension only when it preserves the
 source CDS in full and in frame.
+
+Rescue also checks the same alignments for a shared N-terminal or C-terminal
+deficit, or a gap inside an otherwise aligned protein. Each donor protein must
+be a unique best hit for the target, with the same type of deficit in at least
+two species and a matching synteny anchor in at least one. Miniprot projects
+these proteins in the target gene window. An internal gap repair that relies
+on this evidence requires a partial source CDS, at least 90% in-frame retention,
+and target RNA supporting the revised path or each new splice. Replicated RNA
+for a conflicting original splice holds the repair. Admission replay revalidates
+archived projections and searches only newly nominated donor/locus pairs.
 
 To revisit a particular annotation even when donor screening considers it
 represented, supply `--model-repair-targets TARGETS.tsv` at rescue planning.
@@ -448,8 +513,8 @@ verification batch across writes or subsequent commands.
 Finalization also retains independently verified prepared, synteny and rescue
 publications within that command. Repeated dependency guards check the observed
 generations instead of rescanning all their contents. Original and native inputs
-keep a separate fresh byte proof. Both scopes are fenced before publication and
-when reusing an existing export, and a later command starts from full verification.
+keep a separate verification scope with the source-generation policy above. Both scopes are fenced before publication and
+when reusing an existing export. A later command opens a new verification scope.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction
@@ -683,8 +748,9 @@ thresholds do not invalidate identical comparisons. GFF metadata edits can reuse
 a comparison only after the new plan prepares and verifies identical BED/protein
 files. The full frozen input and per-plan dependency checks remain in force.
 Locked, verified cache outputs are copied and rehashed into each plan; writable
-files are never hard linked. Corrupted entries are recomputed with the usual
-atomic publication and failure diagnostics. Existing results without cache keys
+files are never hard linked. Cache writers on separate nodes coordinate using
+atomic shared-filesystem operations. Corrupted entries are recomputed with the
+usual atomic publication and failure diagnostics. Existing results without cache keys
 remain valid within their original plan and are not relabelled for another plan.
 Updating the implementation/tool identities requires a new rescue output plan;
 finish an active plan with its frozen source. Older shared cache entries remain

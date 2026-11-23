@@ -60,6 +60,23 @@ def test_spawn_preserves_full_records_order_genetic_code_and_rejections(tmp_path
     assert rows==original
 
 
+def test_spawn_reuses_original_candidate_evidence_across_batches(tmp_path):
+    path, rows = fixture(tmp_path, 577)
+    evidence = {
+        **rows[0]['evidence'], 'support': {'left': ['target', 'donor'], 'right': ['target2', 'donor2']},
+    }
+    for row in rows:
+        row['evidence'] = evidence
+    serial, _ = evaluate(path, rows, 1)
+    parallel_output, _ = evaluate(path, rows, 2)
+    assert parallel_output == serial
+    for row, expected in zip(parallel_output, serial, strict=True):
+        if expected['evidence'] == evidence:
+            assert row['evidence'] is evidence
+        assert row['raw_prediction']['evidence'] == evidence
+        assert row['raw_prediction']['evidence'] is not evidence
+
+
 def test_small_replay_keeps_in_process_callback_without_opening_genome_or_pool():
     rows=[{'q':i} for i in range(20)]
     seen=[]

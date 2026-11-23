@@ -90,8 +90,11 @@ try:
     from rescue_search_inputs import (
         records as local_search_records,
     )
+    from rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
+    from rescue_source_verification import refresh_source_versions as refresh_source_versions
     from rescue_terminal_completion import complete_terminals
-    from species_labeling import assembly_only_species, extract_species_label
+    from shared_namespace_lock import namespace_lock
+    from species_labeling import assembly_only_species, species_label_for_input
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
     from . import busco_reference_quality as busco_reference_implementation
@@ -148,8 +151,11 @@ except ImportError:
     from .rescue_search_inputs import (
         records as local_search_records,
     )
+    from .rescue_source_verification import RescueSourceBatch, freeze_sources, source_paths
+    from .rescue_source_verification import refresh_source_versions as refresh_source_versions
     from .rescue_terminal_completion import complete_terminals
-    from .species_labeling import assembly_only_species, extract_species_label
+    from .shared_namespace_lock import namespace_lock
+    from .species_labeling import assembly_only_species, species_label_for_input
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
@@ -217,6 +223,7 @@ def identities():
     for package in ("locuskit", "kffractbias", "jcvi"):
         versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
+    versions["source_verification_implementation"] = digest(Path(__file__).with_name("rescue_source_verification.py"))
     versions["annevo_candidate_implementation"] = digest(Path(__file__).with_name("annevo_gene_models.py"))
     versions["annevo_alignment_implementation"] = digest(Path(__file__).with_name("gene_model_selection.py"))
     versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
@@ -315,8 +322,9 @@ def build_plan(args):
         if (args.max_genome_queries < 0 or args.unanchored_min_species < 1
                 or args.terminal_max_extension < 1):
             raise ValueError("Invalid bounded genome-search or terminal-completion parameters")
-        species = sorted({extract_species_label(p.name) for p in args.cds_dir.iterdir()
-                          if p.is_file() and p.name.removesuffix(".gz").endswith((".fa", ".fas", ".fasta", ".fna"))})
+        fasta_suffixes = (".fa", ".fas", ".fasta", ".fna")
+        species = sorted({label for p in args.cds_dir.iterdir()
+                          if p.is_file() and (label := species_label_for_input(p.name, fasta_suffixes)) is not None})
         excluded = assembly_only_species(getattr(args, 'transcriptome_assembly_dir', None),
                                          args.gff_dir, args.genome_dir)
         species = [name for name in species if name not in excluded]
@@ -371,15 +379,15 @@ def build_plan(args):
         for name in targets:
             safe_token(name, "species")
             def discover(directory, suffixes, name=name):
-                matches = [p for p in directory.iterdir() if p.is_file() and extract_species_label(p.name) == name
-                           and p.name.removesuffix(".gz").endswith(suffixes)]
+                matches = [p for p in directory.iterdir()
+                           if p.is_file() and species_label_for_input(p.name, suffixes) == name]
                 if len(matches) != 1:
                     raise ValueError(f"Expected one {name} source in {directory}, found {len(matches)}")
                 return str(matches[0].resolve())
-            cds = discover(args.cds_dir, (".fa", ".fas", ".fasta", ".fna"))
+            cds = discover(args.cds_dir, fasta_suffixes)
             gff = discover(args.gff_dir, (".gff", ".gff3"))
             validate_gff(gff)
-            genome = discover(args.genome_dir, (".fa", ".fas", ".fasta", ".fna"))
+            genome = discover(args.genome_dir, fasta_suffixes)
             busco = discover(args.busco_dir, (".busco.short.txt",))
             code = codes.get(name, args.genetic_code)
             if code not in CodonTable.unambiguous_dna_by_id:
@@ -406,7 +414,9 @@ def build_plan(args):
         profiles = read_profiles(profiles_path, sources)
         if profiles_path:
             files.append(str(profiles_path.resolve()))
-        request = {"schema": SCHEMA, "sources": sources, "files": digest_paths(files), "parameters": params,
+        genomic_paths = source_paths({"sources": sources})
+        file_hashes, source_versions = freeze_sources(genomic_paths, other_paths=files)
+        request = {"schema": SCHEMA, "sources": sources, "files": file_hashes, "parameters": params,
                    "species_profiles": profiles,
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
@@ -463,6 +473,11 @@ def build_plan(args):
                 raise ValueError('Genomewide rescue requires --oriongeno-inputs')
             from rescue_native_genomewide import CONTRACT
             request['oriongeno_genomewide'] = CONTRACT
+        if getattr(args, 'oriongeno_without_donor', False):
+            import rescue_oriongeno_admission
+            if not request.get('oriongeno'):
+                raise ValueError('--oriongeno-without-donor requires --oriongeno-inputs')
+            request[rescue_oriongeno_admission.BASIS] = rescue_oriongeno_admission.contract()
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
             request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, prediction_sources)
@@ -546,7 +561,9 @@ def build_plan(args):
                     "synteny_jobs": [{**job, "index": i, "id": f"comparison_{i:06d}"} for i, job in enumerate(jobs, 1)]}
             if guide_stability:
                 plan["guide_tree_stability"] = {n: guide_stability[n] for n in targets}
-            if guide_stability and digest_paths(request["files"]) != request["files"]:
+            if source_versions:
+                plan["source_versions"] = source_versions
+            if guide_stability and RescueSourceBatch(plan).read(request["files"]) != request["files"]:
                 raise ValueError("Guide evidence changed during reference selection")
             for file in ("selection.nwk", "quality.tsv", "references.nwk", "references.tsv"):
                 shutil.copyfile(tmp / file, root / file)
@@ -571,19 +588,22 @@ def load(root, *, inspect_only=False):
     return plan
 
 
-def plan_digest(root, plan):
+def plan_digest(root, plan, *, verification=None):
     """Refuse to stamp a stale in-memory plan with the current file's hash."""
     path = root / "plan.json"
     raw = path.read_bytes()
     result = hashlib.sha256(raw).hexdigest()
-    if json.loads(raw) != plan or digest(path) != result:
+    if json.loads(raw) != plan:
+        raise ValueError("Frozen rescue plan changed during execution")
+    current = digest(path) if verification is None else verification.read([path])[str(path)]
+    if current != result:
         raise ValueError("Frozen rescue plan changed during execution")
     return result
 
 
 def verify_sources(plan, names, keys, *, verification=None):
     paths = [plan["request"]["sources"][n][k] for n in names for k in keys]
-    current = verification.read(paths) if verification is not None else digest_paths(paths)
+    current = (verification if verification is not None else RescueSourceBatch(plan)).read(paths)
     if any(plan["request"]["files"][p] != value for p, value in current.items()):
         raise ValueError("Frozen rescue input changed")
     for engine in ('annevo', 'oriongeno'):
@@ -665,7 +685,8 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None, verify=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None, reuse=None, verify=None,
+          *, shared_cache=False):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -673,7 +694,10 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_
     lock.parent.mkdir(exist_ok=True)
     journal = lock.with_suffix(".publish.json")
     token = hashlib.sha256(str(relative).encode()).hexdigest()[:12]
-    with exclusive_lock(lock):
+    # A shared cache can have writers on different nodes even when their
+    # advisory file locks are client-local (for example on Lustre).
+    ownership = namespace_lock(lock, exclusive=True, timeout=86400) if shared_cache else exclusive_lock(lock)
+    with ownership:
         recover_publication(dest, journal, token)
         if guard:
             guard()
@@ -919,7 +943,7 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
         publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
         cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
                        lambda output: build_comparison(output, job, dirs, params, cpus), guard,
-                       **publication)
+                       shared_cache=True, **publication)
         copy_verified_comparison(cached, tmp, cache_key, hash_workers=cpus)
         atomic_json(tmp / "job.json", job)
         atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})
@@ -927,15 +951,16 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
     return stage(root, Path("synteny") / job["id"], key, build, guard, **publication)
 
 
-def comparison_key(root, job, prepared_snapshot=None, *, dependency_snapshot=None):
-    if prepared_snapshot is not None and dependency_snapshot is not None:
+def comparison_key(root, job, prepared_snapshot=None, *, dependency_snapshot=None, plan_hash=None):
+    if prepared_snapshot is not None and (dependency_snapshot is not None or plan_hash is not None):
         raise ValueError('Choose one preparation verification context')
     if prepared_snapshot is not None:
         prepared_snapshot.assert_context(root)
         prepared_snapshot.check_job(job)
         return {"plan": prepared_snapshot.plan_digest(), "job": job,
                 "prepared": {n: prepared_snapshot.receipt_digest(n) for n in sorted({job["a"], job["b"]})}}
-    plan_hash = digest(root / "plan.json")
+    if plan_hash is None:
+        plan_hash = digest(root / "plan.json")
     names = sorted({job["a"], job["b"]})
     check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for name in names:
@@ -1048,14 +1073,17 @@ def candidates(root, plan, name):
     return list({r["id"]: r for r in result}.values())
 
 
-def rescue_key(root, plan, name, *, dependency_snapshot=None):
+def rescue_key(root, plan, name, *, dependency_snapshot=None, plan_hash=None):
     jobs = [j for j in plan["synteny_jobs"] if name in {j["a"], j["b"]}
             and (j["a"] == j["b"] or (j["b"] if name == j["a"] else j["a"]) in plan["donors"][name])]
-    plan_hash = plan_digest(root, plan)
+    # A cohort finalizer can supply its command-local, fenced plan digest.
+    comparison_plan_hash = plan_hash
+    if plan_hash is None:
+        plan_hash = plan_digest(root, plan)
     check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for job in jobs:
-        comparison = (comparison_key(root, job) if dependency_snapshot is None
-                      else comparison_key(root, job, dependency_snapshot=dependency_snapshot))
+        comparison = comparison_key(root, job, dependency_snapshot=dependency_snapshot,
+                                    plan_hash=comparison_plan_hash)
         if not check(root / "synteny" / job["id"], comparison):
             raise ValueError("Comparison incomplete or corrupted: " + job["id"])
     donors = [name, *plan["donors"][name]]
@@ -1544,12 +1572,34 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
     if phase != "all" and any(plan["request"].get(k) for k in
                               ("admission_cache", "gemoma_jar", "oriongeno_genomewide")):
         raise ValueError("Split miniprot rescue does not support admission replay, GeMoMa or native genome-wide transfer")
-    if plan['request'].get('admission_cache'):
-        if name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
-            import rescue_native_genomewide_reuse
-            return rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
+    request = plan['request']
+    if name in request.get('native_genomewide_worker_imports', {}).get('workers', {}):
+        import rescue_native_genomewide_reuse
+        return rescue_native_genomewide_reuse.import_worker(root, plan, name, cpus, dependencies=dependencies)
+    admission = request.get('admission_cache')
+    revalidation_reason = request.get('native_genomewide_parent', {}).get('validated_reuse_unavailable')
+    if admission and admission['contract'].get('scope') == 'oriongeno_additions':
+        import rescue_oriongeno_admission
+        return rescue_oriongeno_admission.extend_worker(root, plan, name, cpus, dependencies)
+    if admission:
         import rescue_admission_replay
-        return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies)
+        parser_proof = None
+        if admission.get('automatic'):
+            import rescue_native_genomewide_reuse
+            if admission['species'][name].get('model_store', {}).get('format') != rescue_admission_replay.store.FORMAT:
+                revalidation_reason = 'Producer worker lacks a compact validated model store'
+            elif admission['contract']['native_parser_equivalence_required']:
+                from gene_model_catalog import indexed_genome
+
+                verify_sources(plan, [name], ['genome', 'fasta', 'gff'])
+                with indexed_genome(request['sources'][name]['genome']) as genome:
+                    try:
+                        parser_proof = rescue_native_genomewide_reuse.parser_equivalence(plan, name, genome)
+                    except rescue_native_genomewide_reuse.IncompatibleEvidence as exc:
+                        revalidation_reason = str(exc)
+        if revalidation_reason is None:
+            return rescue_admission_replay.rescue(root, plan, name, cpus, dependencies=dependencies,
+                                                 parser_proof=parser_proof)
     storage = output_storage(plan)
     diagnostics = storage.get("diagnostics", "legacy")
     donors = [name, *plan["donors"][name]]
@@ -1570,7 +1620,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         except (FileNotFoundError, ValueError) as exc:
             raise ValueError(invalid_checkpoint) from exc
     key = current_key()
-    source_proof = FreshDigestBatch()
+    source_proof = RescueSourceBatch(plan)
 
     def check_sources():
         verify_sources(plan, [name], ["genome", "fasta", "gff"], verification=source_proof)
@@ -1609,7 +1659,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                           [*review_targets, *automatic_model_repair_targets(root, plan, name, proteins, params)])
         empty = (state["empty"] if checkpoint is not None else
                  not candidate_regions and not repair_targets and not plan["request"].get("prediction_cache")
-                 and not plan['request'].get('oriongeno_genomewide'))
+                 and not plan['request'].get('oriongeno_genomewide')
+                 and not plan['request'].get('oriongeno_without_donor'))
         if empty:
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
@@ -1714,6 +1765,9 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 cached_validation = {}
                 validated.extend(rescue_cached_validation.validate_cached(old_models, genome,
                     source['genetic_code'], params, proteins, cpus, checked_prediction, cached_validation))
+                if revalidation_reason:
+                    cached_validation.update(reuse='raw_prediction_cache', reason=revalidation_reason,
+                                             source_receipt_sha256=cached.frozen['receipt_sha256'])
                 atomic_json(tmp / 'cached_prediction_validation.json', cached_validation)
             for model in predictions:
                 region = by_id[model["query"]]
@@ -1893,6 +1947,12 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
             models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
                                  retained_paths=retained_paths)
+            if request.get('oriongeno_without_donor'):
+                import rescue_oriongeno_admission
+                require_same_key(rescue_oriongeno_admission.contract(), request['oriongeno_without_donor'])
+                standalone = rescue_oriongeno_admission.admit(
+                    request['oriongeno'], name, genome, source['genetic_code'], params, placement_ownership, models)
+                atomic_json(tmp / rescue_oriongeno_admission.AUDIT, standalone)
             atomic_json(tmp / "split_model_candidates.json", split_model_candidates(
                 models, placement_ownership, name, genome=genome, code=source["genetic_code"],
                 params=params, proteins=proteins))
@@ -2041,6 +2101,9 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
         for path in [model, *model.get('alternative_coding_paths', ())]:
             if not path.get('sequence') or path.get('problems'):
                 raise ValueError('Previous accepted coding path lacks an intact sequence')
+            if path.get('evidence', {}).get('admission_basis') == 'oriongeno_without_donor':
+                # Repeat the native-only decision under the new frozen policy.
+                continue
             shape = coding_shape(path)
             sequence_sha256 = hashlib.sha256(path['sequence'].encode()).hexdigest()
             if shape in result and result[shape]['sequence_sha256'] != sequence_sha256:
@@ -2373,7 +2436,7 @@ def verify_model_repair_targets(plan):
 
 def automatic_model_repair_targets(root, plan, species, proteins, params):
     """Use existing syntenic correspondences to revisit clearly shorter CDSs."""
-    candidates = defaultdict(list)
+    candidates, terminals = defaultdict(list), defaultdict(list)
     donors = plan['donors'][species]
     if len(donors) < 2:
         return []
@@ -2401,10 +2464,16 @@ def automatic_model_repair_targets(root, plan, species, proteins, params):
                     if len(targets_by_query[query]) == len(queries_by_target[target]) == 1}
         left, right = (target_lengths, donor_lengths) if a == species else (donor_lengths, target_lengths)
         coverage = (.90, .75) if a == species else (.75, .90)
+        terminal = []
         matches = reciprocal_matches(root / 'synteny' / job['id'] / 'target.query.last', left, right,
                                      min_identity=params['minimum_identity'],
-                                     coverage_a=coverage[0], coverage_b=coverage[1])
+                                     coverage_a=coverage[0], coverage_b=coverage[1],
+                                     terminal_hits=terminal, target_is_a=a == species, anchors=queries_by_target)
         reciprocal = {(x, y) if a == species else (y, x) for x, y, _ in matches}
+        for target, query, side in terminal:
+            locus = locus_ids.get(target)
+            if locus:
+                terminals[locus, side].append((donor, query, query in queries_by_target.get(target, ())))
         for target, query in sorted(anchored | reciprocal):
             locus = locus_ids.get(target)
             target_length = target_lengths.get(target, 0)
@@ -2419,11 +2488,21 @@ def automatic_model_repair_targets(root, plan, species, proteins, params):
                 continue
             candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor,
                                       'query': query, basis: locus})
+    for (locus, side), rows in terminals.items():
+        if len({donor for donor, _, _ in rows}) < 2 or not any(anchored for _, _, anchored in rows):
+            continue
+        nominated = {(r['donor'], r['query']) for r in candidates[locus]}
+        for donor, query, _ in rows:
+            if (donor, query) not in nominated:
+                candidates[locus].append({'species': species, 'gene_id': locus, 'donor': donor, 'query': query,
+                                          **({'internal_gap_locus': locus} if side == 'internal' else
+                                             {'terminal_locus': locus, 'terminal_side': side})})
     return [row for locus in sorted(candidates) if len({r['donor'] for r in candidates[locus]}) >= 2
             for row in candidates[locus]]
 
 
-def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
+def search_model_repair_targets(tmp, targets, existing, ownership, proteins, genome, code, params, cpus, *,
+                                archive_name='model_repair_search'):
     """Project selected donor proteins near specified existing loci for review."""
     if not targets:
         return []
@@ -2433,7 +2512,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
     for index, target in enumerate(targets):
         owner = owners.get(target['gene_id'])
         if not owner or not owner.get('cds') or owner['strand'] not in {'+', '-'}:
-            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
+            if any(target.get(k) for k in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus')):
                 continue
             raise ValueError('Unknown or invalid coding owner for model repair: ' + target['gene_id'])
         if target['query'] not in proteins[target['donor']]:
@@ -2442,7 +2521,7 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         start = max(0, owner['start'] - padding)
         end = min(genome.get_reference_length(owner['seqid']), owner['end'] + padding)
         if end - start > params['max_interval']:
-            if target.get('syntenic_locus') or target.get('reciprocal_locus'):
+            if any(target.get(k) for k in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus')):
                 continue
             raise ValueError('Model repair target exceeds max interval: ' + target['gene_id'])
         identifier = f'review_{index + 1}'
@@ -2451,8 +2530,8 @@ def search_model_repair_targets(tmp, targets, existing, ownership, proteins, gen
         queries[identifier] = query
     if not windows:
         return []
-    directory = tmp / 'model_repair_search'
-    directory.mkdir()
+    directory = tmp / archive_name
+    directory.mkdir(parents=True)
     atomic_json(directory / 'targets.json', list(queries.values()))
     predictions = search_intervals(directory, windows, proteins, genome, code, params['max_intron'], cpus,
                                    compact=True, deduplicate_queries=True)
@@ -2496,7 +2575,7 @@ def replay_model_repair_search(directory, targets, ownership, proteins, genome, 
     old = {row['id']: row for row in json.loads(old_targets.read_text())}
     queries = {key: {**row, **current[identity(row)]} for key, row in old.items() if identity(row) in current}
     for key, row in queries.items():
-        for flag in ('syntenic_locus', 'reciprocal_locus'):
+        for flag in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus', 'terminal_side'):
             if flag not in current[identity(old[key])]:
                 row.pop(flag, None)
     if not queries:
@@ -2539,7 +2618,19 @@ def model_repair_geometry(model, ownership):
     if len(owners) != 1 or owners[0]['strand'] != model['strand'] or not owners[0].get('cds'):
         return [], False
     owner = owners[0]
-    old_blocks = {tuple(block) for block in owner['cds']}
+    result = _repair_overlap(model, owner['gene_id'], owner['cds'])
+    if result[0]:
+        return result
+    # A long alternative exon can dilute coverage of the gene-wide union.
+    # Preserve the one-owner constraint and test each actual transcript CDS.
+    matches = [_repair_overlap(model, owner['gene_id'], blocks)
+               for blocks in owner.get('transcript_cds', {}).values()]
+    return max((v for v in matches if v[0]), key=lambda v: (
+        v[1], v[0][0]['overlap_bases'], -v[0][0]['cds_bases']), default=([], False))
+
+
+def _repair_overlap(model, gene_id, blocks):
+    old_blocks = {tuple(block) for block in blocks}
     union = []
     for start, end in sorted(old_blocks):
         if union and start <= union[-1][1]:
@@ -2552,7 +2643,7 @@ def model_repair_geometry(model, ownership):
                  for a, b in union for x, y, _ in model['cds'])
     if 3 * shared < 2 * old_length or 4 * shared < 3 * new_length:
         return [], False
-    geometry = [{'gene_id': owner['gene_id'], 'cds_bases': old_length, 'overlap_bases': shared}]
+    geometry = [{'gene_id': gene_id, 'cds_bases': old_length, 'overlap_bases': shared}]
     return geometry, old_blocks == {tuple(block[:2]) for block in model['cds']}
 
 
@@ -2587,9 +2678,11 @@ def model_repair_candidates(models, ownership, species, source_gff):
             raise ValueError('Inconsistent CDS for reviewed model repair: ' + identifier)
         support = {'donor': evidence['donor'], 'query': evidence['query'],
                    'coverage': model['coverage'], 'identity': model['identity'], 'flags': sorted(model['problems'])}
-        for basis in ('syntenic_locus', 'reciprocal_locus'):
+        for basis in ('syntenic_locus', 'reciprocal_locus', 'internal_gap_locus', 'terminal_locus'):
             if evidence.get(basis) == geometry[0]['gene_id']:
                 support[basis] = evidence[basis]
+                if basis == 'terminal_locus':
+                    support['terminal_side'] = evidence['terminal_side']
         if support not in row['support']:
             row['support'].append(support)
 
@@ -2815,16 +2908,19 @@ def rescue_selection_attributes(model, path=None):
 
 def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
     names = names or plan["species"]
-    key = {"plan": plan_digest(root, plan), "rescue_receipts": {
+    source_proof = RescueSourceBatch(plan)
+    plan_hash = plan_digest(root, plan, verification=source_proof)
+    key = {"plan": plan_hash, "rescue_receipts": {
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
+        require_same_key(plan_hash, plan_digest(root, plan, verification=source_proof))
         for name in names:
-            expected = rescue_key(root, plan, name, dependency_snapshot=dependency_snapshot)
+            expected = rescue_key(root, plan, name, dependency_snapshot=dependency_snapshot, plan_hash=plan_hash)
             if not verified_dependency(dependency_snapshot, root / "rescued" / name, expected):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
         verify_sources(plan, names, ["fasta", "gff", "genome", "busco"], verification=source_proof)
-        require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
-            n: digest(root / "rescued" / n / "receipt.json") for n in names}})
+        require_same_key(key["rescue_receipts"], {
+            n: digest(root / "rescued" / n / "receipt.json") for n in names})
     def build(tmp):
         for subdir in ("species_cds", "species_gff", "anchor_admission"):
             (tmp / subdir).mkdir()
@@ -2889,6 +2985,8 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                     if any(plan['request'].get(e) for e in ('annevo', 'oriongeno')):
                         import annevo_gene_models
                         locus_attributes += annevo_gene_models.gff_attributes(model.get('support', [model.get('evidence', {})]))
+                    if model.get('search') == 'oriongeno_without_donor':
+                        locus_attributes += ';rescue_admission=oriongeno_without_donor;locus_independent_donor_species_count=0'
                     out.write("\t".join([*common[:2], "gene", str(gene_start + 1), str(gene_end), *common[5:8], fields("gene", "ID=" + gene + locus_attributes)]) + "\n")
                     transcript_feature = "transcript" if feature == "transcript" else "mRNA"
                     out.write("\t".join([*common[:2], transcript_feature, *common[3:8], fields(transcript_feature, f"ID={transcript};Parent={gene}" + rescue_selection_attributes(model, model))]) + "\n")
@@ -2932,8 +3030,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                                            "common_references": plan["common_references"],
                                            "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
-                                           "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    source_proof = FreshDigestBatch()
+                                           "gene_loss_calls": False, "plan_sha256": plan_hash})
     with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers)) as dependency_snapshot:
         def publication_guard():
             dependency_snapshot.check_all()
@@ -3133,12 +3230,17 @@ def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
+    additions = sub.add_parser('oriongeno-extend', help='Add donor-free OrionGeno loci to a completed rescue')
+    additions.add_argument('--previous-output', type=Path, required=True)
+    additions.add_argument('--output', type=Path, required=True)
+    additions.add_argument('--cpus', type=int, default=1)
     extension = sub.add_parser('native-genomewide-plan', help='Extend a completed rescue with candidate-first OrionGeno evaluation')
     extension.add_argument('--previous-output', type=Path, required=True)
     extension.add_argument('--output', type=Path, required=True)
-    extension.add_argument('--producer-source', type=Path, help='Reuse completed validated evidence only after proving unchanged coding QC')
+    extension.add_argument('--producer-source', type=Path, help='Require validated reuse using this archived source instead of automatic discovery')
+    extension.add_argument('--diagnostics', choices=('summary',), help='Convert legacy diagnostic tables to exportable summaries')
     extension.add_argument('--completed-output', type=Path, help='Import completed workers from the identical genomewide scientific scope')
-    extension.add_argument('--completed-producer-source', type=Path, help='Archived source of those completed genomewide workers')
+    extension.add_argument('--completed-producer-source', type=Path, help='Archived source of those completed genomewide workers, if outside the output or its parent')
     extension = sub.add_parser('native-genomewide-prepare', help='Import the extension plan\'s frozen prepared and comparison stages')
     extension.add_argument('--output', type=Path, required=True)
     extension.add_argument('--cpus', type=int, default=1)
@@ -3189,6 +3291,8 @@ def parser():
     plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")
     plan.add_argument('--oriongeno-genomewide', action='store_true',
                       help='Also evaluate every native coding path outside the original CDS annotation against all selected external donor proteins')
+    plan.add_argument('--oriongeno-without-donor', action='store_true',
+                      help='Also admit intact OrionGeno coding loci without requiring donor support')
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")
@@ -3228,11 +3332,22 @@ def parser():
 def main():
     p = parser()
     args = p.parse_args()
+    if args.command == 'oriongeno-extend':
+        import rescue_oriongeno_admission
+        if args.cpus < 1:
+            p.error('cpus must be positive')
+        rescue_oriongeno_admission.extend(args.previous_output, args.output, args.cpus)
+        return
     if args.command == 'native-genomewide-plan':
         import rescue_native_genomewide
         plan = rescue_native_genomewide.build_plan(args.previous_output, args.output,producer_source=args.producer_source,
-            completed_output=args.completed_output,completed_producer_source=args.completed_producer_source)
-        print(json.dumps({'species': len(plan['species']), 'native_genomewide': True}))
+            completed_output=args.completed_output,completed_producer_source=args.completed_producer_source,
+            compact_diagnostics=args.diagnostics == 'summary')
+        request = plan['request']
+        print(json.dumps({'species': len(plan['species']), 'native_genomewide': True,
+                          'validated_evidence': 'admission_cache' in request,
+                          'completed_workers': len(request.get('native_genomewide_worker_imports', {}).get('workers', {})),
+                          'revalidation_reason': request.get('native_genomewide_parent', {}).get('validated_reuse_unavailable')}))
         return
     if args.command == "self-align":
         if args.cpus < 1 or not 0 < args.cscore <= 1:

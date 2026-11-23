@@ -419,6 +419,11 @@ Those messages indicate GeneGalleon is applying the current mode rules and inval
 
 ### `species_cds` validation fails
 
+Genome annotation checks CDS headers while reading the species selected for
+the array task. An invalid FASTA from another species is reported when its
+own task runs. To check the entire CDS collection together, use the
+input-generation stage with `run_validate_inputs=1`.
+
 Symptoms:
 
 - a genome annotation, genome evolution, or input-generation run exits during CDS validation,

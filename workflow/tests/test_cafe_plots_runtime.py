@@ -91,7 +91,7 @@ cafe5() {{ echo "unexpected optimizer invocation" >&2; exit 93; }}
     return subprocess.run(["bash", "-c", prelude + stage], env=env, capture_output=True, text=True, timeout=120)
 
 
-def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_path):
+def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_path, monkeypatch):
     native = saved_cafe(tmp_path / "output/cafe/cafe_output")
     (tmp_path / "copies.tsv").write_text("Desc\tFamilyID\tDioncophyllum_thollonii\tDionaea_muscipula\tAmborella_trichopoda\n(null)\tOG000001\t2\t4\t1\n(null)\tOG000002\t2\t4\t1\n")
     (tmp_path / "tree.nwk").write_text("((Dioncophyllum_thollonii:1,Dionaea_muscipula:1):1,Amborella_trichopoda:2);\n")
@@ -99,6 +99,7 @@ def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_pat
     first = run_cafe_stage(tmp_path)
     assert first.returncode == 0, first.stdout + first.stderr
     assert "Skipping CAFE run" in first.stdout
+    assert first.stdout.count('"validated": true') == 1
     assert hashes(native) == before
     inference = json.loads((tmp_path / "provenance/cafe.inference.json").read_text())
     assert inference["parameters"] == {"gamma_categories": "4", "pvalue": "0.05"}
@@ -107,13 +108,19 @@ def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_pat
     replay = run_cafe_stage(tmp_path)
     assert replay.returncode == 0, replay.stdout + replay.stderr
     assert "Skipping CAFE run" in replay.stdout and "Skipping rendering" in replay.stdout
+    assert '"validated": true' not in replay.stdout
     assert all(p.read_bytes() == data for p, data in saved.items())
 
     # A changed input remains a hard stop, with the saved inference untouched.
-    (tmp_path / "copies.tsv").write_text("changed scientific input\n")
+    copies = tmp_path / "copies.tsv"
+    copies.write_text(copies.read_text().replace("OG000001\t2\t4", "OG000001\t3\t4"))
     rejected = run_cafe_stage(tmp_path)
     assert rejected.returncode != 0
     assert "Skipping CAFE run" not in rejected.stdout
+    assert hashes(native) == before
+    monkeypatch.setenv("artifact_stale_policy", "reuse")
+    rejected = run_cafe_stage(tmp_path)
+    assert rejected.returncode != 0 and "CAFE semantic validation failed" in rejected.stderr
     assert hashes(native) == before
 
 

@@ -56,7 +56,7 @@ def test_full_bundle_search_scan_and_sites_with_real_predictor(tmp_path, code, m
         record.seq = record.seq[30:]
     SeqIO.write(records, tmp_path / "trimmed.fa", "fasta")
     shutil.copyfile(fixture / "tree.nwk", tmp_path / "rooted.nwk")
-    codon_model = "ECMK07+F+R4" if code == 1 else "GY+F+R4"
+    codon_model = "ECMK07_GY0K+F+R4" if code == 1 else "GY+F+R4"
     env = dict(os.environ, csubst_nonsyn_recode="3di20", genetic_code=str(code),
                GG_TASK_CPUS="2", codon_model=codon_model, gg_support_dir=str(SUPPORT), og_id="OG3DI",
                file_og_trimmed_aln_analysis=str(tmp_path / "trimmed.fa"),

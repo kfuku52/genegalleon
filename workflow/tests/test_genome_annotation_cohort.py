@@ -1,5 +1,6 @@
 """Frozen per-species handoff, native provenance and CPU-only completeness gates."""
 import csv
+import gzip
 import hashlib
 import http.server
 import importlib
@@ -82,13 +83,13 @@ def test_cpu_format_reuse_audits_original_prediction_without_gpu(tmp_path, monke
             verify(*arguments)
 
 
-def prediction(workspace):
+def prediction(workspace, cds_name='Plant_one.cds.fa'):
     root = workspace / 'output/genome_prediction/oriongeno/Plant_one'
     formatted = root / 'formatted/generation'
     for role in ('cds', 'gff', 'genome'):
         directory = formatted / ('species_' + role)
         directory.mkdir(parents=True)
-        filename = 'Plant_one.gff3' if role == 'gff' else 'Plant_one.' + role + '.fa'
+        filename = {'gff': 'Plant_one.gff3', 'cds': cds_name, 'genome': 'Plant_one.genome.fa'}[role]
         (directory / filename).write_text('formatted fixture ' + role)
         (directory / (filename + '.audit.json')).write_text('formatter audit fixture')
     gff = root / 'Plant_one.gff3'
@@ -246,6 +247,9 @@ def test_unique_frozen_membership_and_exact_lineage(tmp_path):
 
 @pytest.mark.parametrize('name,expected', [
     ('Plant_one.cds.fa', True), ('Plant_one.cds.fa.gz', True), ('Plant_one.FASTA', True),
+    ('Plant_one_gff3.derived.cds.fa.gz', True),
+    ('Plant_one_gff3.derived.cds.fa.gz.cds-normalisation.json', False),
+    ('Plant_one_two_gff3.derived.cds.fa.gz', False),
     ('Plant_one.extra.cds.fa', False), ('Plant_one_two.cds.fa', False),
     ('Other_species.cds.fa', False), ('Plant_one.cds.fa.audit.json', False),
 ])
@@ -340,10 +344,15 @@ def test_acquisition_never_publishes_partial_or_overwrites_existing_input(tmp_pa
         assert not target.exists()
 
 
-def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bad_digest', ['md5', 'sha256'])
+def test_public_acquisition_calls_native_download_only_and_rejects_bad_digest(tmp_path, monkeypatch, bad_digest):
     manifest, _, workspace = fixture(tmp_path)
+    payload = b'download fixture'
+    checksums = dict(md5=hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+                     sha256=hashlib.sha256(payload).hexdigest())
+    checksums[bad_digest] = '0' * len(checksums[bad_digest])
     member = dict(task=1, species='Plant_one', filename='Plant_one.genome.fa',
-                  source=dict(url='https://example.invalid/genome.fa', md5='0' * 32))
+                  source=dict(url='https://example.invalid/genome.fa', **checksums))
     calls = []
     def native(manifest, name, env):
         calls.append((name, env))
@@ -352,9 +361,9 @@ def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_p
                              genome_url=member['source']['url'], genome_filename=member['filename'], genome_archive_member='')]
         root = cohort.provider_raw_dir('direct', workspace / 'raw', member['species'])
         root.mkdir(parents=True)
-        (root / member['filename']).write_text('download fixture')
+        (root / member['filename']).write_bytes(payload)
     monkeypatch.setattr(cohort, 'entrypoint', native)
-    with pytest.raises(ValueError, match='published MD5'):
+    with pytest.raises(ValueError, match='published MD5' if bad_digest == 'md5' else 'changed'):
         cohort.acquire(manifest, member, workspace)
     assert not (workspace / 'genome.acquired.json').exists()
     assert not (workspace / 'input/species_genome/Plant_one.genome.fa').exists()
@@ -363,7 +372,8 @@ def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_p
     assert calls[0][1]['GG_INPUT_RUN_SPECIES_BUSCO'] == '0'
 
 
-def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, monkeypatch):
+@pytest.mark.parametrize('published_md5', [False, True])
+def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, monkeypatch, published_md5):
     manifest, member, workspace = fixture(tmp_path)
     data = b'>contig\nATGAAATAA\n'
     requests = []
@@ -380,8 +390,9 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    member['source'] = dict(url=f'http://127.0.0.1:{server.server_port}/genome.fa',
-                            md5=hashlib.md5(data, usedforsecurity=False).hexdigest())
+    member['source'] = dict(url=f'http://127.0.0.1:{server.server_port}/genome.fa')
+    if published_md5:
+        member['source']['md5'] = hashlib.md5(data, usedforsecurity=False).hexdigest()
     def native(manifest, name, env):
         subprocess.run([sys.executable, str(SUPPORT / 'format_species_inputs.py'), '--provider', 'direct',
                         '--download-only', '--download-manifest', env['GG_INPUT_DOWNLOAD_MANIFEST'],
@@ -391,6 +402,7 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
     try:
         cohort.acquire(manifest, member, workspace)
         first = (workspace / 'genome.acquired.json').read_bytes()
+        assert json.loads(first)['sha256'] == hashlib.sha256(data).hexdigest()
         count = len(requests)
         cohort.acquire(manifest, member, workspace)
         assert first == (workspace / 'genome.acquired.json').read_bytes()
@@ -405,7 +417,8 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
 def test_busco_requires_current_native_prediction_and_successful_native_proof(tmp_path, monkeypatch, damage):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)
-    root = prediction(workspace)
+    cds_name = 'Plant_one_gff3.derived.cds.fa.gz'
+    root = prediction(workspace, cds_name)
     calls = []
     def native(manifest, name, env):
         calls.append(env)
@@ -420,8 +433,8 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
         assert env['GG_ARRAY_TASK_ID'] == '1'
         inputs = workspace / 'busco/input'
         assert {p.name for p in inputs.iterdir()} == {'species_cds'}
-        assert (inputs / 'species_cds/Plant_one.cds.fa').read_bytes() == (
-            root / 'formatted/generation/species_cds/Plant_one.cds.fa').read_bytes()
+        assert (inputs / 'species_cds' / cds_name).read_bytes() == (
+            root / 'formatted/generation/species_cds' / cds_name).read_bytes()
         if damage in {'wrong_lineage', 'none'}:
             phase_workspace = workspace / 'busco'
             output = phase_workspace / 'output/short.txt'
@@ -473,3 +486,92 @@ def test_provider_path_primitive_preserves_the_existing_public_export():
     import format_species_common
     from format_species_providers.common import provider_raw_dir
     assert provider_raw_dir is format_species_common.provider_raw_dir
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_acquisition_repairs_only_line_breaks_and_reuses_the_verified_copy(tmp_path, monkeypatch, compressed):
+    from genome_sequence_identity import genome_sequence_digest
+
+    manifest, member, workspace = fixture(tmp_path)
+    source = Path(member['source']['local_path'])
+    raw = b'>000001F\r\n' + b'ACGT' * 400_000 + b'>000002F\r\nATG\r\n'
+    original = gzip.compress(raw) if compressed else raw
+    if compressed:
+        member['filename'] += '.gz'
+    source.write_bytes(original)
+    member['source']['sha256'] = cohort.file_sha(source)
+    target = workspace / 'input/species_genome' / member['filename']
+    cohort.acquire(manifest, member, workspace)
+    output = gzip.decompress(target.read_bytes()) if compressed else target.read_bytes()
+    assert output == raw.replace(b'>000002F', b'\n>000002F')
+    assert source.read_bytes() == original
+    lengths = {}
+    genome_sequence_digest(target, contig_lengths=lengths)
+    assert lengths == {'000001F': 1_600_000, '000002F': 3}
+    receipt_path = workspace / 'genome.acquired.json'
+    receipt = receipt_path.read_bytes()
+    parsed = json.loads(receipt)
+    assert parsed['sha256'] == cohort.file_sha(target)
+    proof = parsed['fasta_boundary_repair']
+    assert proof['source_sha256'] == cohort.file_sha(source)
+    assert proof['output_sha256'] == cohort.file_sha(target)
+    assert proof['insertions'] == [
+        dict(character_offset=raw.index(b'>000002F'), previous_contig='000001F', contig='000002F')]
+    assert target.stat().st_mode & 0o077 == 0
+
+    inode = target.stat().st_ino
+    with monkeypatch.context() as patch:
+        patch.setattr(cohort, 'repair_bound_genome', lambda _: pytest.fail('verified result was rescanned'))
+        cohort.acquire(manifest, member, workspace)
+    assert target.stat().st_ino == inode
+    receipt_path.unlink()
+    cohort.acquire(manifest, member, workspace)
+    assert receipt_path.read_bytes() == receipt
+    assert target.stat().st_ino == inode
+
+
+@pytest.mark.parametrize('payload, repair_error', [
+    (b'>000001F\nACGT>INVALID\nATG\n', 'Ambiguous inline'),
+    (b'>000001F\nACGT>000002F\nATX\n', 'Invalid DNA'),
+])
+def test_failed_structural_repair_has_no_published_input(tmp_path, payload, repair_error):
+    manifest, member, workspace = fixture(tmp_path)
+    source = Path(member['source']['local_path'])
+    source.write_bytes(payload)
+    member['source']['sha256'] = cohort.file_sha(source)
+    with pytest.raises(ValueError, match=repair_error):
+        cohort.acquire(manifest, member, workspace)
+    assert source.read_bytes() == payload
+    assert not (workspace / 'genome.acquired.json').exists()
+    assert not any((workspace / 'input/species_genome').iterdir())
+
+
+def test_normal_header_description_is_not_an_inline_header(tmp_path, monkeypatch):
+    import genome_fasta_repair
+
+    manifest, member, workspace = fixture(tmp_path)
+    # Force a normal description to cross read blocks.
+    monkeypatch.setattr(genome_fasta_repair, 'BLOCK_SIZE', 7)
+    source = Path(member['source']['local_path'])
+    header = b'>ctg000001 annotation contains > reference\r\n'
+    ordinary = header + b'ACGT\r\n>ctg000002 annotation: >\r\nATG\r\n'
+    source.write_bytes(ordinary)
+    member['source']['sha256'] = cohort.file_sha(source)
+    cohort.acquire(manifest, member, workspace)
+    target = workspace / 'input/species_genome' / member['filename']
+    assert target.read_bytes() == ordinary
+    assert 'fasta_boundary_repair' not in json.loads((workspace / 'genome.acquired.json').read_text())
+
+
+def test_acquisition_repairs_multiple_boundaries_and_records_original_offsets(tmp_path):
+    manifest, member, workspace = fixture(tmp_path)
+    source = Path(member['source']['local_path'])
+    payload = b'>ctg000001\r\nAAA>ctg000002\r\nATG>ctg000003\r\nCCC\r\n'
+    source.write_bytes(payload)
+    member['source']['sha256'] = cohort.file_sha(source)
+    cohort.acquire(manifest, member, workspace)
+    target = workspace / 'input/species_genome' / member['filename']
+    assert target.read_bytes() == payload.replace(b'A>ctg', b'A\n>ctg').replace(b'G>ctg', b'G\n>ctg')
+    receipt = json.loads((workspace / 'genome.acquired.json').read_text())
+    assert [edit['character_offset'] for edit in receipt['fasta_boundary_repair']['insertions']] == [
+        payload.index(b'>ctg000002'), payload.index(b'>ctg000003')]

@@ -15,23 +15,41 @@ def coding_shape(model):
     return model['seqid'], model['strand'], tuple(tuple(b) for b in model['cds'])
 
 
+def _overlapping_cds_pairs(left, right):
+    if len(left) * len(right) > 36:
+        a, b = sorted(left, key=lambda block: block[0]), sorted(right, key=lambda block: block[0])
+        if all(x[1] <= y[0] for blocks in (a, b) for x, y in zip(blocks, blocks[1:], strict=False)):
+            i = j = 0
+            while i < len(a) and j < len(b):
+                x, y = a[i], b[j]
+                if x[0] < y[1] and y[0] < x[1]:
+                    yield x, y
+                if x[1] <= y[1]:
+                    i += 1
+                else:
+                    j += 1
+            return
+    for x in left:
+        for y in right:
+            if x[0] < y[1] and y[0] < x[1]:
+                yield x, y
+
+
 def coding_overlap(a, b):
     if a['seqid'] != b['seqid'] or a['strand'] != b['strand']:
         return 0, 0
     shared = in_frame = 0
-    for left in a['cds']:
-        for right in b['cds']:
-            start, end = max(left[0], right[0]), min(left[1], right[1])
-            if start >= end:
-                continue
-            shared += end - start
-            if len(left) < 3 or len(right) < 3 or left[2] not in (0, 1, 2) or right[2] not in (0, 1, 2):
-                continue
-            first = start if a['strand'] == '+' else end - 1
-            phase_a = (first - left[0] - left[2]) % 3 if a['strand'] == '+' else (left[1] - 1 - first - left[2]) % 3
-            phase_b = (first - right[0] - right[2]) % 3 if b['strand'] == '+' else (right[1] - 1 - first - right[2]) % 3
-            if phase_a == phase_b:
-                in_frame += end - start
+    for left, right in _overlapping_cds_pairs(a['cds'], b['cds']):
+        size = min(left[1], right[1]) - max(left[0], right[0])
+        if size <= 0:
+            continue
+        shared += size
+        if len(left) < 3 or len(right) < 3 or left[2] not in (0, 1, 2) or right[2] not in (0, 1, 2):
+            continue
+        offset = (left[0] + left[2] - right[0] - right[2] if a['strand'] == '+' else
+                  left[1] - left[2] - right[1] + right[2])
+        if offset % 3 == 0:
+            in_frame += size
     return shared, in_frame
 
 
@@ -116,6 +134,7 @@ class OwnershipIndex:
 def original_ownership(lines, attribute_parser):
     """Keep original locus IDs, strand and CDS rather than merging all spans."""
     features, parents, genes = [], {}, {}
+    transcript_ids = set()
     for line in lines:
         if line.strip() == '##FASTA':
             break
@@ -136,6 +155,9 @@ def original_ownership(lines, attribute_parser):
         is_gene = kind.lower().endswith('gene')
         if not identifier and (is_gene or kind.lower().endswith(('rna', 'transcript'))):
             identifier = next(iter(declared_genes if is_gene else transcripts), '')
+        transcript_ids.update(transcripts)
+        if identifier and kind.lower().endswith(('rna', 'transcript')):
+            transcript_ids.add(identifier)
         lineage = declared_parents or (() if is_gene else transcripts or declared_genes)
         row = {'seqid': fields[0], 'start': int(fields[3]) - 1, 'end': int(fields[4]),
                'strand': fields[6] if fields[6] in {'+', '-'} else '.', 'id': identifier,
@@ -179,15 +201,31 @@ def original_ownership(lines, attribute_parser):
                 pending.extend(parents[value])
         return found
     orphaned = []
+    first_transcript, alternatives, unresolved = {}, {}, set()
     for row in features:
         owners = gene_ids(row)
         if not owners:
             orphaned.append({**row, 'gene_id': row['id'] or f"unbound_annotation:{row['seqid']}:{row['start']}:{row['end']}:{row['strand']}:{row['kind']}"})
         elif row['kind'] == 'CDS':
             for owner in owners:
-                genes[owner]['cds'].append([row['start'], row['end']])
+                cds = genes[owner]['cds']
+                block = [row['start'], row['end']]
+                identifiers = row['parents']
+                if len(owners) != 1 or not identifiers or any(p not in transcript_ids for p in identifiers):
+                    unresolved.add(owner)
+                elif owner not in unresolved:
+                    first = first_transcript.setdefault(owner, identifiers[0])
+                    if owner not in alternatives and any(p != first for p in identifiers):
+                        alternatives[owner] = {first: list(cds)}
+                    if owner in alternatives:
+                        for parent in identifiers:
+                            alternatives[owner].setdefault(parent, []).append(block)
+                cds.append(block)
                 if genes[owner]['strand'] != row['strand']:
                     genes[owner]['strand'] = '.'
+    for owner, paths in alternatives.items():
+        if owner not in unresolved:
+            genes[owner]['transcript_cds'] = paths
     return [*genes.values(), *orphaned]
 
 

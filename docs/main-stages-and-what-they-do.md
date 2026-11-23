@@ -32,6 +32,8 @@ Notable defaults:
   parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
 - `run_gene_model_rescue=1` optionally adds [sparse multi-species/self-synteny gene-model rescue](gene-model-rescue.md), with five common references, nearest donors, augmented CDS/GFF and post-rescue BUSCO,
+- `run_species_omark=1` compares representative proteomes at refinement finalization.
+  For an existing publication use [the OMArk-only mode](gene-model-refinement.md#comparing-representative-proteomes-with-omark).
 - `run_gene_model_refinement=1` optionally preserves all coding isoforms, selects conserved representatives, and adds supported existing-locus repairs/isoforms; see [refinement stages, arrays and downstream inputs](gene-model-refinement.md),
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
@@ -142,9 +144,86 @@ Purpose:
 - metadata retrieval (amalgkit),
 - FASTQ retrieval/preprocessing,
 - transcriptome assembly (`Trinity` or `rnaSPAdes`),
-- longest CDS extraction,
+- longest CDS extraction with CDSKIT `--selection longest`, including partial ORFs,
 - optional contamination filtering,
 - BUSCO and expression quantification summaries.
+
+The default `homology-orfs` ranks representatives within each assembly
+group using DIAMOND hits against UniProtKB/Swiss-Prot. It also searches
+CDSKIT's bounded set of alternative ORFs and considers alternatives with
+qualifying hits. Set `GG_TRANSCRIPTOME_ORF_REPRESENTATIVE_MODE=homology`
+to rank only the baseline ORFs or `length` to select by coding length
+without the Swiss-Prot search.
+The homology modes publish the baseline and selected candidates, replacement
+reason, alignment scores, and query/target coverage in
+`transcriptome_assembly/orf_representative_selection/`. The paired cDNA output
+uses the selected ORF's original transcript ID.
+
+The homology modes retain the longer CDS when the shorter CDS lies entirely
+inside it in-frame and both map uniquely to their source transcripts in the
+same orientation. They also retain a longer CDS when the shorter CDS has no
+start codon and shares at least 98% of its coding sequence as an exact
+codon-aligned suffix ending at the same stop codon. These checks use the
+genetic code selected for ORF extraction.
+
+Before replacing a length-based representative without a qualifying hit, the
+workflow also checks local hits to the selected Swiss-Prot accession. It keeps
+the longer ORF when its hit has at least as high a bit score and target coverage,
+with a strict advantage in either metric. The selection report records the
+retained hit and the reason `retain_dominant_baseline_hit`.
+
+For Trinity and rnaSPAdes with aggregation level `i` and `homology-orfs`,
+`GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=auto` enables rescue by default
+when the regular assembler groups are used. Rescue first checks that the
+provisional representatives support distinct Swiss-Prot families. It then
+compares their peptides to the complete representative catalogue and adds
+supported candidates that lack a match with at least 90% identity and 90%
+candidate coverage. Existing representatives are retained. Exact peptide
+extensions and candidates from an already represented transcript are reviewed
+in `transcriptome_assembly/orf_catalog_rescue/<species>.tsv`. Added CDS use
+the provisional `.splitN` identifier and the paired cDNA retains its source
+transcript ID, recorded in that table. Both FASTA outputs can feed quantification.
+
+Use `GG_TRANSCRIPTOME_ORF_CATALOG_RESCUE=off` for ordinary representative
+selection. For rnaSPAdes, the `auto` setting also respects explicit locus-table
+grouping and `orf_homology_split=report` or `apply`. To use an rnaSPAdes locus
+table as corroborating evidence during rescue, select `orf_catalog_rescue=on`
+and `orf_homology_split=off`.
+
+With rnaSPAdes, `orf_aggregation_level=i`, and `homology-orfs`, set
+`GG_TRANSCRIPTOME_ORF_HOMOLOGY_SPLIT=report` to flag multi-transcript groups
+that match different Swiss-Prot protein families. The review compares
+near-best hits spanning at least 80% of both proteins and aligns the matched
+Swiss-Prot proteins to recognize related accessions. `apply` splits a group
+only when all its transcripts have trusted locus assignments and each locus
+has support from a distinct set of protein families. Conflicting ORFs from
+one transcript are reported for review. With either setting, the locus
+table corroborates homology-based split candidates. Without a locus table,
+`apply` publishes the review and retains the original groups.
+The assignments and decisions are written under
+`transcriptome_assembly/orf_homology_split/`. The default is `off`.
+
+In `report` mode, the additional `*.preview.tsv` file shows the provisional
+representatives of each proposed family split. The preview checks whether the
+selected ORFs still match the expected distinct families over at least 80% of
+both proteins. A shared locus, a shared hit family, or near-identical peptides
+can flag a split for retention. Verified distinct loci provide independent
+support. The preview includes the proposed transcript assignments and leaves the
+published representatives intact. `apply` continues to use the locus-supported
+split policy documented above.
+
+New rnaSPAdes assemblies with the main `transcripts.fasta` archive their graph,
+paths, and final k-mer size under `transcriptome_assembly/rnaspades_graph/`.
+Set `GG_TRANSCRIPTOME_RNASPADES_GROUP_AUDIT=yes` to report weak connections
+within original groups at aggregation level `i`. The optional
+`GG_TRANSCRIPTOME_RNASPADES_JUNCTION_TABLE` adds externally measured
+paired-read support. Set `GG_TRANSCRIPTOME_RNASPADES_LOCUS_TABLE` to an
+absolute TSV path with original `transcript_id` and uniquely assigned
+`locus_id` columns to split groups supported by complete locus evidence
+when homology-based splitting is off.
+Assignments and the audit are published under
+`transcriptome_assembly/rnaspades_group_audit/`.
+[CDSKIT input and output formats](https://github.com/kfuku52/cdskit/wiki/cdskit-regroup)
 
 For SRA-derived inputs, schema-4 `getfastq_completion.json` binds every published FASTQ
 and its per-run `getfastq_stats.tsv` to relative paths, byte sizes, and SHA-256
@@ -457,7 +536,8 @@ Notable defaults:
 - species-tree substeps are enabled in the unified wrapper by default, including BUSCO extraction, ASTRAL tree inference, and the IQ2MC/mcmctree dating steps,
 - the same multi-species BUSCO run also feeds the BUSCO-based genome-evolution branch; BUSCO-based genome-evolution steps reuse the BUSCO outputs driven by `run_species_busco` and `run_build_species_busco_summary`,
 - OMArk is optional (`run_species_omark=0` by default) and runs after
-  OrthoFinder so it can reuse the current effective protein inputs,
+  OrthoFinder on the current effective proteins. Matching species results from the
+  [input-generation OMArk comparison](gene-model-refinement.md#comparing-representative-proteomes-with-omark) are reused automatically,
 - shared defaults such as `busco_lineage` and `genetic_code` are loaded from `workflow/gg_common_params.sh`,
 - duplicated BUSCOs are excluded from each species by default;
   [`species_tree_busco_duplicate_policy=best_score`](configuration-and-common-parameters.md#busco-duplicate-representatives-for-species-trees)
@@ -792,7 +872,9 @@ Notable defaults:
   to 5), analyzes each unique candidate once, and writes a self-contained ZIP
   per threshold directly under `gene_summary/<source>`; every candidate entry
   contains its annotated row, raw `csubst sites` outputs, an exact-site tree
-  PDF, and a combined report; PDB search is disabled by default,
+  PDF, and a combined report. CSUBST shortens long branch-list directory names
+  with a SHA-256 digest and records the complete branch list in
+  `csubst.outputs.tsv`. PDB search is disabled by default,
 - `run_csubst_site_convergence_summary=1` runs site-level convergence screening with
   `csubst_site_wrapper.py`, combines orthogroup results with species traits,
   and writes convergence outputs under the selected source's `csubst_site`

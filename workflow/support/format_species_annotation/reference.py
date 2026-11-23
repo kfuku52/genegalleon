@@ -8,6 +8,7 @@ from pathlib import Path
 from format_species_common import is_fasta_filename
 from format_species_constants import FASTA_ARCHIVE_EXTENSIONS
 from format_species_writers import apply_common_replacements, open_text
+from genome_fasta_repair import fasta_blocks
 
 from .common import build_gff_genome_seqid_map, first_token, parse_gff_attributes
 from .organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
@@ -63,41 +64,30 @@ def _strip_sequence_whitespace(text):
     return "".join(text.split())
 
 
-def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True):
+def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True, repairs=None):
     """Yield bounded headers/sequence fragments, including unwrapped FASTA."""
     for handle in genome_text_handles(Path(path)):
-        pending, line_start, have_header = "", True, False
-        while chunk := handle.read(chunk_bytes):
-            data, pending = pending + chunk, ""
-            positions = [0] if line_start and data.startswith(">") else []
-            offset = data.find("\n>")
-            while offset >= 0:
-                positions.append(offset + 1)
-                offset = data.find("\n>", offset + 2)
-            first = positions[0] if positions else len(data)
-            if text := _strip_sequence_whitespace(data[:first]):
-                if not have_header:
-                    if strict:
+        have_header = False
+        edits = []
+        for data, headers, _ in fasta_blocks(handle, edits, chunk_size=chunk_bytes, limit_headers=strict):
+            cursor = 0
+            for start, stop in headers:
+                if text := _strip_sequence_whitespace(data[cursor:start]):
+                    if have_header:
+                        yield "sequence", text
+                    elif strict:
                         raise ValueError("Genome sequence precedes its FASTA header")
-                else:
-                    yield "sequence", text
-            for i, pos in enumerate(positions):
-                segment = data[pos:positions[i + 1] if i + 1 < len(positions) else len(data)]
-                newline = segment.find("\n")
-                if newline < 0:
-                    pending = segment
-                    break
-                if strict and newline > 1024 * 1024:
-                    raise ValueError("Genome FASTA header exceeds 1 MiB")
-                yield "header", segment[1:newline].rstrip("\r")
+                yield "header", data[start + 1:stop]
                 have_header = True
-                if text := _strip_sequence_whitespace(segment[newline + 1:]):
+                cursor = stop + 1
+            if text := _strip_sequence_whitespace(data[cursor:]):
+                if have_header:
                     yield "sequence", text
-            if strict and len(pending) > 1024 * 1024:
-                raise ValueError("Genome FASTA header exceeds 1 MiB")
-            line_start = bool(pending) or data.endswith("\n")
-        if pending:
-            yield "header", pending[1:].rstrip("\r\n")
+                elif strict:
+                    raise ValueError("Genome sequence precedes its FASTA header")
+        if repairs is not None and edits:
+            stream = getattr(handle, "fasta_member", path)
+            repairs.extend({**edit, "stream": str(stream)} for edit in edits)
 
 
 def genome_text_handles(path):
@@ -111,6 +101,7 @@ def genome_text_handles(path):
                 extracted = archive.extractfile(member)
                 if extracted is not None:
                     with io.TextIOWrapper(extracted, encoding="utf-8") as handle:
+                        handle.fasta_member = member.name
                         yield handle
     else:
         with open_text(path, "rt") as handle:
