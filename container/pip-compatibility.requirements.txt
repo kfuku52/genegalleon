@@ -1,7 +1,7 @@
 # Packages that must be installed after the conda environment is solved.
 # Keep this file shared by Docker and native Apptainer builds so both
 # container paths have the same dependency constraints and security fixes.
-pillow==12.3.0
+pillow==13.0.0
 lxml==6.1.1
 ete4==4.4.0
 genomepy==0.16.2
