@@ -310,10 +310,13 @@ is mounted read-only. Paths below are under
 Raw downloads use task scratch. Generated FASTQs live under
 `amalgkit_getfastq/<species>/` until the job verifies quantification and merge.
 Successful jobs remove their generated reads and retain the acquisition
-records. Failed jobs retain resumable reads.
-An unchanged successful job reuses the quantification without acquiring
-the reads again. For intentional replacement of a completed reference, use a
-new output workspace or set `artifact_stale_policy=rebuild`.
+records. When task scratch persists, a retry also keeps its reference index
+and per-run abundance files. AMALGKIT checks the FASTQs, index and quantification
+settings before reusing each run. GSA quantification and merge use the published
+measured metadata when its source and snapshot hashes match. An unchanged
+successful job reuses the quantification without acquiring reads again. Use
+`artifact_stale_policy=rebuild` or a new output workspace to replace a reference
+or quantification settings intentionally.
 Persistent getfastq caches and assembly inputs stay separate.
 
 The same profile is also available through

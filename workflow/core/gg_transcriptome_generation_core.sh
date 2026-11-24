@@ -879,6 +879,43 @@ if audit_file is not None:
 PY
 }
 
+prepare_transcriptome_quant_work_dirs() {
+  local directory
+  for directory in ./fasta ./index ./quant; do
+    if [[ "${quantification_only:-0}" == 1 && "${artifact_stale_policy:-stop}" != rebuild ]]; then
+      if [[ -L "${directory}" || ( -e "${directory}" && ! -d "${directory}" ) ]]; then
+        echo "Unsafe transcriptome quantification work directory: ${directory}" >&2
+        return 1
+      fi
+      ensure_dir "${directory}" || return $?
+    else
+      recreate_dir "${directory}" || return $?
+    fi
+  done
+}
+
+resolve_transcriptome_quant_metadata() {
+  local source=$1
+  local getfastq_dir=$2
+  local state="${getfastq_dir}/gsa_metadata_state.json"
+  if [[ ! -e "${state}" && ! -L "${state}" ]]; then
+    printf '%s\n' "${source}"
+    return 0
+  fi
+  python - "${source}" "${getfastq_dir}" <<'PY_METADATA'
+import os
+import sys
+
+from amalgkit.gsa_snapshot import verified_gsa_snapshot
+
+source, getfastq_dir = sys.argv[1:]
+snapshot = verified_gsa_snapshot(getfastq_dir, source)
+if snapshot == source:
+    raise SystemExit("GSA measured metadata does not match the selected source: " + source)
+print(os.path.abspath(snapshot))
+PY_METADATA
+}
+
 stage_amalgkit_merge_metadata_for_species() {
   local metadata_file=$1
   local output_file=$2
@@ -4078,6 +4115,8 @@ select_transcriptome_quant_reference() {
 }
 
 prepare_transcriptome_quantification() {
+  file_amalgkit_quant_metadata=$(resolve_transcriptome_quant_metadata \
+    "${file_amalgkit_metadata}" "${dir_amalgkit_getfastq_sp}") || return $?
   quant_needs_update=0
   gg_artifact_contract_init quant_provenance_args "transcriptome_quant" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.quant.json"
   quant_provenance_args+=(
@@ -4092,6 +4131,12 @@ prepare_transcriptome_quantification() {
     --parameter "clean_fastq=no"
     --parameter "build_index=yes"
   )
+  if [[ "${file_amalgkit_quant_metadata}" != "${file_amalgkit_metadata}" ]]; then
+    quant_provenance_args+=(
+      --input "gsa_measured_metadata=${file_amalgkit_quant_metadata}"
+      --input "gsa_metadata_state=${dir_amalgkit_getfastq_sp}/gsa_metadata_state.json"
+    )
+  fi
   if [[ "${kallisto_reference}" == "species_cds" && -n "${representative_inputs}" ]]; then
     quant_provenance_args+=(--input "representative_inputs=${representative_inputs}")
   fi
@@ -4101,7 +4146,7 @@ prepare_transcriptome_quantification() {
   quant_output_validation=""
   if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
     "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
-    --metadata "${file_amalgkit_metadata}" \
+    --metadata "${file_amalgkit_quant_metadata}" \
     --quant-root "${dir_amalgkit_quant}/${sp_ub}" 2>&1)
   then
     echo "Existing amalgkit quant output is unavailable or invalid; rebuilding: ${quant_output_validation}" >&2
@@ -5467,16 +5512,14 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     rm -rf -- "./getfastq"
   fi
   ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"
-  recreate_dir "./fasta"
-  recreate_dir "./index"
-  recreate_dir "./quant"
+  prepare_transcriptome_quant_work_dirs || exit $?
   quant_reference_alias_audit="./quant_reference_aliases.tsv"
   rm -f -- "${quant_reference_alias_audit}"
   echo "kallisto reference = ${kallisto_reference}: ${file_kallisto_reference_fasta}"
   if [[ -e "${file_kallisto_reference_fasta}" ]]; then
     staged_quant_reference_aliases=""
     if ! staged_quant_reference_aliases=$(stage_quant_reference_fasta_aliases \
-        "${file_amalgkit_metadata}" \
+        "${file_amalgkit_quant_metadata}" \
         "${file_kallisto_reference_fasta}" \
         "./fasta" \
         "${sp_ub}" \
@@ -5499,8 +5542,9 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     amalgkit quant
     --out_dir "./"
     --threads "${GG_TASK_CPUS}"
-    --metadata "${file_amalgkit_metadata}"
+    --metadata "${file_amalgkit_quant_metadata}"
     --clean_fastq no
+    --redo no
     --fasta_dir "./fasta"
     --build_index yes
     --quant_backend "${amalgkit_quant_backend}"
@@ -5522,7 +5566,7 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   else
     echo "amalgkit quant finished successfully"
     if ! python "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
-      --metadata "${file_amalgkit_metadata}" \
+      --metadata "${file_amalgkit_quant_metadata}" \
       --quant-root "./quant"
     then
       echo "amalgkit quant finished but its per-run output contract is incomplete or invalid."
@@ -5547,11 +5591,11 @@ else
 fi
 
 task='amalgkit merge'
-disable_if_no_input_file "run_amalgkit_merge" "${file_amalgkit_metadata}"
+disable_if_no_input_file "run_amalgkit_merge" "${file_amalgkit_quant_metadata}"
 merge_needs_update=0
 gg_artifact_contract_init merge_provenance_args "transcriptome_merge" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.merge.json"
 merge_provenance_args+=(
-  --input "metadata=${file_amalgkit_metadata}"
+  --input "metadata=${file_amalgkit_quant_metadata}"
   --input "quant_directory=${dir_amalgkit_quant}/${sp_ub}"
   --output "effective_length=${file_amalgkit_merge_efflen}"
   --output "estimated_counts=${file_amalgkit_merge_count}"
@@ -5574,7 +5618,7 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   fi
   ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"
   stage_amalgkit_merge_metadata_for_species \
-    "${file_amalgkit_metadata}" \
+    "${file_amalgkit_quant_metadata}" \
     "${merge_metadata_file}" \
     "${sp_ub}" \
     "${gg_support_dir}" \
