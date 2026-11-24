@@ -928,6 +928,10 @@ run_gene_family_database_for_source() {
   if [[ -n "${orthogroup_summary_selection}" ]]; then
     database_provenance_args+=(--orthogroup-store-selection "${orthogroup_summary_selection}"
       --parameter "orthogroup_selection_sha256=${scope_hash%% *}")
+    local producer_archive="${gg_workspace_output_dir}/.gg_global_artifacts/producer_inputs"
+    if [[ -e "${producer_archive}" || -L "${producer_archive}" ]]; then
+      database_provenance_args+=(--input "producer_input_archive=${producer_archive}")
+    fi
   fi
   gg_artifact_prepare_stage database_needs_update run_gene_family_database_build "${database_provenance_args[@]}" || return $?
   if [[ ${run_gene_family_database_build} -ne 1 ]]; then

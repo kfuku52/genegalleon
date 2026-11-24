@@ -21,7 +21,7 @@ from gene_family_output_store import (
     read_orthogroup_selection,
 )
 from shared_namespace_lock import namespace_lock
-from terminal_artifact_validation import verify_terminal_profile
+from terminal_artifact_validation import TERMINAL_MEMBERS, verify_terminal_profile
 from workflow_observation import observe_files, record_contract_result, report_error
 
 
@@ -74,6 +74,20 @@ def catalog_store(root, record, mode):
         guards.append(((str(selection.absolute()), 'orthogroup_selection'), before, lambda: identity(selection)))
         families = selected
     return CatalogStore(root, families), guards
+
+
+def require_selected_terminal_members(store, memo):
+    missing = []
+    for subdir, suffix in TERMINAL_MEMBERS:
+        names = tuple(store.file_names(subdir))
+        memo.guard((str(store.root), 'terminal_inventory', subdir), names,
+                   lambda subdir=subdir: tuple(store.file_names(subdir)))
+        present = {name[:-len(suffix)] for name in names if name.endswith(suffix)}
+        absent = store.families - present
+        if absent:
+            missing.append(f"{subdir}: {len(absent)} missing ({', '.join(sorted(absent)[:4])})")
+    if missing:
+        raise ValueError('Scoped summary requires all selected terminal artifacts: ' + '; '.join(missing))
 
 
 def validate_destinations(audit, record, destination):
@@ -179,7 +193,15 @@ def run(audit_argv, database_argv, record_argv):
             store, catalog_guards = catalog_store(root, record, audit.mode)
             with store.read_snapshot(), observe_files(), provenance.digest_observation(
                     workers=audit.workers, progress=progress, spill_guards=True) as memo:
-                bound_inputs = {str(Path(path).resolve()) for _, path in provenance.parse_path_pairs(record.input, '--input')}
+                inputs = dict(provenance.parse_unique_pairs(record.input, '--input'))
+                archive_path = inputs.get('producer_input_archive')
+                producer_archive = None
+                if archive_path is not None:
+                    producer_archive = Path(archive_path).absolute()
+                    if (record.orthogroup_store_selection is None or producer_archive.is_symlink()
+                            or not producer_archive.is_dir()):
+                        raise ValueError('Producer input archive requires a scoped summary and a regular directory')
+                bound_inputs = {str(Path(path).resolve()) for path in inputs.values()}
                 for name, identity in database.reconciliation_input_identities(args).items():
                     if identity[0] not in bound_inputs:
                         raise ValueError('Reconciliation input missing from provenance record: ' + name)
@@ -187,7 +209,11 @@ def run(audit_argv, database_argv, record_argv):
                                lambda name=name: database.reconciliation_input_identities(args)[name])
                 for guard in catalog_guards:
                     memo.guard(*guard)
-                provenance._collect_audit_rows(audit, memo, progress, audit.workers, store, rows, inventory, revalidate=False)
+                if record.orthogroup_store_selection is not None:
+                    progress.phase('terminal_inventory')
+                    require_selected_terminal_members(store, memo)
+                provenance._collect_audit_rows(audit, memo, progress, audit.workers, store, rows, inventory,
+                                               revalidate=False, producer_archive=producer_archive)
                 if isinstance(store, CatalogStore):
                     if any(row['family_id'] not in store.families and row['family_id'] != '-' for row in rows):
                         raise ValueError('Manifest family differs from the selected catalog')

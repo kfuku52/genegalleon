@@ -1519,7 +1519,7 @@ def test_selected_catalog_scopes_audit_and_database_without_removing_old_results
         pipeline.run(audit, db, record)
 
 
-def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(tmp_path):
+def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(tmp_path, monkeypatch):
     import hashlib
 
     sys.path.insert(0, str(SCRIPT_PATH.parent))
@@ -1574,7 +1574,12 @@ def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(
     assert p.audit_manifest(saved, store, global_root, tmp_path)[0] == 'stale_input'
     selection.write_text('OG0001\n')
     plot.unlink()
-    with pytest.raises(ValueError, match='audit failed|current statistics and tree plot provenance'):
+
+    def should_not_scan(*args, **kwargs):
+        pytest.fail('an incomplete terminal inventory must stop before content audit')
+
+    monkeypatch.setattr(p, '_collect_audit_rows', should_not_scan)
+    with pytest.raises(ValueError, match=r'tree_plot: 1 missing \(OG0001\)'):
         pipeline.run(audit, db, record)
     assert p.load_manifest(manifest) == saved
 
@@ -1679,3 +1684,50 @@ def test_analytical_bh_shadowed_identity_precedes_invalid_probability_validation
         mod.add_analytical_aa_change_fdr(engine)
     engine.dispose()
     assert path.read_bytes() == before
+
+
+def test_scoped_summary_retains_exact_historical_producer_input(tmp_path):
+    import hashlib
+
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    from gene_family_output_store import GeneFamilyOutputStore
+
+    root = tmp_path / 'orthogroup'
+    root.mkdir()
+    archive = tmp_path / 'archive'
+    archive.mkdir()
+    support = tmp_path / 'runtime/support'
+    support.mkdir(parents=True)
+    old_code = b'original producer implementation\n'
+    old_digest = hashlib.sha256(old_code).hexdigest()
+    (support / 'producer.py').write_text('new consumer implementation\n')
+    (support.parent / 'runtime_dependencies').mkdir()
+    branch = root / 'branch.tsv'
+    branch.write_bytes(b'original branch table\n')
+    input_entry = {'label': 'producer', 'artifact_type': 'file',
+                   'scope': 'absolute', 'path': '/script/support/producer.py',
+                   'size_bytes': len(old_code), 'sha256': old_digest}
+    branch_entry = {'label': 'branch', 'artifact_type': 'file',
+                    'scope': 'logical', 'path': 'stat_branch/branch.tsv',
+                    'sha256': hashlib.sha256(branch.read_bytes()).hexdigest(),
+                    'size_bytes': branch.stat().st_size}
+    (root / 'stat_branch').mkdir()
+    branch.rename(root / branch_entry['path'])
+    store = GeneFamilyOutputStore(root)
+    manifest = {'schema_version': p.SCHEMA_VERSION, 'inputs': [input_entry], 'outputs': [branch_entry]}
+
+    with p.runtime_support_root(support):
+        assert p.audit_manifest(manifest, store, root, tmp_path) == ('changed_input', 'producer')
+        with (archive / old_digest).open('xb') as stream:
+            stream.write(old_code)
+        assert p.audit_manifest(manifest, store, root, tmp_path, producer_archive=archive) == ('current', '')
+        (archive / old_digest).write_bytes(b'mutated producer implementation\n')
+        assert p.audit_manifest(manifest, store, root, tmp_path, producer_archive=archive) == ('changed_input', 'producer')
+        (archive / old_digest).write_bytes(old_code)
+        (root / branch_entry['path']).write_text('mutated branch output\n')
+        assert p.audit_manifest(manifest, store, root, tmp_path, producer_archive=archive) == ('changed_output', 'branch')
+        dangerous = {**input_entry, 'path': '/script/support/../sequences.fasta'}
+        status, _ = p.audit_manifest({**manifest, 'inputs': [dangerous]}, store, root, tmp_path,
+                                     producer_archive=archive)
+        assert status == 'invalid_manifest'

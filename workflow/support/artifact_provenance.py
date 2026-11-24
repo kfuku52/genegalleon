@@ -39,7 +39,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from artifact_audit_runtime import AuditCapacityError, AuditDigests, AuditProgress, source_identity
+from artifact_audit_runtime import (
+    AuditCapacityError,
+    AuditDigests,
+    AuditProgress,
+    _validation_results,
+    source_identity,
+)
 from artifact_audit_runtime import signature as physical_audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
@@ -1654,12 +1660,30 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
         return sha256_stream(handle)
 
 
+def archived_producer_digest(entry, archive, store, logical_root, workspace_root, memo):
+    """Resolve a historical runtime input by the exact content it declared."""
+    if (archive is not None and entry.get("scope") == "absolute"
+            and entry.get("artifact_type", "file") == "file"):
+        path = PurePosixPath(str(entry.get("path", "")))
+        digest = str(entry.get("sha256", ""))
+        if (path.parts[:3] in {("/", "script", "support"), ("/", "script", "runtime_dependencies")}
+                and len(path.parts) > 3 and ".." not in path.parts
+                and re.fullmatch(r"[a-f0-9]{64}", digest)):
+            member = archive / digest
+            if os.path.lexists(member):
+                return audit_entry_digest({"scope": "absolute", "path": str(member)},
+                                          store, logical_root, workspace_root, memo)
+    return audit_entry_digest(entry, store, logical_root, workspace_root, memo)
+
+
 def audit_manifest(
     payload: dict[str, object],
     store: GeneFamilyOutputStore,
     logical_root: Path,
     workspace_root: Path,
     memo=None,
+    *,
+    producer_archive=None,
 ) -> tuple[str, str]:
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != SCHEMA_VERSION:
         return "invalid_manifest", f"unsupported schema_version={payload.get('schema_version')!r}"
@@ -1717,7 +1741,8 @@ def audit_manifest(
                     return "changed_input", label
                 continue
             try:
-                digest, size = audit_entry_digest(entry, store, logical_root, workspace_root, memo)
+                archive = producer_archive if collection_name == "inputs" else None
+                digest, size = archived_producer_digest(entry, archive, store, logical_root, workspace_root, memo)
             except FileNotFoundError:
                 return f"missing_{collection_name[:-1]}", label
             except AuditCapacityError:
@@ -1902,7 +1927,8 @@ def _audit(args, memo, progress, workers):
     return _publish_audit(args, memo, progress, rows, inventory_digest)
 
 
-def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest, *, revalidate=True):
+def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest, *,
+                        revalidate=True, producer_archive=None):
     logical_root = args.logical_root.absolute()
     workspace_root = args.workspace_root.absolute()
     query_matcher_list = None
@@ -1930,7 +1956,8 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             step = str(payload.get("step", ""))
             if not family_id or not step:
                 raise ProvenanceError("family_id and step are required")
-            status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo)
+            status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo,
+                                            producer_archive=producer_archive)
         except AuditCapacityError:
             raise
         except Exception as exc:
@@ -1958,14 +1985,13 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             # as the metadata fence. Each joined worker needs its own copy.
             return context.copy().run(inspect_manifest, name)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            for offset in range(0, len(names), workers * 8):
-                batch = names[offset:offset + workers * 8]
-                for name, (row, payload_hash) in zip(batch, executor.map(inspect_in_context, batch), strict=True):
-                    rows.append(row)
-                    if row["step"] != "unknown":
-                        manifested_steps.add((row["family_id"], row["step"]))
-                    inventory_digest.update(name.encode() + b"\0" + payload_hash.encode())
-                    progress.advance(metrics=memo.metrics())
+            inspected = _validation_results(executor, inspect_in_context, names, workers * 8)
+            for name, (row, payload_hash) in zip(names, inspected, strict=True):
+                rows.append(row)
+                if row["step"] != "unknown":
+                    manifested_steps.add((row["family_id"], row["step"]))
+                inventory_digest.update(name.encode() + b"\0" + payload_hash.encode())
+                progress.advance(metrics=memo.metrics())
 
     progress.phase("legacy_inventory")
     for step, subdir in parse_required_step_subdirs(args.require_step_for_subdir).items():

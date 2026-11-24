@@ -7,6 +7,11 @@ import hashlib
 CHUNK_BYTES = 1024 * 1024
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
+TERMINAL_MEMBERS = (
+    ("stat_branch", "_stat.branch.tsv"),
+    ("stat_tree", "_stat.tree.tsv"),
+    ("tree_plot", "_tree_plot.pdf"),
+)
 
 
 class StatisticsLines:
@@ -84,8 +89,7 @@ def verify_pdf(handle):
 def verify_terminal_profile(store, family):
     members = []
     try:
-        for subdir, suffix in (("stat_branch", "_stat.branch.tsv"), ("stat_tree", "_stat.tree.tsv"),
-                               ("tree_plot", "_tree_plot.pdf")):
+        for subdir, suffix in TERMINAL_MEMBERS:
             name = family + suffix
             artifact = store.source_artifact(subdir, name)
             if artifact is None:

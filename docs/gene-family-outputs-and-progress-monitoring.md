@@ -151,6 +151,14 @@ and PDF. GeneGalleon writes the database and HGT results under
 `workspace/output/gene_summary/scoped_orthogroups/<selection-sha256>/`.
 Leave the setting empty for the ordinary summary.
 
+A scoped summary can verify historical producer implementations retained under
+`workspace/output/.gg_global_artifacts/producer_inputs/`. Store the original
+bytes in regular files named by their recorded lowercase SHA-256. This only
+resolves recorded inputs under `/script/support/` or
+`/script/runtime_dependencies/`. The audit verifies the original size and
+digest, retains the original provenance manifest, and records the archive in the
+database's own inputs. The scientific input and output checks still apply.
+
 When the selected orthogroup count table is present, `gg_gene_summary` binds it
 as a database input and uses those exact, unique family IDs for both the audit
 and database import. Both statistics tables must cover every selected family.
