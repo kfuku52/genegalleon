@@ -113,6 +113,34 @@ def test_detect_amalgkit_read_technology_uses_metadata_heuristics_for_unlabeled_
     assert "detected_input_class=hybrid_long_short" in summary
 
 
+def test_detect_amalgkit_read_technology_prefers_run_platform_over_study_description(tmp_path: Path):
+    metadata = tmp_path / "metadata.tsv"
+    classification = tmp_path / "classification.tsv"
+    summary = tmp_path / "summary.sh"
+    metadata.write_text(
+        "run\tinstrument\tinstrument_model\tplatform\tlib_layout\tstudy_title\n"
+        "SRR1\tIllumina NovaSeq 6000\t\tILLUMINA\tpaired\tONT genome assembly and RNA-seq\n"
+        "SRR2\t\tNovaSeq 6000\t\tpaired\tPacBio RNA-seq project and short reads\n"
+        "SRR3\tunknown\t\tILLUMINA\tpaired\tOxford Nanopore and Illumina RNA-seq\n"
+        "SRR4\t\t\t\tsingle\tNanopore direct RNA sequencing\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_python(
+        DETECT_SCRIPT, "--metadata", str(metadata), "--classification-out", str(classification),
+        "--summary-sh", str(summary), cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    rows = [line.split("\t")[:3] for line in classification.read_text().splitlines()[1:]]
+    assert rows == [
+        ["SRR1", "short_read", "illumina"],
+        ["SRR2", "short_read", "illumina"],
+        ["SRR3", "short_read", "illumina"],
+        ["SRR4", "ont_direct_rna", "ont"],
+    ]
+
+
 def test_rename_rnabloom_transcripts_uses_corset_clusters(tmp_path: Path):
     input_fasta = tmp_path / "rnabloom.transcripts.fa"
     clusters = tmp_path / "clusters.txt"

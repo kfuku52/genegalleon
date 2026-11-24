@@ -35,6 +35,7 @@ PLATFORM_REGEX_BY_FAMILY = {
         r"genome[\s_-]*analyzer",
     ),
 }
+RUN_PLATFORM_FIELDS = ("instrument", "instrument_model", "platform")
 DIRECT_RNA_PATTERNS = (
     r"\bdirect[\s_-]*rna\b",
     r"\bd[\s_-]*rna\b",
@@ -129,13 +130,24 @@ def matches_search_patterns(search_text, patterns):
     return False
 
 
-def infer_platform_family(row):
-    search_text = normalize_search_text(" ".join(collect_text_fragments(row)))
-    for family in ("ont", "pacbio", "illumina"):
-        if matches_search_patterns(search_text, PLATFORM_REGEX_BY_FAMILY[family]):
+def platform_family_from_text(search_text):
+    for family, patterns in PLATFORM_REGEX_BY_FAMILY.items():
+        if matches_search_patterns(search_text, patterns):
             return family
     if SHORT_OTHER_RE.search(search_text):
         return "short_other"
+    return None
+
+
+def infer_platform_family(row, search_text):
+    # Study descriptions can refer to several assays with different instruments.
+    for field in RUN_PLATFORM_FIELDS:
+        family = platform_family_from_text(normalize_search_text(row.get(field)))
+        if family is not None:
+            return family
+    family = platform_family_from_text(search_text)
+    if family is not None:
+        return family
 
     lib_layout = normalize_text(row.get("lib_layout", "")).lower()
     if lib_layout == "paired":
@@ -151,7 +163,7 @@ def infer_platform_family(row):
 
 def classify_row(row):
     search_text = normalize_search_text(" ".join(collect_text_fragments(row)))
-    platform_family = infer_platform_family(row)
+    platform_family = infer_platform_family(row, search_text)
 
     if platform_family == "pacbio":
         return "pacbio", "pacbio", "0"
