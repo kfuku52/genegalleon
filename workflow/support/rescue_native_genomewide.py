@@ -14,6 +14,11 @@ from pathlib import Path
 
 from Bio.Seq import Seq
 
+if __package__:
+    from .rescue_protein_scoring import scored_pairs
+else:
+    from rescue_protein_scoring import scored_pairs
+
 SEARCH = 'oriongeno_genomewide_path'
 CONTRACT = {'schema': 1, 'scope': 'all_native_paths_without_original_cds_overlap',
             'donors': 'all_prepared_proteins_of_frozen_selected_external_species',
@@ -93,8 +98,25 @@ def run_protein_search(queries, subjects, search_dir, cpus):
     (search_dir / 'donors.dmnd').unlink(missing_ok=True)
 
 
+def run_verified_protein_search(root, key, frozen, name, guard, queries, subjects, directory, cpus):
+    """Share the frozen DIAMOND search across rescue restart attempts."""
+    r, native = _r(), _native()
+    source_proof = r.FreshDigestBatch()
+
+    def search_guard():
+        guard()
+        native.verify_inputs(frozen, [name], verification=source_proof)
+
+    search_key = {'rescue': key, 'source': frozen['predictions'][name]['identity']}
+    search = r.stage(root, Path('oriongeno_protein_search') / name, search_key,
+                     lambda work: run_protein_search(queries, subjects, work, cpus),
+                     guard=search_guard, publication_guard=search_guard, hash_workers=cpus)
+    r.copy_verified_comparison(search, directory, search_key, hash_workers=cpus,
+                               share_members=('pairs.tsv', 'native.pep', 'donors.pep'))
+
+
 def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None,
-             search=run_protein_search):
+             search=run_protein_search, score_checkpoint=None, score_checkpoint_key=None):
     """Search each eligible native isoform, retaining identical-protein aliases.
 
     There is no donor representation filter, candidate window or query cap. Search
@@ -163,7 +185,9 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     aligned_pairs = 0
     results = []
     validation_seconds = 0.0
-    for q, s, score in native._scored_pairs(iter(comparisons), cpus):
+    scores = scored_pairs(((q, s) for q, s, _, _ in comparisons), queries, subjects, search_dir, cpus,
+                          checkpoint=score_checkpoint, checkpoint_key=score_checkpoint_key)
+    for q, s, score in scores:
         aligned_pairs += 1
         alignment = {**score.as_dict(), 'junction_information_available': False,
                      'score_basis': 'protein_only_without_donor_junctions'}
@@ -179,7 +203,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
                                 **prediction['identity'], 'native_transcript_id': path['native_transcript_id'],
                                 'native_gene_id': path['native_gene_id'], 'alignment': alignment}}
                 evidence['id'] = token
-                model = {'seqid': path['seqid'], 'strand': path['strand'], 'cds': copy.deepcopy(path['cds']),
+                model = {'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(block) for block in path['cds']],
                          'query': evidence['id'], 'coverage': score.coverage_b, 'identity': score.identity,
                          'frameshift': False, 'evidence': evidence, 'search': SEARCH,
                          'oriongeno_problems': list(problems)}

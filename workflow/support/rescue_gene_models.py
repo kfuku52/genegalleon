@@ -229,6 +229,7 @@ def identities():
     versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
     versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
     versions["native_genomewide_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide.py"))
+    versions["native_protein_scoring_implementation"] = digest(Path(__file__).with_name("rescue_protein_scoring.py"))
     versions["genomewide_reuse_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide_reuse.py"))
     versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))
@@ -1624,6 +1625,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
     def current_key():
         return rescue_key(root, plan, name, dependency_snapshot=dependencies)
 
+    score_checkpoint = (root / 'oriongeno_scores' / f'{name}.sqlite3'
+                        if request.get('oriongeno_genomewide') and native_available and phase != 'predict' else None)
     prediction_stage = Path("miniprot_predictions") / name
     checkpoint = root / prediction_stage if phase == "postprocess" else None
     invalid_checkpoint = "Missing or invalid miniprot prediction checkpoint for " + name + "; run predict first"
@@ -1922,6 +1925,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 import rescue_native_genomewide
                 require_same_key(rescue_native_genomewide.CONTRACT, plan['request']['oriongeno_genomewide'])
 
+                native_cds = {}
                 def checked_native_prediction(model):
                     checked = checked_prediction(model)
                     raw = checked['raw_prediction']
@@ -1931,27 +1935,24 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                         raw['evidence'] = checked['evidence']
                     # After native validation, neither path changes the CDS
                     # coordinates. Keep distinct paths when QC changed them.
+                    transcript = model['evidence']['oriongeno']['native_transcript_id']
+                    raw['cds'] = native_cds.setdefault(transcript, raw['cds'])
                     if raw['cds'] == checked['cds']:
-                        raw['cds'] = checked['cds']
+                        checked['cds'] = raw['cds']
                     return checked
 
                 def run_native_search(queries, subjects, directory, threads):
-                    frozen_prediction = request['oriongeno']
                     def search_guard():
                         require_same_key(key, current_key())
                         check_sources()
-                        annevo_gene_models.verify_inputs(frozen_prediction, [name], verification=native_sources)
-                    native_sources = FreshDigestBatch()
-                    search_key = {"rescue": key, "source": frozen_prediction['predictions'][name]['identity']}
-                    search = stage(root, Path('oriongeno_protein_search') / name, search_key,
-                                   lambda work: rescue_native_genomewide.run_protein_search(queries, subjects, work, threads),
-                                   guard=search_guard, hash_workers=threads, publication_guard=search_guard)
-                    copy_verified_comparison(search, directory, search_key, hash_workers=threads,
-                                             share_members=('pairs.tsv', 'native.pep', 'donors.pep'))
+
+                    rescue_native_genomewide.run_verified_protein_search(
+                        root, key, request['oriongeno'], name, search_guard, queries, subjects, directory, threads)
 
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
                     request['oriongeno'], name, proteins, genome, placement_ownership,
-                    params, tmp, cpus=cpus, validate=checked_native_prediction, search=run_native_search)
+                    params, tmp, cpus=cpus, validate=checked_native_prediction, search=run_native_search,
+                    score_checkpoint=score_checkpoint, score_checkpoint_key=key)
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
                 transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))
@@ -2094,9 +2095,12 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         if checkpoint is not None:
             require_same_key(checkpoint_sha256, digest(checkpoint_receipt_path))
 
-    return stage(root, relative, key, build, guard, hash_workers=cpus,
-                 publication_guard=publication_guard,
-                 reuse=matches_checkpoint if checkpoint is not None else None)
+    result = stage(root, relative, key, build, guard, hash_workers=cpus,
+                   publication_guard=publication_guard,
+                   reuse=matches_checkpoint if checkpoint is not None else None)
+    if score_checkpoint is not None:
+        score_checkpoint.unlink(missing_ok=True)
+    return result
 
 
 def read_retained_coding_paths(directory, expected_receipt_sha256, *, verification=None,

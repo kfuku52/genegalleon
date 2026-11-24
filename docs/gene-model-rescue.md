@@ -836,9 +836,16 @@ binds the files to the frozen plan and prepared/comparison inputs.
 
 Fresh standard rescue with genome-wide OrionGeno evidence automatically writes
 the Miniprot checkpoint before validation. The native DIAMOND search publishes
-a separate `oriongeno_protein_search/SPECIES/` receipt before pair scoring. A
-retry uses both checkpoints after verifying their inputs and members. Admission
-replay and GeMoMa retain their existing execution paths.
+a separate `oriongeno_protein_search/SPECIES/` receipt before pair scoring.
+This also applies to the native search when extending previous validated
+rescue evidence.
+
+Protein scoring workers read the shared search FASTAs and receive only pair IDs.
+During scoring, completed groups are stored in a single compressed SQLite
+checkpoint at `oriongeno_scores/SPECIES.sqlite3`. A retry verifies the frozen
+inputs and pair IDs and resumes from the saved scores, even with a different
+CPU count. Genomic validation and final admission still run on retry.
+The score checkpoint is removed after the rescue result has been published.
 
 Large immutable predictor files are shared as hard links on the same
 filesystem. The postprocessing and prediction paths both remain available

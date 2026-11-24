@@ -12,6 +12,7 @@ import json
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from itertools import chain
 from pathlib import Path
 
@@ -149,7 +150,7 @@ def prove_contract(previous_plan, producer_source):
     # This route is absent from legacy plans. Once used, its implementation is
     # strict evidence and cannot change during an admission-only replay.
     if not previous_plan['request'].get('oriongeno_genomewide'):
-        permitted.add('native_genomewide_implementation')
+        permitted.update(('native_genomewide_implementation', 'native_protein_scoring_implementation'))
     # The worker dispatcher was absent from older raw producers and is not
     # executed by admission replay. Once declared, retain its exact identity.
     if 'cached_validation_implementation' not in before:
@@ -463,6 +464,8 @@ def rescue(root, plan, name, cpus, *, dependencies, parser_proof=None):
         return r.rescue_key(root, plan, name, dependency_snapshot=dependencies)
 
     key = current_key()
+    native_extension = plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension'
+    score_checkpoint = root / 'oriongeno_scores' / f'{name}.sqlite3' if native_extension else None
     expected[str(previous / 'plan.json')] = plan['request']['admission_cache']['plan_sha256']
     expected[str(root / 'plan.json')] = key['plan']
 
@@ -526,10 +529,13 @@ def rescue(root, plan, name, cpus, *, dependencies, parser_proof=None):
             models = [*current.values(), *extra]
             for model in models:
                 r.check_interval(model)
-            if plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension':
+            if native_extension:
+                import rescue_native_genomewide as native
                 import rescue_native_genomewide_reuse
+                search = partial(native.run_verified_protein_search, root, key, plan['request']['oriongeno'], name, guard)
                 additions, native_audit = rescue_native_genomewide_reuse.fresh_candidates(
-                    plan, name, proteins, genome, ownership, params, tmp, cpus, models, parser_proof=parser_proof)
+                    plan, name, proteins, genome, ownership, params, tmp, cpus, models, parser_proof=parser_proof,
+                    search=search, score_checkpoint=score_checkpoint, score_checkpoint_key=key)
                 extra.extend(additions)
                 models.extend(additions)
             placement = r.reassess_unanchored_models(models, params['unanchored_min_species'],
@@ -624,5 +630,8 @@ def rescue(root, plan, name, cpus, *, dependencies, parser_proof=None):
                       'published_counts': manifest['counts'], 'full_stream_verified': True,
                       'admitted_cds_freshly_validated': True, 'model_store_seconds': model_store_seconds,
                       'wall_seconds': time.perf_counter() - started})
-    return r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus,
-                   publication_guard=publication_guard)
+    result = r.stage(root, Path('rescued') / name, key, build, guard, hash_workers=cpus,
+                     publication_guard=publication_guard)
+    if score_checkpoint is not None:
+        score_checkpoint.unlink(missing_ok=True)
+    return result

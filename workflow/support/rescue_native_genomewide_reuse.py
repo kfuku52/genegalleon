@@ -31,7 +31,9 @@ _NATIVE_SEARCH_EQUIVALENT_SOURCES = (
     '4f689c15a9ac56bd665dd6462dc2299a4ad14b28d6013d235e61136b06179931',
     '08ccc0a672ddc6a152bf95b1525fc7699c55f3323dee467bd0d31701d1fc49fa',
     '95f9da7abb5773a102988bc1a0eeea189e70f8b413036060606c012e6863c07b',
+    '6f1fa188a4085a0e4b7df1876e42eca428eaf785d79443fef244e5829f909ad1',
 )
+_EQUIVALENT_PROTEIN_SCORER = '500995deb55f8644da2235f762ca521bd411e027146840433d0a0b7eef4ea61a'
 
 
 def _r():
@@ -136,8 +138,11 @@ def prove_contract(previous_plan,producer_source):
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
         if before['cached_validation_implementation']!=after['cached_validation_implementation']:
             raise IncompatibleEvidence('The producer cached-validation dispatcher changed')
+    scoring_field = 'native_protein_scoring_implementation'
     if request.get('oriongeno_genomewide'):
         bindings['rescue_native_genomewide.py']='native_genomewide_implementation'
+        if scoring_field in before:
+            bindings['rescue_protein_scoring.py'] = scoring_field
     proof=r.FreshDigestBatch()
     paths=[*[old/name for name in bindings],*[current/name for name in strict.keys()|functions.keys()],
            current/'rescue_cached_validation.py',current/'transcript_utrs.py',current/'rescue_native_genomewide.py']
@@ -175,6 +180,9 @@ def prove_contract(previous_plan,producer_source):
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
         'oriongeno_candidate_implementation','nwkit'}
+    if not request.get('oriongeno_genomewide') or (
+            scoring_field not in before and after[scoring_field] == _EQUIVALENT_PROTEIN_SCORER):
+        permitted.add(scoring_field)
     if 'source_verification_implementation' not in before:
         permitted.add('source_verification_implementation')
     # The GPU launcher is not invoked here. Its old bytes remain bound, while
@@ -333,7 +341,8 @@ print(json.dumps({'count':len(rows),'sha256':hashlib.sha256(json.dumps(rows,sort
             'native_paths':len(rows),'coding_paths_sha256':previous['sha256']}
 
 
-def fresh_candidates(plan, name, proteins, genome, ownership, params, directory, cpus, previous, *, parser_proof=None):
+def fresh_candidates(plan, name, proteins, genome, ownership, params, directory, cpus, previous, *,
+                     parser_proof=None, search, score_checkpoint, score_checkpoint_key):
     r=_r()
     import annevo_gene_models
     import rescue_cached_validation
@@ -347,7 +356,8 @@ def fresh_candidates(plan, name, proteins, genome, ownership, params, directory,
         return rescue_cached_validation.checked_prediction(model,memo,genome,
             plan['request']['sources'][name]['genetic_code'],params,proteins[evidence['donor']][evidence['query']],engine=r)
     checked, audit = native.nominate(plan['request']['oriongeno'], name, proteins, genome, ownership,
-                                    params, directory, cpus=cpus, validate=check)
+                                    params, directory, cpus=cpus, validate=check, search=search,
+                                    score_checkpoint=score_checkpoint, score_checkpoint_key=score_checkpoint_key)
     transferred=native.transfer_structure(checked,proteins,genome,
         plan['request']['sources'][name]['genetic_code'],params,directory,cpus=cpus)
     transfers=[check(model) for model in transferred]

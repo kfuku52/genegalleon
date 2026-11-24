@@ -93,7 +93,7 @@ def test_coverage_prefilter_preserves_threshold_and_accounts_for_rejected_hits(t
     params = {**refinement.DEFAULTS, 'minimum_coverage': minimum}
     aligned = []
     run = rescue.run
-    score = annevo._scored_pairs
+    score = native.scored_pairs
 
     def one_hit(command, directory, label, *args, **kwargs):
         if label == 'blastp':
@@ -101,13 +101,13 @@ def test_coverage_prefilter_preserves_threshold_and_accounts_for_rejected_hits(t
         else:
             return run(command, directory, label, *args, **kwargs)
 
-    def observed(pairs, cpus):
+    def observed(pairs, *args, **kwargs):
         pairs = list(pairs)
         aligned.extend(pairs)
-        return score(pairs, cpus)
+        return score(pairs, *args, **kwargs)
 
     monkeypatch.setattr(rescue, 'run', one_hit)
-    monkeypatch.setattr(annevo, '_scored_pairs', observed)
+    monkeypatch.setattr(native, 'scored_pairs', observed)
     with catalog.indexed_genome(genome) as sequence:
         models, audit = native.nominate(frozen, 'Target_species', {'Other_species': {'donor': donor}},
                                        sequence, rescue.OwnershipIndex([]), params, tmp_path)
@@ -389,6 +389,7 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
         retry.setattr(rescue, 'run', reuse_search)
         rescue.rescue(new, extended, target, 2)
     assert {path: path.read_bytes() for path in frozen_searches} == frozen_searches
+    assert list((new / 'oriongeno_scores').iterdir()) == []
     accepted = list(store.iter_accepted_models(new/'rescued'/target))
     assert len(accepted) == 1 and accepted[0]['sequence'] == coding[8]
     assert (old/'rescued'/target/'receipt.json').read_bytes() == original
@@ -409,7 +410,21 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
         raise AssertionError('validated evidence must not repeat old raw QC')
     with monkeypatch.context() as patch:
         patch.setattr(rescue, 'verify_prediction_cache', forbidden)
-        rescue.rescue(fast, fast_plan, target, 2)
+        with monkeypatch.context() as interrupted:
+            def stop_after_scores(*args, **kwargs):
+                raise ValueError('Simulated interruption after scoring')
+
+            interrupted.setattr(native, 'transfer_structure', stop_after_scores)
+            with pytest.raises(ValueError, match='Simulated interruption after scoring'):
+                rescue.rescue(fast, fast_plan, target, 2)
+        checkpoint = fast / 'oriongeno_scores' / f'{target}.sqlite3'
+        assert list(checkpoint.parent.iterdir()) == [checkpoint]
+        original_search = (fast / 'oriongeno_protein_search' / target / 'receipt.json').read_bytes()
+        scoring = importlib.import_module('rescue_protein_scoring')
+        patch.setattr(scoring, '_score_batch', forbidden)
+        rescue.rescue(fast, fast_plan, target, 1)
+        assert list(checkpoint.parent.iterdir()) == []
+        assert (fast / 'oriongeno_protein_search' / target / 'receipt.json').read_bytes() == original_search
     assert list(store.iter_models(fast/'rescued'/target)) == list(store.iter_models(new/'rescued'/target))
     fast_audit = json.loads((fast/'rescued'/target/'oriongeno_genomewide.json').read_text())
     assert fast_audit['path_status_counts'] == audit['path_status_counts']
