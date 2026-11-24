@@ -32,6 +32,7 @@ _NATIVE_SEARCH_EQUIVALENT_SOURCES = (
     '08ccc0a672ddc6a152bf95b1525fc7699c55f3323dee467bd0d31701d1fc49fa',
     '95f9da7abb5773a102988bc1a0eeea189e70f8b413036060606c012e6863c07b',
     '6f1fa188a4085a0e4b7df1876e42eca428eaf785d79443fef244e5829f909ad1',
+    '901954bfbbc99266d3629e4e977005d21f5c3f172e4931ea6c47e4674c4d6082',
 )
 _PRIOR_PROTEIN_SCORERS = {
     (None, None, None),
@@ -144,7 +145,8 @@ def prove_contract(previous_plan,producer_source):
         bindings['rescue_source_verification.py']='source_verification_implementation'
     if 'cached_validation_implementation' in before:
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
-        if before['cached_validation_implementation']!=after['cached_validation_implementation']:
+        if not replay.qc_implementation_equivalent('rescue_cached_validation.py',
+                before['cached_validation_implementation'], after['cached_validation_implementation']):
             raise IncompatibleEvidence('The producer cached-validation dispatcher changed')
     scoring_modules = {
         'rescue_protein_scoring.py': 'native_protein_scoring_implementation',
@@ -165,7 +167,7 @@ def prove_contract(previous_plan,producer_source):
             raise IncompatibleEvidence('Native extension producer source differs from its plan: '+name)
         old_files[str(old/name)]=value
     for name in strict:
-        if observed[str(old/name)]!=observed[str(current/name)]:
+        if not replay.qc_implementation_equivalent(name, observed[str(old/name)], observed[str(current/name)]):
             raise IncompatibleEvidence('Native extension coding evidence kernel changed: '+name)
     for name,names in functions.items():
         try:
@@ -191,6 +193,9 @@ def prove_contract(previous_plan,producer_source):
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
         'oriongeno_candidate_implementation','nwkit'}
+    for name, field in strict.items():
+        if replay.qc_implementation_equivalent(name, observed[str(old/name)], observed[str(current/name)]):
+            permitted.add(field)
     scoring_fields = tuple(scoring_modules.values())
     if not request.get('oriongeno_genomewide') or (
             tuple(before.get(field) for field in scoring_fields) in _PRIOR_PROTEIN_SCORERS
@@ -368,9 +373,20 @@ def fresh_candidates(plan, name, proteins, genome, ownership, params, directory,
         evidence=model['evidence']
         return rescue_cached_validation.checked_prediction(model,memo,genome,
             plan['request']['sources'][name]['genetic_code'],params,proteins[evidence['donor']][evidence['query']],engine=r)
+    validation = {}
+    code = plan['request']['sources'][name]['genetic_code']
+
+    def validate_native_models(models):
+        for _, checked in rescue_cached_validation.validate_native(
+                models, genome, code, params, proteins, cpus, memo, validation):
+            yield checked
+
+    workers = rescue_cached_validation.native_validation_workers(cpus)
     checked, audit = native.nominate(plan['request']['oriongeno'], name, proteins, genome, ownership,
-                                    params, directory, cpus=cpus, validate=check, search=search,
+                                    params, directory, cpus=cpus, validate_many=validate_native_models, search=search,
+                                    scoring_cpus=max(1, cpus - workers - 1) if workers else cpus,
                                     score_checkpoint=score_checkpoint, score_checkpoint_key=score_checkpoint_key)
+    audit['validation'] = validation
     transferred=native.transfer_structure(checked,proteins,genome,
         plan['request']['sources'][name]['genetic_code'],params,directory,cpus=cpus)
     transfers=[check(model) for model in transferred]

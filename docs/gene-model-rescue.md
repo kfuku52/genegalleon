@@ -851,6 +851,18 @@ inputs and pair IDs and resumes from the saved scores, even with a different
 CPU count. Genomic validation and final admission still run on retry.
 The score checkpoint is removed after the rescue result has been published.
 
+The native validator shares the genomic memo in the parent. Larger jobs use part
+of their CPU allocation for donor-specific terminal and boundary checks while
+protein scoring continues. Results return in candidate order, with the same
+strict QC and evidence used for placement and admission.
+
+Compact model stores keep the same on-disk record format and indexed overlays.
+New stores group up to 128 MiB of uncompressed records per shard, batch exact
+body lookups and inserts, and overlap bounded compression with packing. Private
+packing batches can reuse the canonical bytes of identical native CDS bodies.
+Older stores remain readable. In a single `run` invocation, per-target and
+cohort exports share the first full-byte proof of unchanged rescue workers.
+
 Large immutable predictor files are shared as hard links on the same
 filesystem. The postprocessing and prediction paths both remain available
 with their own verified receipts. When the filesystem cannot link the files,

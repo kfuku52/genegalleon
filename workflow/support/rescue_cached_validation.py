@@ -7,7 +7,8 @@ import os
 import time
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
-from itertools import chain, islice
+from contextlib import ExitStack
+from itertools import batched, chain, islice
 from multiprocessing import get_context
 
 
@@ -119,3 +120,86 @@ def validate_cached(models, genome, code, params, proteins, cpus, serial, audit)
     audit['worker_memo_counts'] = {field: sum(value[field] for value in snapshots.values()) for field in fields}
     audit['worker_memo_peak_accounted_bytes_total'] = sum(value['peak_accounted_bytes'] for value in snapshots.values())
     audit['wall_seconds'] = time.perf_counter() - started
+
+
+def native_validation_workers(cpus):
+    """Reserve part of the existing task allocation for donor-specific QC."""
+    return min(2, (cpus - 1) // 3)
+
+
+class _StagedValidation:
+    def __init__(self, checked):
+        self.checked = checked
+
+    def validate(self, _model):
+        return self.checked
+
+
+def _finish_native_batch(rows):
+    genome, code, params, _memo = _CONTEXT
+    results = []
+    for raw, checked, protein in rows:
+        output = checked_prediction(raw, _StagedValidation(checked), genome, code, params, protein)
+        results.append((output, output['evidence'] is raw['evidence']))
+    return results
+
+
+def validate_native(models, genome, code, params, proteins, cpus, memo, audit):
+    """Share genomic memo hits in the parent and send only donor repair to workers."""
+    if __package__:
+        from . import rescue_boundary_revalidation, rescue_terminal_completion
+    else:
+        import rescue_boundary_revalidation
+        import rescue_terminal_completion
+
+    workers = native_validation_workers(cpus)
+    audit.update(workers=0, offloaded=0)
+    pending = deque()
+    started = time.perf_counter()
+
+    def emit(rows, indexes, future):
+        if future is not None:
+            for index, (output, shared_evidence) in zip(indexes, future.result(), strict=True):
+                raw, _previous = rows[index]
+                evidence = raw['evidence']
+                if shared_evidence:
+                    output['evidence'] = evidence
+                output['raw_prediction']['evidence'] = dict(evidence)
+                rows[index] = raw, output
+        yield from rows
+
+    with ExitStack() as stack:
+        executor = None
+        for batch in batched(models, 128):
+            rows, indexes, repair = [], [], []
+            for model in batch:
+                evidence = model['evidence']
+                protein = proteins[evidence['donor']][evidence['query']]
+                checked = memo.validate(model)
+                problems = set(checked.get('problems', ()))
+                offload = (workers and len(batch) == 128 and not checked.get('frameshift') and (
+                    (problems & rescue_terminal_completion._TERMINAL_PROBLEMS
+                     and not problems - rescue_terminal_completion._RECHECKABLE)
+                    or (problems and not problems - rescue_boundary_revalidation._RECHECKABLE)))
+                if offload:
+                    indexes.append(len(rows))
+                    repair.append((model, checked, protein))
+                    rows.append((model, None))
+                else:
+                    output = checked_prediction(model, _StagedValidation(checked), genome, code, params, protein)
+                    rows.append((model, output))
+            future = None
+            if repair:
+                if executor is None:
+                    executor = stack.enter_context(ProcessPoolExecutor(
+                        max_workers=workers, mp_context=get_context('spawn'), initializer=_initialise,
+                        initargs=(os.fsdecode(genome.filename), code, params)))
+                    audit['workers'] = workers
+                audit['offloaded'] += len(repair)
+                future = executor.submit(_finish_native_batch, repair)
+            pending.append((rows, indexes, future))
+            if len(pending) >= max(1, 2 * workers):
+                yield from emit(*pending.popleft())
+        while pending:
+            yield from emit(*pending.popleft())
+    audit['wall_seconds_including_scoring'] = time.perf_counter() - started

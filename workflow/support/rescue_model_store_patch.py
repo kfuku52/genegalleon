@@ -10,7 +10,6 @@ import tempfile
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import ExitStack, nullcontext
-from itertools import batched
 from multiprocessing import get_context
 from pathlib import Path
 
@@ -121,13 +120,8 @@ def _patch_shards(source, output, shards, manifest, ordered_changes, changes, wo
             yield from pending.popleft().result()
 
 
-APPEND_SHARD_BYTES = 32 * 1024 * 1024
-BODY_DB_BATCH = 128
-
-
-def _write_packed_shard(path, packed, codec, level):
-    with store._writer(path, codec, level) as handle:
-        handle.write(packed)
+APPEND_SHARD_BYTES = store.SHARD_BYTES
+BODY_DB_BATCH = store.BODY_DB_BATCH
 
 
 def _append_models(directory, count, appended, manifest, body_db, body_cache, workers):
@@ -146,11 +140,11 @@ def _append_models(directory, count, appended, manifest, body_db, body_cache, wo
         path = f'models-append-{first:012d}.jsonl.{extension}'
         args = directory / path, packed, codec, level
         if executor is None:
-            _write_packed_shard(*args)
+            store._write_shard(*args)
         else:
             if len(pending) == writers:
                 pending.popleft().result()
-            pending.append(executor.submit(_write_packed_shard, *args))
+            pending.append(executor.submit(store._write_shard, *args))
         shards.append({'path': path, 'first': first, 'count': rows})
         packed = bytearray()
         first += rows
@@ -163,7 +157,7 @@ def _append_models(directory, count, appended, manifest, body_db, body_cache, wo
             if bodies.setdefault(sha, body) != body:
                 raise ValueError('Model-store body hash collision')
             if len(bodies) == BODY_DB_BATCH or len(packed) + len(row) > APPEND_SHARD_BYTES:
-                _insert_appended_bodies(body_db, bodies, body_cache, level)
+                store._insert_bodies(body_db, bodies, body_cache, level)
                 bodies.clear()
             if packed and len(packed) + len(row) > APPEND_SHARD_BYTES:
                 flush(executor)
@@ -171,38 +165,12 @@ def _append_models(directory, count, appended, manifest, body_db, body_cache, wo
                 partials.append((ordinal, len(manifest['shards']) + len(shards), rows))
             packed.extend(row)
             rows += 1
-        _insert_appended_bodies(body_db, bodies, body_cache, level)
+        store._insert_bodies(body_db, bodies, body_cache, level)
         if packed:
             flush(executor)
         for result in pending:
             result.result()
     return shards, partials
-
-
-def _insert_appended_bodies(db, bodies, cache, level):
-    """Keep a single SQLite writer, checking collisions before batched insertion."""
-    for rows in batched(bodies.items(), BODY_DB_BATCH):
-        lookup = {}
-        for sha, body in rows:
-            if sha not in cache.cache:
-                lookup[sha] = body
-            elif cache.cache[sha] != body:
-                raise ValueError('Model-store body hash collision')
-            else:
-                cache.cache.move_to_end(sha)
-        if not lookup:
-            continue
-        parameters = ','.join('?' for _ in lookup)
-        found = dict(db.execute(f'SELECT sha,data FROM bodies WHERE sha IN ({parameters})', tuple(lookup)))
-        inserts = []
-        for sha, body in lookup.items():
-            if sha not in found:
-                inserts.append((sha, store._compress(body, cache.codec, level)))
-            elif store._decompress(found[sha], cache.codec, expected_size=len(body)) != body:
-                raise ValueError('Model-store body hash collision')
-            cache.remember(sha, body)
-        db.executemany('INSERT INTO bodies VALUES (?,?)', inserts)
-
 
 
 def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,

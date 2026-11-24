@@ -41,6 +41,8 @@ BODY_FIELDS = frozenset({
 # Donor alignment metrics belong to the existing per-candidate context, including
 # raw_prediction. Otherwise each metric variant duplicates an identical DNA body.
 # The layout records both placements, so old stores and readers remain valid.
+SHARD_BYTES = 128 * 1024 * 1024
+BODY_DB_BATCH = 128
 MAX_RECORD_BYTES = 64 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PAF = re.compile(r"\A(##?PAF\t)?([^\t\r\n]+)(\t[^\r\n]*)(\r?\n)?\Z")
@@ -191,7 +193,28 @@ def _split_fields(record):
     return shared, context, list(record)
 
 
-def _pack(record, *, _validate_envelope=True):
+def _shared_body_key(fields):
+    """Key plain values and private-batch CDS aliases without copying the latter."""
+    items = []
+    for name, value in fields.items():
+        kind = type(value)
+        if kind in (str, int, bool, type(None)):
+            key = kind, value
+        elif name == "cds" and kind is list:
+            # The worker owns the materialized batch and never mutates it.
+            key = list, id(value)
+        elif name == "raw_prediction" and kind is dict:
+            nested = _shared_body_key(value)
+            if nested is None:
+                return None
+            key = dict, nested
+        else:
+            return None
+        items.append((name, key))
+    return tuple(items)
+
+
+def _pack(record, *, _validate_envelope=True, _batch_bodies=None):
     if not isinstance(record, dict) or any(not isinstance(k, str) for k in record):
         raise ValueError("Model-store records must be JSON objects")
     shared, context, order = _split_fields(record)
@@ -200,10 +223,18 @@ def _pack(record, *, _validate_envelope=True):
         raw_body, raw_context, raw_order = _split_fields(record["raw_prediction"])
         shared["raw_prediction"] = raw_body
         context["raw_prediction"] = raw_context
-    body = _json(shared, sort=True)
-    if len(body) > MAX_RECORD_BYTES:
-        raise ValueError("Model-store body exceeds bounded buffer")
-    envelope = {"body": hashlib.sha256(body).hexdigest(), "context": context, "order": order}
+    key = _shared_body_key(shared) if _batch_bodies is not None else None
+    saved = _batch_bodies.get(key) if key is not None else None
+    if saved is None:
+        body = _json(shared, sort=True)
+        if len(body) > MAX_RECORD_BYTES:
+            raise ValueError("Model-store body exceeds bounded buffer")
+        sha = hashlib.sha256(body).hexdigest()
+        if key is not None:
+            _batch_bodies[key] = body, sha
+    else:
+        body, sha = saved
+    envelope = {"body": sha, "context": context, "order": order}
     if raw_order is not None:
         envelope["raw_order"] = raw_order
     # Direct calls retain candidate-only validation, including nonfinite values.
@@ -272,12 +303,40 @@ def _insert_body(db, body, level, codec, cache=None, *, packed_sha=None):
         return sha
     found = db.execute("SELECT data FROM bodies WHERE sha=?", (sha,)).fetchone()
     if found is None:
-        db.execute("INSERT INTO bodies VALUES (?,?)", (sha, _compress(body, codec, level)))
+        db.execute("INSERT INTO bodies VALUES (?,?)", (sha, cache.compress(body, level) if cache is not None
+                                                        else _compress(body, codec, level)))
     elif _decompress(found[0], codec, expected_size=len(body)) != body:
         raise ValueError("Model-store body hash collision")
     if cache is not None:
         cache.remember(sha, body)
     return sha
+
+
+
+def _insert_bodies(db, bodies, cache, level):
+    """Verify and insert bounded sets of bodies with one SQLite writer."""
+    for batch in batched(bodies.items(), BODY_DB_BATCH):
+        missing = {}
+        for sha, body in batch:
+            earlier = cache.cache.get(sha)
+            if earlier is None:
+                missing[sha] = body
+            elif earlier != body:
+                raise ValueError("Model-store body hash collision")
+            else:
+                cache.cache.move_to_end(sha)
+        if not missing:
+            continue
+        parameters = ",".join("?" for _ in missing)
+        present = dict(db.execute(f"SELECT sha,data FROM bodies WHERE sha IN ({parameters})", tuple(missing)))
+        inserts = []
+        for sha, body in missing.items():
+            if sha not in present:
+                inserts.append((sha, cache.compress(body, level)))
+            elif _decompress(present[sha], cache.codec, expected_size=len(body)) != body:
+                raise ValueError("Model-store body hash collision")
+            cache.remember(sha, body)
+        db.executemany("INSERT INTO bodies VALUES (?,?)", inserts)
 
 
 def _overlay(path):
@@ -297,7 +356,7 @@ def _add_packed_overlay(db, ordinal, body, sha, encoded, level, codec, cache):
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
-                      shard_bytes=32 * 1024 * 1024, codec="auto", compression_level=1,
+                      shard_bytes=SHARD_BYTES, codec="auto", compression_level=1,
                       publication_workers=1, packing_workers=1):
     """Atomically publish into ``directory/model_store`` without replacing data.
 
@@ -347,8 +406,8 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         return manifest
 
 
-def _encode_model(record, ordinal, *, track_fingerprint=False):
-    body, envelope = _pack(record, _validate_envelope=False)
+def _encode_model(record, ordinal, *, track_fingerprint=False, batch_bodies=None):
+    body, envelope = _pack(record, _validate_envelope=False, _batch_bodies=batch_bodies)
     fingerprint = hashlib.sha256(_json(envelope)).digest() if track_fingerprint else None
     envelope["ordinal"] = ordinal
     packed = _json(envelope) + b"\n"
@@ -358,7 +417,15 @@ def _encode_model(record, ordinal, *, track_fingerprint=False):
 
 
 def _encode_model_batch(batch, first):
-    return [_encode_model(record, ordinal) for ordinal, record in enumerate(batch, first)]
+    # Live native rescue already shares checked CDS lists across donor hits.
+    # Input without such aliases uses the original canonical serializer.
+    def is_native(record):
+        return type(record) is dict and record.get("search") == "oriongeno_genomewide_path"
+
+    native = [row for row in batch if is_native(row)]
+    memo = {} if len(native) > len({id(row.get("cds")) for row in native}) else None
+    return [_encode_model(record, ordinal, batch_bodies=memo if is_native(record) else None)
+            for ordinal, record in enumerate(batch, first)]
 
 
 def _encoded_models(models, track_fingerprint, workers):
@@ -392,9 +459,73 @@ def _encoded_models(models, track_fingerprint, workers):
             yield from consume()
 
 
+def _write_shard(path, packed, codec, level):
+    with _writer(path, codec, level) as handle:
+        handle.write(packed)
+
+
+class _ModelShards:
+    """Write final shards in order, with at most four queued compression blocks."""
+
+    def __init__(self, path, shard_bytes, codec, level):
+        self.path, self.shard_bytes, self.codec, self.level = path, shard_bytes, codec, level
+        self.executor = None
+        self.handle = None
+        self.pending = deque()
+        self.manifest = []
+        self.packed = bytearray()
+        self.first = self.rows = self.size = 0
+
+    def append(self, packed):
+        if self.rows and self.size + len(packed) > self.shard_bytes:
+            self._flush(last=True)
+        location = len(self.manifest), self.rows
+        self.packed.extend(packed)
+        self.rows += 1
+        self.size += len(packed)
+        if len(self.packed) >= 1024 * 1024:
+            self._flush(last=False)
+        return location
+
+    def _write(self, name, packed, last):
+        if self.handle is None:
+            self.handle = _writer(self.path / name, self.codec, self.level)
+        self.handle.write(packed)
+        if last:
+            self.close()
+
+    def _flush(self, *, last):
+        extension = "gz" if self.codec == "gzip" else "zst"
+        name = f"models-{len(self.manifest):06d}.jsonl.{extension}"
+        arguments = name, self.packed, last
+        if self.executor is None:
+            self._write(*arguments)
+        else:
+            if len(self.pending) >= 4:
+                self.pending.popleft().result()
+            self.pending.append(self.executor.submit(self._write, *arguments))
+        self.packed = bytearray()
+        if last:
+            self.manifest.append({"path": name, "first": self.first, "count": self.rows})
+            self.first += self.rows
+            self.rows = self.size = 0
+
+    def close(self):
+        if self.handle is not None:
+            handle, self.handle = self.handle, None
+            handle.close()
+
+    def finish(self):
+        if self.rows:
+            self._flush(last=True)
+        while self.pending:
+            self.pending.popleft().result()
+        return self.manifest
+
+
 def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level,
                        hash_workers, packing_workers):
-    dbs, shard_handle = [], None
+    dbs = []
     try:
         body_db = _database(tmp / "bodies.sqlite")
         lookup_db = None
@@ -418,37 +549,48 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
         body_cache = _Bodies(body_db, codec)
         accepted_cache = _Bodies(accepted_db, codec)
         revision_cache = _Bodies(revision_db, codec)
-        shards, shard_size, line, count, accepted_count, partial_count = [], 0, 0, 0, 0, 0
+        count = accepted_count = partial_count = 0
         partial_ordered, last_partial_ordinal = True, -1
-        with closing(_encoded_models(models, lookup_db is not None, packing_workers)) as encoded:
+        # Compression uses a single stream and shares the existing worker
+        # budget with packers. No full uncompressed shard is buffered.
+        threaded = hash_workers > 1 and packing_workers >= 4
+        with ExitStack() as resources:
+            shards = _ModelShards(tmp, shard_bytes, codec, compression_level)
+            resources.callback(shards.close)
+            if threaded:
+                shards.executor = resources.enter_context(ThreadPoolExecutor(max_workers=1))
+            packers = packing_workers - int(threaded)
+            encoded = resources.enter_context(closing(_encoded_models(models, lookup_db is not None, packers)))
+            bodies = {}
+            body_bytes = 0
             for ordinal, (record, (body, sha, packed, fingerprint)) in enumerate(encoded):
-                if shard_handle is None or (shard_size and shard_size + len(packed) > shard_bytes):
-                    if shard_handle is not None:
-                        shard_handle.close()
-                    extension = "gz" if codec == "gzip" else "zst"
-                    shard = f"models-{len(shards):06d}.jsonl.{extension}"
-                    shards.append({"path": shard, "first": ordinal, "count": 0})
-                    shard_handle = _writer(tmp / shard, codec, compression_level)
-                    shard_size, line = 0, 0
-                shard_handle.write(packed)
-                _insert_body(body_db, body, compression_level, codec, body_cache, packed_sha=sha)
+                shard, line = shards.append(packed)
+                if sha in body_cache.cache:
+                    if body_cache.cache[sha] != body:
+                        raise ValueError("Model-store body hash collision")
+                    body_cache.cache.move_to_end(sha)
+                elif sha in bodies:
+                    if bodies[sha] != body:
+                        raise ValueError("Model-store body hash collision")
+                else:
+                    bodies[sha] = body
+                    body_bytes += len(body)
+                    if len(bodies) >= BODY_DB_BATCH or body_bytes >= 8 * 1024 * 1024:
+                        _insert_bodies(body_db, bodies, body_cache, compression_level)
+                        bodies.clear()
+                        body_bytes = 0
                 if lookup_db is not None:
-                    lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
-                                      (fingerprint, ordinal, len(shards) - 1, line))
+                    lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)", (fingerprint, ordinal, shard, line))
                 if record.get("status") == "accepted":
                     _add_packed_overlay(accepted_db, ordinal, body, sha, memoryview(packed)[:-1],
                                         compression_level, codec, accepted_cache)
                     accepted_count += 1
                 if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
-                    partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
+                    partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, shard, line))
                     partial_count += 1
-                shard_size += len(packed)
-                line += 1
-                shards[-1]["count"] += 1
                 count += 1
-        if shard_handle is not None:
-            shard_handle.close()
-            shard_handle = None
+            _insert_bodies(body_db, bodies, body_cache, compression_level)
+            shards = shards.finish()
         if partial_models is not None:
             for record in partial_models:
                 body, envelope = _pack(record, _validate_envelope=False)
@@ -498,8 +640,6 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
                                              "partial": partial_count, "revision": revision_count,
                                              "bodies": body_count}}
     finally:
-        if shard_handle is not None:
-            shard_handle.close()
         for db in dbs:
             db.close()
 
@@ -644,6 +784,18 @@ class _Bodies:
         self.codec = codec
         self.cache = OrderedDict()
         self.bytes = 0
+        self._compressor = None
+        self._compression_level = None
+
+    def compress(self, body, level):
+        if self.codec == "gzip":
+            return _compress(body, self.codec, level)
+        if self._compressor is None or level != self._compression_level:
+            import zstandard
+
+            self._compressor = zstandard.ZstdCompressor(level=level, write_checksum=True)
+            self._compression_level = level
+        return self._compressor.compress(body)
 
     def read(self, sha):
         if sha in self.cache:

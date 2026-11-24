@@ -71,6 +71,21 @@ ALLOWED_TOOL_CHANGES = frozenset({'implementation', 'model_store_implementation'
                                 'genome_index_implementation'})
 
 
+# Exact revisions compared for identical QC results and records.
+_EQUIVALENT_QC = {
+    'rescue_raw_validation.py': ('959bf2ae6be0d92d8ee20b2f4291dc91d1f53f23eb49c9beaece1762b33cf701',
+                                 '64268276c0ffeabd754922c023117aaf22814bd850e34abb871596ad08dc95e8'),
+    'rescue_model_quality.py': ('0beabb4162772ec5f7ced15d6a195b3d19aea9a75cebb3136ca63bf0c079c878',
+                                'e175bb3f25334b0ffb6febc95c29dc1c2c38fbf506e8feb9d7bac00b75a79e64'),
+    'rescue_cached_validation.py': ('6a80b411fe0c35738734e41e59ed8542b50bbf832990bbee756112f871de3895',
+                                    '06570d76d24fc8132b58d65042819a05df4221d3b3f97c4d2d071f786287332e'),
+}
+
+
+def qc_implementation_equivalent(filename, previous, current):
+    return previous == current or _EQUIVALENT_QC.get(filename) == (previous, current)
+
+
 def replay_repair_targets(r, worker, files, tmp, targets, existing, ownership, proteins, genome, code, params, cpus):
     """Reuse receipted local projections and align only newly nominated donor/locus pairs."""
     def key(row):
@@ -127,10 +142,13 @@ def prove_contract(previous_plan, producer_source):
                 'input_generation_array_state.py': 'state_implementation'}
     if 'source_verification_implementation' in before:
         bindings['rescue_source_verification.py'] = 'source_verification_implementation'
+    cached_field = 'cached_validation_implementation'
+    if cached_field in before:
+        bindings['rescue_cached_validation.py'] = cached_field
     hashes = {}
     batch = r.FreshDigestBatch()
     observed = batch.read([*[old / filename for filename in bindings],
-                           *[current / filename for filename in MODULES.keys() | FUNCTIONS.keys()]])
+                           *[current / filename for filename in MODULES.keys() | FUNCTIONS.keys() | _EQUIVALENT_QC.keys()]])
     for filename, field in bindings.items():
         value = observed[str(old / filename)]
         if before.get(field) != value:
@@ -139,12 +157,16 @@ def prove_contract(previous_plan, producer_source):
     # The catalog module also owns the FASTA indexer. Rescue uses only its
     # indexed-genome entrypoint, so compare those two bound functions below.
     for filename in MODULES.keys() - FUNCTIONS.keys():
-        if hashes[str(old / filename)] != observed[str(current / filename)]:
+        if not qc_implementation_equivalent(filename, hashes[str(old / filename)], observed[str(current / filename)]):
             raise ValueError('Strict rescue evidence implementation changed: ' + filename)
     for filename, names in FUNCTIONS.items():
         if _definitions(old / filename, names) != _definitions(current / filename, names):
             raise ValueError('Rescue replay function changed: ' + filename)
     permitted = set(ALLOWED_TOOL_CHANGES)
+    for filename in _EQUIVALENT_QC.keys() & bindings.keys():
+        field = bindings[filename]
+        if qc_implementation_equivalent(filename, hashes[str(old / filename)], observed[str(current / filename)]):
+            permitted.add(field)
     if 'source_verification_implementation' not in before:
         permitted.add('source_verification_implementation')
     # This route is absent from legacy plans. Once used, its implementation is

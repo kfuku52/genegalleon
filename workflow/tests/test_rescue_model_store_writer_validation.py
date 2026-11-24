@@ -116,3 +116,20 @@ def test_shared_bodies_have_independent_accepted_partial_and_revision_contexts(t
     restored_partial[0]["support"].append({"donor": "changed"})
     assert restored_partial[2] == records[2]
     assert list(store.iter_partial_models(directory)) == partials
+
+
+def test_native_batch_reuses_only_identical_canonical_bodies():
+    item = model(0)
+    item['search'] = 'oriongeno_genomewide_path'
+    # Genome-wide OrionGeno candidates use protein scores without a PAF row.
+    item.pop('paf', None)
+    item['raw_prediction'].pop('paf', None)
+    peer = {**item, 'query': 'different', 'evidence': {'donor': 'different'}}
+    other = {**item, 'frameshift': 0}
+    item['frameshift'] = peer['frameshift'] = False
+    records = [item, peer, other]
+    packed = store._encode_model_batch(records, 0)
+    expected = [store._encode_model(record, ordinal) for ordinal, record in enumerate(records)]
+    assert packed == expected
+    assert packed[0][0] is packed[1][0]
+    assert packed[0][1] != packed[2][1]

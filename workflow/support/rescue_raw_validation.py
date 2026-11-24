@@ -127,10 +127,15 @@ class RawValidationMemo:
         key = (raw_validation_key(model, genomic_only=self._candidate_homology is not None)
                if self.max_entries and self.max_bytes else None)
         if key is not None and key in self._cache:
-            overlay, _ = self._cache[key]
+            overlay, _, ordinary_blocks = self._cache[key]
             self._cache.move_to_end(key)
             self._counts["hits"] += 1
-            result = {**model, **copy_validation_data(overlay)}
+            if ordinary_blocks:
+                result = {**model, **overlay}
+                result["cds"] = [block.copy() for block in overlay["cds"]]
+                result["problems"] = overlay["problems"].copy()
+            else:
+                result = {**model, **copy_validation_data(overlay)}
             if self._candidate_homology is not None:
                 result["problems"] = sorted(set(result["problems"]) | set(
                     self._candidate_homology(model["coverage"], model["identity"], self._params)))
@@ -158,10 +163,16 @@ class RawValidationMemo:
             return result
         while self._cache and (len(self._cache) >= self.max_entries
                                or self._bytes + weight > self.max_bytes):
-            _, (_, removed) = self._cache.popitem(last=False)
+            _, (_, removed, _) = self._cache.popitem(last=False)
             self._bytes -= removed
             self._counts["evictions"] += 1
-        self._cache[key] = overlay, weight
+        blocks = overlay["cds"]
+        ordinary_blocks = (type(blocks) is list and len({id(block) for block in blocks}) == len(blocks)
+            and all(type(block) is list
+            and all(type(value) is int for value in block) for block in blocks)
+            and type(overlay["problems"]) is list and all(type(value) is str for value in overlay["problems"])
+            and all(type(overlay[field]) in _ATOMIC_TYPES for field in DNA_FIELDS if field not in ("cds", "problems")))
+        self._cache[key] = overlay, weight, ordinary_blocks
         self._bytes += weight
         self._peak_bytes = max(self._peak_bytes, self._bytes)
         self._peak_entries = max(self._peak_entries, len(self._cache))

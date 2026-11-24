@@ -10,6 +10,7 @@ import json
 import time
 from array import array
 from collections import Counter, defaultdict
+from itertools import islice
 from pathlib import Path
 
 from Bio.Seq import Seq
@@ -116,7 +117,8 @@ def run_verified_protein_search(root, key, frozen, name, guard, queries, subject
 
 
 def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None,
-             search=run_protein_search, score_checkpoint=None, score_checkpoint_key=None):
+             search=run_protein_search, score_checkpoint=None, score_checkpoint_key=None,
+             validate_many=None, scoring_cpus=None):
     """Search each eligible native isoform, retaining identical-protein aliases.
 
     There is no donor representation filter, candidate window or query cap. Search
@@ -183,41 +185,70 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
             for path in groups[queries[token]]:
                 rows[path['native_transcript_id']].update(status='evaluated', length_rejected_protein_hits=count)
     aligned_pairs = 0
-    results = []
     validation_seconds = 0.0
-    scores = scored_pairs(((q, s) for q, s, _, _ in comparisons), queries, subjects, search_dir, cpus,
-                          checkpoint=score_checkpoint, checkpoint_key=score_checkpoint_key)
-    for q, s, score in scores:
-        aligned_pairs += 1
-        alignment = {**score.as_dict(), 'junction_information_available': False,
-                     'score_basis': 'protein_only_without_donor_junctions'}
-        problems = (['oriongeno_alignment_bounded'] if score.bounded else [])
-        if min(score.coverage_a, score.coverage_b) < params['minimum_coverage']:
-            problems.append('low_reciprocal_coverage')
-        for path in groups[queries[q]]:
-            rows[path['native_transcript_id']]['status'] = 'evaluated'
-            for donor, query, token in donor_aliases[subjects[s]]:
-                evidence = {'target': name, 'donor': donor, 'query': query, 'genome_only': True,
-                            'placement': 'unanchored', 'orthology': 'unassigned', 'expected_copy': 'unassigned',
-                            'native_search_scope': CONTRACT['scope'], 'oriongeno': {
-                                **prediction['identity'], 'native_transcript_id': path['native_transcript_id'],
-                                'native_gene_id': path['native_gene_id'], 'alignment': alignment}}
-                evidence['id'] = token
-                model = {'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(block) for block in path['cds']],
-                         'query': evidence['id'], 'coverage': score.coverage_b, 'identity': score.identity,
-                         'frameshift': False, 'evidence': evidence, 'search': SEARCH,
-                         'oriongeno_problems': list(problems)}
-                if validate is not None:
-                    validation_started = time.perf_counter()
-                    model = validate(model)
-                    validation_seconds += time.perf_counter() - validation_started
-                results.append(model)
+
+    def candidates():
+        nonlocal aligned_pairs
+        scores = scored_pairs(((q, s) for q, s, _, _ in comparisons), queries, subjects, search_dir,
+                              cpus if scoring_cpus is None else scoring_cpus,
+                              checkpoint=score_checkpoint, checkpoint_key=score_checkpoint_key)
+        for q, s, score in scores:
+            aligned_pairs += 1
+            alignment = {**score.as_dict(), 'junction_information_available': False,
+                         'score_basis': 'protein_only_without_donor_junctions'}
+            problems = (['oriongeno_alignment_bounded'] if score.bounded else [])
+            if min(score.coverage_a, score.coverage_b) < params['minimum_coverage']:
+                problems.append('low_reciprocal_coverage')
+            for path in groups[queries[q]]:
+                rows[path['native_transcript_id']]['status'] = 'evaluated'
+                for donor, query, token in donor_aliases[subjects[s]]:
+                    evidence = {'target': name, 'donor': donor, 'query': query, 'genome_only': True,
+                                'placement': 'unanchored', 'orthology': 'unassigned', 'expected_copy': 'unassigned',
+                                'native_search_scope': CONTRACT['scope'], 'oriongeno': {
+                                    **prediction['identity'], 'native_transcript_id': path['native_transcript_id'],
+                                    'native_gene_id': path['native_gene_id'], 'alignment': alignment}}
+                    evidence['id'] = token
+                    yield {'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(block) for block in path['cds']],
+                           'query': evidence['id'], 'coverage': score.coverage_b, 'identity': score.identity,
+                           'frameshift': False, 'evidence': evidence, 'search': SEARCH,
+                           'oriongeno_problems': list(problems)}
+
+    def serial(models):
+        nonlocal validation_seconds
+        for model in models:
+            if validate is not None:
+                started_validation = time.perf_counter()
+                model = validate(model)
+                validation_seconds += time.perf_counter() - started_validation
+            yield model
+
+    def measured_candidates(models):
+        nonlocal scoring_seconds
+        while True:
+            scoring_started = time.perf_counter()
+            batch = list(islice(models, 128))
+            scoring_seconds += time.perf_counter() - scoring_started
+            if not batch:
+                break
+            yield from batch
+
+    scoring_seconds = time.perf_counter() - started
+    if validate_many is None:
+        results = list(serial(candidates()))
+    else:
+        results = list(validate_many(measured_candidates(candidates())))
+    verify_started = time.perf_counter()
     native.verify_inputs(frozen, [name])
+    scoring_seconds += time.perf_counter() - verify_started
     audit.update(unique_query_proteins=len(queries), unique_donor_proteins=len(subjects),
                  external_donor_records=sum(map(len, donor_aliases.values())),
                  aligned_unique_protein_pairs=aligned_pairs, candidate_pairs=len(results),
-                 length_rejected_protein_hits=sum(rejected_hits.values()),
-                 search_and_alignment_seconds=time.perf_counter() - started - validation_seconds)
+                 length_rejected_protein_hits=sum(rejected_hits.values()))
+    elapsed = time.perf_counter() - started
+    audit['search_and_alignment_seconds'] = (elapsed - validation_seconds
+                                            if validate_many is None else scoring_seconds)
+    if validate_many is not None:
+        audit['search_alignment_and_validation_seconds'] = elapsed
     return results, audit
 
 

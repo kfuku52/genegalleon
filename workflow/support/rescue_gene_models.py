@@ -1928,8 +1928,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 require_same_key(rescue_native_genomewide.CONTRACT, plan['request']['oriongeno_genomewide'])
 
                 native_cds = {}
-                def checked_native_prediction(model):
-                    checked = checked_prediction(model)
+                def compact_native_prediction(model, checked):
                     raw = checked['raw_prediction']
                     if checked['evidence'] is model['evidence']:
                         # This input owns its evidence. Both records already
@@ -1951,10 +1950,21 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     rescue_native_genomewide.run_verified_protein_search(
                         root, key, request['oriongeno'], name, search_guard, queries, subjects, directory, threads)
 
+                native_validation = {}
+
+                def validate_native_models(models):
+                    for raw, checked in rescue_cached_validation.validate_native(
+                            models, genome, source["genetic_code"], params, proteins, cpus,
+                            raw_validation, native_validation):
+                        yield compact_native_prediction(raw, checked)
+
+                validation_workers = rescue_cached_validation.native_validation_workers(cpus)
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
                     request['oriongeno'], name, proteins, genome, placement_ownership,
-                    params, tmp, cpus=cpus, validate=checked_native_prediction, search=run_native_search,
+                    params, tmp, cpus=cpus, search=run_native_search, validate_many=validate_native_models,
+                    scoring_cpus=max(1, cpus - validation_workers - 1) if validation_workers else cpus,
                     score_checkpoint=score_checkpoint, score_checkpoint_key=key)
+                genomewide_audit['validation'] = native_validation
                 transferred = rescue_native_genomewide.transfer_structure(
                     native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
                 transferred_checked = list(check_predictions(transferred, "oriongeno_genomewide_transfer"))
@@ -2940,7 +2950,7 @@ def rescue_selection_attributes(model, path=None):
     return ";" + ";".join(f"{key}={quote(str(value), safe='')}" for key, value in values)
 
 
-def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
+def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1, *, dependencies=None):
     names = names or plan["species"]
     source_proof = RescueSourceBatch(plan)
     plan_hash = plan_digest(root, plan, verification=source_proof)
@@ -3065,7 +3075,9 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                                            "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_hash})
-    with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers)) as dependency_snapshot:
+    proof = (ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers))
+             if dependencies is None else contextlib.nullcontext(dependencies))
+    with proof as dependency_snapshot:
         def publication_guard():
             dependency_snapshot.check_all()
             source_proof.check()
@@ -3501,21 +3513,27 @@ def main():
         indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["synteny_jobs"]) + 1)
         for index in indices:
             synteny(root, plan, index, args.cpus, args.comparison_cache)
-    if args.command in {"rescue", "run", "predict", "postprocess"}:
-        indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["species"]) + 1)
-        for index in indices:
-            if not 1 <= index <= len(plan["species"]):
-                p.error("rescue task index outside frozen plan")
-            name = plan["species"][index - 1]
-            phase = args.command if args.command in {"predict", "postprocess"} else "all"
-            rescue(root, plan, name, args.cpus, getattr(args, "interval_workers", None), phase=phase)
-            if phase != "predict":
-                finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
-    if args.command in {"finalize", "run"}:
-        finalize(root, plan, hash_workers=args.cpus)
-        if plan['request'].get('oriongeno'):
-            import rescue_split_replay
-            rescue_split_replay.publish(root, plan, plan['species'], args.cpus)
+    # The per-target and cohort exports consume the same immutable worker
+    # receipts. Retain their full first verification for this command.
+    proof = (ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=args.cpus))
+             if args.command == "run" else contextlib.nullcontext())
+    with proof as dependencies:
+        if args.command in {"rescue", "run", "predict", "postprocess"}:
+            indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["species"]) + 1)
+            for index in indices:
+                if not 1 <= index <= len(plan["species"]):
+                    p.error("rescue task index outside frozen plan")
+                name = plan["species"][index - 1]
+                phase = args.command if args.command in {"predict", "postprocess"} else "all"
+                rescue(root, plan, name, args.cpus, getattr(args, "interval_workers", None), phase=phase)
+                if phase != "predict":
+                    finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus,
+                         dependencies=dependencies)
+        if args.command in {"finalize", "run"}:
+            finalize(root, plan, hash_workers=args.cpus, dependencies=dependencies)
+            if plan['request'].get('oriongeno'):
+                import rescue_split_replay
+                rescue_split_replay.publish(root, plan, plan['species'], args.cpus)
 
 
 if __name__ == "__main__":

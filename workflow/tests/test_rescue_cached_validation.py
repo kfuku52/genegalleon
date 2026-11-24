@@ -101,3 +101,29 @@ def test_child_exception_is_not_suppressed_or_published_as_a_model(tmp_path):
 def test_invalid_cpu_bound_is_rejected(cpus):
     with pytest.raises(ValueError,match='CPUs must be positive'):
         list(parallel.validate_cached(iter([]),None,1,{},None,cpus,lambda x:x,{}))
+
+
+def test_native_repairs_are_selectively_parallel_and_keep_evidence_aliases(tmp_path):
+    path, rows = fixture(tmp_path, 277)
+    arguments = ['plan', *[value for key in ('cds-dir', 'gff-dir', 'genome-dir', 'busco-dir', 'tree', 'output')
+                          for value in ('--'+key, str(path.parent/key))]]
+    defaults = rescue.parser().parse_args(arguments)
+    params = {key: getattr(defaults, key) for key in rescue.PARAMETERS}
+    proteins = {'Donor': {'p': 'MK'}}
+    for model in rows:
+        model['evidence']['oriongeno'] = {'native_transcript_id': model['query']}
+    with indexed_genome(path) as genome:
+        def memo():
+            return rescue.RawValidationMemo(rescue.validate_model, genome, 1, params,
+                                            candidate_homology=rescue.homology_problems)
+
+        original_memo = memo()
+        expected = [parallel.checked_prediction(row, original_memo, genome, 1, params, 'MK', engine=rescue)
+                    for row in rows]
+        audit = {}
+        observed = list(parallel.validate_native(iter(rows), genome, 1, params, proteins, 4, memo(), audit))
+    assert 0 < audit['offloaded'] < len(rows) and audit['workers'] == 1
+    assert [output for _, output in observed] == expected
+    for (raw, output), reference in zip(observed, expected, strict=True):
+        assert (output['evidence'] is raw['evidence']) == (reference['evidence'] is raw['evidence'])
+        assert output['raw_prediction']['evidence']['oriongeno'] is raw['evidence']['oriongeno']

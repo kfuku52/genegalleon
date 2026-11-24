@@ -35,24 +35,47 @@ class _ReceiptProof:
         self.directory = directory
         self.components = {}
         self.targets = {}
+        self.resolved_directory = None
 
     def observe(self, paths):
         """Capture all identities before the first content verification."""
         self.check()
         try:
-            roots = self.directory, self.directory.resolve(strict=True)
-            for path in paths:
-                resolved = path.resolve(strict=True)
-                self.targets[path] = resolved
-                for component in (*path.parents, path, *resolved.parents, resolved):
-                    # Ancestors outside this publication can gain unrelated
-                    # siblings. Its own directories cannot change membership.
-                    member = component in (path, resolved) or any(component.is_relative_to(root) for root in roots)
+            resolved_directory = self.directory.resolve(strict=True)
+            if self.resolved_directory is not None and resolved_directory != self.resolved_directory:
+                raise ReceiptChanged('Stage dependency resolved directory changed: ' + str(self.directory))
+            roots = self.directory, resolved_directory
+            observed = set()
+
+            def observe_component(component, *, leaf=False):
+                # Ancestors outside a publication can gain unrelated siblings.
+                member = leaf or any(component.is_relative_to(root) for root in roots)
+                if component not in observed:
                     current = _identity(component, member=member)
                     previous = self.components.get(component)
                     if previous is not None and previous != (current, member):
                         raise ReceiptChanged('Stage dependency pathname changed: ' + str(component))
                     self.components[component] = current, member
+                    observed.add(component)
+                return self.components[component][0]
+
+            for path in paths:
+                lexical = (path, *path.parents)
+                for component in lexical:
+                    observe_component(component, leaf=component == path)
+                relative = path.relative_to(self.directory)
+                inside = [item for item in lexical if item != self.directory and item.is_relative_to(self.directory)]
+                # Ordinary members are fenced through the one enclosing
+                # directory resolution and the lstat of every descendant.
+                has_link = any(stat.S_ISLNK(self.components[item][0][2]) for item in inside)
+                if has_link or '..' in relative.parts:
+                    resolved = path.resolve(strict=True)
+                    self.targets[path] = resolved
+                else:
+                    resolved = resolved_directory / relative
+                    self.resolved_directory = resolved_directory
+                for component in (resolved, *resolved.parents):
+                    observe_component(component, leaf=component == resolved)
         except OSError as exc:
             raise ReceiptChanged('Stage dependency unavailable: ' + str(self.directory)) from exc
         self.check()
@@ -62,6 +85,9 @@ class _ReceiptProof:
             for path, (expected, member) in self.components.items():
                 if _identity(path, member=member) != expected:
                     raise ReceiptChanged('Stage dependency content changed: ' + str(path))
+            if (self.resolved_directory is not None
+                    and self.directory.resolve(strict=True) != self.resolved_directory):
+                raise ReceiptChanged('Stage dependency resolved directory changed: ' + str(self.directory))
             for path, target in self.targets.items():
                 if path.resolve(strict=True) != target:
                     raise ReceiptChanged('Stage dependency resolved target changed: ' + str(path))

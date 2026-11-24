@@ -5,8 +5,11 @@ from Bio.Data import CodonTable
 
 
 def model_quality(model, genetic_code=1):
-    sequence = model.get("sequence", "").upper()
-    start = sequence[:3] if len(sequence) >= 3 else None
+    sequence = model.get("sequence", "")
+    # The normal DNA path needs only one codon. Preserve Unicode expansion
+    # semantics for callers outside the validated genome path.
+    prefix = sequence[:3].upper() if type(sequence) is str and sequence.isascii() else sequence.upper()[:3]
+    start = prefix if len(prefix) == 3 else None
     flags = []
     allowed = CodonTable.unambiguous_dna_by_id[genetic_code].start_codons
     if start in allowed and start != "ATG":
