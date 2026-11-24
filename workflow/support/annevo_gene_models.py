@@ -14,6 +14,7 @@ import re
 import tempfile
 from collections import defaultdict, deque
 from concurrent.futures import ProcessPoolExecutor
+from hashlib import sha256
 from itertools import chain, islice
 from multiprocessing import get_context
 from pathlib import Path
@@ -31,13 +32,13 @@ try:
     from annevo_model_selection import PROFILES
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_selection import pair_score
-    from genome_sequence_identity import genome_sequence_digest
+    from genome_sequence_identity import genome_contig_fingerprints, genome_sequence_digest
     from input_generation_array_state import atomic_json, digest, digest_paths
 except ImportError:
     from .annevo_model_selection import PROFILES
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_selection import pair_score
-    from .genome_sequence_identity import genome_sequence_digest
+    from .genome_sequence_identity import genome_contig_fingerprints, genome_sequence_digest
     from .input_generation_array_state import atomic_json, digest, digest_paths
 
 
@@ -97,6 +98,57 @@ def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None
                                              if value.get('genome_sequence_sha256') else {})}
 
 
+def scoped_oriongeno_rows(stream, contigs):
+    """Keep GFF rows on the selected contigs without changing their bytes."""
+    for line in stream:
+        if line.startswith(b'##FASTA'):
+            raise ValueError('Scoped OrionGeno GFF cannot contain embedded FASTA')
+        if line.startswith(b'##sequence-region'):
+            fields = line.split()
+            if len(fields) != 4:
+                raise ValueError('Invalid OrionGeno sequence-region directive')
+            if fields[1] not in contigs:
+                continue
+        elif line.strip() and not line.startswith(b'#'):
+            if b'\t' not in line:
+                raise ValueError('Invalid OrionGeno GFF feature row')
+            if line.partition(b'\t')[0] not in contigs:
+                continue
+        yield line
+
+
+def scoped_oriongeno_identity(gff, receipt, parent_genome, parent_gff, genome, genetic_code):
+    """Bind a coordinate-preserving subset to its actual native prediction."""
+    paths = [Path(path) for path in (gff, receipt, parent_genome, parent_gff, genome)]
+
+    def stamps():
+        return [(s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                for s in (path.stat() for path in paths)]
+
+    before = stamps()
+    parent_sha = digest(parent_genome)
+    parent_identity = prediction_identity(parent_gff, receipt, parent_sha, genetic_code, parent_genome,
+                                          engine='oriongeno')
+    original = genome_contig_fingerprints(parent_genome)
+    selected = genome_contig_fingerprints(genome)
+    if not selected.keys() < original.keys() or any(fp != original[seqid] for seqid, fp in selected.items()):
+        raise ValueError('OrionGeno target must be an exact contig subset of its prediction genome')
+    expected = sha256()
+    with Path(parent_gff).open('rb') as stream:
+        for row in scoped_oriongeno_rows(stream, {seqid.encode() for seqid in selected}):
+            expected.update(row)
+    target_sha, scoped_sha = digest(genome), digest(gff)
+    if scoped_sha != expected.hexdigest():
+        raise ValueError('Scoped OrionGeno GFF differs from the selected native prediction rows')
+    if stamps() != before:
+        raise ValueError('Scoped OrionGeno inputs changed during verification')
+    return {**parent_identity, 'GFF_sha256': scoped_sha, 'GFF_bytes': before[0][2],
+            'genome_match': 'contig_subset_identity', 'target_genome_sha256': target_sha,
+            'selected_contigs': sorted(selected), 'parent_prediction': {
+                'genome': str(parent_genome), 'target_genome_sha256': parent_sha,
+                'gff': str(parent_gff), 'GFF_sha256': parent_identity['GFF_sha256']}}
+
+
 def freeze_inputs(path, sources, *, engine="annevo"):
     """Freeze a subset of target species; missing rows leave their route unchanged."""
     table = Path(path).resolve()
@@ -119,8 +171,10 @@ def freeze_inputs(path, sources, *, engine="annevo"):
     result, files = {}, {str(table): table_sha}
     with table.open(newline='') as stream:
         reader = csv.DictReader(stream, delimiter='\t')
-        if reader.fieldnames != ['species', 'gff', 'receipt']:
-            raise ValueError('ANNEVO input TSV requires species, gff, receipt columns in that order')
+        native_fields = ['species', 'gff', 'receipt']
+        scoped = engine == 'oriongeno' and reader.fieldnames == [*native_fields, 'parent_genome', 'parent_gff']
+        if reader.fieldnames != native_fields and not scoped:
+            raise ValueError('Prediction input TSV requires species, gff, receipt columns in that order')
         for row in reader:
             if None in row or any(not value for value in row.values()):
                 raise ValueError('Incomplete ANNEVO input row')
@@ -128,14 +182,18 @@ def freeze_inputs(path, sources, *, engine="annevo"):
             if name not in sources or name in result:
                 raise ValueError('Unknown or duplicate ANNEVO target species: ' + name)
             locations = {}
-            for role in ('gff', 'receipt'):
+            for role in reader.fieldnames[1:]:
                 location = Path(row[role])
                 locations[role] = str((location if location.is_absolute() else table.parent / location).resolve())
             source = sources[name]
-            genome_sha = digest(source['genome'])
-            identity = prediction_identity(**locations, genome_sha256=genome_sha,
-                                           genetic_code=source.get('genetic_code', 1), genome=source['genome'], engine=engine)
-            result[name] = {**locations, 'identity': identity}
+            if scoped:
+                identity = scoped_oriongeno_identity(**locations, genome=source['genome'],
+                                                     genetic_code=source.get('genetic_code', 1))
+                files[locations['parent_gff']] = identity['parent_prediction']['GFF_sha256']
+            else:
+                identity = prediction_identity(**locations, genome_sha256=digest(source['genome']),
+                                               genetic_code=source.get('genetic_code', 1), genome=source['genome'], engine=engine)
+            result[name] = {role: locations[role] for role in ('gff', 'receipt')} | {'identity': identity}
             files.update({locations['gff']: identity['GFF_sha256'], locations['receipt']: identity['receipt_sha256']})
     if not result:
         raise ValueError('ANNEVO input TSV contains no predictions')
@@ -149,6 +207,8 @@ def verify_inputs(frozen, names=None, *, verification=None):
         return
     selected = frozen['predictions'] if names is None else {n: frozen['predictions'][n] for n in names if n in frozen['predictions']}
     paths = [*frozen.get('tables', [frozen['table']]), *(p[role] for p in selected.values() for role in ('gff', 'receipt'))]
+    paths.extend(p['identity']['parent_prediction']['gff'] for p in selected.values()
+                 if 'parent_prediction' in p.get('identity', {}))
     expected = {p: frozen['files'][p] for p in paths}
     if (verification.read(expected) if verification is not None else digest_paths(expected)) != expected:
         raise ValueError('Frozen ANNEVO candidate input changed')

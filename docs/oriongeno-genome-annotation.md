@@ -328,6 +328,11 @@ Refinement inherits a verified OrionGeno table from a rescue publication.
 Each row binds `species`, native `gff`, and its native execution `receipt`.
 The target assembly, GFF and receipt are checked at plan/execution/publication
 boundaries. Old `gene_model_annevo_inputs` / `--annevo-inputs` remain supported.
+For a curated haplotype FASTA, an OrionGeno table may append `parent_genome`
+and `parent_gff` after `receipt`. Point `receipt` to the original native run
+and `gff` to its rows on the selected contigs. The planner checks exact contig
+sequence identity and verifies the filtered GFF against the original prediction.
+Use assembly metadata to select contigs and supply matching target GFF/CDS inputs.
 Native coding candidates pass the same independent donor, genomic, ownership
 and representative-adoption gates as existing candidates. A predictor cannot
 provide its own independent structural confirmation.

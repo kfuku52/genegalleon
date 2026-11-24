@@ -21,7 +21,8 @@ def mask_genome_sequence(sequence):
     return _NON_DNA.sub('N', sequence).upper()
 
 
-def genome_sequence_digest(path, *, contig_lengths=None):
+def genome_contig_fingerprints(path):
+    """Return each FASTA identifier's sequence length and SHA-256."""
     path = Path(path)
     with path.open('rb') as stream:
         compressed = stream.read(2) == b'\x1f\x8b'
@@ -71,6 +72,11 @@ def genome_sequence_digest(path, *, contig_lengths=None):
     finish()
     if not entries:
         raise ValueError('Genome has no contigs')
+    return entries
+
+
+def genome_sequence_digest(path, *, contig_lengths=None):
+    entries = genome_contig_fingerprints(path)
     if contig_lengths is not None:
         if contig_lengths:
             raise ValueError('Contig length destination must initially be empty')

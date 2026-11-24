@@ -55,6 +55,50 @@ def native_fixture(tmp_path, *, strand='+'):
     return genome, gff, receipt, table, sources, coding, blocks
 
 
+@pytest.mark.parametrize('changed', [None, 'sequence', 'prediction', 'parent'])
+def test_scope_oriongeno_to_exact_haplotype(tmp_path, changed):
+    parent, parent_gff, receipt, table, sources, _, blocks = native_fixture(tmp_path)
+    target = tmp_path / 'hap1.fa'
+    sequence = parent.read_text()
+    target.write_text(sequence.replace('>chr\nC', '>chr\nG', 1) if changed == 'sequence' else sequence)
+    with parent.open('a') as stream:
+        stream.write('>hap2\nATGC\n')
+    original = parent_gff.read_text()
+    target_gff = tmp_path / 'hap1.gff3'
+    target_gff.write_text(original.replace('ID=native', 'ID=altered') if changed == 'prediction' else original)
+    with parent_gff.open('a') as stream:
+        stream.write('##sequence-region hap2 1 4\nhap2\tOrionGeno\tgene\t1\t4\t.\t+\t.\tID=other\n')
+    value = json.loads(receipt.read_text())
+    value.update(kind='genegalleon-oriongeno-native-prediction', model_profile='plants',
+                 inference_settings={'lineage': 'plants'}, genome_sha256=annevo.digest(parent),
+                 GFF_sha256=annevo.digest(parent_gff), GFF_bytes=parent_gff.stat().st_size)
+    receipt.write_text(json.dumps(value))
+    if changed == 'parent':
+        with parent_gff.open('a') as stream:
+            stream.write('# unrelated output modified\n')
+    table.write_text('species\tgff\treceipt\tparent_genome\tparent_gff\n'
+                     'Target_species\thap1.gff3\tnative.json\tgenome.fa\tnative.gff3\n')
+    sources['Target_species']['genome'] = str(target)
+    if changed is not None:
+        with pytest.raises(ValueError, match={'sequence': 'exact contig subset', 'prediction': 'differs from the selected',
+                                              'parent': 'differs from its native receipt'}[changed]):
+            annevo.freeze_inputs(table, sources, engine='oriongeno')
+        return
+    frozen = annevo.freeze_inputs(table, sources, engine='oriongeno')
+    identity = frozen['predictions']['Target_species']['identity']
+    assert identity['genome_match'] == 'contig_subset_identity'
+    assert identity['selected_contigs'] == ['chr']
+    assert identity['GFF_sha256'] == annevo.digest(target_gff)
+    assert identity['parent_prediction']['GFF_sha256'] == annevo.digest(parent_gff)
+    annevo.verify_inputs(frozen, ['Target_species'])
+    with catalog_module.indexed_genome(target) as genome:
+        assert annevo.read_paths(target_gff, genome, engine='oriongeno')[0]['cds'] == list(map(tuple, blocks))
+    with parent_gff.open('a') as stream:
+        stream.write('# parent GFF changed after freeze\n')
+    with pytest.raises(ValueError, match='candidate input changed'):
+        annevo.verify_inputs(frozen, ['Target_species'])
+
+
 @pytest.mark.parametrize('engine', ['annevo', 'oriongeno'])
 @pytest.mark.parametrize('strand', ['+', '-'])
 def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, strand, engine):

@@ -247,7 +247,10 @@ def test_build_hash_ignores_import_and_editor_artifacts_but_tracks_copied_inputs
     root = tmp_path / "repo"
     shutil.copytree(REPO_ROOT / "container", root / "container", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(REPO_ROOT / "workflow/support/treevis", root / "workflow/support/treevis")
-    shutil.copy2(REPO_ROOT / "workflow/support/busco_kmer_distance.cpp", root / "workflow/support/busco_kmer_distance.cpp")
+    kernels = ("busco_kmer_distance.cpp", "rescue_protein_alignment.cpp")
+    for name in kernels:
+        relative = Path("workflow/support") / name
+        shutil.copy2(REPO_ROOT / relative, root / relative)
     shutil.copy2(REPO_ROOT / ".dockerignore", root / ".dockerignore")
     tool = root / "container/scripts/compute_build_input_hash.sh"
 
@@ -282,7 +285,8 @@ def test_build_hash_ignores_import_and_editor_artifacts_but_tracks_copied_inputs
     assert staged.returncode == 0, staged.stderr
     assert (staging / "env/new-untracked-input.txt").is_file()
     assert (staging / "treevis/DESCRIPTION").is_file()
-    assert (staging / "busco_kmer_distance.cpp").read_bytes() == (root / "workflow/support/busco_kmer_distance.cpp").read_bytes()
+    for name in kernels:
+        assert (staging / name).read_bytes() == (root / "workflow/support" / name).read_bytes()
     assert (staging / "source_branches.env").read_bytes() == (root / "container/source_branches.env").read_bytes()
     assert (staging / "pip-compatibility.requirements.txt").read_bytes() == (
         root / "container/pip-compatibility.requirements.txt"
@@ -290,10 +294,11 @@ def test_build_hash_ignores_import_and_editor_artifacts_but_tracks_copied_inputs
     assert not list(staging.rglob("*.pyc"))
     assert not list(staging.rglob(".DS_Store"))
     assert not (staging / "scripts/not-copied-into-image.sh").exists()
-    before_kernel_edit = compute()
-    with (root / "workflow/support/busco_kmer_distance.cpp").open("a") as handle:
-        handle.write("\n// copied kernel source edit\n")
-    assert compute() != before_kernel_edit
+    for name in kernels:
+        before_kernel_edit = compute()
+        with (root / "workflow/support" / name).open("a") as handle:
+            handle.write("\n// copied kernel source edit\n")
+        assert compute() != before_kernel_edit
 
 
 def test_docker_context_excludes_the_same_generated_files_as_build_hash():
