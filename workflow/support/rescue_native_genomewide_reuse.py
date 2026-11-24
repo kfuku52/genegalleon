@@ -33,7 +33,15 @@ _NATIVE_SEARCH_EQUIVALENT_SOURCES = (
     '95f9da7abb5773a102988bc1a0eeea189e70f8b413036060606c012e6863c07b',
     '6f1fa188a4085a0e4b7df1876e42eca428eaf785d79443fef244e5829f909ad1',
 )
-_EQUIVALENT_PROTEIN_SCORER = '500995deb55f8644da2235f762ca521bd411e027146840433d0a0b7eef4ea61a'
+_PRIOR_PROTEIN_SCORERS = {
+    (None, None, None),
+    ('500995deb55f8644da2235f762ca521bd411e027146840433d0a0b7eef4ea61a', None, None),
+}
+_EQUIVALENT_PROTEIN_SCORER = (
+    '0bb0d785b256035fb50dc7dfa4d056977d1442136154fa2a4d7b3ab4238cb974',
+    '317b83fc5419bc738fa487b6375d39e6f6455a0e45bf73cdb9a6fb3470ad63cc',
+    '1abc9e9a974e913023e492e8eb3415f82068ccede99adf495b3b5de9a7806111',
+)
 
 
 def _r():
@@ -138,11 +146,14 @@ def prove_contract(previous_plan,producer_source):
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
         if before['cached_validation_implementation']!=after['cached_validation_implementation']:
             raise IncompatibleEvidence('The producer cached-validation dispatcher changed')
-    scoring_field = 'native_protein_scoring_implementation'
+    scoring_modules = {
+        'rescue_protein_scoring.py': 'native_protein_scoring_implementation',
+        'rescue_alignment_kernel.py': 'native_protein_alignment_implementation',
+        'rescue_protein_alignment.cpp': 'native_protein_alignment_source',
+    }
     if request.get('oriongeno_genomewide'):
         bindings['rescue_native_genomewide.py']='native_genomewide_implementation'
-        if scoring_field in before:
-            bindings['rescue_protein_scoring.py'] = scoring_field
+        bindings.update({module: field for module, field in scoring_modules.items() if field in before})
     proof=r.FreshDigestBatch()
     paths=[*[old/name for name in bindings],*[current/name for name in strict.keys()|functions.keys()],
            current/'rescue_cached_validation.py',current/'transcript_utrs.py',current/'rescue_native_genomewide.py']
@@ -180,9 +191,11 @@ def prove_contract(previous_plan,producer_source):
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
         'oriongeno_candidate_implementation','nwkit'}
+    scoring_fields = tuple(scoring_modules.values())
     if not request.get('oriongeno_genomewide') or (
-            scoring_field not in before and after[scoring_field] == _EQUIVALENT_PROTEIN_SCORER):
-        permitted.add(scoring_field)
+            tuple(before.get(field) for field in scoring_fields) in _PRIOR_PROTEIN_SCORERS
+            and tuple(after.get(field) for field in scoring_fields) == _EQUIVALENT_PROTEIN_SCORER):
+        permitted.update(scoring_fields)
     if 'source_verification_implementation' not in before:
         permitted.add('source_verification_implementation')
     # The GPU launcher is not invoked here. Its old bytes remain bound, while

@@ -7,6 +7,7 @@ workflow/support/*
 !workflow/support/treevis/
 !workflow/support/treevis/**
 !workflow/support/busco_kmer_distance.cpp
+!workflow/support/rescue_protein_alignment.cpp
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache

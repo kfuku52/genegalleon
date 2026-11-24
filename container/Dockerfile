@@ -314,6 +314,12 @@ FROM system AS guide-kernel-build
 COPY workflow/support/busco_kmer_distance.cpp /tmp/busco_kmer_distance.cpp
 RUN g++ -std=c++17 -O3 -pthread /tmp/busco_kmer_distance.cpp -o /usr/local/bin/gg-kmer-distance
 
+FROM system AS rescue-kernel-build
+COPY workflow/support/rescue_protein_alignment.cpp /tmp/rescue_protein_alignment.cpp
+RUN source_sha="$(sha256sum /tmp/rescue_protein_alignment.cpp | cut -d' ' -f1)" \
+ && g++ -std=c++17 -O3 -fPIC -shared -DGG_RESCUE_ALIGNMENT_SOURCE_SHA="${source_sha}" \
+    /tmp/rescue_protein_alignment.cpp -o /usr/local/lib/libgg_rescue_protein_alignment.so
+
 FROM base AS runtime-system
 RUN bash /opt/pg/scripts/install_system_packages.sh runtime
 
@@ -413,6 +419,8 @@ RUN chmod +x /opt/pg/scripts/validate_runtime.sh \
  && micromamba run -n base python -m pip check \
  && micromamba clean -i -l -y \
  && bash /opt/pg/scripts/post_install_notes.sh "${TARGETARCH}"
+
+COPY --from=rescue-kernel-build /usr/local/lib/libgg_rescue_protein_alignment.so /usr/local/lib/
 
 # Both profiles use the same scientific assembly and validation instructions.
 # Wrappers pass matching --target and BUILD_TARGET values. A direct Docker

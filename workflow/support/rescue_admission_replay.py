@@ -150,7 +150,8 @@ def prove_contract(previous_plan, producer_source):
     # This route is absent from legacy plans. Once used, its implementation is
     # strict evidence and cannot change during an admission-only replay.
     if not previous_plan['request'].get('oriongeno_genomewide'):
-        permitted.update(('native_genomewide_implementation', 'native_protein_scoring_implementation'))
+        permitted.update(('native_genomewide_implementation', 'native_protein_scoring_implementation',
+                          'native_protein_alignment_implementation', 'native_protein_alignment_source'))
     # The worker dispatcher was absent from older raw producers and is not
     # executed by admission replay. Once declared, retain its exact identity.
     if 'cached_validation_implementation' not in before:

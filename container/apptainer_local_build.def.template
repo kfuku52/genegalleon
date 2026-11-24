@@ -9,6 +9,7 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
     @@STAGING_ROOT@@/source_branches.env /opt/pg/source_branches.env
     @@STAGING_ROOT@@/busco_kmer_distance.cpp /opt/pg/src/busco_kmer_distance.cpp
+    @@STAGING_ROOT@@/rescue_protein_alignment.cpp /opt/pg/src/rescue_protein_alignment.cpp
     @@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis
     @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
 
@@ -203,6 +204,9 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
         "${rapidnj_arm_repo_url}" "${rapidnj_arm_repo_sha:-${rapidnj_arm_repo_ref}}" \
         "${artifact_root}/rapidnjArm"
     g++ -std=c++17 -O3 -pthread /opt/pg/src/busco_kmer_distance.cpp -o /usr/local/bin/gg-kmer-distance
+    alignment_source_sha="$(sha256sum /opt/pg/src/rescue_protein_alignment.cpp | cut -d' ' -f1)"
+    g++ -std=c++17 -O3 -fPIC -shared -DGG_RESCUE_ALIGNMENT_SOURCE_SHA="${alignment_source_sha}" \
+        /opt/pg/src/rescue_protein_alignment.cpp -o /usr/local/lib/libgg_rescue_protein_alignment.so
     bash /opt/pg/scripts/install_source_artifacts.sh "${artifact_root}"
     rm -rf -- "${artifact_root}"
     /opt/pg/scripts/install_helvetica_compat_font.sh base

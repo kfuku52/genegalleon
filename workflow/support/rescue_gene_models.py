@@ -230,6 +230,8 @@ def identities():
     versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
     versions["native_genomewide_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide.py"))
     versions["native_protein_scoring_implementation"] = digest(Path(__file__).with_name("rescue_protein_scoring.py"))
+    versions["native_protein_alignment_implementation"] = digest(Path(__file__).with_name("rescue_alignment_kernel.py"))
+    versions["native_protein_alignment_source"] = digest(Path(__file__).with_name("rescue_protein_alignment.cpp"))
     versions["genomewide_reuse_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide_reuse.py"))
     versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))

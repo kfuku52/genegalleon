@@ -841,6 +841,10 @@ This also applies to the native search when extending previous validated
 rescue evidence.
 
 Protein scoring workers read the shared search FASTAs and receive only pair IDs.
+The runtime's SIMD global alignment uses the original affine scores and tie order.
+Scoring threads share read-only FASTA mappings, start the heavier tasks first, and
+keep two groups in flight while the parent validates genomic evidence. Legacy
+runtimes use the Biopython implementation in process workers.
 During scoring, completed groups are stored in a single compressed SQLite
 checkpoint at `oriongeno_scores/SPECIES.sqlite3`. A retry verifies the frozen
 inputs and pair IDs and resumes from the saved scores, even with a different

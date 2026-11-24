@@ -1,4 +1,5 @@
 """Check exact native score ordering and interrupted score checkpoint recovery."""
+import random
 import sqlite3
 import sys
 from itertools import product
@@ -9,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 
 import gene_model_selection as selection
+import rescue_alignment_kernel as alignment
 import rescue_protein_scoring as scoring
 
 
@@ -17,13 +19,21 @@ def write_fastas(directory, queries, donors):
         (directory / name).write_text(''.join(f'>{token}\n{protein}\n' for token, protein in proteins.items()))
 
 
-def test_packed_worker_scores_match_pair_score(tmp_path, monkeypatch):
-    queries = {'n0': 'ACDJBZXY', 'n1': 'M' * 5001, 'n2': 'MALLLLLLLLLADTW*'}
-    donors = {'d0': 'acdjbzxy*', 'd1': 'ACDDATY', 'd2': 'MATW', 'd3': 'M' * 5000, 'd4': '*'}
+@pytest.mark.parametrize('use_kernel', [False, True])
+def test_packed_worker_scores_match_pair_score(tmp_path, monkeypatch, use_kernel):
+    if not use_kernel:
+        monkeypatch.setattr(alignment, 'compiled_kernel', lambda: None)
+    elif alignment.compiled_kernel() is None:
+        pytest.skip('GeneGalleon SIMD alignment library is unavailable')
+    prefix = 'ANQH' * 7
+    queries = {'n0': 'ACDJBZXY', 'n1': 'M' * 5001, 'n2': prefix + 'MALLLLLLLLLADTW*'}
+    donors = {'d0': 'acdjbzxy*', 'd1': 'ACDDATY', 'd2': prefix + 'MATW', 'd3': 'M' * 5000, 'd4': '*'}
     write_fastas(tmp_path, queries, donors)
-    # Force the spawned worker path with several long but bounded comparisons.
-    pairs = list(product(queries, donors)) * 35
-    reference = {(q, d): selection.pair_score({'protein': queries[q]}, {'protein': donors[d]}) for q, d in pairs[:15]}
+    # Exercise both worker pools, two groups and restoration of input order.
+    pairs = list(product(queries, donors)) * 69
+    pairs = [pair for pair in pairs if pair not in {('n1', 'd2'), ('n2', 'd3')}]
+    reference = {(q, d): selection.pair_score({'protein': queries[q]}, {'protein': donors[d]})
+                 for q, d in set(pairs)}
     monkeypatch.setattr(scoring, 'CHECKPOINT_PAIRS', 512)
     checkpoint = tmp_path / 'scores.sqlite3'
     fresh = list(scoring.scored_pairs(pairs, queries, donors, tmp_path, 2, checkpoint=checkpoint))
@@ -64,3 +74,23 @@ def test_checkpoint_recovers_committed_groups_and_rejects_changed_inputs(tmp_pat
         db.execute("UPDATE scores SET payload=x'00' WHERE position=0")
     with pytest.raises(ValueError, match='Damaged .* checkpoint'):
         list(scoring.scored_pairs(pairs, queries, donors, tmp_path, 1, checkpoint=checkpoint))
+
+
+def test_simd_kernel_matches_biopython_ties_and_gap_flags():
+    kernel = alignment.compiled_kernel()
+    if kernel is None:
+        pytest.skip('GeneGalleon SIMD alignment library is unavailable')
+    rng = random.Random(3042)
+    alphabet = 'ACDEFGHIKLMNPQRSTVWYXBZJ'
+    varied = [(''.join(rng.choices(alphabet, k=rng.randrange(1, 200))),
+               ''.join(rng.choices(alphabet, k=rng.randrange(1, 200)))) for _ in range(512)]
+    cases = [('AAAAA', 'AAAA'), ('AB', 'BA'), ('AXBZJC', 'AXBZJC'),
+             ('CEHQA' + 'P' * 9 + 'CMWQV', 'CEHQACMWQV'),
+             ('CMWQV', 'P' * 9 + 'CMWQV'), ('Q' * 81, 'Q' * 31),
+             ('AC' * 120, 'CAC' * 80), ('TEFGHA', 'EFGHAT')]
+    stats = alignment.buffer()
+    for first, second in [*cases, *[pair[::-1] for pair in cases], *varied]:
+        n, m = len(first), len(second)
+        assert kernel(first.encode(), n, second.encode(), m, stats) == 0
+        assert alignment.score_counts(n, m, *stats) == selection.pair_score(
+            {'protein': first}, {'protein': second}), (first, second)
