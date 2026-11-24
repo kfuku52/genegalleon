@@ -771,8 +771,10 @@ to distinct transcripts or genes. It also writes a gene-level
 `Genus_species_initial_longestCDS.fa` for initial orthology inference.
 
 The resulting `assembly_candidates/inputs.tsv` has `species`, `cds`,
-`transcript_gene_map` and optional `genetic_code` (default 1) columns. You can
-also supply an existing per-transcript CDS FASTA and a `transcript_id`, `gene_id`
+`transcript_gene_map` and optional `genetic_code` (default 1) columns. The optional
+`transcript` column binds the source assembly FASTA for exporting selected
+transcripts. You can also supply an existing per-transcript CDS FASTA and a
+`transcript_id`, `gene_id`
 mapping TSV directly. Every FASTA ID must have exactly one mapping. Use the
 `GENUS_SPECIES_GENEID` format for gene IDs. The optional `baseline` column can
 mark one existing representative per gene with `1`. Otherwise the longest input
@@ -814,7 +816,10 @@ The complete cohort's paired FASTAs are in `effective/sequence/species_cds` and
 analyses. `effective/sequence/representative_map.tsv` records the source
 transcript, the initial transcript for assembly species, selection status and
 admission to the FASTAs. The usual `effective/inputs.tsv` covers the subset with
-genome and GFF inputs.
+genome and GFF inputs. When the source assembly FASTA is supplied, the selected
+cDNA sequences are also written to `effective/sequence/species_transcript`
+and listed in the sequence manifest. Both effective manifests support
+[transcript-reference quantification](main-stages-and-what-they-do.md#quantify-selected-transcripts).
 
 ## Review figures
 

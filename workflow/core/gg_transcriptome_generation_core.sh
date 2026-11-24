@@ -1167,12 +1167,16 @@ PY
 }
 
 acquire_transcriptome_tmp_lock() {
-  local lock_path="${dir_tmp}/.gg_active.lock"
+  local lock_path=${1:-"${dir_tmp}/.gg_active.lock"}
+  if [[ -L "$(dirname "${lock_path}")" ]]; then
+    echo "Unsafe transcriptome lock directory: ${lock_path}" >&2
+    return 1
+  fi
   if [[ -e "${lock_path}" && ! -f "${lock_path}" ]] || [[ -L "${lock_path}" ]]; then
     echo "Unsafe transcriptome scratch lock path: ${lock_path}" >&2
     return 1
   fi
-  ensure_dir "${dir_tmp}"
+  ensure_dir "$(dirname "${lock_path}")"
   exec {transcriptome_tmp_lock_fd}>"${lock_path}"
   if ! flock -n "${transcriptome_tmp_lock_fd}"; then
     echo "Transcriptome scratch directory is already active: ${dir_tmp}" >&2
@@ -3623,13 +3627,20 @@ if [[ "${GG_CORE_SOURCE_ONLY:-0}" == "1" ]]; then
 fi
 
 # Setting modes
-if [[ ${gg_debug_mode:-0} -eq 1 ]]; then
+if [[ ${gg_debug_mode:-0} -eq 1 && "${quantification_only:-0}" != 1 ]]; then
   enable_all_run_flags_for_debug_mode
   echo "gg debug mode: max_assembly_input_fastq_size is set to 30,000,000 bp."
   max_assembly_input_fastq_size="30,000,000"
 fi
 
 dir_transcriptome_assembly_output="${gg_workspace_output_dir}/transcriptome_assembly"
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  dir_transcriptome_assembly_output="${gg_workspace_output_dir}/transcriptome_quantification"
+  if [[ -L "${dir_transcriptome_assembly_output}" || -L "${dir_transcriptome_assembly_output}/amalgkit_getfastq" ]]; then
+    echo "Refusing a redirected quantification output or reads directory." >&2
+    exit 1
+  fi
+fi
 dir_input_fastq="${gg_workspace_input_dir}/species_rnaseq"
 dir_input_sra_list="${gg_workspace_input_dir}/query_sra_id"
 dir_input_amalgkit_metadata="$(transcriptome_metadata_input_root "${gg_workspace_input_dir}" "${transcriptome_metadata_input_subdir:-amalgkit_metadata}")" || exit 1
@@ -3817,14 +3828,24 @@ elif [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
   fi
 fi
 
-dir_tmp=$(gg_task_tmp_path "${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
+transcriptome_task_key="${GG_ARRAY_TASK_ID}_${sp_ub}"
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  transcriptome_task_key="0_${sp_ub}"
+fi
+dir_tmp=$(gg_task_tmp_path "${dir_transcriptome_assembly_output}/tmp/${transcriptome_task_key}") || exit 1
 transcriptome_tmp_root=$(dirname "${dir_tmp}")
 if [[ -L "${dir_tmp}" || ( -e "${dir_tmp}" && ! -d "${dir_tmp}" ) ]]; then
   echo "Refusing an unsafe transcriptome scratch path: ${dir_tmp}" >&2
   exit 1
 fi
 cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "$(basename "${dir_tmp}")" || exit 1
-acquire_transcriptome_tmp_lock || exit 1
+if [[ "${quantification_only:-0}" == 1 && "${GG_COMMON_TMP_ROOT}" != workspace ]]; then
+  # Each node-local scratch path is private. Guard the shared species outputs
+  # across retries and independent arrays even when scratch lives on that node.
+  acquire_transcriptome_tmp_lock "${dir_transcriptome_assembly_output}/tmp/${transcriptome_task_key}/.gg_active.lock" || exit 1
+else
+  acquire_transcriptome_tmp_lock || exit 1
+fi
 if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
   dir_amalgkit_getfastq_sp="${transcriptome_getfastq_cache_dir}/${sp_ub}"
   if [[ -e "${dir_amalgkit_getfastq_sp}" && \
@@ -3837,6 +3858,13 @@ else
   dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
 fi
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  if [[ -L "${dir_amalgkit_getfastq_sp}" || -L "${dir_tmp}/downloads" ]]; then
+    echo "Refusing a redirected job-owned read directory." >&2
+    exit 1
+  fi
+  dir_amalgkit_download_dir="${dir_tmp}/downloads"
+fi
 dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
 amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"
 amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"
@@ -3995,6 +4023,98 @@ if [[ -e "${file_amalgkit_read_technology_summary_sh}" ]]; then
 fi
 detect_transcriptome_read_technology_from_metadata "${file_amalgkit_metadata}" "${file_amalgkit_read_technology}" "${file_amalgkit_read_technology_summary_sh}"
 configure_transcriptome_runtime_from_detected_metadata
+
+select_transcriptome_quant_reference() {
+  file_kallisto_reference_fasta=""
+  file_quant_transcript_map=""
+  quant_transcript_map_sha256=""
+  if [[ ${kallisto_reference} == 'species_transcript' ]]; then
+    if [[ -z "${representative_inputs}" ]]; then
+      echo "species_transcript quantification requires verified representative_inputs." >&2
+      return 1
+    fi
+    file_quant_transcript_map="${dir_tmp}/transcript_gene.tsv"
+    file_kallisto_reference_fasta=$(python "${gg_support_dir}/gene_model_refinement.py" verify-quant-transcripts \
+      --inputs "${representative_inputs}" --species "${sp_ub}" --gene-map "${file_quant_transcript_map}") || return 1
+    quant_transcript_map_sha256=$(sha256sum -- "${file_quant_transcript_map}") || return 1
+    quant_transcript_map_sha256=${quant_transcript_map_sha256%% *}
+  elif [[ ${kallisto_reference} == 'species_cds' ]]; then
+    if [[ -n "${representative_inputs}" ]]; then
+      # Existing outputs can still trigger a provenance check or automatic rebuild.
+      if [[ ${run_amalgkit_quant} -eq 1 || -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ||
+            -e "${dir_amalgkit_quant}/${sp_ub}" || -e "${dir_amalgkit_quant}/${sp_ub}.zip" ]]; then
+        file_kallisto_reference_fasta=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+          --inputs "${representative_inputs}" --field cds --species "${sp_ub}") || return 1
+      fi
+    else
+      dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
+      kallisto_ref_candidates=()
+      mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
+      if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
+        file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
+      elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
+        echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
+        return 1
+      fi
+    fi
+  elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
+    file_kallisto_reference_fasta=${file_longestcds_transcript}
+  elif [[ ${kallisto_reference} == 'longest_cds' ]]; then
+    file_kallisto_reference_fasta=${file_longestcds}
+  elif [[ ${kallisto_reference} == 'contamination_removed_longest_cds' ]]; then
+    file_kallisto_reference_fasta=${file_longestcds_contamination_removal_fasta}
+  else
+    echo "Unknown kallisto_reference: ${kallisto_reference}" >&2
+    return 1
+  fi
+}
+
+prepare_transcriptome_quantification() {
+  quant_needs_update=0
+  gg_artifact_contract_init quant_provenance_args "transcriptome_quant" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.quant.json"
+  quant_provenance_args+=(
+    --input "metadata=${file_amalgkit_metadata}"
+    --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
+    --input "reference=${file_kallisto_reference_fasta}"
+    --output "quant_directory=${dir_amalgkit_quant}/${sp_ub}"
+    --parameter "reference_type=${kallisto_reference}"
+    --parameter "quant_backend=${amalgkit_quant_backend}"
+    --parameter "oarfish_seq_tech=${amalgkit_oarfish_seq_tech}"
+    --parameter "oarfish_options=${amalgkit_oarfish_options}"
+    --parameter "clean_fastq=no"
+    --parameter "build_index=yes"
+  )
+  if [[ "${kallisto_reference}" == "species_cds" && -n "${representative_inputs}" ]]; then
+    quant_provenance_args+=(--input "representative_inputs=${representative_inputs}")
+  fi
+  if [[ -n "${file_quant_transcript_map}" ]]; then
+    quant_provenance_args+=(--parameter "transcript_gene_map_sha256=${quant_transcript_map_sha256}")
+  fi
+  quant_output_validation=""
+  if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
+    "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
+    --metadata "${file_amalgkit_metadata}" \
+    --quant-root "${dir_amalgkit_quant}/${sp_ub}" 2>&1)
+  then
+    echo "Existing amalgkit quant output is unavailable or invalid; rebuilding: ${quant_output_validation}" >&2
+    quant_needs_update=1
+  else
+    gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || return $?
+  fi
+}
+
+quantification_reused=0
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  select_transcriptome_quant_reference || exit $?
+  if [[ -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ]]; then
+    prepare_transcriptome_quantification || exit $?
+    if [[ ${quant_needs_update} -eq 0 ]]; then
+      echo "Reusing existing quantification; skipping getfastq."
+      run_amalgkit_getfastq=0
+      quantification_reused=1
+    fi
+  fi
+fi
 
 task="amalgkit getfastq"
 amalgkit_fastq_files=()
@@ -5261,35 +5381,8 @@ fi
 
 task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
-file_kallisto_reference_fasta=""
-if [[ ${kallisto_reference} == 'species_cds' ]]; then
-  if [[ -n "${representative_inputs}" ]]; then
-    # Existing outputs can still trigger a provenance check or automatic rebuild.
-    if [[ ${run_amalgkit_quant} -eq 1 || -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ||
-          -e "${dir_amalgkit_quant}/${sp_ub}" || -e "${dir_amalgkit_quant}/${sp_ub}.zip" ]]; then
-      file_kallisto_reference_fasta=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
-        --inputs "${representative_inputs}" --field cds --species "${sp_ub}") || exit 1
-    fi
-  else
-    dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
-    kallisto_ref_candidates=()
-    mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
-    if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
-      file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
-    elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
-      echo "Expected exactly one species_cds reference for ${sp_ub}; found ${#kallisto_ref_candidates[@]}. Exiting."
-      exit 1
-    fi
-  fi
-elif [[ ${kallisto_reference} == 'longest_transcript' ]]; then
-  file_kallisto_reference_fasta=${file_longestcds_transcript}
-elif [[ ${kallisto_reference} == 'longest_cds' ]]; then
-  file_kallisto_reference_fasta=${file_longestcds}
-elif [[ ${kallisto_reference} == 'contamination_removed_longest_cds' ]]; then
-  file_kallisto_reference_fasta=${file_longestcds_contamination_removal_fasta}
-else
-  echo "Please check the input parameter. kallisto_reference must not be: ${kallisto_reference}"
-  exit 1
+if [[ "${quantification_only:-0}" != 1 ]]; then
+  select_transcriptome_quant_reference || exit $?
 fi
 if [[ ${run_amalgkit_quant} -eq 1 ]] && \
   is_public_original_completion_manifest_v3 \
@@ -5327,37 +5420,12 @@ then
   fi
   echo "Migrated public FASTQ completion metadata without re-downloading reads or rebuilding the assembly."
 fi
-quant_needs_update=0
-gg_artifact_contract_init quant_provenance_args "transcriptome_quant" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.quant.json"
-quant_provenance_args+=(
-  --input "metadata=${file_amalgkit_metadata}"
-  --input "getfastq_completion=${dir_amalgkit_getfastq_sp}/getfastq_completion.json"
-  --input "reference=${file_kallisto_reference_fasta}"
-  --output "quant_directory=${dir_amalgkit_quant}/${sp_ub}"
-  --parameter "reference_type=${kallisto_reference}"
-  --parameter "quant_backend=${amalgkit_quant_backend}"
-  --parameter "oarfish_seq_tech=${amalgkit_oarfish_seq_tech}"
-  --parameter "oarfish_options=${amalgkit_oarfish_options}"
-  --parameter "clean_fastq=no"
-  --parameter "build_index=yes"
-)
-if [[ "${kallisto_reference}" == "species_cds" && -n "${representative_inputs}" ]]; then
-  quant_provenance_args+=(--input "representative_inputs=${representative_inputs}")
-fi
-quant_output_validation=""
-if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
-  "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
-  --metadata "${file_amalgkit_metadata}" \
-  --quant-root "${dir_amalgkit_quant}/${sp_ub}" 2>&1)
-then
-  echo "Existing amalgkit quant output is unavailable or invalid; rebuilding: ${quant_output_validation}" >&2
-  quant_needs_update=1
-else
-  gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant "${quant_provenance_args[@]}" || exit $?
+if [[ ${quantification_reused} -eq 0 ]]; then
+  prepare_transcriptome_quantification || exit $?
 fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
-  if [[ "${selected_transcriptome_mode}" == "sraid" ]] && \
+  if [[ "${selected_transcriptome_mode}" == "sraid" || "${quantification_only:-0}" == 1 ]] && \
     ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
       "${file_amalgkit_metadata}"
@@ -5374,8 +5442,10 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     exit 1
   fi
   quant_species_output_dir="${dir_amalgkit_quant%/}/${sp_ub}"
-  rm -rf -- "${quant_species_output_dir}"
-  ensure_dir "${quant_species_output_dir}"
+  if [[ "${quantification_only:-0}" != 1 ]]; then
+    rm -rf -- "${quant_species_output_dir}"
+    ensure_dir "${quant_species_output_dir}"
+  fi
   if [[ ! -d "${dir_amalgkit_getfastq_sp}" ]]; then
     echo "amalgkit getfastq output directory not found: ${dir_amalgkit_getfastq_sp}. Exiting."
     exit 1
@@ -5453,6 +5523,9 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     if [[ -s "${quant_reference_alias_audit}" ]]; then
       mv -- "${quant_reference_alias_audit}" "./quant/reference_aliases.tsv"
     fi
+    if [[ -n "${file_quant_transcript_map}" ]]; then
+      mv -- "${file_quant_transcript_map}" "./quant/transcript_gene.tsv"
+    fi
     mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"
     rm -rf -- "./quant"
     rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
@@ -5501,6 +5574,7 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
 
   amalgkit merge \
     --out_dir "./" \
+    --threads "${GG_TASK_CPUS}" \
     --metadata "${merge_metadata_file}"
 
   if merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \
@@ -5537,7 +5611,9 @@ transcriptome_summary_finalizer_should_run=0
 transcriptome_summary_finalizer_claimed=0
 transcriptome_summary_transaction_lock_acquired=0
 transcriptome_summary_stage_parent=""
-if gg_array_finalizer_claim \
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  : # Independent species quantification has no multispecies finalizer.
+elif gg_array_finalizer_claim \
   "${transcriptome_provenance_dir}/array_finalizers" \
   "multispecies_summary" \
   "${transcriptome_expected_tasks}"; then

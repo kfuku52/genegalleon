@@ -159,7 +159,7 @@ def test_optional_view_config_is_registered_for_container_forwarding(name):
     assert 'forward_config_vars_to_container_env "${gg_entrypoint_name}"' in source
 
 
-@pytest.mark.parametrize("consumer", ["annotation", "fractionation", "quantification"])
+@pytest.mark.parametrize("consumer", ["annotation", "fractionation", "quantification", "transcript_quantification"])
 def test_actual_core_input_routing_uses_verified_view(selected_view, tmp_path, consumer):
     effective, _cds, _protein = selected_view
     environment = dict(os.environ, gg_support_dir=str(SUPPORT), representative_inputs=str(effective / "inputs.tsv"),
@@ -180,11 +180,15 @@ def test_actual_core_input_routing_uses_verified_view(selected_view, tmp_path, c
                     str(effective / "species_cds/Donor_one.fa")]
     else:
         text = (ROOT / "workflow/core/gg_transcriptome_generation_core.sh").read_text()
-        start = text.index('file_kallisto_reference_fasta=""')
-        end = text.index('if [[ ${run_amalgkit_quant} -eq 1 ]] &&', start)
-        script = text[start:end]
+        start = text.index('select_transcriptome_quant_reference() {')
+        end = text.index('prepare_transcriptome_quantification() {', start)
+        script = text[start:end] + 'select_transcriptome_quant_reference\n'
         result = 'printf "%s\\n" "$file_kallisto_reference_fasta"\n'
-        expected = [str(effective / "species_cds/Target_species.fa")]
+        role = "species_cds"
+        if consumer == "transcript_quantification":
+            role = "species_transcript"
+            environment.update(kallisto_reference="species_transcript", dir_tmp=str(tmp_path))
+        expected = [str(effective / role / "Target_species.fa")]
     completed = subprocess.run(["bash", "-c", 'set -euo pipefail\nsource "$gg_support_dir/gg_util.sh"\n' + script + result],
                                 env=environment, text=True, capture_output=True, timeout=30)
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -201,8 +205,15 @@ def test_actual_core_input_routing_uses_verified_view(selected_view, tmp_path, c
         expected[1] = str(reader)
     assert actual == expected
     # Tampered selected files must stop before a raw-input fallback is consumed.
-    selected_cds = effective / ("analysis_cds" if consumer == "annotation" else "species_cds") / "Target_species.fa"
-    selected_cds.write_text(selected_cds.read_text() + "A\n")
+    if consumer == "transcript_quantification":
+        assert refinement.read_table(tmp_path / "transcript_gene.tsv") == [
+            {"target_id": "short", "gene_id": "Target_species_g", "source_transcript_id": "short"}]
+    role = {
+        "annotation": "analysis_cds",
+        "transcript_quantification": "species_transcript",
+    }.get(consumer, "species_cds")
+    selected_fasta = effective / role / "Target_species.fa"
+    selected_fasta.write_text(selected_fasta.read_text() + "A\n")
     failed = subprocess.run(["bash", "-c", 'set -euo pipefail\nsource "$gg_support_dir/gg_util.sh"\n' + script + result],
                             env=environment, text=True, capture_output=True, timeout=30)
     assert failed.returncode != 0

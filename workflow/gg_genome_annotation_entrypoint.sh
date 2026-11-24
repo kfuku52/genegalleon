@@ -99,6 +99,8 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 
 representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv.
 
+run_transcript_quantification=0 # Set 1 for a CPU-only quantification job using verified refinement transcripts.
+
 # CDS workflow flags
 run_collect_gff_info=0 # Collect per-gene coordinates, exon/intron structure, and gene stats from workspace/input/species_gff.
 run_busco_cds=0 # BUSCO completeness analysis on species CDS inputs.
@@ -187,6 +189,14 @@ delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Se
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 # Forward config variables (including external overrides) into container environment.
 gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir"
+case "${run_transcript_quantification:-0}" in
+  1)
+    export GG_TRANSCRIPTOME_REPRESENTATIVE_INPUTS="${representative_inputs}"
+    exec bash "${gg_workflow_dir}/gg_transcriptome_generation_entrypoint.sh" --genome-annotation-quantification
+    ;;
+  0) ;;
+  *) echo "run_transcript_quantification must be 0 or 1." >&2; exit 1 ;;
+esac
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1

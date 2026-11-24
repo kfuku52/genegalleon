@@ -489,7 +489,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if transcriptome_sources:
             if transcriptome_inputs:
                 files.append(str(transcriptome_inputs))
-            files.extend(s[k] for s in transcriptome_sources.values() for k in ('fasta', 'transcript_gene_map'))
+            files.extend(s[k] for s in transcriptome_sources.values()
+                         for k in ('fasta', 'transcript_gene_map', 'transcript') if k in s)
         inherited = {k: v for k, v in anchors['request']['parameters'].items() if k.startswith('terminal_')} if anchor_root else {}
         params = {**DEFAULTS, **inherited, **parameters}
         if params['policy'] not in {'longest', 'conserved'} or params['mode'] not in {'off', 'audit', 'conservative'}:
@@ -3867,7 +3868,7 @@ def apply_reviewed_phase_rows(graph, repairs):
 def write_sequence_view(tmp, db, request, selected_by_species, retired_by_species, coding_audit):
     """Publish paired coding sequences for the complete mixed cohort."""
     output = tmp / 'sequence'
-    for directory in ('species_cds', 'species_protein'):
+    for directory in ('species_cds', 'species_protein', 'species_transcript'):
         (output / directory).mkdir(parents=True)
     genome_admission = {(name, gene): status for name, gene, _, status, *_ in coding_audit}
     transcriptome_sources = request['transcriptome_sources']
@@ -3875,8 +3876,12 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
     for name in sorted(selected_by_species):
         rows = selected_by_species[name]
         cds_path, pep_path = (output / role / (name + '.fa') for role in ('species_cds', 'species_protein'))
+        transcript_path = output / 'species_transcript' / (name + '.fa')
+        transcript_input = ''
         if name in request['sources']:
             code = request['sources'][name]['genetic_code']
+            os.link(tmp / 'species_transcript' / transcript_path.name, transcript_path)
+            transcript_input = transcript_path.relative_to(output)
             os.link(tmp / 'analysis_cds' / cds_path.name, cds_path)
             os.link(tmp / 'species_protein' / pep_path.name, pep_path)
             for row in rows:
@@ -3885,8 +3890,10 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
                     decisions.append((row, 'genome_annotation', '', genome_admission[name, gene]))
             kind = 'genome_annotation'
         else:
-            code = transcriptome_sources[name]['genetic_code']
+            source = transcriptome_sources[name]
+            code = source['genetic_code']
             selected = {row['gene_id']: row for row in rows}
+            transcript_ids = set()
             with cds_path.open('w') as cds, pep_path.open('w') as protein:
                 for locus in iter_loci(db, name):
                     gene = locus['gene_id']
@@ -3899,12 +3906,16 @@ def write_sequence_view(tmp, db, request, selected_by_species, retired_by_specie
                         sequence = candidate['cds']
                         cds.write(f'>{gene}\n{sequence[:len(sequence) // 3 * 3]}\n')
                         protein.write(f'>{gene}\n{candidate["protein"]}\n')
+                        transcript_ids.add(row['source_transcript_id'])
                     decisions.append((row, 'transcriptome_assembly', baseline, 'included' if usable else 'excluded'))
+            if source.get('transcript'):
+                transcriptome.write_selected_transcripts(source['transcript'], transcript_ids, transcript_path)
+                transcript_input = transcript_path.relative_to(output)
             kind = 'transcriptome_assembly'
-        inputs.append((name, kind, cds_path.relative_to(output), pep_path.relative_to(output), code))
-    rescue.write_tsv(output / 'inputs.tsv', ('species', 'source_kind', 'cds', 'protein', 'genetic_code'), inputs)
+        inputs.append((name, kind, cds_path.relative_to(output), pep_path.relative_to(output), code, transcript_input))
+    rescue.write_tsv(output / 'inputs.tsv', ('species', 'source_kind', 'cds', 'protein', 'genetic_code', 'transcript'), inputs)
     rescue.write_tsv(output / 'species_genetic_code.tsv', ('species', 'genetic_code'),
-                     [(name, code) for name, _, _, _, code in inputs])
+                     [(name, code) for name, _, _, _, code, _ in inputs])
     rescue.write_tsv(output / 'representative_map.tsv', (*MAP_FIELDS, 'source_kind', 'baseline_transcript_id', 'sequence_admission'),
                      [[*(row.get(k, '') for k in MAP_FIELDS), kind, baseline, admission]
                       for row, kind, baseline, admission in decisions])
@@ -4346,6 +4357,74 @@ def verify_inputs(inputs, field=None, *, species=None, verification=None):
     return result
 
 
+def verify_quant_transcripts(inputs, species, output_map):
+    """Verify the chosen cDNA and emit an exact map for its quantification target IDs."""
+    rescue.safe_token(species, 'Quantification species')
+    batch = FreshDigestBatch(scoped_reads=True)
+    inputs = inputs.resolve(strict=True)
+    if inputs.parent.name == 'sequence':
+        view = inputs.parent
+        root = view.parent
+        receipt = root / 'receipt.json'
+        digest_before = batch.read([inputs, receipt])
+        members = json.loads(receipt.read_text())['files']
+        if inputs.name != 'inputs.tsv' or digest_before[str(inputs)] != members.get('sequence/inputs.tsv'):
+            raise ValueError('Assembly quantification manifest differs from the effective view')
+        with inputs.open(newline='') as stream:
+            matches = [r for r in csv.DictReader(stream, delimiter='\t') if r['species'] == species]
+        if len(matches) != 1 or not matches[0].get('transcript'):
+            raise ValueError(f'Expected one published transcript reference for {species}')
+        row = matches[0]
+        reference = view / 'species_transcript' / (species + '.fa')
+        mapping = view / 'representative_map.tsv'
+        if reference != view / row['transcript']:
+            raise ValueError('Unexpected transcript path in the effective sequence view')
+        expected = {}
+        for path in (reference, mapping):
+            sha = members.get(str(path.relative_to(root)))
+            if path.resolve(strict=True) != path or not sha:
+                raise ValueError('Effective sequence view lacks a verified transcript or representative map')
+            expected[str(path)] = sha
+        batch.read(expected, expected=expected)
+        source_kind = row['source_kind']
+        if source_kind not in {'genome_annotation', 'transcriptome_assembly'}:
+            raise ValueError(f'Unexpected quantification source kind: {source_kind}')
+        genomic = source_kind == 'genome_annotation'
+    else:
+        row, = verified_input_rows(inputs, ('transcript', 'representative_map'), species_names=[species],
+                                   verification=batch)
+        reference, mapping = Path(row['transcript']), Path(row['representative_map'])
+        genomic = True
+
+    genes = {}
+    with mapping.open(newline='') as stream:
+        for row in csv.DictReader(stream, delimiter='\t'):
+            if row['species'] != species:
+                continue
+            transcript_id = row['source_transcript_id']
+            target_id = quote(transcript_id, safe='._-:') if genomic else transcript_id
+            gene = row['gene_id']
+            if target_id in genes and genes[target_id] != (gene, transcript_id):
+                raise ValueError(f'Ambiguous gene for transcript {transcript_id}')
+            genes[target_id] = gene, transcript_id
+    targets = {}
+    for target_id, _, sequence in fasta_records(reference):
+        if not sequence or target_id in targets or target_id not in genes:
+            raise ValueError(f'Empty, duplicate or unmapped quantification target: {target_id}')
+        targets[target_id] = genes[target_id]
+    if not targets:
+        raise ValueError(f'No published transcripts for {species}')
+    batch.check()
+    output_map.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_map.parent) as tmp:
+        path = Path(tmp) / 'transcript_gene.tsv'
+        rescue.write_tsv(path, ('target_id', 'gene_id', 'source_transcript_id'),
+                         [(key, *value) for key, value in sorted(targets.items())])
+        if output_map.is_symlink() or not output_map.is_file() or path.read_bytes() != output_map.read_bytes():
+            path.replace(output_map)
+    return str(reference)
+
+
 def inspect_stages(root, value, cpus=1, *, effective_verification=None):
     """Check the required dependency graph, including absent publications.
 
@@ -4507,6 +4586,10 @@ def parser():
     check.add_argument('--inputs', required=True, type=Path)
     check.add_argument('--species', help='Return the verified file for one exact species and field')
     check.add_argument('--field', choices=['cds', 'protein', 'gff', 'genome', 'analysis_cds', 'analysis_gff', 'representative_map', 'transcript', 'layout', 'analysis_layout', 'coding_layout'])
+    quant = sub.add_parser('verify-quant-transcripts', help='Verify one refined transcript reference and publish its transcript-to-gene map')
+    quant.add_argument('--inputs', type=Path, required=True)
+    quant.add_argument('--species', required=True)
+    quant.add_argument('--gene-map', type=Path, required=True)
     utr = sub.add_parser('reproject-utrs', help='Re-evaluate UTRs from a completed, immutable coding-model view')
     utr.add_argument('--source-output', required=True, type=Path)
     utr.add_argument('--output', required=True, type=Path)
@@ -4523,6 +4606,9 @@ def _main(args):
     if args.command == 'reproject-utrs':
         import transcript_utr_reassessment
         transcript_utr_reassessment.reproject(args.source_output, args.output, args.source_receipt_sha256, args.species)
+        return
+    if args.command == 'verify-quant-transcripts':
+        print(verify_quant_transcripts(args.inputs, args.species, args.gene_map))
         return
     if args.command == 'verify-inputs':
         result = verify_inputs(args.inputs, args.field, species=args.species)

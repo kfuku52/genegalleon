@@ -129,13 +129,21 @@ def test_initial_assembly_cds_preserves_baselines_and_rejects_unmapped_candidate
         refinement.transcriptome.write_initial_cds(species, source, output)
 
 
-def test_transcriptome_only_refinement_retains_explicit_baseline_and_verifies_outputs(tmp_path):
+@pytest.mark.parametrize("with_transcripts", [False, True])
+def test_transcriptome_only_refinement_retains_explicit_baseline_and_verifies_outputs(tmp_path, with_transcripts):
     species, gene = 'Species_assembly', 'Species_assembly_gene'
     cds, mapping = tmp_path / 'cds.fa', tmp_path / 'map.tsv'
     cds.write_text('>short\nATGAAATAA\n>long\nATGAAAAAATAA\n')
     mapping.write_text(f'transcript_id\tgene_id\tbaseline\nshort\t{gene}\t1\nlong\t{gene}\t0\n')
     inputs, edges = tmp_path / 'assemblies.tsv', tmp_path / 'edges.tsv'
-    inputs.write_text(f'species\tcds\ttranscript_gene_map\n{species}\t{cds.name}\t{mapping.name}\n')
+    fields = 'species\tcds\ttranscript_gene_map'
+    record = f'{species}\t{cds.name}\t{mapping.name}'
+    if with_transcripts:
+        assembly = tmp_path / 'assembly.fa'
+        assembly.write_text('>long\nATGAAAAAATAA\n>short\nCGCATGAAATAAGGG\n')
+        fields += '\ttranscript'
+        record += f'\t{assembly.name}'
+    inputs.write_text(fields + '\n' + record + '\n')
     edges.write_text('species_a\tgene_a\tspecies_b\tgene_b\n')
     output = tmp_path / 'run'
     value = refinement.plan(output, transcriptome_inputs=inputs, edges=edges)
@@ -145,6 +153,16 @@ def test_transcriptome_only_refinement_retains_explicit_baseline_and_verifies_ou
     assert len(choices) == 1 and choices[0]['source_transcript_id'] == 'short'
     assert choices[0]['reason'] == 'no_trusted_crossspecies_correspondence'
     assert not (effective / 'inputs.tsv').exists()
+    if with_transcripts:
+        manifest = effective / 'sequence' / 'inputs.tsv'
+        quant_map = tmp_path / 'quant_target_gene.tsv'
+        reference = Path(refinement.verify_quant_transcripts(manifest, species, quant_map))
+        assert reference.read_text() == '>short\nCGCATGAAATAAGGG\n'
+        assert refinement.read_table(quant_map) == [
+            {'target_id': 'short', 'gene_id': gene, 'source_transcript_id': 'short'}]
+        reference.write_text('>short\nATGAAATAA\n')
+        with pytest.raises(ValueError, match='hash mismatch'):
+            refinement.verify_quant_transcripts(manifest, species, quant_map)
     protein = effective / 'sequence/species_protein' / f'{species}.fa'
     protein.write_text('damaged\n')
     assert not refinement.inspect_stages(output, value)['effective']

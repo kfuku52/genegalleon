@@ -45,16 +45,32 @@ def _genetic_code(value):
 def read_sources(path):
     path = Path(path).resolve()
     sources = {}
-    for row in _rows(path, ('species', 'cds', 'transcript_gene_map'), ('genetic_code',)):
+    for row in _rows(path, ('species', 'cds', 'transcript_gene_map'), ('genetic_code', 'transcript')):
         species = rescue.safe_token(row['species'], 'Transcriptome species')
         if species in sources:
             raise ValueError(f'Duplicate transcriptome species: {species}')
         sources[species] = {'fasta': str((path.parent / row['cds']).resolve()),
                             'transcript_gene_map': str((path.parent / row['transcript_gene_map']).resolve()),
                             'genetic_code': _genetic_code(row.get('genetic_code') or 1)}
+        if row.get('transcript'):
+            sources[species]['transcript'] = str((path.parent / row['transcript']).resolve())
     if not sources:
         raise ValueError(f'No transcriptome species in {path}')
     return sources
+
+
+def write_selected_transcripts(assembly, selected, output):
+    remaining = set(selected)
+    with output.open('w') as stream:
+        for name, _, sequence in fasta_records(Path(assembly)):
+            if name not in selected:
+                continue
+            if not sequence or name not in remaining:
+                raise ValueError(f'Empty or duplicate selected assembly transcript: {name}')
+            remaining.remove(name)
+            stream.write(f'>{name}\n{sequence}\n')
+    if remaining:
+        raise ValueError(f'Assembly lacks selected transcript: {min(remaining)}')
 
 
 def _gene_mapping(path, species):
@@ -204,8 +220,8 @@ def prepare(assembly, species, output, code, cpus, assembler=None, corset=None, 
         source = {'fasta': str(cds), 'transcript_gene_map': str(mapping), 'genetic_code': code}
         write_initial_cds(species, source, tmp / f'{species}_initial_longestCDS.fa')
         local.unlink()
-        rescue.write_tsv(tmp / 'inputs.tsv', ('species', 'cds', 'transcript_gene_map', 'genetic_code'),
-                         [(species, cds.name, mapping.name, code)])
+        rescue.write_tsv(tmp / 'inputs.tsv', ('species', 'cds', 'transcript_gene_map', 'genetic_code', 'transcript'),
+                         [(species, cds.name, mapping.name, code, assembly)])
 
     return rescue.stage(output.parent, output.name, key, build, guard=guard, publication_guard=guard)
 
@@ -275,7 +291,8 @@ def prepare_assemblies(directory, excluded, output, cpus, genetic_codes, proof, 
         proof.read(expected, expected=expected)
         imported = read_sources(manifest)
         expected_source = {'fasta': str(stage / 'all_isoforms.cds.fa'),
-                           'transcript_gene_map': str(stage / 'transcript_gene_map.tsv'), 'genetic_code': codes.get(name, 1)}
+                           'transcript_gene_map': str(stage / 'transcript_gene_map.tsv'),
+                           'genetic_code': codes.get(name, 1), 'transcript': str(path)}
         if imported != {name: expected_source}:
             raise ValueError(f'Prepared assembly manifest differs from its verified outputs: {name}')
         files.extend(str(p.resolve()) for p in (path, corset, receipt, manifest, stage_receipt) if p)

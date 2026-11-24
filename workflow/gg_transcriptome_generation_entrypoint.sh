@@ -94,19 +94,28 @@ if ! declare -F gg_entrypoint_initialize >/dev/null 2>&1; then
   echo "Failed to locate gg_entrypoint_bootstrap.sh from BASH_SOURCE[0]=${BASH_SOURCE[0]}" >&2
   exit 1
 fi
-if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1 "gg_transcriptome_generation"; then
+transcriptome_launch_workflow=gg_transcriptome_generation
+case "${1:-}" in
+  --genome-annotation-quantification)
+    transcriptome_launch_workflow=gg_genome_annotation
+    ;;
+  "") ;;
+  *) echo "Unexpected transcriptome entrypoint argument: $1" >&2; exit 1 ;;
+esac
+if ! gg_entrypoint_initialize "${BASH_SOURCE[0]}" 1 "${transcriptome_launch_workflow}"; then
   exit 1
 fi
 gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
-representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement inputs for species_cds quantification.
+representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement inputs for species_cds or species_transcript quantification.
 
 # Mode
 mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}; input source for transcriptome assembly: sraid reads accession lists in workspace/input/query_sra_id, fastq reads local FASTQ directories in workspace/input/species_rnaseq, metadata reads amalgkit metadata TSVs, and auto selects the single available layout.
 
 # Workflow flags
+quantification_only=0 # Quantify against verified refinement transcripts with job-owned reads.
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.
 run_assembly=1 # Transcriptome assembly with Trinity, rnaSPAdes, or RNA-Bloom2.
@@ -155,7 +164,7 @@ protocol_rna_seq="mixed" # {same,mixed}; mixed preserves distinct libraries usin
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}" # {auto,kallisto,oarfish}; auto selects kallisto for short-read runs and oarfish for long-read runs.
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}" # {auto,ont-cdna,ont-drna,pac-bio,pac-bio-hifi}; auto infers long-read subtype from metadata for oarfish.
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}" # Optional extra shell-style option string forwarded to amalgkit quant --oarfish_options.
-kallisto_reference="longest_cds" # {species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}; reference FASTA used for expression quantification, choosing provider CDS, assembled longest transcripts, assembled longest CDS, or contamination-filtered longest CDS.
+kallisto_reference="longest_cds" # {species_transcript,species_cds,longest_transcript,longest_cds,contamination_removed_longest_cds}; reference FASTA for expression quantification.
 orf_aggregation_level="i" # {c,g,i,p}; Longest-CDS ORF aggregation level. The value selects how transcript/ORF IDs are trimmed before choosing one representative CDS per group: "p" groups ORFs within the same transcript, "i" groups isoforms within the same gene-level ID, and "g" or "c" use broader upstream ID levels when those levels exist in the assembler output. Lower levels are more aggressive and collapse more sequences; "i" is the default balance. For rnaSPAdes, "c" is not supported because rnaSPAdes transcript IDs do not include a Trinity-style component level.
 orf_representative_mode="homology-orfs" # {length,homology,homology-orfs}; Rank representatives with Swiss-Prot DIAMOND hits, including supported alternative ORFs.
 orf_catalog_rescue="auto" # {auto,on,off}; Add supported ORFs missing from the representative catalogue for Trinity and rnaSPAdes homology-orfs at level i.
@@ -183,6 +192,51 @@ gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" \
 # An installed runtime may retain an older project's editable block that has
 # no cache assignment. Keep the external override usable in that case.
 transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}"
+
+if [[ "${transcriptome_launch_workflow}" == gg_genome_annotation ]]; then
+  quantification_only=1
+fi
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  if [[ -z "${representative_inputs}" || -n "${transcriptome_getfastq_cache_dir}" ]]; then
+    echo "Quantification-only jobs require verified representative_inputs and an empty persistent getfastq cache setting." >&2
+    exit 1
+  fi
+  if [[ ! -f "${representative_inputs}" ]]; then
+    echo "Quantification reference manifest does not exist: ${representative_inputs}" >&2
+    exit 1
+  fi
+  representative_inputs="$(realpath -- "${representative_inputs}")" || exit 1
+  quantification_reference_root="$(dirname -- "${representative_inputs}")"
+  if [[ "${quantification_reference_root##*/}" == sequence ]]; then
+    quantification_reference_root="$(dirname -- "${quantification_reference_root}")"
+  fi
+  if [[ "${quantification_reference_root}" == / || "${representative_inputs}" == *[:,]* || \
+        "${representative_inputs}" == *$'\n'* ]]; then
+    echo "Quantification reference requires a bindable manifest directory: ${representative_inputs}" >&2
+    exit 1
+  fi
+  mode_transcriptome_assembly=metadata
+  kallisto_reference=species_transcript
+  run_amalgkit_getfastq=1
+  run_amalgkit_quant=1
+  run_amalgkit_merge=1
+  remove_amalgkit_fastq_after_completion=1
+  delete_tmp_dir=1
+  run_amalgkit_metadata_or_integrate=0
+  run_assembly=0
+  run_longestcds=0
+  run_longestcds_fx2tab=0
+  run_longestcds_mmseqs2taxonomy=0
+  run_longestcds_contamination_removal=0
+  run_busco_isoforms=0
+  run_busco_longest_cds=0
+  run_busco_contamination_removed_longest_cds=0
+  run_assembly_stat=0
+  run_multispecies_summary=0
+elif [[ "${quantification_only:-0}" != 0 ]]; then
+  echo "quantification_only must be 0 or 1." >&2
+  exit 1
+fi
 
 # Keep a reviewed metadata cohort under workspace/input while writing all
 # generated artifacts to the selected workspace/output. Existing project
@@ -238,6 +292,9 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" \
   "transcriptome_tmp_max_bytes" "transcriptome_tmp_max_files"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
+fi
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  gg_add_container_bind_mount "${quantification_reference_root}:${quantification_reference_root}:ro"
 fi
 if [[ -n "${transcriptome_getfastq_cache_dir_host:-}" ]]; then
   gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"

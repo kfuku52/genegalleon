@@ -410,6 +410,7 @@ run_cdskit_localize
 run_uniprot_annotation
 run_wgd_ksd
 uniprot_annotation_method
+run_transcript_quantification
 EOF
       ;;
     gg_genome_evolution_entrypoint.sh)
@@ -867,6 +868,7 @@ run_longestcds_contamination_removal
 run_longestcds_fx2tab
 run_longestcds_mmseqs2taxonomy
 run_multispecies_summary
+quantification_only
 EOF
       ;;
     *)

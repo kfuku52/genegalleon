@@ -276,6 +276,50 @@ Notable defaults:
 - `kallisto_reference="longest_cds"`
 - staged FASTA outputs are written as `.fa.gz`.
 
+#### Quantify selected transcripts
+
+Use the genome-annotation entrypoint as a CPU-only quantification job for
+either genomic annotations or refined transcriptome assemblies:
+
+```bash
+GG_GENOME_ANNOTATION_RUN_TRANSCRIPT_QUANTIFICATION=1 \
+GG_GENOME_ANNOTATION_REPRESENTATIVE_INPUTS=/path/to/refinement/effective/inputs.tsv \
+  bash workflow/gg_genome_annotation_entrypoint.sh
+```
+
+Use `effective/sequence/inputs.tsv` for an assembly-only or mixed refinement
+view. The array indices select species from the sorted per-species metadata
+TSVs under `workspace/input/amalgkit_metadata` (or the configured metadata
+subdirectory). A single-species refinement manifest therefore needs a
+matching one-species metadata workspace or task selection.
+
+This mode invokes the shared transcriptome quantification workflow with
+`species_transcript` as the reference type. It verifies the selected
+transcript FASTA and gene mapping before taking reads. The reference directory
+is mounted read-only. Paths below are under
+`${gg_workspace_dir}/output/transcriptome_quantification/`:
+
+| Path | Contents |
+| --- | --- |
+| `amalgkit_quant/<species>/<run>/` | Per-run abundance and mapping statistics |
+| `amalgkit_quant/<species>/transcript_gene.tsv` | Quantification target IDs and their gene IDs |
+| `amalgkit_merge/<species>/` | `<species>_est_counts.tsv`, `<species>_tpm.tsv`, `<species>_eff_length.tsv` and `<species>_metadata.tsv` |
+| `amalgkit_getfastq/<species>/` | Read-acquisition receipt and diagnostics |
+| `artifact_provenance/` | Per-species read-acquisition, quantification and merge provenance |
+
+Raw downloads use task scratch. Generated FASTQs live under
+`amalgkit_getfastq/<species>/` until the job verifies quantification and merge.
+Successful jobs remove their generated reads and retain the acquisition
+records. Failed jobs retain resumable reads.
+An unchanged successful job reuses the quantification without acquiring
+the reads again. For intentional replacement of a completed reference, use a
+new output workspace or set `artifact_stale_policy=rebuild`.
+Persistent getfastq caches and assembly inputs stay separate.
+
+The same profile is also available through
+`GG_TRANSCRIPTOME_QUANTIFICATION_ONLY=1` on the transcriptome-generation
+entrypoint.
+
 ### `gg_genome_annotation_entrypoint.sh`
 
 Purpose:
