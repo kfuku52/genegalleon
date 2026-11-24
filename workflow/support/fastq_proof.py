@@ -5,9 +5,11 @@ import gzip
 import hashlib
 import io
 import math
+import multiprocessing
 import os
 import stat
 import zlib
+from concurrent.futures import ProcessPoolExecutor
 
 
 class FastqChanged(OSError):
@@ -90,6 +92,17 @@ def proof_fastq(path):
         if _identity(before) != _identity(os.fstat(raw.fileno())) or _identity(before) != _identity(current):
             raise FastqChanged(path)
         return True, before.st_size, reader.digest.hexdigest()
+
+
+def proof_fastqs(paths, workers):
+    """Prove independent files in manifest order using the task's CPU allocation."""
+    workers = min(len(paths), workers)
+    if workers <= 1:
+        return [proof_fastq(path) for path in paths]
+    # The workflow calls this from a fresh, single-threaded Python heredoc.
+    # Fork keeps the worker entrypoint importable when __main__ is stdin.
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("fork")) as pool:
+        return list(pool.map(proof_fastq, paths))
 
 
 def _positive_number(value):

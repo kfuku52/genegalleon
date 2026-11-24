@@ -1453,7 +1453,7 @@ bind_amalgkit_getfastq_completion_manifest() {
   local support_dir
   support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" <<'PY'
 import csv
 import json
 import os
@@ -1462,10 +1462,11 @@ import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
+from fastq_proof import FastqChanged, proof_fastqs, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
+workers = int(sys.argv[4])
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
@@ -1489,19 +1490,6 @@ def safe_fastq_path(raw_value):
     if path.is_symlink() or resolved != path:
         raise SystemExit("Completion manifest FASTQ must be a regular non-symlink path: {}".format(value))
     return value, path
-
-
-def file_contract(raw_value):
-    value, path = safe_fastq_path(raw_value)
-    try:
-        complete, size, checksum = proof_fastq(path)
-    except FastqChanged:
-        raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(value))
-    except OSError:
-        complete = False
-    if not complete:
-        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(value))
-    return {"path": value, "size": size, "sha256": checksum}
 
 
 def stats_contract(run):
@@ -1566,6 +1554,7 @@ if len(expected_runs) != len(set(expected_runs)):
     raise SystemExit("Metadata contains duplicate run IDs: {}".format(metadata_path))
 
 bound_runs = []
+pending_files = []
 seen_runs = set()
 seen_paths = set()
 run_id_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -1601,11 +1590,10 @@ for entry in manifest["runs"]:
         output_names.append(str(output.get("name", "") or "").strip())
     if sorted(output_names) != sorted(expected_names) or len(output_names) != len(set(output_names)):
         raise SystemExit("Completion manifest output set differs from the run layout: {}".format(run))
-    contracts = [
-        file_contract("{}/{}".format(run, output_name))
-        for output_name in expected_names
-    ]
-    paths = [item["path"] for item in contracts]
+    paths_and_files = [safe_fastq_path("{}/{}".format(run, name)) for name in expected_names]
+    paths = [value for value, _ in paths_and_files]
+    contracts = [{"path": value} for value in paths]
+    pending_files.extend((contract, path) for contract, (_, path) in zip(contracts, paths_and_files))
     if len(paths) != len(set(paths)) or any(path in seen_paths for path in paths):
         raise SystemExit("Completion manifest contains a duplicate FASTQ path for run: {}".format(run))
     seen_runs.add(run)
@@ -1620,6 +1608,16 @@ if sorted(seen_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
 if manifest.get("run_count") != len(bound_runs):
     raise SystemExit("Completion manifest run_count does not match its runs list.")
+try:
+    proofs = proof_fastqs([path for _, path in pending_files], workers)
+except FastqChanged as exc:
+    raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(exc))
+except OSError as exc:
+    raise SystemExit("Completion manifest FASTQ could not be read: {}".format(exc))
+for (contract, _), (complete, size, checksum) in zip(pending_files, proofs):
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(contract["path"]))
+    contract.update(size=size, sha256=checksum)
 quarantine_unbound_fastqs(seen_paths)
 
 bound_manifest = {
@@ -1652,7 +1650,7 @@ validate_amalgkit_getfastq_completion_manifest() {
   local support_dir
   support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" <<'PY'
 import csv
 import json
 import os
@@ -1661,10 +1659,11 @@ import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastq, quant_stats_digest
+from fastq_proof import FastqChanged, proof_fastqs, quant_stats_digest
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
+workers = int(sys.argv[4])
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
@@ -1719,15 +1718,8 @@ def validate_file_contract(contract, run, seen_paths):
         raise SystemExit("Completion manifest FASTQ path changed: {}".format(value))
     if path.stat().st_size != expected_size:
         raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
-    try:
-        complete, size, checksum = proof_fastq(path)
-    except FastqChanged:
-        raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(value))
-    if not complete:
-        raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
-    if size != expected_size or checksum != expected_sha256:
-        raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
     seen_paths.add(value)
+    return path
 
 
 def validate_stats_contract(contract, run, seen_paths):
@@ -1781,6 +1773,7 @@ manifest_entries = manifest.get("runs")
 if not isinstance(manifest_entries, list):
     raise SystemExit("Completion manifest lacks a runs list: {}".format(manifest_path))
 manifest_runs = []
+pending_files = []
 seen_paths = set()
 seen_stats_paths = set()
 for entry in manifest_entries:
@@ -1796,7 +1789,8 @@ for entry in manifest_entries:
     if run == "" or entry.get("status") != "complete" or not isinstance(files, list) or not files:
         raise SystemExit("Completion manifest contains an incomplete run contract: {}".format(run))
     for contract in files:
-        validate_file_contract(contract, run, seen_paths)
+        path = validate_file_contract(contract, run, seen_paths)
+        pending_files.append((contract, path))
     if not legacy_public_original:
         validate_stats_contract(entry.get("stats"), run, seen_stats_paths)
     manifest_runs.append(run)
@@ -1836,6 +1830,20 @@ if not legacy_public_original:
                 ",".join(sorted(seen_stats_paths - actual_stats_paths)),
             )
         )
+
+try:
+    proofs = proof_fastqs([path for _, path in pending_files], workers)
+except FastqChanged as exc:
+    raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(exc))
+except OSError as exc:
+    raise SystemExit("Completion manifest FASTQ could not be read: {}".format(exc))
+for (contract, _), (complete, size, checksum) in zip(pending_files, proofs):
+    value = contract["path"]
+    if not complete:
+        raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
+    if size != contract["size"] or checksum != contract["sha256"]:
+        raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
+
 PY
 }
 

@@ -919,13 +919,16 @@ def test_drifted_bound_fastq_and_manifest_are_preserved_for_recovery(monkeypatch
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped):
+def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped, monkeypatch):
+    monkeypatch.setenv("GG_TASK_CPUS", "2")
     metadata_path = tmp_path / "metadata.tsv"
     output_dir = tmp_path / "getfastq"
     run_dir = output_dir / "RUN1"
     run_dir.mkdir(parents=True)
     _metadata(metadata_path, ["RUN1"])
-    fastq_path = run_dir / "RUN1.amalgkit.fastq.gz"
+    fastq_path = run_dir / "RUN1_1.amalgkit.fastq.gz"
+    second_mate = run_dir / "RUN1_2.amalgkit.fastq.gz"
+    second_mate.write_bytes(gzip.compress(b"@read\nTGCA\n+\n!!!!\n"))
     if wrapped:
         fastq_path.write_bytes(
             gzip.compress(b"@read\r\nAC\r\nGT\r\n+\r\n!!\r\n")
@@ -952,9 +955,9 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped):
                 "runs": [
                     {
                         "run": "RUN1",
-                        "layout": "single",
+                        "layout": "paired",
                         "fingerprint": "b" * 64,
-                        "outputs": [{"name": "RUN1.amalgkit.fastq.gz"}],
+                        "outputs": [{"name": path.name} for path in (fastq_path, second_mate)],
                     }
                 ],
             }
@@ -967,14 +970,13 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped):
 
     assert bound.returncode == 0, bound.stderr
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
-    contract = manifest["runs"][0]["files"][0]
     assert manifest["schema_version"] == 4
     assert manifest["read_source"] == "amalgkit"
-    assert contract == {
-        "path": "RUN1/RUN1.amalgkit.fastq.gz",
-        "size": fastq_path.stat().st_size,
-        "sha256": hashlib.sha256(fastq_path.read_bytes()).hexdigest(),
-    }
+    assert manifest["runs"][0]["files"] == [
+        {"path": path.relative_to(output_dir).as_posix(), "size": path.stat().st_size,
+         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in (fastq_path, second_mate)
+    ]
     assert manifest["runs"][0]["stats"] == {
         "path": "RUN1/getfastq_stats.tsv",
         "size": stats_path.stat().st_size,
