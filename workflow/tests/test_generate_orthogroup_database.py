@@ -1549,6 +1549,19 @@ def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(
                            '--family-id', 'OG0001', '--step', step, '--manifest',
                            str(root / 'artifact_provenance' / f'OG0001.{step}.json'),
                            *(arg for file in files for arg in ('--output', f'{file.parent.name}={file}'))]) == 0
+    archive = tmp_path / 'output/.gg_producer_inputs'
+    archive.mkdir()
+    producer = b'original producer implementation\n'
+    producer_hash = hashlib.sha256(producer).hexdigest()
+    (archive / producer_hash).write_bytes(producer)
+    summary_manifest = root / 'artifact_provenance/OG0001.summary_statistics.json'
+    original_summary = p.load_manifest(summary_manifest)
+    original_summary['inputs'].append({
+        'label': 'producer', 'artifact_type': 'file', 'scope': 'absolute',
+        'path': '/script/support/historical-test-producer.py',
+        'sha256': producer_hash, 'size_bytes': len(producer),
+    })
+    p.write_manifest_atomic(summary_manifest, original_summary)
     database, manifest, report = (output / name for name in ('database.db', 'database.json', 'audit.tsv'))
     audit = ['--workspace-root', str(tmp_path), '--logical-root', str(root),
              '--output-tsv', str(report), '--mode', 'orthogroup', '--progress-interval', '0']
@@ -1559,8 +1572,11 @@ def test_completed_orthogroup_scope_fences_only_its_members_and_requires_a_plot(
               '--input-gene-family-store', f'families={root}', '--output', f'database={database}',
               '--input', f'family_catalog={source}', '--parameter', 'family_scope=selected_orthogroups_v1',
               '--parameter', f'orthogroup_selection_sha256={scope_hash}',
-              '--orthogroup-store-selection', str(selection)]
+              '--orthogroup-store-selection', str(selection),
+              '--input', f'producer_input_archive={archive}']
     assert pipeline.run(audit, db, record) == 0
+    assert p.load_manifest(summary_manifest) == original_summary
+    assert p.entries_by_label(p.load_manifest(manifest), 'inputs')['producer_input_archive']['scope'] == 'workspace'
     assert not (root / 'gg_orthogroup.db').exists()
     with sqlite3.connect(database) as conn:
         assert conn.execute('SELECT DISTINCT orthogroup FROM tree').fetchall() == [('OG0001',)]

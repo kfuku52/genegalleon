@@ -152,7 +152,7 @@ and PDF. GeneGalleon writes the database and HGT results under
 Leave the setting empty for the ordinary summary.
 
 A scoped summary can verify historical producer implementations retained under
-`workspace/output/.gg_global_artifacts/producer_inputs/`. Store the original
+`workspace/output/.gg_producer_inputs/`. Store the original
 bytes in regular files named by their recorded lowercase SHA-256. This only
 resolves recorded inputs under `/script/support/` or
 `/script/runtime_dependencies/`. The audit verifies the original size and

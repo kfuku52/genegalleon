@@ -928,7 +928,7 @@ run_gene_family_database_for_source() {
   if [[ -n "${orthogroup_summary_selection}" ]]; then
     database_provenance_args+=(--orthogroup-store-selection "${orthogroup_summary_selection}"
       --parameter "orthogroup_selection_sha256=${scope_hash%% *}")
-    local producer_archive="${gg_workspace_output_dir}/.gg_global_artifacts/producer_inputs"
+    local producer_archive="${gg_workspace_output_dir}/.gg_producer_inputs"
     if [[ -e "${producer_archive}" || -L "${producer_archive}" ]]; then
       database_provenance_args+=(--input "producer_input_archive=${producer_archive}")
     fi
