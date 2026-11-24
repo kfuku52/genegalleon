@@ -176,8 +176,8 @@ def prove_contract(previous_plan, producer_source):
     if not previous_plan['request'].get('oriongeno_genomewide'):
         permitted.update(('native_genomewide_implementation', 'native_protein_scoring_implementation',
                           'native_protein_alignment_implementation', 'native_protein_alignment_source'))
-    # The worker dispatcher was absent from older raw producers and is not
-    # executed by admission replay. Once declared, retain its exact identity.
+    # Older producers did not declare a worker dispatcher. For newer producers,
+    # the binding above checks its archived identity and measured equivalence.
     if 'cached_validation_implementation' not in before:
         permitted.add('cached_validation_implementation')
     if 'genomewide_reuse_implementation' not in before:

@@ -58,7 +58,7 @@ def completed(tmp_path, request):
     root, source = tmp_path / 'previous', tmp_path / 'producer'
     root.mkdir()
     tools = rescue.identities()
-    bindings = {*replay.MODULES, *replay.FUNCTIONS, 'rescue_source_verification.py'}
+    bindings = {*replay.MODULES, *replay.FUNCTIONS, 'rescue_cached_validation.py', 'rescue_source_verification.py'}
     for name in bindings:
         path = source / 'workflow/support' / name
         path.parent.mkdir(parents=True, exist_ok=True)
