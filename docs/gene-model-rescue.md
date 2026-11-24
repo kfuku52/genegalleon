@@ -842,6 +842,8 @@ rescue evidence.
 
 Protein scoring workers read the shared search FASTAs and receive only pair IDs.
 The runtime's SIMD global alignment uses the original affine scores and tie order.
+It uses eight-cell AVX2 vectors on capable x86 CPUs and the four-cell baseline on
+other supported CPUs.
 Scoring threads share read-only FASTA mappings, start the heavier tasks first, and
 keep two groups in flight while the parent validates genomic evidence. Legacy
 runtimes use the Biopython implementation in process workers.
@@ -851,9 +853,10 @@ inputs and pair IDs and resumes from the saved scores, even with a different
 CPU count. Genomic validation and final admission still run on retry.
 The score checkpoint is removed after the rescue result has been published.
 
-The native validator shares the genomic memo in the parent. Larger jobs use part
-of their CPU allocation for donor-specific terminal and boundary checks while
-protein scoring continues. Results return in candidate order, with the same
+The native validator shares the genomic memo in the parent. With the SIMD
+kernel, scoring threads and donor-specific terminal or boundary repair jobs
+share the same child-worker slots. Scoring uses idle slots when there are no
+repairs pending. Results return in candidate order, with the same
 strict QC and evidence used for placement and admission.
 
 Compact model stores keep the same on-disk record format and indexed overlays.

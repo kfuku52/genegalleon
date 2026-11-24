@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack
 from itertools import batched, chain, islice
 from multiprocessing import get_context
+from threading import Condition
 
 
 def _r():
@@ -123,8 +124,73 @@ def validate_cached(models, genome, code, params, proteins, cpus, serial, audit)
 
 
 def native_validation_workers(cpus):
-    """Reserve part of the existing task allocation for donor-specific QC."""
+    """Bound child processes for donor-specific QC."""
     return min(2, (cpus - 1) // 3)
+
+
+class NativeWorkerBudget:
+    """Share all child CPU slots between exact scoring threads and repair jobs."""
+
+    def __init__(self, slots, repair_workers):
+        if type(slots) is not int or type(repair_workers) is not int or not 1 <= repair_workers <= slots:
+            raise ValueError('Invalid shared native worker budget')
+        self.slots = slots
+        self.repair_workers = repair_workers
+        self.available = slots
+        self.repairs = 0
+        self.waiting_repair = False
+        self.condition = Condition()
+
+    def score(self, function, *args):
+        with self.condition:
+            self.condition.wait_for(lambda: self.available and not (
+                self.waiting_repair and self.repairs < self.repair_workers))
+            self.available -= 1
+        try:
+            return function(*args)
+        finally:
+            with self.condition:
+                self.available += 1
+                self.condition.notify_all()
+
+    def _finish_repair(self, _future=None):
+        with self.condition:
+            self.repairs -= 1
+            self.available += 1
+            self.condition.notify_all()
+
+    def submit_repair(self, pool, function, rows):
+        with self.condition:
+            self.waiting_repair = True
+            try:
+                self.condition.wait_for(lambda: self.available and self.repairs < self.repair_workers)
+                self.available -= 1
+                self.repairs += 1
+            finally:
+                self.waiting_repair = False
+                self.condition.notify_all()
+        try:
+            future = pool.submit(function, rows)
+        except BaseException:
+            self._finish_repair()
+            raise
+        future.add_done_callback(self._finish_repair)
+        return future
+
+
+def native_worker_allocation(cpus):
+    """Use the shared budget on the thread-based SIMD path."""
+    if __package__:
+        from .rescue_alignment_kernel import compiled_kernel
+    else:
+        from rescue_alignment_kernel import compiled_kernel
+
+    repairs = native_validation_workers(cpus)
+    if not repairs:
+        return cpus, None
+    if compiled_kernel() is None:
+        return max(1, cpus - repairs - 1), None
+    return cpus - 1, NativeWorkerBudget(cpus - 1, repairs)
 
 
 class _StagedValidation:
@@ -144,7 +210,7 @@ def _finish_native_batch(rows):
     return results
 
 
-def validate_native(models, genome, code, params, proteins, cpus, memo, audit):
+def validate_native(models, genome, code, params, proteins, cpus, memo, audit, *, budget=None, repair_workers=None):
     """Share genomic memo hits in the parent and send only donor repair to workers."""
     if __package__:
         from . import rescue_boundary_revalidation, rescue_terminal_completion
@@ -152,8 +218,10 @@ def validate_native(models, genome, code, params, proteins, cpus, memo, audit):
         import rescue_boundary_revalidation
         import rescue_terminal_completion
 
-    workers = native_validation_workers(cpus)
-    audit.update(workers=0, offloaded=0)
+    workers = native_validation_workers(cpus) if repair_workers is None else repair_workers
+    if type(workers) is not int or not 0 <= workers < cpus or (budget and workers != budget.repair_workers):
+        raise ValueError('Invalid native repair worker count')
+    audit.update(workers=0, offloaded=0, shared_worker_budget=budget.slots if budget else None)
     pending = deque()
     started = time.perf_counter()
 
@@ -196,7 +264,8 @@ def validate_native(models, genome, code, params, proteins, cpus, memo, audit):
                         initargs=(os.fsdecode(genome.filename), code, params)))
                     audit['workers'] = workers
                 audit['offloaded'] += len(repair)
-                future = executor.submit(_finish_native_batch, repair)
+                future = (executor.submit(_finish_native_batch, repair) if budget is None
+                          else budget.submit_repair(executor, _finish_native_batch, repair))
             pending.append((rows, indexes, future))
             if len(pending) >= max(1, 2 * workers):
                 yield from emit(*pending.popleft())

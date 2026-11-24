@@ -1,4 +1,5 @@
 """Check exact native score ordering and interrupted score checkpoint recovery."""
+import ctypes
 import random
 import sqlite3
 import sys
@@ -88,9 +89,16 @@ def test_simd_kernel_matches_biopython_ties_and_gap_flags():
              ('CEHQA' + 'P' * 9 + 'CMWQV', 'CEHQACMWQV'),
              ('CMWQV', 'P' * 9 + 'CMWQV'), ('Q' * 81, 'Q' * 31),
              ('AC' * 120, 'CAC' * 80), ('TEFGHA', 'EFGHAT')]
+    library = ctypes.CDLL(str(alignment._LIBRARY))
+    assert library.gg_rescue_protein_alignment_lanes() in (4, 8)
+    baseline = library.gg_rescue_protein_alignment_baseline
+    baseline.argtypes, baseline.restype = kernel.argtypes, kernel.restype
+    probe = alignment.buffer()
     stats = alignment.buffer()
     for first, second in [*cases, *[pair[::-1] for pair in cases], *varied]:
         n, m = len(first), len(second)
         assert kernel(first.encode(), n, second.encode(), m, stats) == 0
+        assert baseline(first.encode(), n, second.encode(), m, probe) == 0
+        assert list(probe) == list(stats)
         assert alignment.score_counts(n, m, *stats) == selection.pair_score(
             {'protein': first}, {'protein': second}), (first, second)

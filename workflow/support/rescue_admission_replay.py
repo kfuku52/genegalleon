@@ -78,12 +78,14 @@ _EQUIVALENT_QC = {
     'rescue_model_quality.py': ('0beabb4162772ec5f7ced15d6a195b3d19aea9a75cebb3136ca63bf0c079c878',
                                 'e175bb3f25334b0ffb6febc95c29dc1c2c38fbf506e8feb9d7bac00b75a79e64'),
     'rescue_cached_validation.py': ('6a80b411fe0c35738734e41e59ed8542b50bbf832990bbee756112f871de3895',
-                                    '06570d76d24fc8132b58d65042819a05df4221d3b3f97c4d2d071f786287332e'),
+                                    '06570d76d24fc8132b58d65042819a05df4221d3b3f97c4d2d071f786287332e',
+                                    '35e8fc442c164915418162cfbe963f3c7dc163a8dbaed1df17430b1e2745079c'),
 }
 
 
 def qc_implementation_equivalent(filename, previous, current):
-    return previous == current or _EQUIVALENT_QC.get(filename) == (previous, current)
+    qualified = _EQUIVALENT_QC.get(filename)
+    return previous == current or (qualified is not None and current == qualified[-1] and previous in qualified[:-1])
 
 
 def replay_repair_targets(r, worker, files, tmp, targets, existing, ownership, proteins, genome, code, params, cpus):

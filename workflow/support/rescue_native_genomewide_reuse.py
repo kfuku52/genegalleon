@@ -33,15 +33,17 @@ _NATIVE_SEARCH_EQUIVALENT_SOURCES = (
     '95f9da7abb5773a102988bc1a0eeea189e70f8b413036060606c012e6863c07b',
     '6f1fa188a4085a0e4b7df1876e42eca428eaf785d79443fef244e5829f909ad1',
     '901954bfbbc99266d3629e4e977005d21f5c3f172e4931ea6c47e4674c4d6082',
+    'e42807ab37114c5c4e1d687cb333b29f180b0ad21f1a8ed744091a7973490975',
 )
 _PRIOR_PROTEIN_SCORERS = {
     (None, None, None),
+    ('0bb0d785b256035fb50dc7dfa4d056977d1442136154fa2a4d7b3ab4238cb974', '317b83fc5419bc738fa487b6375d39e6f6455a0e45bf73cdb9a6fb3470ad63cc', '1abc9e9a974e913023e492e8eb3415f82068ccede99adf495b3b5de9a7806111'),
     ('500995deb55f8644da2235f762ca521bd411e027146840433d0a0b7eef4ea61a', None, None),
 }
 _EQUIVALENT_PROTEIN_SCORER = (
-    '0bb0d785b256035fb50dc7dfa4d056977d1442136154fa2a4d7b3ab4238cb974',
+    '980cceccb737b833b081ddf7d6704a9d45d0b8b4019af504cb367039d1a4f259',
     '317b83fc5419bc738fa487b6375d39e6f6455a0e45bf73cdb9a6fb3470ad63cc',
-    '1abc9e9a974e913023e492e8eb3415f82068ccede99adf495b3b5de9a7806111',
+    'ac0800a7ace8933220830c421d091c76ddc2bfae608bf6c5b5185d11741fc07d',
 )
 
 
@@ -375,16 +377,16 @@ def fresh_candidates(plan, name, proteins, genome, ownership, params, directory,
             plan['request']['sources'][name]['genetic_code'],params,proteins[evidence['donor']][evidence['query']],engine=r)
     validation = {}
     code = plan['request']['sources'][name]['genetic_code']
+    scoring_cpus, worker_budget = rescue_cached_validation.native_worker_allocation(cpus)
 
     def validate_native_models(models):
         for _, checked in rescue_cached_validation.validate_native(
-                models, genome, code, params, proteins, cpus, memo, validation):
+                models, genome, code, params, proteins, cpus, memo, validation, budget=worker_budget):
             yield checked
 
-    workers = rescue_cached_validation.native_validation_workers(cpus)
     checked, audit = native.nominate(plan['request']['oriongeno'], name, proteins, genome, ownership,
                                     params, directory, cpus=cpus, validate_many=validate_native_models, search=search,
-                                    scoring_cpus=max(1, cpus - workers - 1) if workers else cpus,
+                                    scoring_cpus=scoring_cpus, worker_budget=worker_budget,
                                     score_checkpoint=score_checkpoint, score_checkpoint_key=score_checkpoint_key)
     audit['validation'] = validation
     transferred=native.transfer_structure(checked,proteins,genome,

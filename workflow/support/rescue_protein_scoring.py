@@ -182,7 +182,7 @@ def _save(db, position, pairs_sha, scores):
                    (position, pairs_sha, hashlib.sha256(payload).digest(), payload))
 
 
-def scored_pairs(pairs, queries, subjects, directory, cpus, *, checkpoint=None, checkpoint_key=None):
+def scored_pairs(pairs, queries, subjects, directory, cpus, *, checkpoint=None, checkpoint_key=None, worker_budget=None):
     """Read the existing FASTAs, returning exact scores in their original pair order.
 
     Only compact pair IDs cross worker boundaries. Completed groups commit into
@@ -198,6 +198,8 @@ def scored_pairs(pairs, queries, subjects, directory, cpus, *, checkpoint=None, 
     sids = {token: i for i, token in enumerate(subjects)}
     pool = context = None
     kernel = alignment.compiled_kernel()
+    if worker_budget is not None and kernel is None:
+        raise ValueError('Shared native worker budget requires an installed SIMD kernel')
     with ExitStack() as resources:
         db = (resources.enter_context(_open_checkpoint(checkpoint, [layout[2] for layout in layouts], checkpoint_key))
               if checkpoint is not None else None)
@@ -227,7 +229,11 @@ def scored_pairs(pairs, queries, subjects, directory, cpus, *, checkpoint=None, 
                 return None, partial(_score_batch, ids, context), pairs_sha
             tasks = sorted(_tasks(ids, layouts[0][1], layouts[1][1]), key=lambda task: -task[2])
             worker_context = context if kernel is not None else None
-            pending = [(a, b, pool.submit(_score_batch, ids[a:b], worker_context)) for a, b, _ in tasks]
+            if worker_budget is None:
+                pending = [(a, b, pool.submit(_score_batch, ids[a:b], worker_context)) for a, b, _ in tasks]
+            else:
+                pending = [(a, b, pool.submit(worker_budget.score, _score_batch, ids[a:b], worker_context))
+                           for a, b, _ in tasks]
 
             def collect():
                 output = bytearray(len(group) * _SCORE.size)

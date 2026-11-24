@@ -1,5 +1,7 @@
 """Actual spawned genomic replay must match the serial decision path exactly."""
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 from Bio.Seq import Seq
@@ -103,7 +105,8 @@ def test_invalid_cpu_bound_is_rejected(cpus):
         list(parallel.validate_cached(iter([]),None,1,{},None,cpus,lambda x:x,{}))
 
 
-def test_native_repairs_are_selectively_parallel_and_keep_evidence_aliases(tmp_path):
+@pytest.mark.parametrize('shared_budget', [False, True])
+def test_native_repairs_are_selectively_parallel_and_keep_evidence_aliases(tmp_path, shared_budget):
     path, rows = fixture(tmp_path, 277)
     arguments = ['plan', *[value for key in ('cds-dir', 'gff-dir', 'genome-dir', 'busco-dir', 'tree', 'output')
                           for value in ('--'+key, str(path.parent/key))]]
@@ -121,9 +124,57 @@ def test_native_repairs_are_selectively_parallel_and_keep_evidence_aliases(tmp_p
         expected = [parallel.checked_prediction(row, original_memo, genome, 1, params, 'MK', engine=rescue)
                     for row in rows]
         audit = {}
-        observed = list(parallel.validate_native(iter(rows), genome, 1, params, proteins, 4, memo(), audit))
+        budget = parallel.NativeWorkerBudget(3, 1) if shared_budget else None
+        busy = Event()
+        finished = Event()
+
+        def scoring_work():
+            busy.set()
+            assert finished.wait(10)
+
+        with ThreadPoolExecutor(1) as scorer:
+            future = scorer.submit(budget.score, scoring_work) if budget else None
+            try:
+                if future is not None:
+                    assert busy.wait(5)
+                observed = list(parallel.validate_native(iter(rows), genome, 1, params, proteins, 4, memo(), audit,
+                                                        budget=budget))
+            finally:
+                finished.set()
+            if future is not None:
+                future.result()
+                assert budget.available == 3 and budget.repairs == 0
     assert 0 < audit['offloaded'] < len(rows) and audit['workers'] == 1
     assert [output for _, output in observed] == expected
     for (raw, output), reference in zip(observed, expected, strict=True):
         assert (output['evidence'] is raw['evidence']) == (reference['evidence'] is raw['evidence'])
         assert output['raw_prediction']['evidence']['oriongeno'] is raw['evidence']['oriongeno']
+
+
+def test_native_repair_uses_idle_scoring_slots_and_releases_failed_tasks():
+    budget = parallel.NativeWorkerBudget(2, 1)
+    active_repair = Event()
+    release_repair = Event()
+
+    def repair(_rows):
+        active_repair.set()
+        assert release_repair.wait(5)
+        raise RuntimeError('repair failed')
+
+    with ThreadPoolExecutor(1) as repair_pool:
+        future = budget.submit_repair(repair_pool, repair, [])
+        try:
+            assert active_repair.wait(5)
+            assert budget.score(lambda: budget.available) == 0
+        finally:
+            release_repair.set()
+        with pytest.raises(RuntimeError, match='repair failed'):
+            future.result(timeout=5)
+    assert budget.available == 2 and budget.repairs == 0
+
+    def fail():
+        raise ValueError('scoring failed')
+
+    with pytest.raises(ValueError, match='scoring failed'):
+        budget.score(fail)
+    assert budget.available == 2

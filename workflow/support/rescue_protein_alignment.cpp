@@ -26,31 +26,27 @@ inline int predecessor(const int m, const int x, const int y) {
     return m >= x && m >= y ? 0 : x >= y ? 1 : 2;
 }
 
-// GCC vector types map to native SSE2/NEON at the container's baseline ISA.
-using Scores = int __attribute__((vector_size(16)));
-using Residues = unsigned char __attribute__((vector_size(4)));
-
+// ABI-neutral inline helpers let the same recurrence compile inside both
+// baseline and ISA-specific entry points.
 template<class Vector, class Scalar>
-inline Vector load(const Scalar* pointer) {
-    Vector value;
+__attribute__((always_inline)) inline void load(Vector& value, const Scalar* pointer) {
     std::memcpy(&value, pointer, sizeof value);
-    return value;
 }
 
-inline Scores choose(Scores mask, Scores yes, Scores no) {
-    return (mask & yes) | (~mask & no);
-}
-
+template<class Scores>
 struct Best {
     Scores score;
     Scores state;
 };
 
-inline Best best(Scores m, Scores x, Scores y) {
+template<class Scores>
+__attribute__((always_inline)) inline void best(
+    const Scores& m, const Scores& x, const Scores& y, Best<Scores>& result) {
     const Scores prefer_x = x >= y;
-    const Scores gap = choose(prefer_x, x, y);
+    const Scores gap = (prefer_x & x) | (~prefer_x & y);
     const Scores prefer_m = m >= gap;
-    return {choose(prefer_m, m, gap), ~prefer_m & (2 + prefer_x)};
+    result.score = (prefer_m & m) | (~prefer_m & gap);
+    result.state = ~prefer_m & (2 + prefer_x);
 }
 
 inline void boundary(int* m, int* x, int* y, int i, int up, int left) {
@@ -59,17 +55,10 @@ inline void boundary(int* m, int* x, int* y, int i, int up, int left) {
     y[i] = left;
 }
 
-}  // namespace
-
-#define STRINGIFY_IMPL(x) #x
-#define STRINGIFY(x) STRINGIFY_IMPL(x)
-
-extern "C" const char* gg_rescue_protein_alignment_source() {
-    return STRINGIFY(GG_RESCUE_ALIGNMENT_SOURCE_SHA);
-}
-
-extern "C" int gg_rescue_protein_alignment_v1(const unsigned char* native, int n,
-                                               const unsigned char* donor, int m, int* stats) {
+template<class Scores, class Residues>
+__attribute__((always_inline)) inline int align(
+    const unsigned char* native, int n, const unsigned char* donor, int m, int* stats) {
+    constexpr int lanes = sizeof(Scores) / sizeof(int);
     if (n <= 0 || m <= 0 || static_cast<std::int64_t>(n) * m > 25'000'000) {
         return 1;
     }
@@ -117,18 +106,27 @@ extern "C" int gg_rescue_protein_alignment_v1(const unsigned char* native, int n
             const auto* b = workspace.reversed_donor.data() + (m - d + first);
             // Score independent cells in this antidiagonal together.
             int k = 0;
-            for (; k + 3 <= last - first; k += 4) {
+            for (; k + lanes - 1 <= last - first; k += lanes) {
                 const int i = first + k;
-                const Best diag = best(load<Scores>(older_m + i - 1), load<Scores>(older_x + i - 1),
-                                       load<Scores>(older_y + i - 1));
-                const Best up = best(load<Scores>(prev_m + i - 1) - gap_open,
-                                     load<Scores>(prev_x + i - 1) - gap_extend,
-                                     load<Scores>(prev_y + i - 1) - gap_open);
-                const Best left = best(load<Scores>(prev_m + i) - gap_open,
-                                       load<Scores>(prev_x + i) - gap_open,
-                                       load<Scores>(prev_y + i) - gap_extend);
-                const Scores residues_a = __builtin_convertvector(load<Residues>(a + k), Scores);
-                const Scores residues_b = __builtin_convertvector(load<Residues>(b + k), Scores);
+                Scores from_m, from_x, from_y;
+                Best<Scores> diag, up, left;
+                load(from_m, older_m + i - 1);
+                load(from_x, older_x + i - 1);
+                load(from_y, older_y + i - 1);
+                best(from_m, from_x, from_y, diag);
+                load(from_m, prev_m + i - 1);
+                load(from_x, prev_x + i - 1);
+                load(from_y, prev_y + i - 1);
+                best(from_m - gap_open, from_x - gap_extend, from_y - gap_open, up);
+                load(from_m, prev_m + i);
+                load(from_x, prev_x + i);
+                load(from_y, prev_y + i);
+                best(from_m - gap_open, from_x - gap_open, from_y - gap_extend, left);
+                Residues raw_a, raw_b;
+                load(raw_a, a + k);
+                load(raw_b, b + k);
+                const Scores residues_a = __builtin_convertvector(raw_a, Scores);
+                const Scores residues_b = __builtin_convertvector(raw_b, Scores);
                 const Scores score = diag.score - 2 + ((residues_a == residues_b) & 6);
                 const Scores states = diag.state | (up.state << 2) | (left.state << 4);
                 const Residues packed = __builtin_convertvector(states, Residues);
@@ -203,4 +201,63 @@ extern "C" int gg_rescue_protein_alignment_v1(const unsigned char* native, int n
     } catch (const std::bad_alloc&) {
         return 2;
     }
+}
+
+
+using Scorer = int (*)(const unsigned char*, int, const unsigned char*, int, int*);
+
+// GCC vector types map to SSE2 and NEON at the supported baseline ISAs.
+int baseline(const unsigned char* native, int n, const unsigned char* donor, int m, int* stats) {
+    using Scores = int __attribute__((vector_size(16)));
+    using Residues = unsigned char __attribute__((vector_size(4)));
+    return align<Scores, Residues>(native, n, donor, m, stats);
+}
+
+#if defined(__x86_64__) || defined(__i386__)
+__attribute__((target("avx2")))
+int avx2(const unsigned char* native, int n, const unsigned char* donor, int m, int* stats) {
+    using Scores = int __attribute__((vector_size(32)));
+    using Residues = unsigned char __attribute__((vector_size(8)));
+    return align<Scores, Residues>(native, n, donor, m, stats);
+}
+#endif
+
+struct Backend {
+    Scorer scorer;
+    int lanes;
+};
+
+const Backend& selected_backend() {
+    static const Backend backend = [] {
+#if defined(__x86_64__) || defined(__i386__)
+        if (__builtin_cpu_supports("avx2")) {
+            return Backend{&avx2, 8};
+        }
+#endif
+        return Backend{&baseline, 4};
+    }();
+    return backend;
+}
+
+}  // namespace
+
+#define STRINGIFY_IMPL(x) #x
+#define STRINGIFY(x) STRINGIFY_IMPL(x)
+
+extern "C" const char* gg_rescue_protein_alignment_source() {
+    return STRINGIFY(GG_RESCUE_ALIGNMENT_SOURCE_SHA);
+}
+
+extern "C" int gg_rescue_protein_alignment_lanes() {
+    return selected_backend().lanes;
+}
+
+extern "C" int gg_rescue_protein_alignment_baseline(
+    const unsigned char* native, int n, const unsigned char* donor, int m, int* stats) {
+    return baseline(native, n, donor, m, stats);
+}
+
+extern "C" int gg_rescue_protein_alignment_v1(
+    const unsigned char* native, int n, const unsigned char* donor, int m, int* stats) {
+    return selected_backend().scorer(native, n, donor, m, stats);
 }

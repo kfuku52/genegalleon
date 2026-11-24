@@ -118,7 +118,7 @@ def run_verified_protein_search(root, key, frozen, name, guard, queries, subject
 
 def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cpus=1, validate=None,
              search=run_protein_search, score_checkpoint=None, score_checkpoint_key=None,
-             validate_many=None, scoring_cpus=None):
+             validate_many=None, scoring_cpus=None, worker_budget=None):
     """Search each eligible native isoform, retaining identical-protein aliases.
 
     There is no donor representation filter, candidate window or query cap. Search
@@ -191,7 +191,7 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
         nonlocal aligned_pairs
         scores = scored_pairs(((q, s) for q, s, _, _ in comparisons), queries, subjects, search_dir,
                               cpus if scoring_cpus is None else scoring_cpus,
-                              checkpoint=score_checkpoint, checkpoint_key=score_checkpoint_key)
+                              checkpoint=score_checkpoint, checkpoint_key=score_checkpoint_key, worker_budget=worker_budget)
         for q, s, score in scores:
             aligned_pairs += 1
             alignment = {**score.as_dict(), 'junction_information_available': False,

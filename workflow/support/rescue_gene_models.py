@@ -1951,18 +1951,18 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                         root, key, request['oriongeno'], name, search_guard, queries, subjects, directory, threads)
 
                 native_validation = {}
+                scoring_cpus, worker_budget = rescue_cached_validation.native_worker_allocation(cpus)
 
                 def validate_native_models(models):
                     for raw, checked in rescue_cached_validation.validate_native(
                             models, genome, source["genetic_code"], params, proteins, cpus,
-                            raw_validation, native_validation):
+                            raw_validation, native_validation, budget=worker_budget):
                         yield compact_native_prediction(raw, checked)
 
-                validation_workers = rescue_cached_validation.native_validation_workers(cpus)
                 native_checked, genomewide_audit = rescue_native_genomewide.nominate(
                     request['oriongeno'], name, proteins, genome, placement_ownership,
                     params, tmp, cpus=cpus, search=run_native_search, validate_many=validate_native_models,
-                    scoring_cpus=max(1, cpus - validation_workers - 1) if validation_workers else cpus,
+                    scoring_cpus=scoring_cpus, worker_budget=worker_budget,
                     score_checkpoint=score_checkpoint, score_checkpoint_key=key)
                 genomewide_audit['validation'] = native_validation
                 transferred = rescue_native_genomewide.transfer_structure(
