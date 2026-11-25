@@ -5,6 +5,8 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
@@ -263,13 +265,12 @@ def fetch_wormbase_options(timeout):
             continue
         species_dirs.add(species_dir)
 
-    out = []
-    for species_dir in sorted(species_dirs):
+    def fetch_projects(species_dir):
         species_url = "{}{}/".format(base_url, species_dir)
         try:
             species_html = fetch_text(species_url, timeout)
         except Exception:
-            continue
+            return []
         projects = set()
         for link in parse_links(species_html, species_url):
             path = urlparse(link).path
@@ -277,14 +278,14 @@ def fetch_wormbase_options(timeout):
             if match is None:
                 continue
             projects.add(match.group(1).upper())
-        if len(projects) == 0:
-            continue
         species_label = species_dir.replace("_", " ")
-        for project in sorted(projects):
-            source_id = "{}_{}".format(species_dir, project.lower())
-            out.append((source_id, species_label))
-    out = dedupe_options(out)
-    return sorted(out, key=lambda x: x[0].lower())
+        return [("{}_{}".format(species_dir, project.lower()), species_label) for project in sorted(projects)]
+
+    # Match the downloader's default WormBase limit while overlapping slow responses.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(copy_context().run, fetch_projects, species_dir) for species_dir in sorted(species_dirs)]
+        out = [option for job in jobs for option in job.result()]
+    return sorted(dedupe_options(out), key=lambda x: x[0].lower())
 
 
 def vectorbase_species_label_from_id(source_id):
@@ -448,9 +449,26 @@ def example_options(provider):
     return [(source_id, species_label) for source_id, species_label in ID_EXAMPLES_BY_PROVIDER.get(provider, ())]
 
 
+def fetch_snapshot_options(timeout, input_root):
+    results = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = {
+            provider: pool.submit(copy_context().run, fetch_provider_options, provider, timeout, input_root)
+            for provider in PROVIDERS
+            if provider in FETCH_PROVIDERS
+        }
+        for provider, job in jobs.items():
+            try:
+                results[provider] = (job.result(), None)
+            except Exception as exc:
+                results[provider] = ([], exc)
+    return results
+
+
 def build_snapshot(timeout, input_root, fallback_options, fallback_direct_catalog, direct_catalog_entries):
     warnings = []
     providers = {}
+    fetched = fetch_snapshot_options(timeout, input_root)
 
     for provider in PROVIDERS:
         if provider == "direct":
@@ -467,11 +485,9 @@ def build_snapshot(timeout, input_root, fallback_options, fallback_direct_catalo
 
         resolved = []
         if provider in FETCH_PROVIDERS:
-            try:
-                resolved = fetch_provider_options(provider, timeout=timeout, input_root=input_root)
-            except Exception as exc:
-                warnings.append("[{}] fetch failed: {}".format(provider, exc))
-                resolved = []
+            resolved, error = fetched[provider]
+            if error is not None:
+                warnings.append("[{}] fetch failed: {}".format(provider, error))
             if len(resolved) == 0:
                 fallback_values = list(fallback_options.get(provider, []))
                 if len(fallback_values) > 0:

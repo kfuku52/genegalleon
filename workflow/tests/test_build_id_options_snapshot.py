@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from threading import Barrier
 
 from openpyxl import Workbook
 
@@ -174,3 +175,49 @@ def test_fetch_provider_options_dispatches_new_ensemblgenomes_providers(monkeypa
 
     assert module.fetch_provider_options("ensemblmetazoa", 1, None) == [("m1", "Metazoa species")]
     assert module.fetch_provider_options("ensemblprotists", 1, None) == [("p1", "Protist species")]
+
+
+def test_wormbase_parallel_listings_preserve_project_ids(monkeypatch):
+    module = load_module()
+    in_flight = Barrier(2)
+
+    def fetch_text(url, timeout):
+        assert timeout == 1
+        directory = url.rstrip("/").rsplit("/", 1)[-1]
+        if directory == "species":
+            return '<a href="beta_species/">B</a><a href="alpha_species/">A</a><a href="unavailable/">U</a>'
+        if directory == "unavailable":
+            raise OSError("listing unavailable")
+        in_flight.wait(timeout=3)
+        if directory == "alpha_species":
+            return '<a href="PRJNA2/">second</a><a href="PRJEB1/">first</a><a href="prjeb1/">duplicate</a>'
+        return '<a href="PRJNA3/">third</a>'
+
+    monkeypatch.setattr(module, "fetch_text", fetch_text)
+
+    assert module.fetch_wormbase_options(1) == [
+        ("alpha_species_prjeb1", "alpha species"),
+        ("alpha_species_prjna2", "alpha species"),
+        ("beta_species_prjna3", "beta species"),
+    ]
+
+
+def test_snapshot_parallel_fetches_keep_provider_order_and_fallback(monkeypatch):
+    module = load_module()
+    in_flight = Barrier(2)
+    monkeypatch.setattr(module, "PROVIDERS", ("wormbase", "insectbase"))
+    monkeypatch.setattr(module, "FETCH_PROVIDERS", ("wormbase", "insectbase"))
+
+    def fetch_provider(provider, timeout, input_root):
+        in_flight.wait(timeout=3)
+        if provider == "wormbase":
+            raise OSError("service unavailable")
+        return [("fresh", "Fresh label")]
+
+    monkeypatch.setattr(module, "fetch_provider_options", fetch_provider)
+    snapshot, warnings = module.build_snapshot(1, None, {"wormbase": [("prior", "Prior label")]}, [], [])
+
+    assert list(snapshot["providers"]) == ["wormbase", "insectbase"]
+    assert snapshot["providers"]["wormbase"] == [{"id": "prior", "species": "Prior label"}]
+    assert snapshot["providers"]["insectbase"] == [{"id": "fresh", "species": "Fresh label"}]
+    assert warnings == ["[wormbase] fetch failed: service unavailable", "[wormbase] using fallback snapshot entries (1)"]
