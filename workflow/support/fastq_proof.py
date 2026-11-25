@@ -4,6 +4,7 @@ import csv
 import gzip
 import hashlib
 import io
+import json
 import math
 import multiprocessing
 import os
@@ -64,6 +65,20 @@ def _complete_fastq(handle):
 
 def _identity(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def capture_fastq_identities(files):
+    return {path: _identity(path.lstat()) for _, path in files}
+
+
+def write_quant_fastq_receipt(destination, files, identities):
+    receipt = []
+    for contract, path in files:
+        if _identity(path.lstat()) != identities[path]:
+            raise FastqChanged(path)
+        receipt.append({"path": contract["path"], "stat": identities[path], "sha256": contract["sha256"]})
+    with open(destination, "wt", encoding="utf-8") as handle:
+        json.dump({"schema_version": 1, "files": receipt}, handle)
 
 
 def _parse_gzip(file):

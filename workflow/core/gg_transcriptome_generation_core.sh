@@ -79,6 +79,7 @@ classified_pacbio_fastq_files=()
 classified_ont_fastq_files=()
 getfastq_content_validated=0
 getfastq_content_validation_fingerprint=""
+quant_fastq_proof=""
 getfastq_cache_enabled=0
 getfastq_cache_reused=0
 transcriptome_tmp_lock_fd=""
@@ -1513,10 +1514,11 @@ has_resumable_getfastq_run_state() {
 bind_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local quant_proof=${3:-}
   local support_dir
   support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" "${quant_proof}" <<'PY'
 import csv
 import json
 import os
@@ -1525,11 +1527,12 @@ import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastqs, quant_stats_digest
+from fastq_proof import FastqChanged, capture_fastq_identities, proof_fastqs, quant_stats_digest, write_quant_fastq_receipt
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 workers = int(sys.argv[4])
+quant_proof = sys.argv[5]
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 output_root = manifest_path.parent.resolve(strict=True)
@@ -1672,6 +1675,7 @@ if sorted(seen_runs) != sorted(expected_runs):
 if manifest.get("run_count") != len(bound_runs):
     raise SystemExit("Completion manifest run_count does not match its runs list.")
 try:
+    identities = capture_fastq_identities(pending_files) if quant_proof else {}
     proofs = proof_fastqs([path for _, path in pending_files], workers)
 except FastqChanged as exc:
     raise SystemExit("Completion manifest FASTQ changed while hashing: {}".format(exc))
@@ -1682,6 +1686,11 @@ for (contract, _), (complete, size, checksum) in zip(pending_files, proofs):
         raise SystemExit("Completion manifest FASTQ is not a complete gzip/FASTQ: {}".format(contract["path"]))
     contract.update(size=size, sha256=checksum)
 quarantine_unbound_fastqs(seen_paths)
+if quant_proof:
+    try:
+        write_quant_fastq_receipt(quant_proof, pending_files, identities)
+    except OSError as exc:
+        raise SystemExit("Could not retain the verified FASTQ receipt: {}".format(exc))
 
 bound_manifest = {
     "schema_version": 4,
@@ -1723,7 +1732,7 @@ import re
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from fastq_proof import FastqChanged, proof_fastqs, quant_stats_digest
+from fastq_proof import FastqChanged, capture_fastq_identities, proof_fastqs, quant_stats_digest, write_quant_fastq_receipt
 
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
@@ -1896,32 +1905,24 @@ if not legacy_public_original:
             )
         )
 
-def stat_identity(path):
-    st = path.stat(follow_symlinks=False)
-    return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
-
-
 try:
-    identities = {path: stat_identity(path) for _, path in pending_files} if quant_proof else {}
+    identities = capture_fastq_identities(pending_files) if quant_proof else {}
     proofs = proof_fastqs([path for _, path in pending_files], workers)
 except FastqChanged as exc:
     raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(exc))
 except OSError as exc:
     raise SystemExit("Completion manifest FASTQ could not be read: {}".format(exc))
-receipt = []
-for (contract, path), (complete, size, checksum) in zip(pending_files, proofs):
+for (contract, _), (complete, size, checksum) in zip(pending_files, proofs):
     value = contract["path"]
     if not complete:
         raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
     if size != contract["size"] or checksum != contract["sha256"]:
         raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
-    if quant_proof:
-        if stat_identity(path) != identities[path]:
-            raise SystemExit("Completion manifest FASTQ changed before proof publication: {}".format(value))
-        receipt.append({"path": value, "stat": identities[path], "sha256": checksum})
 if quant_proof:
-    with open(quant_proof, "wt", encoding="utf-8") as handle:
-        json.dump({"schema_version": 1, "files": receipt}, handle)
+    try:
+        write_quant_fastq_receipt(quant_proof, pending_files, identities)
+    except OSError as exc:
+        raise SystemExit("Could not retain the verified FASTQ receipt: {}".format(exc))
 
 PY
 }
@@ -1931,8 +1932,9 @@ validate_amalgkit_getfastq_completion_manifest_index() {
   local metadata_tsv=$2
   local print_stat_fingerprint=${3:-no}
   local scope=${4:-all}
+  local quant_proof=${5:-}
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" "${scope}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" "${scope}" "${quant_proof}" <<'PY'
 import csv
 import hashlib
 import json
@@ -1945,6 +1947,7 @@ manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 print_stat_fingerprint = sys.argv[3] == "yes"
 stats_only = sys.argv[4] == "stats"
+quant_proof = sys.argv[5]
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
@@ -1984,6 +1987,7 @@ manifest_runs = []
 seen_paths = set()
 seen_stats_paths = set()
 stat_fingerprint = []
+published_proof = []
 for entry in entries:
     expected_entry_keys = (
         {"run", "status", "files"}
@@ -2039,6 +2043,8 @@ for entry in entries:
                 stat_result.st_ctime_ns,
             ]
         )
+        if quant_proof:
+            published_proof.append({"path": value, "stat": stat_fingerprint[-1][1:], "sha256": expected_sha256})
         seen_paths.add(value)
     if not legacy_public_original:
         stats_contract = entry.get("stats")
@@ -2123,6 +2129,11 @@ if not legacy_public_original:
                 ",".join(sorted(seen_stats_paths - actual_stats_paths)),
             )
         )
+if quant_proof:
+    with pathlib.Path(quant_proof).open(encoding="utf-8") as handle:
+        receipt = json.load(handle)
+    if receipt != {"schema_version": 1, "files": published_proof}:
+        raise SystemExit(3)
 if print_stat_fingerprint:
     print(json.dumps(stat_fingerprint, separators=(",", ":")))
 PY
@@ -2131,14 +2142,22 @@ PY
 mark_amalgkit_getfastq_content_validated() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local quant_proof=${3:-}
   local stat_fingerprint=""
+  local status=0
 
-  if ! stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+  stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
     "${completion_manifest}" \
     "${metadata_tsv}" \
-    yes)
-  then
-    return 1
+    yes all "${quant_proof}") || status=$?
+  if [[ ${status} -eq 3 && -n "${quant_proof}" ]]; then
+    # Moving to another filesystem produces new file identities. Verify the
+    # published bytes once before making them eligible for quantification.
+    validate_amalgkit_getfastq_completion_manifest "${completion_manifest}" "${metadata_tsv}" "${quant_proof}" || return $?
+    stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+      "${completion_manifest}" "${metadata_tsv}" yes all "${quant_proof}") || return $?
+  elif [[ ${status} -ne 0 ]]; then
+    return "${status}"
   fi
   if [[ -z "${stat_fingerprint}" ]]; then
     echo "Failed to capture the getfastq FASTQ filesystem identity." >&2
@@ -2370,6 +2389,7 @@ run_amalgkit_getfastq_attempt() {
   local log_file="${dir_tmp}/amalgkit_getfastq.${attempt_label}.log"
   local getfastq_cmd=()
   local status_amalgkit_attempt=0
+  local bound_quant_proof=""
 
   rm -f -- "${log_file}"
   echo "Running amalgkit getfastq attempt '${attempt_label}' with --rrna_filter ${rrna_filter_value}"
@@ -2433,9 +2453,12 @@ run_amalgkit_getfastq_attempt() {
     fi
     echo "amalgkit getfastq safely finished."
     echo "amalgkit getfastq log: ${log_file}"
+    if [[ ${run_amalgkit_quant:-0} -eq 1 ]]; then
+      bound_quant_proof=$(mktemp -- "${dir_tmp}/quant_fastq_proof.XXXXXX") || return 3
+    fi
     if ! bind_amalgkit_getfastq_completion_manifest \
       "${dir_tmp}/getfastq/getfastq_completion.json" \
-      "${file_amalgkit_metadata}"
+      "${file_amalgkit_metadata}" "${bound_quant_proof}"
     then
       echo "amalgkit getfastq finished without a valid all-run completion manifest."
       return 3
@@ -2453,7 +2476,7 @@ run_amalgkit_getfastq_attempt() {
     fi
     if ! mark_amalgkit_getfastq_content_validated \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
-      "${file_amalgkit_metadata}"
+      "${file_amalgkit_metadata}" "${bound_quant_proof}"
     then
       echo "Published amalgkit getfastq output failed its completion-index check." >&2
       return 3
@@ -2462,6 +2485,7 @@ run_amalgkit_getfastq_attempt() {
       echo "Failed to write the persistent getfastq cache contract." >&2
       return 3
     fi
+    quant_fastq_proof=${bound_quant_proof}
     rm -rf -- "${dir_tmp}/getfastq"
     return 0
   else
@@ -5572,7 +5596,9 @@ if [[ ${quantification_reused} -eq 0 ]]; then
 fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
-  quant_fastq_proof=$(mktemp -- "${dir_tmp}/quant_fastq_proof.XXXXXX") || exit $?
+  if [[ -z "${quant_fastq_proof:-}" ]]; then
+    quant_fastq_proof=$(mktemp -- "${dir_tmp}/quant_fastq_proof.XXXXXX") || exit $?
+  fi
   if [[ "${selected_transcriptome_mode}" == "sraid" || "${quantification_only:-0}" == 1 ]] && \
     ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \

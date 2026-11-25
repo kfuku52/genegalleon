@@ -336,10 +336,11 @@ Then set `GG_TRANSCRIPTOME_AMALGKIT_USE_PREFETCHED_READS=1` for the regular
 quantification job. Processing uses the existing cache and reports broken or
 missing inputs so the relevant download can be retried independently. Retain
 the raw cache until the matching work has passed verification.
-On a retry that requires a fresh FASTQ verification, GeneGalleon passes the
-verified digests to AMALGKIT for the current invocation. AMALGKIT checks the
-file identities before and after quantification so the same compressed FASTQ
-bytes need only be hashed once.
+GeneGalleon passes the verified digests to AMALGKIT after freshly binding its
+getfastq outputs or revalidating them on a retry. If publishing the FASTQs
+changes their file identities, GeneGalleon checks the published bytes before
+handing off their digests. AMALGKIT rechecks file identities before and after
+quantification.
 
 The same profile is also available through
 `GG_TRANSCRIPTOME_QUANTIFICATION_ONLY=1` on the transcriptome-generation

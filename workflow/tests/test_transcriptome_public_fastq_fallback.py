@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -290,16 +291,16 @@ def _run_contract_recovery(output_dir: Path):
     )
 
 
-def _run_manifest_binder(metadata_path: Path, output_dir: Path):
+def _run_manifest_binder(metadata_path: Path, output_dir: Path, proof_path=""):
     script = "\n".join(
         [
             "set -u",
             _source_core(),
-            'bind_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2"',
+            'bind_amalgkit_getfastq_completion_manifest "$1/getfastq_completion.json" "$2" "$3"',
         ]
     )
     return subprocess.run(
-        ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        ["bash", "-s", "--", str(output_dir), str(metadata_path), str(proof_path)],
         input=script,
         text=True,
         capture_output=True,
@@ -989,7 +990,9 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped, 
         encoding="utf-8",
     )
 
-    bound = _run_manifest_binder(metadata_path, output_dir)
+    receipt_path = tmp_path / "quant_proof.json"
+    receipt_path.touch(mode=0o600)
+    bound = _run_manifest_binder(metadata_path, output_dir, receipt_path)
 
     assert bound.returncode == 0, bound.stderr
     manifest = json.loads((output_dir / "getfastq_completion.json").read_text(encoding="utf-8"))
@@ -1011,6 +1014,36 @@ def test_amalgkit_manifest_is_bound_to_validated_fastq_bytes(tmp_path, wrapped, 
     ).is_file()
     validated = _run_manifest_validator(metadata_path, output_dir)
     assert validated.returncode == 0, validated.stderr
+
+    def check_published(directory):
+        script = "\n".join([
+            "set -eu",
+            _source_core(),
+            'mark_amalgkit_getfastq_content_validated "$1/getfastq_completion.json" "$2" "$3"',
+        ])
+        return subprocess.run(
+            ["bash", "-s", "--", str(directory), str(metadata_path), str(receipt_path)],
+            input=script, text=True, capture_output=True, check=False,
+        )
+
+    bound_receipt = receipt_path.read_bytes()
+    bound_receipt_mtime = receipt_path.stat().st_mtime_ns
+    published = tmp_path / "published"
+    output_dir.rename(published)
+    reused = check_published(published)
+    assert reused.returncode == 0, reused.stderr
+    assert receipt_path.read_bytes() == bound_receipt
+    assert receipt_path.stat().st_mtime_ns == bound_receipt_mtime
+    bindings = json.loads(bound_receipt)["files"]
+    assert [entry["sha256"] for entry in bindings] == [entry["sha256"] for entry in manifest["runs"][0]["files"]]
+
+    copied = tmp_path / "copied"
+    shutil.copytree(published, copied)
+    verified_copy = check_published(copied)
+    assert verified_copy.returncode == 0, verified_copy.stderr
+    copied_bindings = json.loads(receipt_path.read_bytes())["files"]
+    assert [entry["sha256"] for entry in copied_bindings] == [entry["sha256"] for entry in bindings]
+    assert [entry["stat"] for entry in copied_bindings] != [entry["stat"] for entry in bindings]
 
 
 def test_fastq_proof_rejects_same_byte_replacement_during_validation(tmp_path, monkeypatch):
