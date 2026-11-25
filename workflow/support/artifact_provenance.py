@@ -1940,6 +1940,8 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         )
     query_extractor = query_id_extractor(query_matcher_list) if query_matcher_list else None
     manifested_steps: set[tuple[str, str]] = set()
+    audit_options = {"producer_archive": producer_archive} if producer_archive is not None else {}
+
     def inspect_manifest(name):
         family_id = infer_orthogroup_id(name) or "-"
         step = "unknown"
@@ -1956,8 +1958,7 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             step = str(payload.get("step", ""))
             if not family_id or not step:
                 raise ProvenanceError("family_id and step are required")
-            status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo,
-                                            producer_archive=producer_archive)
+            status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo, **audit_options)
         except AuditCapacityError:
             raise
         except Exception as exc:
