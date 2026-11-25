@@ -411,6 +411,32 @@ printf 'status=%s needs=%s run=%s\n' "${{stage_status}}" "${{needs_update}}" "${
     )
 
 
+def test_plot_only_mounts_historical_support_after_runtime_reset(tmp_path):
+    producer = tmp_path / "retained"
+    (producer / "support").mkdir(parents=True)
+    entrypoint = GG_UTIL.parent.parent / "gg_gene_evolution_entrypoint.sh"
+    code = entrypoint.read_text()
+    first = code.index("if ! gg_entrypoint_prepare_container_runtime 1;")
+    last = code.index("gg_entrypoint_activate_container_runtime", first)
+    shell = r"""
+gg_entrypoint_prepare_container_runtime() { unset GG_CONTAINER_BIND_MOUNTS; }
+gg_resolve_physical_path() { printf '%s\n' "$1"; }
+gg_add_container_bind_mount() { GG_CONTAINER_BIND_MOUNTS=$1; }
+gg_export_var_to_container_env_if_set() { printf '%s\n' "${!1}"; }
+gene_evolution_plot_only=$2
+gene_evolution_plot_frozen_summary=1
+gene_evolution_plot_producer_support=$1
+GG_CONTAINER_BIND_MOUNTS=stale
+""" + code[first:last] + '\nprintf "%s\\n" "$GG_CONTAINER_BIND_MOUNTS"\n'
+    valid = subprocess.run(["bash", "-c", shell, "_", str(producer / "support"), "1"],
+                           text=True, capture_output=True, check=True)
+    assert valid.stdout.splitlines() == ["/gg_historical_producer/support", f"{producer}:/gg_historical_producer:ro"]
+    invalid = subprocess.run(["bash", "-c", shell, "_", str(producer / "support"), "0"],
+                             text=True, capture_output=True, check=False)
+    assert invalid.returncode == 3
+    assert not invalid.stdout
+
+
 @pytest.mark.skipif(bash_major_version() < 4, reason="gg_util.sh requires Bash 4+")
 def test_plot_only_skips_frozen_stages_but_audits_summary_and_plot(tmp_path):
     workspace = tmp_path / "workspace"

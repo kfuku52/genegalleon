@@ -166,7 +166,7 @@ run_tree_pruning=0 # If 1, discard genes without expression data.
 check_pruned=0 # Delete downstream outputs if inconsistent to run_tree_pruning.
 gene_evolution_plot_only=0 # Render from verified existing summary tables without rerunning upstream stages.
 gene_evolution_plot_frozen_summary=0 # In plot-only mode, verify and retain the original statistics recipe.
-gene_evolution_plot_producer_support="" # Optional mounted support directory of that historical producer.
+gene_evolution_plot_producer_support="" # Optional host support directory of that historical producer.
 gene_evolution_statistics_only=0 # Reuse existing gene trees; regenerate LCA reconciliation and summary statistics only.
 
 # dN/dS workflow flags
@@ -377,6 +377,22 @@ gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" "dele
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" "delete_preexisting_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1
+fi
+if [[ -n "${gene_evolution_plot_producer_support:-}" ]]; then
+  if [[ "${gene_evolution_plot_only}" != 1 || "${gene_evolution_plot_frozen_summary}" != 1 ||
+        "${gene_evolution_plot_producer_support}" != /*/support ]]; then
+    echo "Historical producer support requires a full absolute support directory in frozen-summary plotting mode." >&2
+    exit 3
+  fi
+  gg_plot_producer_workflow=$(gg_resolve_physical_path "${gene_evolution_plot_producer_support%/support}") || exit 3
+  if [[ ! -d "${gg_plot_producer_workflow}/support" || "${gg_plot_producer_workflow}" == *[:,$'\n']* ]]; then
+    echo "Invalid historical producer workflow directory." >&2
+    exit 3
+  fi
+  gg_add_container_bind_mount "${gg_plot_producer_workflow}:/gg_historical_producer:ro"
+  gene_evolution_plot_producer_support=/gg_historical_producer/support
+  gg_export_var_to_container_env_if_set gene_evolution_plot_producer_support
+  unset gg_plot_producer_workflow
 fi
 gg_entrypoint_activate_container_runtime
 
