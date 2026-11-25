@@ -94,6 +94,8 @@ gg_entrypoint_name="gg_gene_summary_entrypoint.sh"
 # Gene-family source
 orthogroup_catalog_name="Orthogroups_filtered" # Named selected-catalog directory below output/orthofinder; keep the original name to retain legacy behavior.
 orthogroup_summary_selection="" # Optional file with one completed orthogroup ID per line. A scoped run writes its own database and HGT outputs.
+orthogroup_summary_attempt="" # Optional 32-digit lowercase hexadecimal identity for a separate scoped attempt.
+orthogroup_summary_producer_inputs="" # Optional immutable historical producer input archive for a scoped summary.
 gene_family_source="${gene_family_source:-query2family}" # query2family|orthogroup; selects which gene-family output source to summarize.
 
 # Workflow flags

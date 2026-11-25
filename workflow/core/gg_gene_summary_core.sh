@@ -278,6 +278,21 @@ fi
 
 file_gene_family_db="${dir_gene_family}/gg_orthogroup.db"
 orthogroup_summary_selection="${orthogroup_summary_selection:-}"
+orthogroup_summary_attempt="${orthogroup_summary_attempt:-}"
+orthogroup_summary_producer_inputs="${orthogroup_summary_producer_inputs:-}"
+if [[ -n "${orthogroup_summary_attempt}${orthogroup_summary_producer_inputs}" && -z "${orthogroup_summary_selection}" ]]; then
+  echo "A summary attempt or producer archive requires an explicit orthogroup selection." >&2
+  exit 3
+fi
+if [[ -n "${orthogroup_summary_attempt}" && ! "${orthogroup_summary_attempt}" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "orthogroup_summary_attempt must be 32 lowercase hexadecimal digits." >&2
+  exit 3
+fi
+if [[ -n "${orthogroup_summary_producer_inputs}" && ( "${orthogroup_summary_producer_inputs}" != /* ||
+      ! -d "${orthogroup_summary_producer_inputs}" || -L "${orthogroup_summary_producer_inputs}" ) ]]; then
+  echo "The summary producer archive must be an absolute regular directory." >&2
+  exit 3
+fi
 if [[ -n "${orthogroup_summary_selection}" ]]; then
   if [[ "${gene_family_source}" != orthogroup || "${run_gene_family_database_build}" != 1 ||
         "${run_family_completion_summary}" != 0 || "${run_presence_absence_summary}" != 0 ||
@@ -291,10 +306,14 @@ if [[ -n "${orthogroup_summary_selection}" ]]; then
   fi
   scope_hash=$(sha256sum < "${orthogroup_summary_selection}") || exit $?
   scoped_parent="${gg_workspace_output_dir}/gene_summary/scoped_orthogroups"
-  summary_output_dir="${scoped_parent}/${scope_hash%% *}"
+  scoped_selection_dir="${scoped_parent}/${scope_hash%% *}"
+  summary_output_dir="${scoped_selection_dir}"
+  if [[ -n "${orthogroup_summary_attempt}" ]]; then
+    summary_output_dir="${scoped_selection_dir}/attempt-${orthogroup_summary_attempt}"
+  fi
   hgt_summary_output_dir="${summary_output_dir}/hgt"
   file_gene_family_db="${summary_output_dir}/gg_orthogroup.db"
-  for scoped_path in "${scoped_parent%/*}" "${scoped_parent}" "${summary_output_dir}" "${hgt_summary_output_dir}"; do
+  for scoped_path in "${scoped_parent%/*}" "${scoped_parent}" "${scoped_selection_dir}" "${summary_output_dir}" "${hgt_summary_output_dir}"; do
     if [[ -L "${scoped_path}" ]]; then
       echo "Scoped summary output cannot use a symbolic link: ${scoped_path}" >&2
       exit 3
@@ -928,7 +947,7 @@ run_gene_family_database_for_source() {
   if [[ -n "${orthogroup_summary_selection}" ]]; then
     database_provenance_args+=(--orthogroup-store-selection "${orthogroup_summary_selection}"
       --parameter "orthogroup_selection_sha256=${scope_hash%% *}")
-    local producer_archive="${gg_workspace_output_dir}/.gg_producer_inputs"
+    local producer_archive="${orthogroup_summary_producer_inputs:-${gg_workspace_output_dir}/.gg_producer_inputs}"
     if [[ -e "${producer_archive}" || -L "${producer_archive}" ]]; then
       database_provenance_args+=(--input "producer_input_archive=${producer_archive}")
     fi

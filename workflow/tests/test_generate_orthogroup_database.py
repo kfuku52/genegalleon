@@ -1747,3 +1747,55 @@ def test_scoped_summary_retains_exact_historical_producer_input(tmp_path):
         status, _ = p.audit_manifest({**manifest, 'inputs': [dangerous]}, store, root, tmp_path,
                                      producer_archive=archive)
         assert status == 'invalid_manifest'
+
+
+def test_scoped_summary_retry_retains_original_audit_and_rejects_unsafe_paths(tmp_path):
+    import hashlib
+
+    selection = tmp_path / 'selection'
+    selection.write_text('OG0000001\n')
+    sha = hashlib.sha256(selection.read_bytes()).hexdigest()
+    output = tmp_path / 'output'
+    first = output / 'gene_summary' / 'scoped_orthogroups' / sha
+    first.mkdir(parents=True)
+    previous = first / 'orthogroup_artifact_provenance_audit.tsv'
+    previous.write_bytes(b'failed audit retained\n')
+    core = SCRIPT_PATH.parents[1] / 'core' / 'gg_gene_summary_core.sh'
+    text = core.read_text()
+    start = text.index('orthogroup_summary_selection="${orthogroup_summary_selection:-}"')
+    stop = text.index('resolve_orthogroup_genecount_selected()', start)
+    script = r"""
+set -eu
+gg_workspace_output_dir=$1
+orthogroup_summary_selection=$2
+orthogroup_summary_attempt=$3
+orthogroup_summary_producer_inputs=$4
+gene_family_source=orthogroup
+run_gene_family_database_build=1
+run_family_completion_summary=0
+run_presence_absence_summary=0
+run_species_taxonomy=0
+run_gene_annotation_database=0
+run_reconciliation_summary=0
+run_csubst_scan_aa_change_summary=0
+run_csubst_scan_candidate_sites=0
+run_csubst_site_convergence_summary=0
+run_hgt_trait_focus=0
+""" + text[start:stop] + '\nprintf "%s\\n" "$summary_output_dir"\n'
+
+    def setup(attempt, archive='', select=selection):
+        return subprocess.run(['bash', '-c', script, '_', str(output), str(select), attempt, archive],
+                              text=True, capture_output=True)
+
+    assert setup('').stdout.strip() == str(first)
+    attempt = '1' * 32
+    staged = setup(attempt)
+    assert staged.returncode == 0, staged.stderr
+    assert staged.stdout.strip() == str(first / f'attempt-{attempt}')
+    assert previous.read_bytes() == b'failed audit retained\n'
+    assert setup(attempt, select='').returncode == 3
+    assert setup('../other').returncode == 3
+    assert setup(attempt, 'relative').returncode == 3
+    redirect = first / ('attempt-' + '2' * 32)
+    redirect.symlink_to(tmp_path, target_is_directory=True)
+    assert setup('2' * 32).returncode == 3

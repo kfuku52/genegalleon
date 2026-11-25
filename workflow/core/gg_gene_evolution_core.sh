@@ -6687,7 +6687,7 @@ fi
 summary_legacy_policy=${artifact_legacy_policy:-adopt}
 # Legacy tables may assign an arbitrary sister at a multifurcation.
 if [[ "${summary_legacy_policy}" == "adopt" ]]; then summary_legacy_policy=rebuild; fi
-if [[ "${gene_evolution_plot_frozen_summary}" == 1 ]]; then
+if [[ "${gene_evolution_plot_frozen_summary:-0}" == 1 ]]; then
   summary_legacy_policy=stop
   summary_provenance_args+=(--frozen-family-summary)
   if [[ -n "${gene_evolution_plot_producer_support}" ]]; then
