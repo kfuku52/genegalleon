@@ -31,7 +31,7 @@ def receipt(directory, key):
     (directory / 'receipt.json').write_text(json.dumps({'key': key, 'files': files}))
 
 
-def publish(directory, models, *, revisions=(), sharded=True, key=None):
+def publish(directory, models, *, revisions=(), sharded=True, key=None, archive_shards=True):
     directory.mkdir(parents=True, exist_ok=True)
     if sharded:
         # Deliberately replace a synthetic generation for frozen-key tests.
@@ -39,7 +39,8 @@ def publish(directory, models, *, revisions=(), sharded=True, key=None):
             shutil.rmtree(directory / 'model_store')
         for name in ('models.json', 'partial_models.json', 'revision_candidates.json'):
             (directory / name).unlink(missing_ok=True)
-        model_store.write_model_store(directory, models, revisions=list(revisions), shard_bytes=1024)
+        model_store.write_model_store(directory, models, revisions=list(revisions), shard_bytes=1024,
+                                      archive_shards=archive_shards)
     else:
         for name, values in (('models.json', models), ('partial_models.json', []),
                              ('revision_candidates.json', list(revisions))):
@@ -139,13 +140,14 @@ def test_prediction_replay_checks_donor_even_outside_store(tmp_path, when):
         next(stream)
 
 
+@pytest.mark.parametrize('archive_shards', [False, True])
 @pytest.mark.parametrize('fault', ['member', 'manifest', 'receipt', 'omitted_shard', 'accepted_scope', 'boolean_schema'])
-def test_prediction_store_freeze_detects_content_and_membership_changes(tmp_path, fault):
+def test_prediction_store_freeze_detects_content_and_membership_changes(tmp_path, fault, archive_shards):
     old, new, plan, region = cache_fixture(tmp_path)
     directory = old / 'rescued/T'
     rows = json.loads((directory / 'models.json').read_text())
     old_key = json.loads((directory / 'receipt.json').read_text())['key']
-    publish(directory, rows, key=old_key)
+    publish(directory, rows, key=old_key, archive_shards=archive_shards)
     frozen = frozen_prediction_cache_key(old, ['T'])
     store_key = frozen['species']['T']['model_store']
     if fault == 'manifest':
@@ -160,7 +162,8 @@ def test_prediction_store_freeze_detects_content_and_membership_changes(tmp_path
     elif fault == 'boolean_schema':
         store_key['schema'] = True
     else:
-        member = next(name for name in store_key['files'] if name.endswith(('.gz', '.zst')))
+        suffix = ('.zip',) if archive_shards else ('.gz', '.zst')
+        member = next(name for name in store_key['files'] if name.endswith(suffix))
         if fault == 'member':
             with (directory / member).open('ab') as handle:
                 handle.write(b'changed')

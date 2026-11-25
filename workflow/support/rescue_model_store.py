@@ -18,9 +18,10 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import zipfile
 from collections import OrderedDict, deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, nullcontext
 from itertools import batched, chain, islice
 from multiprocessing import get_context
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,7 @@ else:
     from stage_output_hashes import hash_paths
 
 FORMAT = "gg_rescue_model_store_v1"
+SHARD_ARCHIVE = "models.zip"
 KINDS = {"models", "accepted", "partial", "revision"}
 BODY_FIELDS = frozenset({
     "seqid", "strand", "cds", "sequence", "assembly_ambiguous_bases",
@@ -357,7 +359,7 @@ def _add_packed_overlay(db, ordinal, body, sha, encoded, level, codec, cache):
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
                       shard_bytes=SHARD_BYTES, codec="auto", compression_level=1,
-                      publication_workers=1, packing_workers=1):
+                      publication_workers=1, packing_workers=1, archive_shards=True):
     """Atomically publish into ``directory/model_store`` without replacing data.
 
     ``partial_models=None`` records references for ``partial_evidence.partial``.
@@ -366,6 +368,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
     ``publication_workers`` bounds concurrent checksums and file syncs.
     Parallel packing requires stable, picklable input records and is used only
     when the main stream supplies its own partial references.
+    Shards are published in a stored ZIP by default. Existing loose shards remain readable.
     Publication is immutable; the enclosing stage subsequently hashes all files
     into its normal receipt. No receipt is fabricated by this writer.
     """
@@ -387,7 +390,8 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         staging = Path(directory)
         with scratch_build_directory(staging) as work:
             manifest = _build_model_store(work, models, partial_models, revisions, shard_bytes,
-                                          codec, codec_version, compression_level, publication_workers, packing_workers)
+                                          codec, codec_version, compression_level, publication_workers, packing_workers,
+                                          archive_shards)
             if work != staging:
                 def copy_member(path):
                     target_path = staging / path.name
@@ -397,7 +401,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
                         raise OSError(f"Copied model-store member differs: {path.name}")
                     return copied
 
-                hash_paths(work, (work / name for name in manifest["files"]),
+                hash_paths(work, (work / name for name in _physical_files(manifest)),
                            workers=publication_workers, hash_function=copy_member)
         (staging / "manifest.json").write_bytes(_json(manifest) + b"\n")
         _sync_files(staging.iterdir(), publication_workers)
@@ -467,8 +471,10 @@ def _write_shard(path, packed, codec, level):
 class _ModelShards:
     """Write final shards in order, with at most four queued compression blocks."""
 
-    def __init__(self, path, shard_bytes, codec, level):
+    def __init__(self, path, shard_bytes, codec, level, archive):
         self.path, self.shard_bytes, self.codec, self.level = path, shard_bytes, codec, level
+        self.archive = archive
+        self.streams = ExitStack()
         self.executor = None
         self.handle = None
         self.pending = deque()
@@ -489,7 +495,18 @@ class _ModelShards:
 
     def _write(self, name, packed, last):
         if self.handle is None:
-            self.handle = _writer(self.path / name, self.codec, self.level)
+            if self.archive is None:
+                writer = _writer(self.path / name, self.codec, self.level)
+            else:
+                raw = self.streams.enter_context(self.archive.open(name, "w", force_zip64=True))
+                if self.codec == "gzip":
+                    writer = gzip.GzipFile(filename=name, fileobj=raw, mode="wb",
+                                           compresslevel=self.level, mtime=0)
+                else:
+                    import zstandard
+                    writer = zstandard.ZstdCompressor(level=self.level, write_checksum=True).stream_writer(
+                        raw, closefd=False)
+            self.handle = self.streams.enter_context(writer)
         self.handle.write(packed)
         if last:
             self.close()
@@ -511,9 +528,8 @@ class _ModelShards:
             self.rows = self.size = 0
 
     def close(self):
-        if self.handle is not None:
-            handle, self.handle = self.handle, None
-            handle.close()
+        self.handle = None
+        self.streams.close()
 
     def finish(self):
         if self.rows:
@@ -524,7 +540,7 @@ class _ModelShards:
 
 
 def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, codec, codec_version, compression_level,
-                       hash_workers, packing_workers):
+                       hash_workers, packing_workers, archive_shards):
     dbs = []
     try:
         body_db = _database(tmp / "bodies.sqlite")
@@ -555,7 +571,10 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
         # budget with packers. No full uncompressed shard is buffered.
         threaded = hash_workers > 1 and packing_workers >= 4
         with ExitStack() as resources:
-            shards = _ModelShards(tmp, shard_bytes, codec, compression_level)
+            archive = None
+            if archive_shards:
+                archive = resources.enter_context(zipfile.ZipFile(tmp / SHARD_ARCHIVE, "x", compression=zipfile.ZIP_STORED))
+            shards = _ModelShards(tmp, shard_bytes, codec, compression_level, archive)
             resources.callback(shards.close)
             if threaded:
                 shards.executor = resources.enter_context(ThreadPoolExecutor(max_workers=1))
@@ -625,6 +644,10 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
             db.close()
         dbs = []
         hashes = hash_paths(tmp, tmp.iterdir(), workers=hash_workers, hash_function=_digest)
+        storage = {}
+        if archive_shards:
+            storage["shard_archive"] = SHARD_ARCHIVE
+            hashes.update(_archive_shard_hashes(tmp, shards))
         files = dict(sorted(hashes.items()))
         scopes = {
             "models": ["bodies.sqlite", *(s["path"] for s in shards)],
@@ -635,7 +658,7 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
         return {"schema": 1, "format": FORMAT, "codec": codec, "body_codec": codec,
                 "codec_version": codec_version,
                 "compression_level": compression_level, "files": files, "scopes": scopes,
-                "shards": shards, "partial_ordered": partial_ordered,
+                "shards": shards, "partial_ordered": partial_ordered, **storage,
                 "counts": {"models": count, "accepted": accepted_count,
                                              "partial": partial_count, "revision": revision_count,
                                              "bodies": body_count}}
@@ -644,8 +667,63 @@ def _build_model_store(tmp, models, partial_models, revisions, shard_bytes, code
             db.close()
 
 
-def _manifest(store):
-    manifest, sha = _snapshot(store / "manifest.json")
+def _physical_files(manifest, names=None):
+    """Map logical shard dependencies to the receipted files on disk."""
+    files = manifest["files"]
+    names = files if names is None else names
+    archive = manifest.get("shard_archive")
+    if archive is None:
+        return {name: files[name] for name in names}
+    shards = {item["path"] for item in manifest["shards"]}
+    return {name: files[name] for name in (archive if name in shards else name for name in names)}
+
+
+@contextmanager
+def _open_shards(store, manifest):
+    archive = manifest.get("shard_archive")
+    if archive is None:
+        yield store
+        return
+    with zipfile.ZipFile(_member(store, archive)) as handle:
+        members = handle.infolist()
+        names = {item["path"] for item in manifest["shards"]}
+        if (len(members) != len(names) or {member.filename for member in members} != names
+                or any(member.compress_type != zipfile.ZIP_STORED or member.flag_bits & 1 for member in members)):
+            raise ValueError("Model-store ZIP membership or encoding changed")
+        yield zipfile.Path(handle)
+
+
+def _copy_zip_member(source, archive, name, expected):
+    checksum = hashlib.sha256()
+    with source.open("rb") as raw, archive.open(name, "w", force_zip64=True) as dest:
+        for block in iter(lambda: raw.read(1024 * 1024), b""):
+            checksum.update(block)
+            dest.write(block)
+    if checksum.hexdigest() != expected:
+        raise ValueError(f"Model-store source shard changed: {name}")
+
+
+def _archive_shard_hashes(store, shards):
+    manifest = {"shard_archive": SHARD_ARCHIVE, "shards": shards}
+    hashes = {}
+    with _open_shards(store, manifest) as source:
+        for shard in shards:
+            name = shard["path"]
+            with (source / name).open("rb") as raw:
+                hashes[name] = hashlib.file_digest(raw, "sha256").hexdigest()
+    return hashes
+
+
+# Spawned workers each open the ZIP index once and keep their own reader.
+_worker_shards = None
+
+
+def _initialize_worker_shards(store, archive):
+    global _worker_shards
+    _worker_shards = zipfile.Path(_member(store, archive)) if archive else store
+
+
+def _validate_manifest(manifest):
     if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int
             or manifest.get("schema") != 1 or manifest.get("format") != FORMAT
             or manifest.get("codec") not in {"gzip", "zstd"} or manifest.get("body_codec") != manifest.get("codec")
@@ -674,6 +752,10 @@ def _manifest(store):
         shard_names.append(shard["path"])
         seen.add(shard["path"])
         ordinal += shard["count"]
+    if "shard_archive" in manifest and (manifest["shard_archive"] != SHARD_ARCHIVE
+            or SHARD_ARCHIVE not in manifest["files"] or SHARD_ARCHIVE in seen
+            or any("/" in name or not name.endswith((".jsonl.gz", ".jsonl.zst")) for name in seen)):
+        raise ValueError("Malformed model-store shard archive")
     partial_members = seen | {"partial.sqlite", "bodies.sqlite"}
     if (ordinal != manifest["counts"]["models"] or manifest["scopes"]["models"] != ["bodies.sqlite", *shard_names]
             or manifest["scopes"]["accepted"] != ["accepted.sqlite"]
@@ -681,6 +763,11 @@ def _manifest(store):
             or not manifest["scopes"]["partial"] or manifest["scopes"]["partial"][0] != "partial.sqlite"
             or not partial_members.issuperset(manifest["scopes"]["partial"])):
         raise ValueError("Malformed model-store scope dependencies")
+
+
+def _manifest(store):
+    manifest, sha = _snapshot(store / "manifest.json")
+    _validate_manifest(manifest)
     return manifest, sha
 
 
@@ -708,7 +795,7 @@ def frozen_model_store_key(directory, *, kind="models"):
         manifest, manifest_sha = _manifest(store)
         prefix = store.relative_to(root).as_posix()
         files = {f"{prefix}/manifest.json": manifest_sha}
-        files.update({f"{prefix}/{p}": manifest["files"][p] for p in manifest["scopes"][kind]})
+        files.update({f"{prefix}/{p}": digest for p, digest in _physical_files(manifest, manifest["scopes"][kind]).items()})
         if any(receipt["files"].get(p) != sha for p, sha in files.items()):
             raise ValueError("Model-store manifest/members are not bound to producer receipt")
         return {"schema": 1, "format": FORMAT, "kind": kind, "manifest_sha256": manifest_sha,
@@ -908,7 +995,7 @@ class _HashReader:
 
 
 def _record_lines(path, codec, expected=None):
-    with Path(path).open("rb") as raw:
+    with path.open("rb") as raw:
         reader = raw if expected is None else _HashReader(raw)
         if codec == "gzip":
             handle = gzip.GzipFile(fileobj=reader, mode="rb")
@@ -960,10 +1047,10 @@ def _selection_context(envelope):
     return envelope["context"]
 
 
-def _filter_shard(source, codec, expected, first, count, predicate, destination):
+def _filter_shard(member, codec, expected, first, count, predicate, destination):
     seen = 0
     with destination.open("xb") as output:
-        for line in _record_lines(source, codec, expected):
+        for line in _record_lines(_worker_shards / member, codec, expected):
             envelope = _decode_line(line)
             context = _selection_context(envelope)
             if envelope.get("ordinal") != first + seen:
@@ -975,12 +1062,14 @@ def _filter_shard(source, codec, expected, first, count, predicate, destination)
         raise ValueError("Model-store shard count changed")
 
 
-def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
+def _selected_shard_rows(store, manifest, verify_shards, predicate, workers):
     """Verify each complete shard and consume its selected lines in source order."""
     codec = manifest["codec"]
     pending = deque()
     with tempfile.TemporaryDirectory(prefix="gg-model-selection-") as directory, \
-            ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+            ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"),
+                                initializer=_initialize_worker_shards,
+                                initargs=(store, manifest.get("shard_archive"))) as pool:
         def consume():
             path, future = pending.popleft()
             future.result()
@@ -992,9 +1081,10 @@ def _selected_shard_rows(prefix, manifest, paths, expected, predicate, workers):
             path.unlink()
 
         for index, shard in enumerate(manifest["shards"]):
-            member = f"{prefix}/{shard['path']}"
+            member = shard["path"]
+            expected = manifest["files"][member] if verify_shards else None
             output = Path(directory) / str(index)
-            pending.append((output, pool.submit(_filter_shard, paths[member], codec, expected.get(member),
+            pending.append((output, pool.submit(_filter_shard, member, codec, expected,
                                                 shard["first"], shard["count"], predicate, output)))
             if len(pending) >= workers * 2:
                 yield from consume()
@@ -1050,9 +1140,10 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
         manifest, _ = _manifest(store)
         prefix = store.relative_to(root).as_posix()
         revision_member = f"{prefix}/revision.sqlite" if kind == "revision" else None
+        archive_member = f"{prefix}/{manifest['shard_archive']}" if "shard_archive" in manifest else None
         if key is not None and verification is None:
             for member, path in paths.items():
-                if (member != revision_member and not member.endswith((".jsonl.gz", ".jsonl.zst"))
+                if (member not in (revision_member, archive_member) and not member.endswith((".jsonl.gz", ".jsonl.zst"))
                         and _digest(path) != key["files"][member]):
                     raise ValueError(f"Model-store checksum changed: {member}")
         if kind in {"accepted", "revision"}:
@@ -1081,26 +1172,28 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 if count != manifest["counts"][kind]:
                     raise ValueError("Model-store overlay count changed")
         elif kind == "partial":
-            yield from _partials(root, store, manifest, key)
+            shard_reader = _open_shards(store, manifest) if manifest["counts"]["partial"] else nullcontext(store)
+            with shard_reader as shards:
+                yield from _partials(store, manifest, key, shards)
         elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
               and len(manifest["shards"]) >= scan_workers * 2):
-            with _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
+            with _open_shards(store, manifest), \
+                    _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
-                checksums = key["files"] if verification is None else {}
-                for envelope in _selected_shard_rows(prefix, manifest, paths, checksums, context_filter, scan_workers):
+                for envelope in _selected_shard_rows(store, manifest, verification is None, context_filter, scan_workers):
                     record = bodies.unpack(envelope, context_owned=True)
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
         else:
             stage_bodies = context_filter is not None or verification is not None
             checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and stage_bodies else None
-            with _open_body_database(store / "bodies.sqlite", checksum) as db:
+            with _open_shards(store, manifest) as shards, _open_body_database(store / "bodies.sqlite", checksum) as db:
                 bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
                     count = 0
-                    relative = f"{prefix}/{shard['path']}"
-                    path = _member(root, relative)
-                    expected = key["files"][relative] if key is not None and verification is None else None
+                    name = shard["path"]
+                    path = _member(store, name) if archive_member is None else shards / name
+                    expected = manifest["files"][name] if key is not None and verification is None else None
                     if shard["first"] != ordinal:
                         raise ValueError("Model-store shard order changed")
                     for envelope in _lines(path, manifest["codec"], expected):
@@ -1133,7 +1226,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
         verification.check()
 
 
-def _partials(root, store, manifest, key):
+def _partials(store, manifest, key, shards):
     refs = _readonly(store / "partial.sqlite")
     body_db = None
     try:
@@ -1146,7 +1239,7 @@ def _partials(root, store, manifest, key):
         bodies = _DecodedBodies(body_db, manifest["body_codec"])
         if manifest.get("partial_ordered") is True:
             position = 0
-            for found_position, envelope, context_owned in _partial_entries(root, store, manifest, key, refs):
+            for found_position, envelope, context_owned in _partial_entries(store, manifest, key, refs, shards):
                 if found_position != position:
                     raise ValueError("Model-store partial order changed")
                 position += 1
@@ -1160,7 +1253,7 @@ def _partials(root, store, manifest, key):
             spool = sqlite3.connect(Path(tmp) / "partial.sqlite")
             try:
                 spool.execute("CREATE TABLE entries (position INTEGER PRIMARY KEY,envelope BLOB)")
-                for position, envelope, _ in _partial_entries(root, store, manifest, key, refs):
+                for position, envelope, _ in _partial_entries(store, manifest, key, refs, shards):
                     spool.execute("INSERT INTO entries VALUES (?,?)", (position, _json(envelope)))
                 if spool.execute("SELECT COUNT(*) FROM entries").fetchone()[0] != count:
                     raise ValueError("Missing model-store partial reference")
@@ -1175,19 +1268,20 @@ def _partials(root, store, manifest, key):
             body_db.close()
 
 
-def _partial_entries(root, store, manifest, key, refs):
-    prefix = store.relative_to(root).as_posix()
+def _partial_entries(store, manifest, key, refs, shards):
     for (shard_index,) in refs.execute("SELECT DISTINCT shard FROM refs ORDER BY shard"):
         if type(shard_index) is not int or not 0 <= shard_index < len(manifest["shards"]):
             raise ValueError("Malformed model-store partial shard reference")
         shard = manifest["shards"][shard_index]["path"]
-        relative = f"{prefix}/{_safe_member(shard)}"
-        expected = key["files"][relative] if key is not None else None
+        path = shards / shard if "shard_archive" in manifest else _member(store, shard)
+        expected = manifest["files"][shard] if key is not None else None
+        if key is not None and shard not in manifest["scopes"]["partial"]:
+            raise ValueError("Model-store partial shard is not in the producer scope")
         references = refs.execute(
             "SELECT line,position,ordinal FROM refs WHERE shard=? ORDER BY line,position", (shard_index,))
         reference = next(references, None)
         count = 0
-        for line, envelope in enumerate(_lines(_member(root, relative), manifest["codec"], expected)):
+        for line, envelope in enumerate(_lines(path, manifest["codec"], expected)):
             count += 1
             if (not isinstance(envelope, dict) or type(envelope.get("ordinal")) is not int
                     or envelope["ordinal"] != manifest["shards"][shard_index]["first"] + line):

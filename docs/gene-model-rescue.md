@@ -627,6 +627,28 @@ audits. Readers also accept existing `models.json`, `partial_models.json` and
 three arrays explicitly. Input generation forwards these choices through
 `GG_INPUT_GENE_MODEL_RESCUE_MODEL_STORAGE=compact|legacy`.
 
+New compact publications write the already compressed JSONL shards into one
+`model_store/models.zip` per species, using ZIP STORE. The manifest retains
+individual shard paths, order and hashes, and the producer receipt binds the
+physical ZIP. SQLite bodies and overlays remain directly accessible. Current
+readers stream the ZIP or earlier loose shards, so existing results need no
+migration. Use a ZIP-aware GeneGalleon runtime for newer publications.
+
+For a closed worker with no consumers pinned to its receipt, convert its loose
+shards offline with:
+
+```bash
+python workflow/support/archive_rescue_model_store.py /path/to/rescued/Species \
+  --writers-and-receipt-consumers-stopped
+```
+
+This verifies the ZIP members against the original receipt before retiring the
+loose shards and publishes a new receipt generation. Repeat the same command
+to resume an interruption. For offline restoration, verify and restore the
+loose members from `models.zip`, then restore the exact `manifest` and `receipt`
+bytes (base64) saved in `model_store/.model-store-loose-layout.json`. Existing
+dependent publications require their original receipt generation.
+
 Successful predictor input FASTAs and expanded genome GFF are omitted by
 default. Small records retain coordinates, input-sequence hashes, donor/query
 mappings and search flags. Compact rescue writes interval GFF and logs into

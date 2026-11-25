@@ -355,6 +355,8 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models,
         assert list(iter_partial_models(b)) == json.loads((a / "partial_models.json").read_text())
         assert list(iter_revision_models(b)) == json.loads((a / "revision_candidates.json").read_text())
         assert (b / "model_store/manifest.json").is_file()
+        assert (b / "model_store/models.zip").is_file()
+        assert not list((b / "model_store").glob("models-*.jsonl.*"))
         details = compact.parent / (name + '_diagnostics')
         cli("export-diagnostics", "--output", compact, "--task-index", str(names.index(name) + 1),
             "--destination", details)

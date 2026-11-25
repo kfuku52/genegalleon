@@ -7,18 +7,19 @@ import math
 import os
 import shutil
 import tempfile
+import zipfile
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import ExitStack, nullcontext
 from multiprocessing import get_context
 from pathlib import Path
 
-try:
-    import rescue_model_store as store
-    from stage_output_hashes import hash_paths
-except ImportError:
+if __package__:
     from . import rescue_model_store as store
     from .stage_output_hashes import hash_paths
+else:
+    import rescue_model_store as store
+    from stage_output_hashes import hash_paths
 
 
 def _copy(source, destination, expected, *, verify_destination=True):
@@ -48,14 +49,16 @@ def _same_json_value(a, b):
     return store._json(a) == store._json(b)
 
 
-def _patch_shard(source_store, temporary, shard, expected, codec, level, changes):
+def _patch_shard(source_store, temporary, shard, expected, codec, level, changes, shard_root=None):
     normalized = set()
     with ExitStack() as resources:
         source_bodies = None
         name = shard['path']
+        if shard_root is None:
+            shard_root = store._worker_shards
         seen = 0
         with store._writer(temporary / name, codec, level) as out:
-            for envelope in store._lines(source_store / name, codec, expected):
+            for envelope in store._lines(shard_root / name, codec, expected):
                 ordinal = shard['first'] + seen
                 if envelope.get('ordinal') != ordinal:
                     raise ValueError('Patch source candidate order changed')
@@ -100,7 +103,11 @@ def _patch_shard(source_store, temporary, shard, expected, codec, level, changes
     return normalized
 
 
-def _patch_shards(source, output, shards, manifest, ordered_changes, changes, workers):
+def _initialize_patch_shards(source, archive):
+    store._initialize_worker_shards(source, archive)
+
+
+def _patch_shards(source, output, shards, manifest, ordered_changes, changes, workers, shard_root):
     def args(shard, first, last):
         name = shard['path']
         return (source, output, shard, manifest['files'][name], manifest['codec'],
@@ -108,10 +115,12 @@ def _patch_shards(source, output, shards, manifest, ordered_changes, changes, wo
 
     if workers == 1 or len(shards) < workers * 2:
         for shard, first, last in shards:
-            yield from _patch_shard(*args(shard, first, last))
+            yield from _patch_shard(*args(shard, first, last), shard_root=shard_root)
         return
     pending = deque()
-    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as pool:
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn'),
+                             initializer=_initialize_patch_shards,
+                             initargs=(source, manifest.get('shard_archive'))) as pool:
         for shard, first, last in shards:
             pending.append(pool.submit(_patch_shard, *args(shard, first, last)))
             if len(pending) >= workers * 2:
@@ -195,7 +204,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
     manifest, manifest_sha = store._manifest(source_store)
     receipt, receipt_sha = store._receipt(root)
     prefix = source_store.relative_to(root).as_posix()
-    members = {f'{prefix}/{name}': sha for name, sha in manifest['files'].items()}
+    members = {f'{prefix}/{name}': sha for name, sha in store._physical_files(manifest).items()}
     members[f'{prefix}/manifest.json'] = manifest_sha
     if any(receipt['files'].get(name) != sha for name, sha in members.items()):
         raise ValueError('Patch input is not bound to its producer receipt')
@@ -237,15 +246,15 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             else:
                 affected_shards.append((shard, first, last))
 
-        def copy_shard(path):
-            name = str(path.relative_to(source_store))
-            expected = manifest['files'][name]
-            _copy(path, temporary / name, expected, verify_destination=False)
-            return expected
-
-        deferred = hash_paths(source_store, unchanged, workers=publication_workers, hash_function=copy_shard)
-        normalized.update(_patch_shards(source_store, temporary, affected_shards, manifest,
-                                        ordered_changes, changes, publication_workers))
+        archive = temporary / store.SHARD_ARCHIVE
+        with store._open_shards(source_store, manifest) as shard_root:
+            with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_STORED) as handle:
+                for path in unchanged:
+                    name = str(path.relative_to(source_store))
+                    store._copy_zip_member(shard_root / name, handle, name, manifest['files'][name])
+            normalized.update(_patch_shards(source_store, temporary, affected_shards, manifest,
+                                            ordered_changes, changes, publication_workers, shard_root))
+        deferred = {}
         _copy(source_store / 'bodies.sqlite', temporary / 'bodies.sqlite', manifest['files']['bodies.sqlite'])
         body_db = store.sqlite3.connect(temporary / 'bodies.sqlite')
         databases.append(body_db)
@@ -281,7 +290,9 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             deferred['partial.sqlite'] = partial_expected
         known = {'bodies.sqlite', 'partial.sqlite', 'accepted.sqlite', 'revision.sqlite',
                  *[s['path'] for s in manifest['shards']]}
-        for name in manifest['files'].keys() - known:
+        if 'shard_archive' in manifest:
+            known.add(manifest['shard_archive'])
+        for name in store._physical_files(manifest).keys() - known:
             expected = manifest['files'][name]
             _copy(source_store / name, temporary / name, expected, verify_destination=False)
             deferred[name] = expected
@@ -307,10 +318,23 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             databases.remove(db)
         output['counts'].update(models=count + len(appended), **overlay_counts)
         output['scopes']['models'] = ['bodies.sqlite', *[s['path'] for s in output['shards']]]
-        files = (p for p in temporary.rglob('*') if p.is_file())
+        files = (p for p in temporary.rglob('*') if p.is_file() and p != archive)
         hashes = hash_paths(temporary, files, workers=publication_workers, hash_function=store._digest)
         if any(hashes.get(name) != expected for name, expected in deferred.items()):
             raise ValueError('Unchanged model-store member differs at publication')
+        with zipfile.ZipFile(archive, 'a', compression=zipfile.ZIP_STORED) as handle:
+            for shard in output['shards']:
+                name = shard['path']
+                path = temporary / name
+                if name in hashes:
+                    store._copy_zip_member(path, handle, name, hashes[name])
+                    path.unlink()
+                else:
+                    hashes[name] = manifest['files'][name]
+        if any(sha != hashes[name] for name, sha in store._archive_shard_hashes(temporary, output['shards']).items()):
+            raise ValueError('Copied model-store ZIP member differs')
+        hashes[archive.name] = store._digest(archive)
+        output['shard_archive'] = archive.name
         output['files'] = dict(sorted(hashes.items()))
         (temporary / 'manifest.json').write_bytes(store._json(output) + b'\n')
         store._check_key(source, key, 'models')

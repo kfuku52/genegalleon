@@ -36,14 +36,17 @@ def test_refinement_cli_help_uses_real_runtime_without_outputs(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("model_storage", ["legacy", "compact"])
+def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path, monkeypatch, model_storage):
+    from workflow.support.rescue_model_store import iter_accepted_models
+
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
-    anchor_root, names, truth = fixture.make_plan(data)
+    anchor_root, names, truth = fixture.make_plan(data, model_storage=model_storage)
     before = {path: path.read_bytes() for role in ('cds', 'gff', 'genome') for path in (tmp_path / role).iterdir()}
     fixture.cli('run', '--output', anchor_root, '--cpus', 2)
-    models = json.loads((anchor_root / 'rescued' / names[0] / 'models.json').read_text())
-    accepted = [model for model in models if model['status'] == 'accepted']
+    worker = anchor_root / 'rescued' / names[0]
+    accepted = list(iter_accepted_models(worker))
     assert len(accepted) == 1 and accepted[0]['sequence'] == truth[8]
     root = tmp_path / 'refinement'
     producer_plan = (anchor_root / 'plan.json').read_bytes()
@@ -68,7 +71,7 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
     assert len(records) == 16  # Fifteen original annotations plus one missing model.
     assert accepted[0]['model_id'] in (root / 'effective/full_annotation' / (names[0] + '.gff3')).read_text()
     assert all(path.read_bytes() == content for path, content in before.items())
-    worker_file = anchor_root / 'rescued' / names[0] / 'models.json'
+    worker_file = worker / ('model_store/accepted.sqlite' if model_storage == 'compact' else 'models.json')
     changed = tmp_path / 'changed-worker'
     original_identities = refinement.dependency_identities
 

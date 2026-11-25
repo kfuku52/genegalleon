@@ -43,10 +43,11 @@ def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, mon
     assert maximum <= 4
 
 
+@pytest.mark.parametrize('archive_shards', [False, True])
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
-def test_parallel_patch_matches_serial_across_changed_shards(tmp_path, codec):
+def test_parallel_patch_matches_serial_across_changed_shards(tmp_path, codec, archive_shards):
     records = [model(i) for i in range(12)]
-    source, before = published(tmp_path, records, codec=codec)
+    source, before = published(tmp_path, records, codec=codec, archive_shards=archive_shards)
     assert len(before['shards']) >= 8
     changes = {i: {**row, 'new_admission_metadata': {'index': i}} for i, row in enumerate(records)}
     serial, parallel = tmp_path / 'serial', tmp_path / 'parallel'
@@ -85,8 +86,10 @@ def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp
     assert result['counts']['models'] == before['counts']['models'] + 1
     assert result['counts']['partial'] == before['counts']['partial']
     assert {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()} == original
-    for name in before['files']:
+    assert (output / 'model_store' / store.SHARD_ARCHIVE).is_file()
+    for name in before['files'].keys() & store._physical_files(result).keys():
         assert not os.path.samefile(source / 'model_store' / name, output / 'model_store' / name)
+    assert not any((output / 'model_store' / shard['path']).exists() for shard in result['shards'])
 
 
 @pytest.mark.parametrize('field,value', [('sequence', 'ATGCCCTAA'), ('partial_evidence', {'partial': True}),
@@ -150,8 +153,7 @@ def test_parallel_context_selection_checks_rejected_shards(tmp_path):
 @pytest.mark.parametrize('workers', [1, 4])
 def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeypatch, workers):
     source, _ = published(tmp_path, [model(0), model(1)])
-    from workflow.support import rescue_model_store_patch as patch
-    original, changed = patch._copy, False
+    original, changed = store._copy_zip_member, False
     def replace(*args, **kwargs):
         nonlocal changed
         original(*args, **kwargs)
@@ -161,7 +163,7 @@ def test_patch_source_replacement_during_copy_is_not_published(tmp_path, monkeyp
             replacement = source / 'new-body'
             replacement.write_bytes(path.read_bytes())
             replacement.replace(path)
-    monkeypatch.setattr(patch, '_copy', replace)
+    monkeypatch.setattr(store, '_copy_zip_member', replace)
     with pytest.raises(ValueError, match='changed'):
         patch_model_store(source, tmp_path / 'output', {}, publication_workers=workers)
     assert not (tmp_path / 'output/model_store').exists()
@@ -333,9 +335,22 @@ def test_copied_unchanged_member_is_checked_at_publication(tmp_path, monkeypatch
             assert not verify_destination
             dst.write_bytes(b'damaged after copy')
 
-    monkeypatch.setattr(patch, '_copy', corrupt_destination)
+    if member == 'shard':
+        copy_zip = store._copy_zip_member
+
+        def corrupt_archive(src, archive, dest, expected):
+            if dest == name:
+                archive.writestr(dest, b'damaged during ZIP write')
+            else:
+                copy_zip(src, archive, dest, expected)
+
+        monkeypatch.setattr(store, '_copy_zip_member', corrupt_archive)
+        message = 'ZIP member differs'
+    else:
+        monkeypatch.setattr(patch, '_copy', corrupt_destination)
+        message = 'differs at publication'
     output = tmp_path / 'output'
-    with pytest.raises(ValueError, match='differs at publication'):
+    with pytest.raises(ValueError, match=message):
         patch.patch_model_store(source, output, {})
     assert not list(output.iterdir())
     assert list(store.iter_models(source)) == [model(0), model(1)]

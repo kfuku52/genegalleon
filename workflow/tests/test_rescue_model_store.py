@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
+import zipfile
 from contextlib import closing, contextmanager
 from pathlib import Path
 
@@ -33,10 +34,10 @@ def model(i=0, status="proposal"):
             "unknown": {"null": None, "empty": [], "unicode": "β植物", "number": -0.0}}
 
 
-def published(tmp_path, records, *, partial=None, revisions=None, codec="gzip"):
+def published(tmp_path, records, *, partial=None, revisions=None, codec="gzip", archive_shards=False):
     directory = tmp_path / "worker"
     manifest = store.write_model_store(directory, iter(records), partial_models=partial,
-                                       revisions=revisions, shard_bytes=900, codec=codec)
+                                       revisions=revisions, shard_bytes=900, codec=codec, archive_shards=archive_shards)
     receipt(directory)
     return directory, manifest
 
@@ -67,13 +68,14 @@ def test_externally_verified_shards_skip_only_the_second_digest(tmp_path, monkey
     assert list(store._lines(path, codec)) == [{"context": {}}]
 
 
+@pytest.mark.parametrize("archive_shards", [False, True])
 @pytest.mark.parametrize("codec", ["gzip", "auto", "zstd"])
-def test_exact_all_records_fields_order_and_raw_binding(tmp_path, codec):
+def test_exact_all_records_fields_order_and_raw_binding(tmp_path, codec, archive_shards):
     if codec == "zstd":
         pytest.importorskip("zstandard")
     original = [model(0, "accepted"), model(1, "accepted_alternative_path"), model(2), model(3)]
     revisions = [{**model(2), "support": [model(0)["evidence"], model(3)["evidence"]]}]
-    directory, manifest = published(tmp_path, original, revisions=revisions, codec=codec)
+    directory, manifest = published(tmp_path, original, revisions=revisions, codec=codec, archive_shards=archive_shards)
     restored = list(store.iter_models(directory))
     assert restored == original
     assert json.dumps(restored, ensure_ascii=False) == json.dumps(original, ensure_ascii=False)
@@ -90,13 +92,15 @@ def even_candidate(context):
     return int(context["query"].removeprefix("query")) % 2 == 0
 
 
+@pytest.mark.parametrize("archive_shards", [False, True])
 @pytest.mark.parametrize("reader", ["raw_cache", "selective", "parallel_selective", "revision"])
 @pytest.mark.parametrize("fault", [None, "full", "corrupt", "source_replaced"])
-def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reader, fault):
+def test_replay_body_database_uses_verified_scratch(tmp_path, monkeypatch, reader, fault, archive_shards):
     from workflow.support.input_generation_array_state import FreshDigestBatch
 
     records = [model(i) for i in range(8)]
-    directory, _ = published(tmp_path, records, revisions=records if reader == "revision" else None)
+    directory, _ = published(tmp_path, records, revisions=records if reader == "revision" else None,
+                             archive_shards=archive_shards)
     filename = "revision.sqlite" if reader == "revision" else "bodies.sqlite"
     original = directory / "model_store" / filename
     scratch = tmp_path / "scratch"
@@ -176,7 +180,7 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
 
 def test_parallel_model_store_hashes_preserve_manifest_and_verify_copies(tmp_path, monkeypatch):
     records = [model(i, "accepted" if i % 2 else "proposal") for i in range(16)]
-    source, manifest = published(tmp_path, records)
+    source, manifest = published(tmp_path, records, archive_shards=True)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
@@ -247,7 +251,7 @@ def test_zstd_model_store_frame_fast_path_preserves_streamed_bytes_and_bound(mon
 
 def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_path, monkeypatch):
     records = [model(0, 'accepted'), model(1), model(2)]
-    before, expected = published(tmp_path / 'direct', records, revisions=records)
+    before, expected = published(tmp_path / 'direct', records, revisions=records, archive_shards=True)
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
 
@@ -258,7 +262,7 @@ def test_scratch_publication_preserves_exact_store_and_rejects_corrupt_copy(tmp_
             yield Path(directory)
 
     monkeypatch.setattr(store, 'scratch_build_directory', scratch_directory)
-    after, actual = published(tmp_path / 'local', records, revisions=records)
+    after, actual = published(tmp_path / 'local', records, revisions=records, archive_shards=True)
     assert actual == expected
     assert (after / 'receipt.json').read_bytes() == (before / 'receipt.json').read_bytes()
     assert list(store.iter_models(after)) == records
@@ -550,7 +554,7 @@ def test_partial_consumes_trailing_unreferenced_bytes_and_checks_hash(tmp_path):
     records = [model(i) for i in range(3)]
     directory = tmp_path / "worker"
     manifest = store.write_model_store(directory, records, partial_models=[records[0]],
-                                       shard_bytes=1024 * 1024, codec="gzip")
+                                       shard_bytes=1024 * 1024, codec="gzip", archive_shards=False)
     receipt(directory)
     key = store.frozen_model_store_key(directory, kind="partial")
     path = directory / "model_store" / manifest["shards"][0]["path"]
@@ -895,3 +899,31 @@ def test_legacy_export_cannot_overwrite_its_source(tmp_path):
     with pytest.raises(ValueError, match="consumed source"):
         store.export_legacy_models(tmp_path, tmp_path / "models.json")
     assert json.loads((tmp_path / "models.json").read_text()) == records
+
+
+def test_writer_defaults_to_a_stored_zip_and_rejects_a_changed_member(tmp_path):
+    directory = tmp_path / "worker"
+    records = [model(i, "accepted" if i == 0 else "proposal") for i in range(6)]
+    manifest = store.write_model_store(directory, records, shard_bytes=900, codec="gzip")
+    receipt(directory)
+    root = directory / "model_store"
+    archive = root / store.SHARD_ARCHIVE
+    key = store.frozen_model_store_key(directory)
+    assert key["files"]["model_store/models.zip"] == manifest["files"]["models.zip"]
+    assert not any((root / shard["path"]).exists() for shard in manifest["shards"])
+    assert list(store.iter_models(directory, frozen_key=key)) == records
+
+    # Repacking a modified gzip member gives it a valid ZIP CRC. The rescue
+    # reader still rejects it by the original member's receipted SHA-256.
+    replacement = tmp_path / "replacement.zip"
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(replacement, "x") as output:
+        for i, info in enumerate(source.infolist()):
+            assert info.compress_type == zipfile.ZIP_STORED
+            body = source.read(info)
+            output.writestr(info, body + gzip.compress(b"") if i == 0 else body)
+    replacement.replace(archive)
+    assert list(store.iter_accepted_models(directory)) == [records[0]]
+    with pytest.raises(ValueError, match="Model-store shard checksum changed"):
+        list(store.iter_models(directory, frozen_key=key))
+    with pytest.raises(ValueError, match="Model-store checksum changed"):
+        store.verify_model_store_key(directory, key)
