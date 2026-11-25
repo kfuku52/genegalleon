@@ -335,8 +335,8 @@ def relocate_contract(args, workspace_root):
         setattr(args, name, values)
 
 
-def preflight_step(argv, workspace_root=None, stale_policy=None, *, store=None):
-    with provenance.runtime_support_root(Path(__file__).resolve().parent):
+def preflight_step(argv, workspace_root=None, stale_policy=None, *, store=None, producer_support_root=None):
+    with provenance.runtime_support_root(producer_support_root or Path(__file__).resolve().parent):
         return _preflight_step(argv, workspace_root, stale_policy, store=store)
 
 
@@ -458,8 +458,8 @@ def producers(args):
     return envelope("producers", **result, plan_sha256=digest(plan))
 
 
-def verify_many(requests):
-    """Fence one bounded batch; no digest survives this call."""
+def verify_many(requests, *, producer_support_root=None):
+    """Fence one bounded batch, optionally using an archived producer runtime for bound attempts."""
     if not 1 <= len(requests) <= 32:
         raise ValueError("verification batch must contain 1..32 requests")
     identities = [(str(item.root.resolve()), item.family_id) for item in requests]
@@ -467,8 +467,9 @@ def verify_many(requests):
         raise ValueError("duplicate family in verification batch")
     with provenance.digest_observation() as memo:
         results = []
+        options = {"producer_support_root": producer_support_root} if producer_support_root is not None else {}
         for item in requests:
-            result = verify(item)
+            result = verify(item, **options)
             memo.guard((str(item.root.absolute()), item.family_id, "family_observation"),
                        result["family_observation"], provenance.scoped_digest_reader(
                            lambda item=item: GeneFamilyOutputStore(item.root, family_filter=item.family_id).family_observation(item.family_id)))
@@ -530,7 +531,9 @@ def reuse_plan(args):
                     coverage="required-steps-only; unverified requires investigation, not automatic regeneration")
 
 
-def verify(args):
+def verify(args, *, producer_support_root=None):
+    if producer_support_root is not None and not args.attempt:
+        raise ValueError("Historical producer support requires an exact recorded attempt")
     if getattr(args, "batch_file", None):
         return verify_batch(args)
     root, workspace = args.root.absolute(), args.workspace_root.absolute()
@@ -542,13 +545,13 @@ def verify(args):
         raise ValueError("terminal profile requires summary_statistics and tree_plot contracts")
     store = GeneFamilyOutputStore(root, family_filter=args.family_id)
     observation = argparse.Namespace(logical_root=root, family_id=args.family_id)
-    with (provenance.runtime_support_root(Path(__file__).resolve().parent),
+    with (provenance.runtime_support_root(producer_support_root or Path(__file__).resolve().parent),
           store.read_snapshot(), provenance.logical_observation(observation, store),
           provenance.digest_observation() as memo):
-        return _verify(args, store, memo)
+        return _verify(args, store, memo, producer_support_root=producer_support_root)
 
 
-def _verify(args, store, memo):
+def _verify(args, store, memo, *, producer_support_root=None):
     root, workspace = args.root.absolute(), args.workspace_root.absolute()
     family_before = store.family_observation(args.family_id)
     rows = []
@@ -624,7 +627,8 @@ def _verify(args, store, memo):
                              and type(receipt.get("observed_at_ns")) is int
                              and run["started_at_ns"] <= receipt["observed_at_ns"] <= run.get("finished_at_ns", -1))
                     if valid:
-                        valid = preflight_step(contract_arguments(declared), store=store)["state"] == "verified_current"
+                        options = {"producer_support_root": producer_support_root} if producer_support_root is not None else {}
+                        valid = preflight_step(contract_arguments(declared), store=store, **options)["state"] == "verified_current"
                 except (SystemExit, KeyError, OSError, ValueError, TypeError):
                     valid = False
             row["attempt_bound"] = valid

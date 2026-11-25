@@ -1285,3 +1285,50 @@ def test_subdirectory_digest_rejects_invalid_allocated_cpu_count(tmp_path, monke
     monkeypatch.setenv('GG_TASK_CPUS', value)
     with pytest.raises(ValueError):
         provenance.gene_family_subdir_digest(logical, 'stat_tree')
+
+
+def test_frozen_family_statistics_verifies_retained_packed_manifest(tmp_path):
+    from metadata_store import pack
+
+    logical = tmp_path / "output/orthogroup"
+    branch = logical / "stat_branch/OG0000001_stat.branch.tsv"
+    tree = logical / "stat_tree/OG0000001_stat.tree.tsv"
+    source = tmp_path / "input.tsv"
+    manifest_path = logical / "artifact_provenance/OG0000001.summary_statistics.json"
+    source.write_bytes(b"original data\n")
+    for path in (branch, tree):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"value\n1\n")
+    args = ["--logical-root", str(logical), "--workspace-root", str(tmp_path),
+            "--manifest", str(manifest_path), "--step", "summary_statistics", "--family-id", "OG0000001",
+            "--output", f"stat_branch={branch}", "--output", f"stat_tree={tree}"]
+    assert provenance.dispatch(["record", *args, "--input", f"source={source}"]) == 0
+    payload = provenance.load_manifest(manifest_path)
+    code = b"retained producer source\n"
+    digest = hashlib.sha256(code).hexdigest()
+    payload["inputs"].append({"label": "old_recipe", "artifact_type": "file",
+                              "scope": "absolute", "path": "/script/support/retained-test.py",
+                              "size_bytes": len(code), "sha256": digest})
+    provenance.write_manifest_atomic(manifest_path, payload)
+    pack(manifest_path.parent, writers_stopped=True, delete_originals=True)
+    archive = tmp_path / "output/.gg_producer_inputs"
+    archive.mkdir()
+    (archive / digest).write_bytes(code)
+    audit = ["needs-run", *args, "--frozen-family-summary", "--legacy-policy", "stop", "--stale-policy", "stop"]
+    assert provenance.dispatch(audit) == provenance.CURRENT
+    assert not manifest_path.exists()
+    assert provenance.load_manifest(manifest_path) == payload
+    source.write_bytes(b"changed data\n")
+    assert provenance.dispatch(audit) == provenance.STALE_STOP
+    source.write_bytes(b"original data\n")
+    (archive / digest).write_bytes(b"changed producer\n")
+    assert provenance.dispatch(audit) == provenance.STALE_STOP
+
+    (archive / digest).unlink()
+    producer_support = tmp_path / "retained" / "support"
+    producer_support.mkdir(parents=True)
+    producer_file = producer_support / "retained-test.py"
+    producer_file.write_bytes(code)
+    assert provenance.dispatch([*audit, "--producer-support-dir", str(producer_support)]) == provenance.CURRENT
+    producer_file.write_bytes(b"changed mounted producer\n")
+    assert provenance.dispatch([*audit, "--producer-support-dir", str(producer_support)]) == provenance.STALE_STOP

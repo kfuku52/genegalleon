@@ -1365,7 +1365,59 @@ def frozen_tree_output_current(args: argparse.Namespace) -> int:
     return CURRENT
 
 
+def frozen_family_summary_current(args: argparse.Namespace) -> int:
+    """Validate the recorded summary as a plot input without replacing its recipe."""
+    if (args.step != "summary_statistics" or infer_orthogroup_id(args.family_id) != args.family_id
+            or args.legacy_policy != "stop" or args.stale_policy != "stop"
+            or args.recover_output or args.output_fasta_type
+            or getattr(args, "frozen_plot", False) or getattr(args, "frozen_tree_output", False)):
+        raise ProvenanceError("Frozen family statistics require a named orthogroup and strict stop policies")
+    logical_root = args.logical_root.absolute()
+    workspace_root = args.workspace_root.absolute()
+    archive = workspace_root / "output/.gg_producer_inputs"
+    if not os.path.lexists(archive):
+        archive = None
+    elif archive.is_symlink() or not archive.is_dir():
+        raise ProvenanceError("Historical producer input archive is not a regular directory")
+    name = args.family_id + ".summary_statistics.json"
+    if args.manifest.absolute() != logical_root / MANIFEST_SUBDIR / name:
+        raise ProvenanceError("Frozen family statistics require the canonical manifest path")
+    store = GeneFamilyOutputStore(logical_root, family_filter=args.family_id)
+    producer = (runtime_support_root(args.producer_support_dir) if args.producer_support_dir
+                else contextlib.nullcontext())
+    with producer, store.read_snapshot(), digest_observation() as memo:
+        artifact = store.source_artifact(MANIFEST_SUBDIR, name)
+        recorded = read_manifest_from_store(store, name, artifact)
+        identity = (_audit_artifact_identity(artifact),
+                    hashlib.sha256(json.dumps(recorded, sort_keys=True).encode()).hexdigest())
+        memo.guard((str(logical_root), MANIFEST_SUBDIR, name), identity,
+                   lambda: _audit_manifest_identity(store, name))
+        if (recorded.get("step") != args.step or recorded.get("family_id") != args.family_id
+                or not recorded.get("inputs")):
+            raise ProvenanceError("Frozen family statistics lack their original input provenance")
+        declared = dict(parse_unique_pairs(args.output, "--output"))
+        outputs = entries_by_label(recorded, "outputs")
+        if set(declared) != {"stat_branch", "stat_tree"}:
+            raise ProvenanceError("Frozen family statistics require exact branch and tree outputs")
+        for label, path in declared.items():
+            reference = path_reference(Path(path), logical_root, workspace_root)
+            if any(outputs.get(label, {}).get(key) != value for key, value in reference.items()):
+                raise ProvenanceError("Frozen family statistics output identity changed: " + label)
+        status, label = audit_manifest(recorded, store, logical_root, workspace_root, memo,
+                                       producer_archive=archive)
+        if status != "current":
+            return stale_policy_result(args, f"frozen family statistics: {status}: {label}", reusable=False)
+        store._close_snapshot_zip_readers()
+        memo.validate()
+    print(f"Frozen family statistics verified; historical producer retained: {args.manifest}")
+    return CURRENT
+
+
 def needs_run(args: argparse.Namespace) -> int:
+    if getattr(args, "frozen_family_summary", False):
+        return frozen_family_summary_current(args)
+    if getattr(args, "producer_support_dir", None):
+        raise ProvenanceError("Producer support directory requires frozen family statistics")
     if getattr(args, "frozen_tree_output", False):
         if (args.step not in {"species_tree_concat_iqtree_pep", "species_tree_concat_iqtree_dna"}
                 or args.family_id != "all_buscos" or args.stale_policy != "stop" or args.legacy_policy != "stop"
@@ -2159,6 +2211,10 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Inspect without writing outputs, manifests, or the digest cache")
     needs_parser.add_argument("--frozen-plot", action="store_true",
                               help="Verify an unrequested species-tree plot while retaining its recorded rendering recipe")
+    needs_parser.add_argument("--frozen-family-summary", action="store_true",
+                              help="Verify the original statistics manifest for plot-only consumption.")
+    needs_parser.add_argument("--producer-support-dir", type=Path,
+                              help="Mounted support directory of the recorded statistics producer.")
     needs_parser.add_argument("--frozen-tree-output", action="store_true",
                               help="Verify a preserved concatenated species tree without changing its historical output selection")
     needs_parser.add_argument(

@@ -165,6 +165,8 @@ run_tree_pruning=0 # If 1, discard genes without expression data.
 # Workflow control flags
 check_pruned=0 # Delete downstream outputs if inconsistent to run_tree_pruning.
 gene_evolution_plot_only=0 # Render from verified existing summary tables without rerunning upstream stages.
+gene_evolution_plot_frozen_summary=0 # In plot-only mode, verify and retain the original statistics recipe.
+gene_evolution_plot_producer_support="" # Optional mounted support directory of that historical producer.
 gene_evolution_statistics_only=0 # Reuse existing gene trees; regenerate LCA reconciliation and summary statistics only.
 
 # dN/dS workflow flags

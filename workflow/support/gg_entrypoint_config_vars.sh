@@ -152,6 +152,8 @@ generax_model
 generax_rec_model
 gene_evolution_profile
 gene_evolution_plot_only
+gene_evolution_plot_frozen_summary
+gene_evolution_plot_producer_support
 gene_evolution_statistics_only
 gene_family_output_storage
 gene_family_tmp_max_dirs

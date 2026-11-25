@@ -1223,6 +1223,22 @@ rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upp
 rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
 gene_evolution_plot_only=${gene_evolution_plot_only:-0}
+gene_evolution_plot_frozen_summary=${gene_evolution_plot_frozen_summary:-0}
+gene_evolution_plot_producer_support=${gene_evolution_plot_producer_support:-}
+if [[ -n "${gene_evolution_plot_producer_support}" && "${gene_evolution_plot_frozen_summary}" != 1 ]]; then
+  echo "gene_evolution_plot_producer_support requires frozen-summary plotting." >&2
+  exit 3
+fi
+case "${gene_evolution_plot_frozen_summary}" in
+  0) ;;
+  1)
+    if [[ "${gene_evolution_plot_only}" != 1 ]]; then
+      echo "gene_evolution_plot_frozen_summary requires gene_evolution_plot_only=1." >&2
+      exit 3
+    fi
+    ;;
+  *) echo "gene_evolution_plot_frozen_summary must be 0 or 1." >&2; exit 3 ;;
+esac
 gene_evolution_statistics_only=${gene_evolution_statistics_only:-0}
 statistics_reuse_generax=0
 case "${gene_evolution_statistics_only}" in
@@ -6671,7 +6687,16 @@ fi
 summary_legacy_policy=${artifact_legacy_policy:-adopt}
 # Legacy tables may assign an arbitrary sister at a multifurcation.
 if [[ "${summary_legacy_policy}" == "adopt" ]]; then summary_legacy_policy=rebuild; fi
-artifact_legacy_policy="${summary_legacy_policy}" gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}" || exit $?
+if [[ "${gene_evolution_plot_frozen_summary}" == 1 ]]; then
+  summary_legacy_policy=stop
+  summary_provenance_args+=(--frozen-family-summary)
+  if [[ -n "${gene_evolution_plot_producer_support}" ]]; then
+    summary_provenance_args+=(--producer-support-dir "${gene_evolution_plot_producer_support}")
+  fi
+  artifact_legacy_policy="${summary_legacy_policy}" gg_artifact_set_needs_update summary_needs_update "${summary_provenance_args[@]}" || exit $?
+else
+  artifact_legacy_policy="${summary_legacy_policy}" gg_artifact_prepare_stage summary_needs_update run_summary "${summary_provenance_args[@]}" || exit $?
+fi
 disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
 if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"
