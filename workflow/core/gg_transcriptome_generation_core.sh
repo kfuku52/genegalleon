@@ -42,6 +42,8 @@ amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}"
 amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}"
 amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}"
+amalgkit_gsa_download_max_concurrency="${amalgkit_gsa_download_max_concurrency:-2}"
+amalgkit_use_prefetched_reads="${amalgkit_use_prefetched_reads:-0}"
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"
@@ -80,6 +82,7 @@ getfastq_content_validation_fingerprint=""
 getfastq_cache_enabled=0
 getfastq_cache_reused=0
 transcriptome_tmp_lock_fd=""
+transcriptome_species_lock_token=""
 fi
 
 # Named stage functions for gg_transcriptome_generation_core.sh.
@@ -446,7 +449,7 @@ require_amalgkit_supported_options() {
 
   for option_name in "$@"; do
     if ! amalgkit_command_supports_option "${subcommand}" "${option_name}"; then
-      echo "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build with shared download throttling. Exiting." >&2
+      echo "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build that provides this option. Exiting." >&2
       exit 1
     fi
   done
@@ -1231,6 +1234,29 @@ release_transcriptome_tmp_lock() {
   fi
 }
 
+acquire_transcriptome_species_lock() {
+  local lock_path=$1
+  local owner_pid=${BASHPID:-$$}
+  transcriptome_species_lock_path=${lock_path}
+  transcriptome_species_lock_helper="$(gg_resolve_core_support_dir "${BASH_SOURCE[0]}")/shared_namespace_lock.py" || return $?
+  transcriptome_species_lock_token=$(python "${transcriptome_species_lock_helper}" acquire-exclusive \
+    "${lock_path}" --owner-pid "${owner_pid}" --nonblocking) || {
+    echo "Could not acquire transcriptome quantification species lock: ${lock_path}" >&2
+    return 1
+  }
+}
+
+release_transcriptome_species_lock_on_exit() {
+  local status=$?
+  # A terminated core can still have subprocesses unwinding. Leave its owner
+  # record available for reconciliation once the scheduler confirms it ended.
+  if (( status < 128 )) && [[ -n "${transcriptome_species_lock_token:-}" ]]; then
+    python "${transcriptome_species_lock_helper}" release-exclusive \
+      "${transcriptome_species_lock_path}" --token "${transcriptome_species_lock_token}" || status=1
+  fi
+  exit "${status}"
+}
+
 retire_transcriptome_tmp() {
   python - "${dir_tmp}" "${transcriptome_tmp_root}" <<'PY'
 import os
@@ -1683,11 +1709,12 @@ PY
 validate_amalgkit_getfastq_completion_manifest() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local quant_proof=${3:-}
 
   local support_dir
   support_dir=$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}") || return $?
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${support_dir}" "${GG_TASK_CPUS:-1}" "${quant_proof}" <<'PY'
 import csv
 import json
 import os
@@ -1701,6 +1728,7 @@ from fastq_proof import FastqChanged, proof_fastqs, quant_stats_digest
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 workers = int(sys.argv[4])
+quant_proof = sys.argv[5]
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
@@ -1868,18 +1896,32 @@ if not legacy_public_original:
             )
         )
 
+def stat_identity(path):
+    st = path.stat(follow_symlinks=False)
+    return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+
+
 try:
+    identities = {path: stat_identity(path) for _, path in pending_files} if quant_proof else {}
     proofs = proof_fastqs([path for _, path in pending_files], workers)
 except FastqChanged as exc:
     raise SystemExit("Completion manifest FASTQ changed while validating: {}".format(exc))
 except OSError as exc:
     raise SystemExit("Completion manifest FASTQ could not be read: {}".format(exc))
-for (contract, _), (complete, size, checksum) in zip(pending_files, proofs):
+receipt = []
+for (contract, path), (complete, size, checksum) in zip(pending_files, proofs):
     value = contract["path"]
     if not complete:
         raise SystemExit("Completion manifest FASTQ content contract changed or is not a complete gzip/FASTQ: {}".format(value))
     if size != contract["size"] or checksum != contract["sha256"]:
         raise SystemExit("Completion manifest FASTQ content contract changed: {}".format(value))
+    if quant_proof:
+        if stat_identity(path) != identities[path]:
+            raise SystemExit("Completion manifest FASTQ changed before proof publication: {}".format(value))
+        receipt.append({"path": value, "stat": identities[path], "sha256": checksum})
+if quant_proof:
+    with open(quant_proof, "wt", encoding="utf-8") as handle:
+        json.dump({"schema_version": 1, "files": receipt}, handle)
 
 PY
 }
@@ -1888,9 +1930,11 @@ validate_amalgkit_getfastq_completion_manifest_index() {
   local completion_manifest=$1
   local metadata_tsv=$2
   local print_stat_fingerprint=${3:-no}
+  local scope=${4:-all}
 
-  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" <<'PY'
+  python - "${completion_manifest}" "${metadata_tsv}" "${print_stat_fingerprint}" "${scope}" <<'PY'
 import csv
+import hashlib
 import json
 import os
 import pathlib
@@ -1900,6 +1944,7 @@ import sys
 manifest_path = pathlib.Path(sys.argv[1])
 metadata_path = pathlib.Path(sys.argv[2])
 print_stat_fingerprint = sys.argv[3] == "yes"
+stats_only = sys.argv[4] == "stats"
 if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size == 0:
     raise SystemExit("Missing, empty, or symlinked amalgkit getfastq completion manifest: {}".format(manifest_path))
 with manifest_path.open("rt", encoding="utf-8") as handle:
@@ -1929,6 +1974,8 @@ with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
 expected_runs = [run for run in expected_runs if run]
 if len(expected_runs) != len(set(expected_runs)):
     raise SystemExit("Metadata contains duplicate run IDs: {}".format(metadata_path))
+if stats_only and legacy_public_original:
+    raise SystemExit("Legacy getfastq completion manifest does not bind run statistics.")
 
 entries = manifest.get("runs")
 if not isinstance(entries, list):
@@ -1949,7 +1996,7 @@ for entry in entries:
     files = entry.get("files")
     if run == "" or entry.get("status") != "complete" or not isinstance(files, list) or not files:
         raise SystemExit("Completion manifest contains an incomplete run contract: {}".format(run))
-    for contract in files:
+    for contract in (() if stats_only else files):
         if not isinstance(contract, dict) or set(contract) != {"path", "size", "sha256"}:
             raise SystemExit("Completion manifest has an invalid FASTQ contract for run: {}".format(run))
         value = str(contract.get("path", "") or "").strip()
@@ -2024,6 +2071,8 @@ for entry in entries:
         stats_stat = stats_path.stat()
         if stats_stat.st_size != expected_stats_size:
             raise SystemExit("Completion manifest getfastq statistics size changed: {}".format(stats_value))
+        if stats_only and hashlib.sha256(stats_path.read_bytes()).hexdigest() != expected_stats_sha256:
+            raise SystemExit("Completion manifest getfastq statistics changed: {}".format(stats_value))
         stat_fingerprint.append(
             [
                 stats_value,
@@ -2042,6 +2091,13 @@ if sorted(manifest_runs) != sorted(expected_runs):
     raise SystemExit("Completion manifest run IDs differ from metadata.")
 if len(manifest_runs) != len(set(manifest_runs)):
     raise SystemExit("Completion manifest contains duplicate run IDs: {}".format(manifest_path))
+if stats_only:
+    for index, value in enumerate(sorted(seen_stats_paths), start=1):
+        relative = pathlib.PurePosixPath(value)
+        if relative.is_absolute() or len(relative.parts) != 2 or ".." in relative.parts or "\n" in str(output_root / relative):
+            raise SystemExit("Unsafe getfastq statistics path: {}".format(value))
+        print(f"getfastq_stats_{index}={output_root / relative}")
+    raise SystemExit(0)
 actual_paths = {
     path.relative_to(output_root).as_posix()
     for path in output_root.rglob("*.amalgkit.fastq.gz")
@@ -2092,9 +2148,26 @@ mark_amalgkit_getfastq_content_validated() {
   getfastq_content_validated=1
 }
 
+collect_transcriptome_merge_stats() {
+  local getfastq_dir=$1 metadata=$2
+  local manifest="${getfastq_dir}/getfastq_completion.json"
+  if [[ ! -e "${manifest}" && ! -L "${manifest}" ]] || is_public_original_completion_manifest_v3 "${manifest}"; then
+    return 0
+  fi
+  validate_amalgkit_getfastq_completion_manifest_index "${manifest}" "${metadata}" no stats
+}
+
+link_transcriptome_merge_getfastq() {
+  if [[ -L ./getfastq ]]; then
+    rm -f -- ./getfastq || return $?
+  fi
+  ln -sT -- "$1" ./getfastq
+}
+
 validate_amalgkit_getfastq_completion_manifest_once() {
   local completion_manifest=$1
   local metadata_tsv=$2
+  local quant_proof=${3:-}
   local current_stat_fingerprint=""
 
   if [[ ${getfastq_content_validated:-0} -eq 1 && -n "${getfastq_content_validation_fingerprint:-}" ]]; then
@@ -2113,7 +2186,8 @@ validate_amalgkit_getfastq_completion_manifest_once() {
 
   if ! validate_amalgkit_getfastq_completion_manifest \
     "${completion_manifest}" \
-    "${metadata_tsv}"
+    "${metadata_tsv}" \
+    "${quant_proof}"
   then
     return 1
   fi
@@ -2342,6 +2416,14 @@ run_amalgkit_getfastq_attempt() {
     --ena yes
     --redo no
   )
+  if [[ -n "${amalgkit_gsa_download_max_concurrency:-}" ]]; then
+    require_amalgkit_supported_options getfastq --gsa_download_max_concurrency || return 1
+    getfastq_cmd+=(--gsa_download_max_concurrency "${amalgkit_gsa_download_max_concurrency}")
+  fi
+  if [[ "${amalgkit_use_prefetched_reads:-0}" == 1 ]]; then
+    require_amalgkit_supported_options getfastq --read_stage --prefetch_dir || return 1
+    getfastq_cmd+=(--read_stage process --prefetch_dir "${gg_workspace_downloads_dir}/amalgkit_prefetch")
+  fi
 
   if "${getfastq_cmd[@]}" > "${log_file}" 2>&1; then
     if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
@@ -3556,6 +3638,10 @@ run_amalgkit_getfastq_or_fallback() {
   else
     status_amalgkit=$?
   fi
+  if [[ "${amalgkit_use_prefetched_reads:-0}" == 1 ]]; then
+    echo "Prefetched getfastq processing failed. Inspect ${fatal_log_file}; repair the affected cached reads before retrying." >&2
+    return 1
+  fi
 
   if [[ ${status_amalgkit} -eq 2 ]]; then
     if [[ "${amalgkit_rrna_filter}" != "no" ]]; then
@@ -3883,12 +3969,15 @@ if [[ -L "${dir_tmp}" || ( -e "${dir_tmp}" && ! -d "${dir_tmp}" ) ]]; then
   echo "Refusing an unsafe transcriptome scratch path: ${dir_tmp}" >&2
   exit 1
 fi
-cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "$(basename "${dir_tmp}")" || exit 1
-if [[ "${quantification_only:-0}" == 1 && "${GG_COMMON_TMP_ROOT}" != workspace ]]; then
-  # Each node-local scratch path is private. Guard the shared species outputs
-  # across retries and independent arrays even when scratch lives on that node.
-  acquire_transcriptome_tmp_lock "${dir_transcriptome_assembly_output}/tmp/${transcriptome_task_key}/.gg_active.lock" || exit 1
+if [[ "${quantification_only:-0}" == 1 ]]; then
+  # This lock stays outside the scratch tree that normal completion retires.
+  acquire_transcriptome_species_lock "${dir_transcriptome_assembly_output}/.locks/${sp_ub}" || exit 1
+  trap 'release_transcriptome_species_lock_on_exit' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 else
+  cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "$(basename "${dir_tmp}")" || exit 1
   acquire_transcriptome_tmp_lock || exit 1
 fi
 if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
@@ -3910,7 +3999,7 @@ if [[ "${quantification_only:-0}" == 1 ]]; then
   fi
   dir_amalgkit_download_dir="${dir_tmp}/downloads"
 fi
-dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
+dir_amalgkit_download_lock_dir="${gg_workspace_downloads_dir}/locks"
 amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"
 amalgkit_rrna_filter_chunk_spots="${amalgkit_rrna_filter_chunk_spots:-5000000}"
 amalgkit_rrna_filter_memory_limit="${amalgkit_rrna_filter_memory_limit:-32G}"
@@ -3956,6 +4045,11 @@ amalgkit_ncbi_metadata_max_concurrency="$(normalize_amalgkit_download_limit_valu
 amalgkit_ncbi_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_download_max_concurrency}" "amalgkit_ncbi_download_max_concurrency")"
 amalgkit_aws_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_aws_download_max_concurrency}" "amalgkit_aws_download_max_concurrency")"
 amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gcp_download_max_concurrency}" "amalgkit_gcp_download_max_concurrency")"
+amalgkit_gsa_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gsa_download_max_concurrency}" "amalgkit_gsa_download_max_concurrency")"
+if [[ "${amalgkit_use_prefetched_reads}" != 0 && "${amalgkit_use_prefetched_reads}" != 1 ]]; then
+  echo "amalgkit_use_prefetched_reads must be 0 or 1." >&2
+  exit 1
+fi
 
 
 # shellcheck shell=bash
@@ -5478,10 +5572,11 @@ if [[ ${quantification_reused} -eq 0 ]]; then
 fi
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
+  quant_fastq_proof=$(mktemp -- "${dir_tmp}/quant_fastq_proof.XXXXXX") || exit $?
   if [[ "${selected_transcriptome_mode}" == "sraid" || "${quantification_only:-0}" == 1 ]] && \
     ! validate_amalgkit_getfastq_completion_manifest_once \
       "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
-      "${file_amalgkit_metadata}"
+      "${file_amalgkit_metadata}" "${quant_fastq_proof}"
   then
     echo "getfastq completion contract changed before quant FASTQ reuse. Exiting." >&2
     exit 1
@@ -5553,12 +5648,17 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   if [[ -n "${amalgkit_oarfish_options}" ]]; then
     amalgkit_quant_cmd+=(--oarfish_options "${amalgkit_oarfish_options}")
   fi
+  if [[ -s "${quant_fastq_proof}" ]]; then
+    require_amalgkit_supported_options quant --verified_fastq_proof || exit 1
+    amalgkit_quant_cmd+=(--verified_fastq_proof "${quant_fastq_proof}")
+  fi
 
   if "${amalgkit_quant_cmd[@]}"; then
     exit_code_amalgkit_quant=0
   else
     exit_code_amalgkit_quant=$?
   fi
+  rm -f -- "${quant_fastq_proof}"
 
   if [[ ${exit_code_amalgkit_quant} -ne 0 ]]; then
     echo "amalgkit quant failed with exit code ${exit_code_amalgkit_quant}"
@@ -5602,6 +5702,16 @@ merge_provenance_args+=(
   --output "tpm=${file_amalgkit_merge_tpm}"
   --output "metadata_output=${file_amalgkit_merge_metadata}"
 )
+merge_getfastq_stats=""
+if [[ ${run_amalgkit_merge} -eq 1 || -s "${transcriptome_provenance_dir}/${sp_ub}.merge.json" ]]; then
+  merge_getfastq_stats=$(collect_transcriptome_merge_stats "${dir_amalgkit_getfastq_sp}" "${file_amalgkit_quant_metadata}") || exit $?
+  if [[ -n "${merge_getfastq_stats}" ]]; then
+    mapfile -t merge_getfastq_stats_inputs <<< "${merge_getfastq_stats}"
+    for stats_input in "${merge_getfastq_stats_inputs[@]}"; do
+      merge_provenance_args+=(--input "${stats_input}")
+    done
+  fi
+fi
 gg_artifact_prepare_stage merge_needs_update run_amalgkit_merge "${merge_provenance_args[@]}" || exit $?
 if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5617,6 +5727,9 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
     rm -rf -- ./quant
   fi
   ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"
+  if [[ -n "${merge_getfastq_stats}" ]]; then
+    link_transcriptome_merge_getfastq "${dir_amalgkit_getfastq_sp}" || exit $?
+  fi
   stage_amalgkit_merge_metadata_for_species \
     "${file_amalgkit_quant_metadata}" \
     "${merge_metadata_file}" \
@@ -5642,6 +5755,9 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
     mv_out "./merge/metadata.tsv" "${file_amalgkit_merge_metadata}"
     rm -rf -- "./merge"
     rm -f -- "./quant" # Do not put -r, otherwise the original quant files will be deleted.
+    if [[ -n "${merge_getfastq_stats}" ]]; then
+      rm -f -- ./getfastq
+    fi
     rm -f -- "${merge_metadata_file}"
   else
     echo "amalgkit merge outputs were not found for the metadata scientific_name prefix under: ./merge"
@@ -5801,6 +5917,8 @@ else
 fi
 
 release_transcriptome_tmp_lock
-cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "" || true
+if [[ "${quantification_only:-0}" != 1 ]]; then
+  cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "" || true
+fi
 
 echo "$(date): Exiting Singularity environment"

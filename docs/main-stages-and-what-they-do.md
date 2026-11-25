@@ -319,6 +319,28 @@ successful job reuses the quantification without acquiring reads again. Use
 or quantification settings intentionally.
 Persistent getfastq caches and assembly inputs stay separate.
 
+The merge stage includes the verified per-run getfastq QC statistics in its
+metadata output. It uses the retained statistics after FASTQ retirement, so an
+existing quantification can be reused when rebuilding the merge. Quantification
+jobs coordinate through a per-species lock under `.locks/` on shared storage.
+They retire their own scratch on success and retain their scratch on failure for
+retries. If a job is killed while holding a lock, reconcile its owner record
+after confirming the scheduler has ended the job. Use the same lock protocol
+for every quantification job that can write the same species.
+
+If the runtime supports AMALGKIT's separate read stages, prepare the raw cache
+in a download job using `amalgkit getfastq --read_stage prefetch --prefetch_dir
+<workspace-downloads>/amalgkit_prefetch` with the same reviewed metadata. Use
+`<workspace-downloads>/locks` for `--download_lock_dir` in the download job.
+Then set `GG_TRANSCRIPTOME_AMALGKIT_USE_PREFETCHED_READS=1` for the regular
+quantification job. Processing uses the existing cache and reports broken or
+missing inputs so the relevant download can be retried independently. Retain
+the raw cache until the matching work has passed verification.
+On a retry that requires a fresh FASTQ verification, GeneGalleon passes the
+verified digests to AMALGKIT for the current invocation. AMALGKIT checks the
+file identities before and after quantification so the same compressed FASTQ
+bytes need only be hashed once.
+
 The same profile is also available through
 `GG_TRANSCRIPTOME_QUANTIFICATION_ONLY=1` on the transcriptome-generation
 entrypoint.

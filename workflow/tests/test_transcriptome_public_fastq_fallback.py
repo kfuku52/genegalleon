@@ -256,16 +256,16 @@ def _run_manifest_validator(metadata_path: Path, output_dir: Path):
     )
 
 
-def _run_manifest_index_validator(metadata_path: Path, output_dir: Path):
+def _run_manifest_index_validator(metadata_path: Path, output_dir: Path, scope="all"):
     script = "\n".join(
         [
             "set -u",
             _source_core(),
-            'validate_amalgkit_getfastq_completion_manifest_index "$1/getfastq_completion.json" "$2"',
+            'validate_amalgkit_getfastq_completion_manifest_index "$1/getfastq_completion.json" "$2" no "$3"',
         ]
     )
     return subprocess.run(
-        ["bash", "-s", "--", str(output_dir), str(metadata_path)],
+        ["bash", "-s", "--", str(output_dir), str(metadata_path), scope],
         input=script,
         text=True,
         capture_output=True,
@@ -890,7 +890,30 @@ def test_skip_index_validator_rejects_truncated_bound_fastq_without_full_content
     source = _shell_function_source("validate_amalgkit_getfastq_completion_manifest_index")
     assert 'path.open("rb")' not in source
     assert "gzip.open" not in source
-    assert "hashlib" not in source
+    assert 'if stats_only and hashlib.sha256(stats_path.read_bytes())' in source
+
+
+def test_merge_can_verify_bound_stats_after_fastq_retirement(monkeypatch, tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    output_dir = tmp_path / "getfastq"
+    _metadata(metadata_path, ["RUN1"])
+    fastq_url = "https://example.invalid/RUN1.fastq"
+    responses = {
+        "https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc=RUN1": _xml("RUN1.fastq", fastq_url),
+        fastq_url: b"@read\nACGT\n+\n!!!!\n",
+    }
+    _run_fallback(monkeypatch, metadata_path, output_dir, responses)
+    (output_dir / "RUN1" / "RUN1.amalgkit.fastq.gz").unlink()
+    stats_path = output_dir / "RUN1" / "getfastq_stats.tsv"
+    result = _run_manifest_index_validator(metadata_path, output_dir, scope="stats")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"getfastq_stats_1={stats_path.resolve()}"
+
+    content = stats_path.read_bytes()
+    stats_path.write_bytes(b"X" + content[1:])
+    changed = _run_manifest_index_validator(metadata_path, output_dir, scope="stats")
+    assert changed.returncode != 0
+    assert "statistics changed" in changed.stderr
 
 
 def test_drifted_bound_fastq_and_manifest_are_preserved_for_recovery(monkeypatch, tmp_path):
@@ -1157,6 +1180,21 @@ validate_amalgkit_getfastq_completion_manifest_once manifest metadata
         "index",
     ]
     assert "filesystem identity changed" in completed.stderr
+
+
+def test_prefetched_read_processing_failure_preserves_stage_boundary(tmp_path):
+    script = '\n'.join([
+        'set -euo pipefail',
+        _source_core(),
+        'dir_tmp=$1; amalgkit_rrna_filter=yes; amalgkit_use_prefetched_reads=1',
+        'run_amalgkit_getfastq_attempt() { printf "%s\\n" "$2"; return 2; }',
+        'download_public_original_fastqs_for_metadata() { echo unexpected-network-download; exit 9; }',
+        'run_amalgkit_getfastq_or_fallback',
+    ])
+    completed = subprocess.run(['bash', '-s', '--', str(tmp_path)], input=script, text=True, capture_output=True)
+    assert completed.returncode == 1
+    assert completed.stdout.strip() == 'initial'
+    assert 'repair the affected cached reads' in completed.stderr
 
 
 def test_content_validator_rejects_same_size_fastq_mutation(monkeypatch, tmp_path):

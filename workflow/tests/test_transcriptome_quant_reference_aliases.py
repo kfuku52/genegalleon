@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import json
 import os
 import random
@@ -784,6 +785,7 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
     with gzip.open(reference_path, "wt") as handle:
         handle.write(">tx1\n" + sequence + "\n")
     metadata_rows = []
+    manifest_runs = []
     for run in ("R1", "R2"):
         fastq_path = tmp_path / "getfastq" / run / (run + ".amalgkit.fastq.gz")
         fastq_path.parent.mkdir(parents=True)
@@ -791,6 +793,17 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
             for index in range(2000):
                 start = rng.randrange(len(sequence) - 100)
                 handle.write(f"@read{index}\n{sequence[start:start + 100]}\n+\n" + "I" * 100 + "\n")
+        stats = fastq_path.parent / "getfastq_stats.tsv"
+        stats.write_text(
+            f"run\tnum_written\tbp_fastp_in\tnum_fastp_in\tnum_fastp_out\n{run}\t2000\t200000\t2000\t1900\n",
+            encoding="utf-8",
+        )
+        contracts = [
+            {"path": path.relative_to(tmp_path / "getfastq").as_posix(), "size": path.stat().st_size,
+             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for path in (fastq_path, stats)
+        ]
+        manifest_runs.append({"run": run, "status": "complete", "files": contracts[:1], "stats": contracts[1]})
         metadata_rows.append(dict(
             run=run, scientific_name=scientific_name, species_token=species_token,
             lib_layout="single", total_spots=2000, total_bases=200000, spot_length=100,
@@ -800,6 +813,9 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
         metadata_path, sep="\t", index=False,
     )
     original_metadata = metadata_path.read_bytes()
+    manifest = tmp_path / "getfastq" / "getfastq_completion.json"
+    manifest.write_text(json.dumps({"schema_version": 4, "read_source": "amalgkit", "status": "complete",
+                                    "run_count": len(manifest_runs), "runs": manifest_runs}))
 
     def run_command(command, **kwargs):
         completed = subprocess.run(
@@ -843,16 +859,32 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
         "quantification_only=1 prepare_transcriptome_quant_work_dirs",
         "_", str(CORE_SCRIPT), str(SUPPORT_DIR / "gg_util.sh"),
     ])
+    proof = tmp_path / "verified_fastq.json"
+    proof.touch(mode=0o600)
+    run_command([
+        "bash", "-c", 'set -euo pipefail; GG_CORE_SOURCE_ONLY=1 source "$1"; '
+        'validate_amalgkit_getfastq_completion_manifest "$2" "$3" "$4"',
+        "_", str(CORE_SCRIPT), str(manifest), str(metadata_path), str(proof),
+    ])
+    assert len(json.loads(proof.read_text())["files"]) == 2
     resume = run_command([
         "amalgkit", "quant", "--out_dir", str(tmp_path), "--metadata", str(metadata_path),
         "--threads", "1", "--clean_fastq", "no", "--fasta_dir", str(fasta_dir),
-        "--build_index", "yes", "--quant_backend", "kallisto", "--redo", "no",
+        "--build_index", "yes", "--quant_backend", "kallisto", "--redo", "no", "--verified_fastq_proof", str(proof),
     ])
     assert "The output will not be overwritten" in resume.stdout
     assert first_identity == (first.read_bytes(), first.stat().st_mtime_ns)
     assert index.stat().st_mtime_ns == index_mtime
     assert (tmp_path / "quant" / "R2" / "R2_abundance.tsv").is_file()
 
+    retained = tmp_path / "retained"
+    (tmp_path / "getfastq").rename(retained)
+    for run in ("R1", "R2"):
+        (retained / run / (run + ".amalgkit.fastq.gz")).unlink()
+    run_command([
+        "bash", "-c", 'set -euo pipefail; GG_CORE_SOURCE_ONLY=1 source "$1"; link_transcriptome_merge_getfastq "$2"',
+        "_", str(CORE_SCRIPT), str(retained),
+    ])
     merge_metadata = tmp_path / "metadata.merge.tsv"
     run_command(
         [sys.executable, "-", str(metadata_path), str(merge_metadata), species_key, str(SUPPORT_DIR), ""],
@@ -876,6 +908,10 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
             rows = list(reader)
         assert [row["target_id"] for row in rows] == ["tx1"]
         assert all(float(rows[0][run]) > 0 for run in ("R1", "R2"))
+    with (tmp_path / "merge" / "metadata.tsv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert {row["run"] for row in rows} == {"R1", "R2"}
+    assert all(float(row["num_fastp_in"]) == 2000 and float(row["num_fastp_out"]) == 1900 for row in rows)
     assert metadata_path.read_bytes() == original_metadata
 
 

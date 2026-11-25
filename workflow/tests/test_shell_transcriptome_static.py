@@ -261,7 +261,7 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     assert "gg_run_with_shared_semaphore" not in text
     assert "dir_amalgkit_metadata_semaphore=" not in text
     assert "dir_amalgkit_getfastq_semaphore=" not in text
-    assert 'dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"' in text
+    assert 'dir_amalgkit_download_lock_dir="${gg_workspace_downloads_dir}/locks"' in text
     assert (
         'amalgkit_ncbi_metadata_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_ncbi_metadata_max_concurrency}" "amalgkit_ncbi_metadata_max_concurrency")"'
         in text
@@ -282,7 +282,7 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     assert "printf '0\\n'" in normalize_body
     assert "Use a non-negative integer or auto" in normalize_body
     assert (
-        "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build with shared download throttling. Exiting."
+        "Installed amalgkit ${subcommand} does not support ${option_name}."
         in require_body
     )
     assert (
@@ -295,6 +295,7 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in getfastq_body
     assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in getfastq_body
     assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in getfastq_body
+    assert '--gsa_download_max_concurrency "${amalgkit_gsa_download_max_concurrency}"' in getfastq_body
 
 
 def test_transcriptome_core_applies_artifact_policy_to_mismatched_query_tables():

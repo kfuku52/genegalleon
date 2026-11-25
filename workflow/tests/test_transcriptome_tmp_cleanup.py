@@ -5,6 +5,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 CORE = Path(__file__).resolve().parents[1] / 'core/gg_transcriptome_generation_core.sh'
 
 
@@ -39,7 +41,7 @@ PY
 '''
     source = CORE.read_text()
     ending = source[source.index('if [[ ${delete_tmp_dir} -eq 1 ]]; then', source.index('### Modify below')):]
-    ending = ending[:ending.index('\ncleanup_transcriptome_tmp "${transcriptome_tmp_root}" ""')]
+    ending = ending[:ending.index('\nif [[ "${quantification_only:-0}"')]
     result = run(script + ending, scratch, root)
     assert 'Normal completion' in result.stdout
     assert not scratch.exists()
@@ -98,3 +100,19 @@ def test_unsafe_current_scratch_is_preserved(tmp_path):
         'scratch-test', str(CORE), str(scratch), str(tmp_path)], text=True, capture_output=True)
     assert result.returncode != 0
     assert (outside / 'keep').read_text() == 'curated'
+
+
+def test_quant_species_locks_exclude_duplicate_jobs_and_release_on_error(tmp_path):
+    support = CORE.parents[1] / 'support/shared_namespace_lock.py'
+    first, other = tmp_path / '.locks' / 'Plant_one', tmp_path / '.locks' / 'Plant_two'
+    held = run('python "$2" acquire-exclusive "$3" --nonblocking', support, first).stdout.strip()
+    acquire = ('acquire_transcriptome_species_lock "$2" || exit $?; '
+               "trap 'release_transcriptome_species_lock_on_exit' EXIT; exit 17")
+    try:
+        with pytest.raises(subprocess.CalledProcessError, match='exit status 1'):
+            run(acquire, first)
+        with pytest.raises(subprocess.CalledProcessError, match='exit status 17'):
+            run(acquire, other)
+        assert not Path(f'{other}.namespace-v1/gate').exists()
+    finally:
+        run('python "$2" release-exclusive "$3" --token "$4"', support, first, held)

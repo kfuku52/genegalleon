@@ -825,6 +825,7 @@ representative_inputs
 amalgkit_contam_filter
 amalgkit_aws_download_max_concurrency
 amalgkit_gcp_download_max_concurrency
+amalgkit_gsa_download_max_concurrency
 amalgkit_ncbi_download_max_concurrency
 amalgkit_ncbi_metadata_max_concurrency
 amalgkit_oarfish_options
@@ -835,6 +836,7 @@ amalgkit_rrna_filter_chunk_spots
 amalgkit_rrna_filter_jobs
 amalgkit_rrna_filter_memory_limit
 amalgkit_sra_strategy_query
+amalgkit_use_prefetched_reads
 assembly_cpu_offset
 assembly_method
 assembly_ram_offset

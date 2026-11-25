@@ -141,6 +141,8 @@ amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency
 amalgkit_ncbi_download_max_concurrency="${amalgkit_ncbi_download_max_concurrency:-20}" # Maximum concurrent NCBI cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --ncbi_download_max_concurrency. Set 0 or auto to disable throttling.
 amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-20}" # Maximum concurrent AWS cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --aws_download_max_concurrency. Set 0 or auto to disable throttling.
 amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}" # Maximum concurrent GCP cloud-object downloads across array tasks. Forwarded to amalgkit getfastq --gcp_download_max_concurrency. Set 0 or auto to disable throttling.
+amalgkit_gsa_download_max_concurrency="${amalgkit_gsa_download_max_concurrency:-2}" # Concurrent GSA transfers sharing the workspace downloads lock directory. Set 0 or auto to disable throttling.
+amalgkit_use_prefetched_reads=0 # Set 1 to process an existing amalgkit raw-read cache in the workspace downloads directory.
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 
