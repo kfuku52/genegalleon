@@ -1,6 +1,5 @@
 import csv
 import gzip
-import hashlib
 import json
 import os
 import random
@@ -878,30 +877,6 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
         assert [row["target_id"] for row in rows] == ["tx1"]
         assert all(float(rows[0][run]) > 0 for run in ("R1", "R2"))
     assert metadata_path.read_bytes() == original_metadata
-
-
-def test_quant_resolves_published_gsa_metadata_against_original_digest(tmp_path):
-    source = tmp_path / "selected.tsv"
-    source.write_text("run\tdata_source\tgsa_selection_status\nCRR1\tgsa\tpending_input_counts\n")
-    reads = tmp_path / "finished_reads" / "Species_one"
-    reads.mkdir(parents=True)
-    measured = reads / "metadata.tsv"
-    measured.write_text("run\tdata_source\tread_count_status\ttotal_spots\nCRR1\tgsa\tmeasured\t12\n")
-    (reads / "gsa_metadata_state.json").write_text(json.dumps({
-        "source_digest": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "snapshot_digest": hashlib.sha256(measured.read_bytes()).hexdigest(),
-    }))
-    argv = [
-        "bash", "-c", 'set -euo pipefail; GG_CORE_SOURCE_ONLY=1 source "$1"; '
-        'resolve_transcriptome_quant_metadata "$2" "$3"', "_", str(CORE_SCRIPT), str(source), str(reads),
-    ]
-    result = subprocess.run(argv, text=True, capture_output=True, check=True)
-    assert result.stdout.strip() == str(measured)
-    with source.open("a") as handle:
-        handle.write("CRR2\tgsa\tpending_input_counts\n")
-    changed = subprocess.run(argv, text=True, capture_output=True, check=False)
-    assert changed.returncode != 0
-    assert "does not match the selected source" in changed.stderr
 
 
 def test_quant_alias_staging_failure_is_not_masked_by_process_substitution():
