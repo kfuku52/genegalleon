@@ -291,7 +291,8 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     )
     assert '--download_lock_dir "${dir_amalgkit_download_lock_dir}"' in metadata_body
     assert '--ncbi_metadata_max_concurrency "${amalgkit_ncbi_metadata_max_concurrency}"' in metadata_body
-    assert 'require_amalgkit_supported_options "getfastq" \\' in getfastq_body
+    assert 'require_amalgkit_supported_options "getfastq" "${required_options[@]}"' in getfastq_body
+    assert getfastq_body.count('require_amalgkit_supported_options') == 1
     assert '--ncbi_download_max_concurrency "${amalgkit_ncbi_download_max_concurrency}"' in getfastq_body
     assert '--aws_download_max_concurrency "${amalgkit_aws_download_max_concurrency}"' in getfastq_body
     assert '--gcp_download_max_concurrency "${amalgkit_gcp_download_max_concurrency}"' in getfastq_body

@@ -235,33 +235,19 @@ that consumes the reads. Later consumers in the same invocation verify the
 manifest index and file identity (device, inode, size, mtime, and ctime); any
 identity change triggers another full byte/integrity validation.
 
-If amalgkit exhausts its configured download sources, GeneGalleon can recover
-the public original FASTQs from bounded ENA/SRA endpoints. That recovery is
-built in a directory isolated from any partially completed, filtered amalgkit
-files, so a published read set cannot mix filtered and original reads. The
-completion manifest records `read_source=amalgkit` or
-`read_source=public-original`; the latter means all runs use public originals
-and have not passed through amalgkit's rRNA/contamination filters. FASTQ files
-from public-original recovery are scanned once per filesystem identity to derive
-the bound spot/base statistics; repeated validation in the same recovery process
-reuses those metrics. Native amalgkit schema-3 completion manifests are converted
-to the bound GeneGalleon schema only after their exact run layouts, FASTQs, and
-statistics sidecars validate, avoiding a redundant all-run public download.
-Older schema-3 `public-original` manifests are migrated before quantification by
-validating and reusing their exact FASTQ byte contracts, deriving the missing
-statistics locally, and performing no network retrieval. FASTQ files not
-referenced by the current metadata are quarantined outside the
-`*.amalgkit.fastq.gz` namespace, and validation rejects any extra FASTQ that is
-not bound by the manifest.
+AMALGKIT chooses the initial public read format and retries its eligible
+sources per run. Legacy completion manifests with `read_source=public-original`
+are still reusable and can be migrated offline to bind their read counts and
+bases. The current workflow applies the normal getfastq filters after public
+acquisition.
 
-Interrupted public FASTQ downloads keep a `.download.part.json` sidecar next
-to the partial gzip. It records the source URL, expected checksum, remote
-validator (strong ETag or Last-Modified when available), and total byte size.
-Resumption requires matching identity and validated HTTP ranges; unidentifiable
-partials and changed objects restart from byte zero. A syntactically valid gzip
-prefix is never sufficient evidence that the remote file is complete. Publishing
-requires a verified complete transfer and gzip/FASTQ integrity, plus the expected
-MD5 when supplied. Partial plaintext downloads are restarted before recompression.
+The default `GG_TRANSCRIPTOME_AMALGKIT_READ_SOURCE_FORMAT=auto` selects an
+advertised SRA archive when available. Set it to `fastq` for original FASTQ
+first, or to `sra` to request an archive. To explicitly allow a failed run to
+switch between original FASTQ and SRA, set
+`GG_TRANSCRIPTOME_AMALGKIT_ALLOW_READ_FORMAT_FALLBACK=yes`. Allowing this
+switch can change stored read qualities or extraction details. The options also
+apply when genome annotation invokes transcript quantification.
 
 Main outputs:
 
@@ -335,7 +321,9 @@ in a download job using `amalgkit getfastq --read_stage prefetch --prefetch_dir
 Then set `GG_TRANSCRIPTOME_AMALGKIT_USE_PREFETCHED_READS=1` for the regular
 quantification job. Processing uses the existing cache and reports broken or
 missing inputs so the relevant download can be retried independently. Retain
-the raw cache until the matching work has passed verification.
+the raw cache until the matching work has passed verification. Pass
+`--read_source_format` and `--allow_read_format_fallback` directly to
+AMALGKIT in the download job to select the same acquisition policy.
 GeneGalleon passes the verified digests to AMALGKIT after freshly binding its
 getfastq outputs or revalidating them on a retry. If publishing the FASTQs
 changes their file identities, GeneGalleon checks the published bytes before

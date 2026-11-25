@@ -836,6 +836,8 @@ amalgkit_rrna_filter_chunk_spots
 amalgkit_rrna_filter_jobs
 amalgkit_rrna_filter_memory_limit
 amalgkit_sra_strategy_query
+amalgkit_read_source_format
+amalgkit_allow_read_format_fallback
 amalgkit_use_prefetched_reads
 assembly_cpu_offset
 assembly_method

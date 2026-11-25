@@ -1591,227 +1591,35 @@ def test_resume_staging_rejects_symlink_outside_published_root(tmp_path):
     assert "does not resolve to the exact published output directory" in completed.stderr
 
 
-def test_fatal_then_incomplete_retry_routes_through_public_fallback(tmp_path):
-    trace_path = tmp_path / "trace.txt"
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-    script = "\n".join(
-        [
-            "set -u",
-            _source_core(),
-            r'''
-trace_path=$1
-dir_tmp=$2
-file_amalgkit_metadata="${dir_tmp}/metadata.tsv"
-dir_amalgkit_getfastq_sp="${dir_tmp}/published"
+@pytest.mark.parametrize(("read_stage", "failed_status", "attempts"), [
+    ("combined", 2, ["yes:initial", "no:retry_rrna_filter_no"]),
+    ("combined", 3, ["yes:initial"]),
+    ("prefetched", 2, ["yes:initial"]),
+])
+def test_getfastq_failure_cannot_bypass_amalgkit_acquisition_policy(tmp_path, read_stage, failed_status, attempts):
+    script = _source_core() + "\n" + r'''
+set -u
+dir_tmp=$1
 amalgkit_rrna_filter=yes
-attempt_count=0
-
+amalgkit_allow_read_format_fallback=yes
+amalgkit_use_prefetched_reads=$2
+fail=$3
 run_amalgkit_getfastq_attempt() {
-  attempt_count=$((attempt_count + 1))
-  printf 'attempt:%s:%s\n' "$1" "$2" >> "${trace_path}"
-  if [[ ${attempt_count} -eq 1 ]]; then
-    return 2
-  fi
-  return 3
+    printf '%s:%s\n' "$1" "$2"
+    return "$fail"
 }
-has_resumable_getfastq_run_state() {
-  printf 'resume-state-present\n' >> "${trace_path}"
-  return 0
-}
-prepare_getfastq_outputs_for_public_fallback() {
-  printf 'prepare\n' >> "${trace_path}"
-}
-download_public_original_fastqs_for_metadata() {
-  printf 'download:%s:%s\n' "$1" "$2" >> "${trace_path}"
-  return 0
-}
-validate_amalgkit_getfastq_completion_manifest_index() {
-  printf 'prevalidate:%s:%s\n' "$1" "$2" >> "${trace_path}"
-  return 0
-}
-mark_amalgkit_getfastq_content_validated() {
-  printf 'validate:%s:%s\n' "$1" "$2" >> "${trace_path}"
-  return 0
-}
-mv_out_replace_dir() {
-  printf 'publish:%s:%s\n' "$1" "$2" >> "${trace_path}"
-}
-rm() {
-  printf 'cleanup:%s\n' "$*" >> "${trace_path}"
-}
-
+download_public_original_fastqs_for_metadata() { exit 92; }
 run_amalgkit_getfastq_or_fallback
-''',
-        ]
-    )
-
+'''
     completed = subprocess.run(
-        ["bash", "-s", "--", str(trace_path), str(work_dir)],
+        ["bash", "-s", "--", str(tmp_path), str(int(read_stage == "prefetched")), str(failed_status)],
         input=script,
         text=True,
         capture_output=True,
         check=False,
     )
-
-    assert completed.returncode == 0, completed.stderr + completed.stdout
-    assert trace_path.read_text(encoding="utf-8").splitlines() == [
-        "attempt:yes:initial",
-        "attempt:no:retry_rrna_filter_no",
-        "prepare",
-        f"download:{work_dir / 'metadata.tsv'}:{work_dir / 'getfastq_public_original'}",
-        f"prevalidate:{work_dir / 'getfastq_public_original/getfastq_completion.json'}:{work_dir / 'metadata.tsv'}",
-        f"publish:{work_dir / 'getfastq_public_original'}:{work_dir / 'published'}",
-        f"validate:{work_dir / 'published/getfastq_completion.json'}:{work_dir / 'metadata.tsv'}",
-        f"cleanup:-rf -- {work_dir / 'getfastq_public_original'}",
-    ]
-    assert "incomplete all-run manifest" in completed.stdout
-
-
-def _run_fatal_route_fixture(tmp_path: Path, final_log_lines: list[str]) -> subprocess.CompletedProcess[str]:
-    trace_path = tmp_path / "trace.txt"
-    work_dir = tmp_path / "work"
-    work_dir.mkdir()
-    script = "\n".join(
-        [
-            "set -u",
-            _source_core(),
-            r'''
-trace_path=$1
-dir_tmp=$2
-final_log_lines=$3
-file_amalgkit_metadata="${dir_tmp}/metadata.tsv"
-dir_amalgkit_getfastq_sp="${dir_tmp}/published"
-amalgkit_rrna_filter=yes
-attempt_count=0
-
-run_amalgkit_getfastq_attempt() {
-  attempt_count=$((attempt_count + 1))
-  local log_file="${dir_tmp}/amalgkit_getfastq.$2.log"
-  printf 'attempt:%s:%s\n' "$1" "$2" >> "${trace_path}"
-  if [[ ${attempt_count} -eq 2 ]]; then
-    printf '%s\n' "${final_log_lines}" > "${log_file}"
-  fi
-  return 2
-}
-has_resumable_getfastq_run_state() {
-  printf 'resume-state-present\n' >> "${trace_path}"
-  return 0
-}
-prepare_getfastq_outputs_for_public_fallback() {
-  printf 'prepare\n' >> "${trace_path}"
-}
-download_public_original_fastqs_for_metadata() {
-  printf 'download\n' >> "${trace_path}"
-  return 0
-}
-validate_amalgkit_getfastq_completion_manifest_index() {
-  printf 'prevalidate\n' >> "${trace_path}"
-  return 0
-}
-mark_amalgkit_getfastq_content_validated() {
-  printf 'validate\n' >> "${trace_path}"
-  return 0
-}
-mv_out_replace_dir() {
-  printf 'publish\n' >> "${trace_path}"
-}
-rm() {
-  printf 'cleanup\n' >> "${trace_path}"
-}
-
-run_amalgkit_getfastq_or_fallback
-''',
-        ]
-    )
-    return subprocess.run(
-        ["bash", "-s", "--", str(trace_path), str(work_dir), "\n".join(final_log_lines)],
-        input=script,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def test_download_source_exhaustion_only_routes_through_public_fallback(tmp_path):
-    completed = _run_fatal_route_fixture(
-        tmp_path,
-        ["ERROR: Configured download sources were exhausted."],
-    )
-
-    assert completed.returncode == 0, completed.stderr + completed.stdout
-    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
-    assert trace == [
-        "attempt:yes:initial",
-        "attempt:no:retry_rrna_filter_no",
-        "prepare",
-        "download",
-        "prevalidate",
-        "publish",
-        "validate",
-        "cleanup",
-    ]
-    assert "Every fatal condition" in completed.stdout
-
-
-def test_aggregate_download_source_exhaustion_routes_through_public_fallback(tmp_path):
-    completed = _run_fatal_route_fixture(
-        tmp_path,
-        [
-            "ERROR: getfastq failed for 1/56 SRA runs. "
-            "ERR4643641: SRA file download failed for ERR4643641. "
-            "Expected PATH: /tmp/ERR4643641.sra. "
-            "Configured download sources were exhausted."
-        ],
-    )
-
-    assert completed.returncode == 0, completed.stderr + completed.stdout
-    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
-    assert trace == [
-        "attempt:yes:initial",
-        "attempt:no:retry_rrna_filter_no",
-        "prepare",
-        "download",
-        "prevalidate",
-        "publish",
-        "validate",
-        "cleanup",
-    ]
-    assert "Every fatal condition" in completed.stdout
-
-
-def test_download_source_exhaustion_mixed_with_another_fatal_fails_closed(tmp_path):
-    completed = _run_fatal_route_fixture(
-        tmp_path,
-        [
-            "ERROR: Configured download sources were exhausted.",
-            "ERROR: Metadata validation failed.",
-        ],
-    )
-
-    assert completed.returncode != 0
-    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
-    assert trace == ["attempt:yes:initial", "attempt:no:retry_rrna_filter_no"]
-    assert "Exiting without fallback" in completed.stdout
-
-
-def test_aggregate_exhaustion_mixed_with_another_run_failure_fails_closed(tmp_path):
-    completed = _run_fatal_route_fixture(
-        tmp_path,
-        [
-            "ERROR: getfastq failed for 2/56 SRA runs. "
-            "ERR4643641: SRA file download failed for ERR4643641. "
-            "Expected PATH: /tmp/ERR4643641.sra. "
-            "Configured download sources were exhausted. "
-            "SRR0000001: Metadata validation failed."
-        ],
-    )
-
-    assert completed.returncode != 0
-    trace = (tmp_path / "trace.txt").read_text(encoding="utf-8").splitlines()
-    assert trace == ["attempt:yes:initial", "attempt:no:retry_rrna_filter_no"]
-    assert "Exiting without fallback" in completed.stdout
-
+    assert completed.returncode == (1 if read_stage == "prefetched" else failed_status)
+    assert [line for line in completed.stdout.splitlines() if ":initial" in line or ":retry_" in line] == attempts
 
 def test_relaxed_metadata_normalization_preserves_old_output_when_sed_fails(tmp_path):
     output = tmp_path / "metadata.tsv"

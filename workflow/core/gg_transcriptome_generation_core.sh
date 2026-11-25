@@ -44,6 +44,8 @@ amalgkit_aws_download_max_concurrency="${amalgkit_aws_download_max_concurrency:-
 amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-20}"
 amalgkit_gsa_download_max_concurrency="${amalgkit_gsa_download_max_concurrency:-2}"
 amalgkit_use_prefetched_reads="${amalgkit_use_prefetched_reads:-0}"
+amalgkit_read_source_format="${amalgkit_read_source_format:-auto}"
+amalgkit_allow_read_format_fallback="${amalgkit_allow_read_format_fallback:-no}"
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"
@@ -435,21 +437,14 @@ normalize_amalgkit_download_limit_value() {
   printf '%d\n' "$((10#${normalized_value}))"
 }
 
-amalgkit_command_supports_option() {
-  local subcommand=$1
-  local option_name=$2
-  local help_text=""
-  help_text=$(amalgkit "${subcommand}" --help 2>&1 || true)
-  grep -Fq -- "${option_name}" <<< "${help_text}"
-}
-
 require_amalgkit_supported_options() {
   local subcommand=$1
   shift
-  local option_name=""
+  local option_name="" help_text=""
+  help_text=$(amalgkit "${subcommand}" --help 2>&1 || true)
 
   for option_name in "$@"; do
-    if ! amalgkit_command_supports_option "${subcommand}" "${option_name}"; then
+    if ! grep -Fq -- "${option_name}" <<< "${help_text}"; then
       echo "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build that provides this option. Exiting." >&2
       exit 1
     fi
@@ -1068,12 +1063,6 @@ run_amalgkit_metadata_query() {
   "${metadata_cmd[@]}"
 }
 
-prepare_getfastq_outputs_for_public_fallback() {
-  # Keep public-original recovery isolated from amalgkit's potentially filtered
-  # resumable files so one completion manifest can never mix both sources.
-  ensure_dir "${dir_tmp}/getfastq_public_original"
-}
-
 validate_transcriptome_tmp_limits() {
   local variable_name=""
   local variable_value=""
@@ -1286,7 +1275,8 @@ write_getfastq_cache_contract() {
     "${getfastq_content_validation_fingerprint:-}" \
     "${amalgkit_rrna_filter}" "${amalgkit_rrna_filter_jobs}" \
     "${amalgkit_rrna_filter_chunk_spots}" "${amalgkit_rrna_filter_memory_limit}" \
-    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" <<'PY'
+    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" \
+    "${amalgkit_read_source_format:-auto}" "${amalgkit_allow_read_format_fallback:-no}" <<'PY'
 import hashlib
 import json
 import os
@@ -1319,6 +1309,8 @@ parameters = {
     "ena": "yes",
     "redo": "no",
 }
+if sys.argv[11] != "auto":
+    parameters["read_source_format"], parameters["allow_read_format_fallback"] = sys.argv[11:13]
 contract = {
     "schema_version": 1,
     "species": species,
@@ -1347,7 +1339,8 @@ validate_getfastq_cache_contract() {
     "${sp_ub}" "${file_amalgkit_metadata}" \
     "${amalgkit_rrna_filter}" "${amalgkit_rrna_filter_jobs}" \
     "${amalgkit_rrna_filter_chunk_spots}" "${amalgkit_rrna_filter_memory_limit}" \
-    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" <<'PY'
+    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" \
+    "${amalgkit_read_source_format:-auto}" "${amalgkit_allow_read_format_fallback:-no}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -1388,6 +1381,8 @@ expected = {
     "ena": "yes",
     "redo": "no",
 }
+if sys.argv[10] != "auto":
+    expected["read_source_format"], expected["allow_read_format_fallback"] = sys.argv[10:12]
 if contract.get("parameters") != expected or contract.get("completion_manifest") != "getfastq_completion.json":
     raise SystemExit(1)
 manifest = contract_path.parent / "getfastq_completion.json"
@@ -1504,11 +1499,6 @@ PY
     fi
     mv -- "${published_entry}" "${resume_entry}"
   done
-}
-
-has_resumable_getfastq_run_state() {
-  [[ -d "${dir_tmp}/getfastq" ]] || return 1
-  [[ -n "$(find "${dir_tmp}/getfastq" -mindepth 2 -maxdepth 2 -type f -name 'getfastq_run_state.json' -print -quit 2> /dev/null)" ]]
 }
 
 bind_amalgkit_getfastq_completion_manifest() {
@@ -2333,56 +2323,6 @@ amalgkit_getfastq_log_has_fatal_message() {
   grep -Eq '^ERROR: ' "${log_file}"
 }
 
-amalgkit_getfastq_log_has_only_download_source_exhaustion() {
-  local log_file=$1
-  [[ -s "${log_file}" ]] || return 1
-  python - "${log_file}" <<'PY'
-import pathlib
-import re
-import sys
-
-log_path = pathlib.Path(sys.argv[1])
-fatal_lines = [
-    line.rstrip("\n")
-    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    if line.startswith("ERROR: ")
-]
-if not fatal_lines:
-    raise SystemExit(1)
-
-legacy_exhaustion = "ERROR: Configured download sources were exhausted."
-summary_pattern = re.compile(
-    r"^ERROR: getfastq failed for (?P<failed>[1-9][0-9]*)/"
-    r"(?P<total>[1-9][0-9]*) SRA runs\. (?P<details>.+)$"
-)
-entry_pattern = re.compile(
-    r"(?P<run>[A-Za-z0-9][A-Za-z0-9._-]*): "
-    r"SRA file download failed for (?P=run)\. "
-    r"Expected PATH: \S+\. Configured download sources were exhausted\."
-    r"(?: |$)"
-)
-
-for line in fatal_lines:
-    if line == legacy_exhaustion:
-        continue
-    summary = summary_pattern.fullmatch(line)
-    if summary is None:
-        raise SystemExit(1)
-    failed = int(summary.group("failed"))
-    total = int(summary.group("total"))
-    details = summary.group("details")
-    position = 0
-    entries = 0
-    for match in entry_pattern.finditer(details):
-        if match.start() != position:
-            raise SystemExit(1)
-        position = match.end()
-        entries += 1
-    if position != len(details) or entries != failed or failed > total:
-        raise SystemExit(1)
-PY
-}
-
 run_amalgkit_getfastq_attempt() {
   local rrna_filter_value=$1
   local attempt_label=$2
@@ -2398,16 +2338,19 @@ run_amalgkit_getfastq_attempt() {
   echo "amalgkit getfastq AWS download max concurrency: ${amalgkit_aws_download_max_concurrency}"
   echo "amalgkit getfastq GCP download max concurrency: ${amalgkit_gcp_download_max_concurrency}"
   echo "amalgkit getfastq rRNA jobs/chunk/memory: ${amalgkit_rrna_filter_jobs}/${amalgkit_rrna_filter_chunk_spots}/${amalgkit_rrna_filter_memory_limit}"
-  require_amalgkit_supported_options "getfastq" \
-    "--download_lock_dir" \
-    "--ncbi_metadata_max_concurrency" \
-    "--ncbi_download_max_concurrency" \
-    "--aws_download_max_concurrency" \
-    "--gcp_download_max_concurrency" \
-    "--ena" \
-    "--rrna_filter_jobs" \
-    "--rrna_filter_chunk_spots" \
+  local required_options=(
+    "--download_lock_dir"
+    "--ncbi_metadata_max_concurrency"
+    "--ncbi_download_max_concurrency"
+    "--aws_download_max_concurrency"
+    "--gcp_download_max_concurrency"
+    "--ena"
+    "--rrna_filter_jobs"
+    "--rrna_filter_chunk_spots"
     "--rrna_filter_memory_limit"
+    "--read_source_format"
+    "--allow_read_format_fallback"
+  )
 
   getfastq_cmd=(
     amalgkit getfastq
@@ -2434,16 +2377,20 @@ run_amalgkit_getfastq_attempt() {
     --aws yes
     --ncbi yes
     --ena yes
+    --read_source_format "${amalgkit_read_source_format:-auto}"
+    --allow_read_format_fallback "${amalgkit_allow_read_format_fallback:-no}"
     --redo no
   )
   if [[ -n "${amalgkit_gsa_download_max_concurrency:-}" ]]; then
-    require_amalgkit_supported_options getfastq --gsa_download_max_concurrency || return 1
+    required_options+=(--gsa_download_max_concurrency)
     getfastq_cmd+=(--gsa_download_max_concurrency "${amalgkit_gsa_download_max_concurrency}")
   fi
   if [[ "${amalgkit_use_prefetched_reads:-0}" == 1 ]]; then
-    require_amalgkit_supported_options getfastq --read_stage --prefetch_dir || return 1
+    required_options+=(--read_stage --prefetch_dir)
     getfastq_cmd+=(--read_stage process --prefetch_dir "${gg_workspace_downloads_dir}/amalgkit_prefetch")
   fi
+
+  require_amalgkit_supported_options "getfastq" "${required_options[@]}" || return $?
 
   if "${getfastq_cmd[@]}" > "${log_file}" 2>&1; then
     if amalgkit_getfastq_log_has_fatal_message "${log_file}"; then
@@ -3652,10 +3599,7 @@ PY
 
 run_amalgkit_getfastq_or_fallback() {
   local status_amalgkit=0
-  local fatal_log_file="${dir_tmp}/amalgkit_getfastq.initial.log"
-  local fatal_retry_suffix=""
-  local fatal_retry_download_source_exhaustion=0
-  local fatal_retry_incomplete_manifest=0
+  local initial_log="${dir_tmp}/amalgkit_getfastq.initial.log"
 
   if run_amalgkit_getfastq_attempt "${amalgkit_rrna_filter}" "initial"; then
     return 0
@@ -3663,70 +3607,16 @@ run_amalgkit_getfastq_or_fallback() {
     status_amalgkit=$?
   fi
   if [[ "${amalgkit_use_prefetched_reads:-0}" == 1 ]]; then
-    echo "Prefetched getfastq processing failed. Inspect ${fatal_log_file}; repair the affected cached reads before retrying." >&2
+    echo "Prefetched getfastq processing failed. Inspect ${initial_log}; repair the affected cached reads before retrying." >&2
     return 1
   fi
-
-  if [[ ${status_amalgkit} -eq 2 ]]; then
-    if [[ "${amalgkit_rrna_filter}" != "no" ]]; then
-      echo "Retrying amalgkit getfastq once with --rrna_filter no because the previous attempt logged a fatal error."
-      fatal_retry_suffix=" after retrying with --rrna_filter no"
-      if run_amalgkit_getfastq_attempt "no" "retry_rrna_filter_no"; then
-        return 0
-      else
-        status_amalgkit=$?
-      fi
-      fatal_log_file="${dir_tmp}/amalgkit_getfastq.retry_rrna_filter_no.log"
-      if [[ ${status_amalgkit} -eq 3 ]]; then
-        fatal_retry_incomplete_manifest=1
-        echo "The fatal-condition retry produced an incomplete all-run manifest. Routing retained FASTQs through the bounded public-original fallback."
-      fi
-    fi
-    if [[ ${status_amalgkit} -eq 2 ]] && amalgkit_getfastq_log_has_only_download_source_exhaustion "${fatal_log_file}"; then
-      fatal_retry_download_source_exhaustion=1
-      echo "Every fatal condition in the final amalgkit attempt was configured download-source exhaustion. Routing retained FASTQs through the bounded public-original fallback."
-    fi
-    if [[ ${fatal_retry_incomplete_manifest} -eq 0 && ${fatal_retry_download_source_exhaustion} -eq 0 ]]; then
-      echo "amalgkit getfastq encountered a fatal error${fatal_retry_suffix}. Exiting without fallback download so partial outputs do not reach downstream steps."
-      return 1
-    fi
+  if [[ ${status_amalgkit} -eq 2 && "${amalgkit_rrna_filter}" != no ]]; then
+    echo "Retrying amalgkit getfastq once with --rrna_filter no because the previous attempt logged a fatal error."
+    run_amalgkit_getfastq_attempt no retry_rrna_filter_no
+    return $?
   fi
-
-  if [[ ${fatal_retry_incomplete_manifest} -eq 0 && ${fatal_retry_download_source_exhaustion} -eq 0 ]] && has_resumable_getfastq_run_state; then
-    echo "amalgkit getfastq left validated run-level resume state. Preserving it and exiting for a resumable retry instead of replacing it with unfiltered original FASTQ files."
-    return 1
-  fi
-  echo "amalgkit getfastq did not safely finish. Attempting fallback download of public original FASTQ files."
-  prepare_getfastq_outputs_for_public_fallback
-  if download_public_original_fastqs_for_metadata "${file_amalgkit_metadata}" "${dir_tmp}/getfastq_public_original"; then
-    if ! validate_amalgkit_getfastq_completion_manifest_index \
-      "${dir_tmp}/getfastq_public_original/getfastq_completion.json" \
-      "${file_amalgkit_metadata}"
-    then
-      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
-      return 1
-    fi
-    if ! mv_out_replace_dir "${dir_tmp}/getfastq_public_original" "${dir_amalgkit_getfastq_sp}"; then
-      echo "Failed to atomically publish fallback direct FASTQ recovery. Exiting." >&2
-      return 1
-    fi
-    if ! mark_amalgkit_getfastq_content_validated \
-      "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
-      "${file_amalgkit_metadata}"
-    then
-      echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
-      return 1
-    fi
-    if ! write_getfastq_cache_contract; then
-      echo "Failed to write the persistent getfastq cache contract." >&2
-      return 1
-    fi
-    rm -rf -- "${dir_tmp}/getfastq_public_original"
-    echo "Fallback download of public original FASTQ files succeeded and was atomically published."
-    return 0
-  fi
-  echo "Fallback direct FASTQ recovery also failed. Exiting."
-  return 1
+  echo "amalgkit getfastq failed. See ${initial_log}. Validated run-level outputs remain available for retry." >&2
+  return "${status_amalgkit}"
 }
 
 
@@ -4070,6 +3960,14 @@ amalgkit_ncbi_download_max_concurrency="$(normalize_amalgkit_download_limit_valu
 amalgkit_aws_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_aws_download_max_concurrency}" "amalgkit_aws_download_max_concurrency")"
 amalgkit_gcp_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gcp_download_max_concurrency}" "amalgkit_gcp_download_max_concurrency")"
 amalgkit_gsa_download_max_concurrency="$(normalize_amalgkit_download_limit_value "${amalgkit_gsa_download_max_concurrency}" "amalgkit_gsa_download_max_concurrency")"
+case "${amalgkit_read_source_format}" in
+  auto|fastq|sra) ;;
+  *) echo "amalgkit_read_source_format must be auto, fastq, or sra." >&2; exit 1 ;;
+esac
+case "${amalgkit_allow_read_format_fallback}" in
+  yes|no) ;;
+  *) echo "amalgkit_allow_read_format_fallback must be yes or no." >&2; exit 1 ;;
+esac
 if [[ "${amalgkit_use_prefetched_reads}" != 0 && "${amalgkit_use_prefetched_reads}" != 1 ]]; then
   echo "amalgkit_use_prefetched_reads must be 0 or 1." >&2
   exit 1
@@ -4249,6 +4147,10 @@ prepare_transcriptome_quantification() {
     --parameter "clean_fastq=no"
     --parameter "build_index=yes"
   )
+  if [[ "${amalgkit_read_source_format:-auto}" != auto ]]; then
+    quant_provenance_args+=(--parameter "read_source_format=${amalgkit_read_source_format:-auto}"
+      --parameter "allow_read_format_fallback=${amalgkit_allow_read_format_fallback:-no}")
+  fi
   if [[ "${file_amalgkit_quant_metadata}" != "${file_amalgkit_metadata}" ]]; then
     quant_provenance_args+=(
       --input "gsa_measured_metadata=${file_amalgkit_quant_metadata}"
@@ -4316,6 +4218,10 @@ getfastq_provenance_args+=(
   --parameter "redo=no"
 )
 gg_artifact_add_input_if_present getfastq_provenance_args "contam_filter_db" "${dir_mmseqs2_db}/UniRef90_DB"
+if [[ "${amalgkit_read_source_format}" != auto ]]; then
+  getfastq_provenance_args+=(--parameter "read_source_format=${amalgkit_read_source_format}"
+    --parameter "allow_read_format_fallback=${amalgkit_allow_read_format_fallback}")
+fi
 if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
   if getfastq_cache_is_reusable; then
     echo "Reusing validated persistent amalgkit getfastq cache: ${dir_amalgkit_getfastq_sp}"
