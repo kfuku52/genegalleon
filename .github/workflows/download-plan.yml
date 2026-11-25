@@ -31,8 +31,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source container/source_branches.env
+          nwkit_repo="https://github.com/kfuku52/nwkit.git"
+          nwkit_sha="$(bash container/scripts/resolve_git_branch_sha.sh "${nwkit_repo}" "${GG_SOURCE_NWKIT_REPO_REF}")"
           python -m pip install --upgrade pip
-          python -m pip install openpyxl
+          python -m pip install openpyxl "nwkit @ git+${nwkit_repo}@${nwkit_sha}"
+          python workflow/support/build_download_manifest.py --help >/dev/null
 
       - name: Prepare seed input root
         shell: bash
