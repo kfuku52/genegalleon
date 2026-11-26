@@ -5786,13 +5786,21 @@ if [[ ${transcriptome_summary_finalizer_should_run} -eq 1 && ${run_multispecies_
     mv_out "busco_cds.pdf" "$(basename "${dir_busco}").pdf"
   done
 
+  transcriptome_summary_merge_dir=$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")
   Rscript "${gg_support_dir}/multispecies_transcriptome_summary.r" \
     --dir_assembly_stat="$(dirname "${file_assembly_stat}")" \
     --dir_amalgkit_metadata="${dir_input_amalgkit_metadata}" \
-    --dir_amalgkit_merge="$(dirname "$(dirname "${file_amalgkit_merge_tpm}")")" \
+    --dir_amalgkit_merge="${transcriptome_summary_merge_dir}" \
     --dir_busco_isoform="$(dirname "${file_busco_full_cdna_isoforms}")" \
     --dir_busco_longest_cds="$(dirname "${file_busco_full_longest_cds}")" \
     --dir_myscript="${gg_support_dir}"
+
+  if [[ -d "${transcriptome_summary_merge_dir}" && -n $(find "${transcriptome_summary_merge_dir}" \
+    -mindepth 2 -maxdepth 2 -type f -name '*_tpm.tsv' -print -quit) ]]; then
+    python "${gg_support_dir}/transcript_quantification_qc.py" \
+      --merge-dir "${transcriptome_summary_merge_dir}" \
+      --write-summary transcript_quantification_qc.tsv --output transcript_quantification_qc.pdf
+  fi
 
   if [[ -e "Rplots.pdf" ]]; then
     rm -f -- "Rplots.pdf"

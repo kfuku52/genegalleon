@@ -334,6 +334,30 @@ The same profile is also available through
 `GG_TRANSCRIPTOME_QUANTIFICATION_ONLY=1` on the transcriptome-generation
 entrypoint.
 
+#### Plot compact quantification QC
+
+The transcriptome multispecies summary writes `transcript_quantification_qc.pdf`
+and a reusable `transcript_quantification_qc.tsv` under `annotation_summary/`
+when merge results are available. For independent quantification jobs, generate
+the same 7.2-inch figure from one or more completed species with the command
+below. It only opens merged metadata and TPM tables.
+
+```bash
+python workflow/support/transcript_quantification_qc.py \
+  --merge-dir /path/to/output/transcriptome_quantification/amalgkit_merge \
+  --write-summary rna_qc.tsv --output rna_qc.pdf
+```
+
+Use `--summary rna_qc.tsv` in place of `--merge-dir` to regenerate the figure
+without rereading the TPM matrices. Regenerate the summary when the merge
+outputs change. The optional `--retained-runs` TSV takes a `run` column and
+limits the library layout, sequencing QC and tissue counts to those RUNs.
+Mean expression keeps the original quantified cohort for the displayed species
+and uses the per-RUN mean over transcripts with TPM greater than zero.
+Each library-layout pie uses the paired-end and single-end proportions for
+that species. The percentage axes span 0–100% and insert size starts at zero.
+Use `.svg` or `.png` for a vector or raster figure in place of PDF.
+
 ### `gg_genome_annotation_entrypoint.sh`
 
 Purpose:
