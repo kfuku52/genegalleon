@@ -3867,7 +3867,7 @@ if [[ "${quantification_only:-0}" == 1 ]]; then
   trap 'exit 143' TERM
 else
   cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "$(basename "${dir_tmp}")" || exit 1
-  acquire_transcriptome_tmp_lock || exit 1
+  acquire_transcriptome_tmp_lock "${dir_tmp}/.gg_active.lock" || exit 1
 fi
 if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
   dir_amalgkit_getfastq_sp="${transcriptome_getfastq_cache_dir}/${sp_ub}"
@@ -4141,6 +4141,7 @@ prepare_transcriptome_quantification() {
   quant_output_validation=""
   # A published ZIP already passed the structured checks. Compare its
   # logical byte identity against the recorded result without reparsing TSVs.
+  # gg-cache-guard: audited - the else branch proves output identity before reuse.
   if [[ ${run_amalgkit_quant} -eq 1 &&
       ( ! -s "${quant_manifest}" || ! -e "${quant_species_output_dir}.zip" ||
         "${artifact_stale_policy:-stop}" == reuse ) ]] && ! quant_output_validation=$(python \
