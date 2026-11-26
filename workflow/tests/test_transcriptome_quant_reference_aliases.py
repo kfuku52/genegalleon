@@ -914,6 +914,28 @@ def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species
     assert all(float(row["num_fastp_in"]) == 2000 and float(row["num_fastp_out"]) == 1900 for row in rows)
     assert metadata_path.read_bytes() == original_metadata
 
+    # The native tool reads exactly the same files for the retained ZIP.
+    merge_before = {
+        path.relative_to(tmp_path / "merge"): path.read_bytes()
+        for path in (tmp_path / "merge").rglob("*.tsv")
+    }
+    archive_tool = str(SUPPORT_DIR / "archive_transcriptome_quant.py")
+    logical_quant = tmp_path / "output" / "transcriptome_quantification" / "amalgkit_quant" / species_key
+    run_command([sys.executable, archive_tool, "pack", "--raw", str(logical_quant),
+                 "--source", str(tmp_path / "quant")])
+    shutil.rmtree(tmp_path / "quant")
+    shutil.rmtree(tmp_path / "merge")
+    run_command([sys.executable, archive_tool, "stage-merge", "--raw", str(logical_quant),
+                 "--metadata", str(metadata_path), "--destination", str(tmp_path / "quant")])
+    run_command([
+        "amalgkit", "merge", "--out_dir", str(tmp_path), "--metadata", str(merge_metadata), "--threads", "1",
+    ])
+    assert {
+        path.relative_to(tmp_path / "merge"): path.read_bytes()
+        for path in (tmp_path / "merge").rglob("*.tsv")
+    } == merge_before
+
+
 
 def test_quant_alias_staging_failure_is_not_masked_by_process_substitution():
     text = read_text(CORE_SCRIPT)
@@ -1004,3 +1026,29 @@ def test_resolve_amalgkit_merge_output_prefix_does_not_fall_back_to_canonical_pr
     )
 
     assert completed.returncode != 0
+
+
+@pytest.mark.parametrize("substitute", ["", "_extra"])
+def test_amalgkit_option_probe_is_exact_and_reuses_help(tmp_path, substitute):
+    counts = tmp_path / "help_calls"
+    command = r'''
+source "$1"
+counts=$2
+suffix=$3
+amalgkit() {
+    printf '%s\n' "$*" >> "$counts"
+    printf 'usage: amalgkit getfastq [--read_source_format%s {auto,fastq,sra}]\n' "$suffix"
+}
+if require_amalgkit_supported_options getfastq --read_source_format; then
+    require_amalgkit_supported_options getfastq --read_source_format
+else
+    exit 1
+fi
+'''
+    result = subprocess.run(
+        ["bash", "-euc", command, "_", str(SUPPORT_DIR / "gg_amalgkit_runtime.sh"),
+         str(counts), substitute],
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == (1 if substitute else 0), result.stderr
+    assert counts.read_text().splitlines() == ["getfastq --help"]

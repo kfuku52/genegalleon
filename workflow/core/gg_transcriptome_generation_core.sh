@@ -10,6 +10,8 @@ fi
 # shellcheck disable=SC1090
 source "${gg_core_bootstrap}"
 unset gg_core_bootstrap
+# shellcheck disable=SC1090
+source "$(gg_resolve_core_support_dir "${BASH_SOURCE[0]:-$0}")/gg_amalgkit_runtime.sh"
 if [[ "${GG_CORE_SOURCE_ONLY:-0}" != "1" ]]; then
 gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
@@ -435,20 +437,6 @@ normalize_amalgkit_download_limit_value() {
     return 0
   fi
   printf '%d\n' "$((10#${normalized_value}))"
-}
-
-require_amalgkit_supported_options() {
-  local subcommand=$1
-  shift
-  local option_name="" help_text=""
-  help_text=$(amalgkit "${subcommand}" --help 2>&1 || true)
-
-  for option_name in "$@"; do
-    if ! grep -Fq -- "${option_name}" <<< "${help_text}"; then
-      echo "Installed amalgkit ${subcommand} does not support ${option_name}. Update amalgkit to a build that provides this option. Exiting." >&2
-      exit 1
-    fi
-  done
 }
 
 build_entrez_or_search_string_from_file() {
@@ -2338,19 +2326,8 @@ run_amalgkit_getfastq_attempt() {
   echo "amalgkit getfastq AWS download max concurrency: ${amalgkit_aws_download_max_concurrency}"
   echo "amalgkit getfastq GCP download max concurrency: ${amalgkit_gcp_download_max_concurrency}"
   echo "amalgkit getfastq rRNA jobs/chunk/memory: ${amalgkit_rrna_filter_jobs}/${amalgkit_rrna_filter_chunk_spots}/${amalgkit_rrna_filter_memory_limit}"
-  local required_options=(
-    "--download_lock_dir"
-    "--ncbi_metadata_max_concurrency"
-    "--ncbi_download_max_concurrency"
-    "--aws_download_max_concurrency"
-    "--gcp_download_max_concurrency"
-    "--ena"
-    "--rrna_filter_jobs"
-    "--rrna_filter_chunk_spots"
-    "--rrna_filter_memory_limit"
-    "--read_source_format"
-    "--allow_read_format_fallback"
-  )
+  local required_options=()
+  gg_amalgkit_getfastq_options required_options
 
   getfastq_cmd=(
     amalgkit getfastq
@@ -2382,11 +2359,9 @@ run_amalgkit_getfastq_attempt() {
     --redo no
   )
   if [[ -n "${amalgkit_gsa_download_max_concurrency:-}" ]]; then
-    required_options+=(--gsa_download_max_concurrency)
     getfastq_cmd+=(--gsa_download_max_concurrency "${amalgkit_gsa_download_max_concurrency}")
   fi
   if [[ "${amalgkit_use_prefetched_reads:-0}" == 1 ]]; then
-    required_options+=(--read_stage --prefetch_dir)
     getfastq_cmd+=(--read_stage process --prefetch_dir "${gg_workspace_downloads_dir}/amalgkit_prefetch")
   fi
 
@@ -4164,7 +4139,11 @@ prepare_transcriptome_quantification() {
     quant_provenance_args+=(--parameter "transcript_gene_map_sha256=${quant_transcript_map_sha256}")
   fi
   quant_output_validation=""
-  if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
+  # A published ZIP already passed the structured checks. Compare its
+  # logical byte identity against the recorded result without reparsing TSVs.
+  if [[ ${run_amalgkit_quant} -eq 1 &&
+      ( ! -s "${quant_manifest}" || ! -e "${quant_species_output_dir}.zip" ||
+        "${artifact_stale_policy:-stop}" == reuse ) ]] && ! quant_output_validation=$(python \
     "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \
     --metadata "${file_amalgkit_quant_metadata}" \
     --quant-root "${dir_amalgkit_quant}/${sp_ub}" 2>&1)
@@ -4176,9 +4155,17 @@ prepare_transcriptome_quantification() {
   fi
 }
 
+quant_species_output_dir="${dir_amalgkit_quant%/}/${sp_ub}"
+quant_archive_script="${gg_support_dir}/archive_transcriptome_quant.py"
+quant_manifest="${transcriptome_provenance_dir}/${sp_ub}.quant.json"
 quantification_reused=0
 if [[ "${quantification_only:-0}" == 1 ]]; then
   select_transcriptome_quant_reference || exit $?
+  if [[ -e "${quant_species_output_dir}" && -e "${quant_species_output_dir}.zip" ]]; then
+    # Resume a conversion interrupted after ZIP publication and before retirement.
+    python "${quant_archive_script}" pack --raw "${quant_species_output_dir}" \
+      --source "${quant_species_output_dir}" --manifest "${quant_manifest}" || exit $?
+  fi
   if [[ -s "${transcriptome_provenance_dir}/${sp_ub}.quant.json" ]]; then
     prepare_transcriptome_quantification || exit $?
     if [[ ${quant_needs_update} -eq 0 ]]; then
@@ -4254,6 +4241,14 @@ then
 fi
 if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 1 ]]; then
   gg_step_start "${task}"
+  # A getfastq run for quantification must also have a compatible downstream
+  # executable before staging completed reads or starting remote transfers.
+  if [[ ${quantification_only:-0} == 1 && ${run_amalgkit_quant} -eq 1 ]]; then
+    gg_amalgkit_require_quant_options || exit $?
+  fi
+  getfastq_runtime_options=()
+  gg_amalgkit_getfastq_options getfastq_runtime_options
+  require_amalgkit_supported_options getfastq "${getfastq_runtime_options[@]}" || exit $?
   ensure_dir "${dir_amalgkit_getfastq_sp}"
 
   clear_getfastq_safely_removed_markers
@@ -5500,6 +5495,7 @@ fi
 if [[ ${quantification_reused} -eq 0 ]]; then
   prepare_transcriptome_quantification || exit $?
 fi
+quant_merge_scratch_ready=0
 if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
   gg_step_start "${task}"
   if [[ -z "${quant_fastq_proof:-}" ]]; then
@@ -5521,7 +5517,6 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     echo "Refusing to clear an unsafe amalgkit quant output path." >&2
     exit 1
   fi
-  quant_species_output_dir="${dir_amalgkit_quant%/}/${sp_ub}"
   if [[ "${quantification_only:-0}" != 1 ]]; then
     rm -rf -- "${quant_species_output_dir}"
     ensure_dir "${quant_species_output_dir}"
@@ -5610,8 +5605,15 @@ if [[ ${quant_needs_update} -eq 1 && ${run_amalgkit_quant} -eq 1 ]]; then
     if [[ -n "${file_quant_transcript_map}" ]]; then
       mv -- "${file_quant_transcript_map}" "./quant/transcript_gene.tsv"
     fi
-    mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"
-    rm -rf -- "./quant"
+    if [[ "${quantification_only:-0}" == 1 && ! -e "${quant_species_output_dir}" &&
+      ( "${amalgkit_quant_storage:-directory}" == zip || -e "${quant_species_output_dir}.zip" ) ]]; then
+      python "${quant_archive_script}" pack --raw "${quant_species_output_dir}" --source "./quant" || exit $?
+      # Reuse fresh local TSVs for merge, saving an archive read and extraction.
+      quant_merge_scratch_ready=1
+    else
+      mv_out_replace_dir "./quant" "${quant_species_output_dir}"
+      rm -rf -- "./quant"
+    fi
     rm -f -- "./getfastq" # Do not put -r, otherwise the original getfastq files will be deleted.
   fi
 
@@ -5655,10 +5657,15 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   merge_output_dir=""
   merge_metadata_file="./metadata.merge_species_level.tsv"
 
-  if [[ -e ./quant ]]; then
+  if [[ ${quant_merge_scratch_ready} -eq 0 ]]; then
     rm -rf -- ./quant
+    if [[ -e "${quant_species_output_dir}.zip" ]]; then
+      python "${quant_archive_script}" stage-merge --raw "${quant_species_output_dir}" \
+        --metadata "${file_amalgkit_quant_metadata}" --destination ./quant || exit $?
+    else
+      ln -s "${quant_species_output_dir}" "./quant"
+    fi
   fi
-  ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"
   if [[ -n "${merge_getfastq_stats}" ]]; then
     link_transcriptome_merge_getfastq "${dir_amalgkit_getfastq_sp}" || exit $?
   fi
@@ -5686,7 +5693,11 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
     mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"
     mv_out "./merge/metadata.tsv" "${file_amalgkit_merge_metadata}"
     rm -rf -- "./merge"
-    rm -f -- "./quant" # Do not put -r, otherwise the original quant files will be deleted.
+    if [[ -L ./quant ]]; then
+      rm -f -- ./quant
+    elif [[ ${quant_merge_scratch_ready} -eq 0 ]]; then
+      rm -rf -- ./quant # Only the temporary merge inputs.
+    fi
     if [[ -n "${merge_getfastq_stats}" ]]; then
       rm -f -- ./getfastq
     fi
@@ -5698,6 +5709,12 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   echo "$(date): End: ${task}"
 else
   gg_step_skip "${task}"
+fi
+
+if [[ "${quantification_only:-0}" == 1 && "${amalgkit_quant_storage:-directory}" == zip &&
+  -d "${quant_species_output_dir}" ]]; then
+  python "${quant_archive_script}" pack --raw "${quant_species_output_dir}" \
+    --source "${quant_species_output_dir}" --manifest "${quant_manifest}" || exit $?
 fi
 
 task='Multispecies summary'

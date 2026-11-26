@@ -1,5 +1,16 @@
 """Directory catalogs for retained workflow results; inputs and live caches stay raw."""
 
+from pathlib import PurePath
+
+
+def is_transcriptome_quant_species(path):
+    """The per-species output of the locked, quantification-only workflow."""
+    path = PurePath(path)
+    return path.parent.parts[-3:] == (
+        "output", "transcriptome_quantification", "amalgkit_quant",
+    )
+
+
 ORTHOFINDER_DIRECTORIES = tuple(
     prefix + name
     for prefix in ("", "core/")
@@ -35,9 +46,10 @@ if __name__ == "__main__":
     # command still verifies the marker and every declared content hash.
     import argparse
     import sys
-    from pathlib import PurePath
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", help="Potential managed output directory (exit 0 when recognized, otherwise 1).")
     args = parser.parse_args()
-    sys.exit(0 if PurePath(args.path).name in {PurePath(name).name for name in ALL_DIRECTORIES} else 1)
+    recognized = (is_transcriptome_quant_species(args.path)
+                  or PurePath(args.path).name in {PurePath(name).name for name in ALL_DIRECTORIES})
+    sys.exit(0 if recognized else 1)

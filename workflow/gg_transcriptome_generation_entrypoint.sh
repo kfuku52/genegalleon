@@ -116,6 +116,7 @@ mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "s
 
 # Workflow flags
 quantification_only=0 # Quantify against verified refinement transcripts with job-owned reads.
+amalgkit_quant_storage="${amalgkit_quant_storage:-directory}" # {directory,zip}; retention for quantification-only results.
 run_amalgkit_metadata_or_integrate=1 # Metadata retrieval.
 run_amalgkit_getfastq=1 # fastq generation from NCBI SRA.
 run_assembly=1 # Transcriptome assembly with Trinity, rnaSPAdes, or RNA-Bloom2.
@@ -197,9 +198,21 @@ gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" \
 # no cache assignment. Keep the external override usable in that case.
 transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}"
 
+# Retained project config blocks can predate this setting.
+amalgkit_quant_storage="${amalgkit_quant_storage:-${GG_TRANSCRIPTOME_AMALGKIT_QUANT_STORAGE:-directory}}"
 if [[ "${transcriptome_launch_workflow}" == gg_genome_annotation ]]; then
   quantification_only=1
 fi
+case "${amalgkit_quant_storage}" in
+  directory) ;;
+  zip)
+    if [[ "${quantification_only:-0}" != 1 ]]; then
+      echo "amalgkit_quant_storage=zip requires quantification-only mode." >&2
+      exit 1
+    fi
+    ;;
+  *) echo "amalgkit_quant_storage must be directory or zip." >&2; exit 1 ;;
+esac
 if [[ "${quantification_only:-0}" == 1 ]]; then
   if [[ -z "${representative_inputs}" || -n "${transcriptome_getfastq_cache_dir}" ]]; then
     echo "Quantification-only jobs require verified representative_inputs and an empty persistent getfastq cache setting." >&2
@@ -281,11 +294,6 @@ if [[ -n "${transcriptome_getfastq_cache_dir}" ]]; then
     echo "transcriptome_getfastq_cache_dir is not a real directory: ${transcriptome_getfastq_cache_dir_host}" >&2
     exit 1
   fi
-  mkdir -p -- "${transcriptome_getfastq_cache_dir_host}"
-  if [[ -L "${transcriptome_getfastq_cache_dir_host}" || ! -d "${transcriptome_getfastq_cache_dir_host}" ]]; then
-    echo "Refusing an unsafe transcriptome getfastq cache directory: ${transcriptome_getfastq_cache_dir_host}" >&2
-    exit 1
-  fi
   transcriptome_getfastq_cache_dir="/gg_transcriptome_getfastq_cache"
 fi
 
@@ -301,6 +309,11 @@ if [[ "${quantification_only:-0}" == 1 ]]; then
   gg_add_container_bind_mount "${quantification_reference_root}:${quantification_reference_root}:ro"
 fi
 if [[ -n "${transcriptome_getfastq_cache_dir_host:-}" ]]; then
+  mkdir -p -- "${transcriptome_getfastq_cache_dir_host}"
+  if [[ -L "${transcriptome_getfastq_cache_dir_host}" || ! -d "${transcriptome_getfastq_cache_dir_host}" ]]; then
+    echo "Refusing an unsafe transcriptome getfastq cache directory: ${transcriptome_getfastq_cache_dir_host}" >&2
+    exit 1
+  fi
   gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"
   echo "Persistent transcriptome getfastq cache bind: ${transcriptome_getfastq_cache_dir_host} -> ${transcriptome_getfastq_cache_dir}"
 fi

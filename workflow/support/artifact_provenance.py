@@ -30,11 +30,6 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
-from metadata_store import archived_bytes, archived_exists, archived_info
-from metadata_store import read_snapshot as metadata_read_snapshot
-from metadata_store import writer as metadata_writer
-from shared_namespace_lock import NamespaceLockError, namespace_lock
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -50,6 +45,7 @@ from artifact_audit_runtime import signature as physical_audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
+from directory_storage_policy import is_transcriptome_quant_species
 from gene_family_output_store import (
     ArchiveStoreError,
     GeneFamilyOutputStore,
@@ -60,12 +56,16 @@ from gene_family_output_store import (
     read_orthogroup_selection,
     record_family_output_inventory,
 )
+from metadata_store import archived_bytes, archived_exists, archived_info
+from metadata_store import read_snapshot as metadata_read_snapshot
+from metadata_store import writer as metadata_writer
 from orthofinder_output_store import logical_directory_exists as managed_directory_exists
 from orthofinder_output_store import logical_directory_records as orthofinder_directory_records
 from orthofinder_output_store import logical_file_location as managed_file_location
 from orthofinder_output_store import logical_records as orthofinder_logical_records
 from orthofinder_output_store import open_binary as open_managed_binary
 from safe_zip_extract import extract_expected_prefix, validated_members
+from shared_namespace_lock import NamespaceLockError, namespace_lock
 from workflow_observation import observe_path, observing_files, strict_json_loads
 
 SCHEMA_VERSION = 1
@@ -225,7 +225,8 @@ def declared_path_exists(path):
     observe_path(path)
     if os.path.lexists(path) or observation_artifact(path) is not None:
         return True
-    return (_metadata_visible(path)
+    return (transcriptome_quant_archive_exists(path)
+            or _metadata_visible(path)
             or managed_directory_exists(path, observe=observe_path)
             or managed_file_location(path, observe=observe_path) is not None)
 
@@ -341,11 +342,22 @@ def sha256_stream(handle: BinaryIO) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def transcriptome_quant_archive_exists(path: Path) -> bool:
+    if not is_transcriptome_quant_species(path):
+        return False
+    archive = path.with_name(path.name + ".zip")
+    observe_path(archive)
+    return os.path.lexists(archive)
+
+
 def sha256_path(path: Path) -> tuple[str, int, str]:
     path = _runtime_path(path)
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    if transcriptome_quant_archive_exists(path):
+        digest, size, _count = raw_or_zip_directory_digest(path)
+        return digest, size, "directory"
     if not path.exists() and archived_exists(path, observe=observe_path):
         with open_declared_binary(path) as handle:
             digest, size = sha256_stream(handle)
@@ -802,6 +814,30 @@ def describe_gene_family_artifacts(
     return entries
 
 
+def zip_directory_digest(
+    archive_path: Path, prefix: str, *, by_parts: bool = False,
+) -> tuple[str, int, int]:
+    digest = hashlib.sha256()
+    total_size = 0
+    with zipfile.ZipFile(archive_path) as archive:
+        infos, _directories = validated_members(archive, archive_path, prefix)
+        members = [(PurePosixPath(info.filename).relative_to(prefix), info) for info in infos]
+        if by_parts:
+            members.sort(key=lambda item: item[0].parts)
+        else:
+            members.sort(key=lambda item: item[0].as_posix())
+        for relative, info in members:
+            relative_bytes = relative.as_posix().encode("utf-8")
+            with archive.open(info) as handle:
+                member_digest, member_size = sha256_stream(handle)
+            digest.update(len(relative_bytes).to_bytes(8, "big"))
+            digest.update(relative_bytes)
+            digest.update(bytes.fromhex(member_digest))
+            digest.update(member_size.to_bytes(8, "big"))
+            total_size += member_size
+    return digest.hexdigest(), total_size, len(members)
+
+
 def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
     archive_path = path.with_name(f"{path.name}.zip")
     observe_path(archive_path)
@@ -844,36 +880,13 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
                         total_size += row["size"]
                         member_count += 1
                 else:
-                    with zipfile.ZipFile(archive_path, "r") as archive:
-                        infos, _directories = validated_members(archive, archive_path, path.name)
-                        prefix = PurePosixPath(path.name)
-                        members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
-                        for info in infos:
-                            member = PurePosixPath(info.filename)
-                            if member.is_absolute() or ".." in member.parts:
-                                raise ProvenanceError(f"Unsafe logical directory ZIP member: {info.filename!r}")
-                            try:
-                                relative = member.relative_to(prefix)
-                            except ValueError as exc:
-                                raise ProvenanceError(
-                                    f"Logical directory ZIP member is outside {path.name}/: {info.filename!r}"
-                                ) from exc
-                            if not relative.parts:
-                                continue
-                            members.append((relative, info))
-                        for relative, info in sorted(members, key=lambda item: item[0].as_posix()):
-                            relative_bytes = relative.as_posix().encode("utf-8")
-                            with archive.open(info, "r") as handle:
-                                member_digest, member_size = sha256_stream(handle)
-                            digest.update(len(relative_bytes).to_bytes(8, "big"))
-                            digest.update(relative_bytes)
-                            digest.update(bytes.fromhex(member_digest))
-                            digest.update(member_size.to_bytes(8, "big"))
-                            total_size += member_size
-                            member_count += 1
+                    archive_result = zip_directory_digest(
+                        archive_path, path.name, by_parts=is_transcriptome_quant_species(path),
+                    )
             except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
                 raise ProvenanceError(f"Failed to read logical directory ZIP {archive_path}: {exc}") from exc
-            archive_result = (digest.hexdigest(), total_size, member_count)
+            if archive_result is None:
+                archive_result = (digest.hexdigest(), total_size, member_count)
             if current_cache is not None and archive_signature is not None:
                 current_cache.put(
                     "logical_zip_directory",

@@ -4,6 +4,7 @@ import csv
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -139,6 +140,81 @@ def test_transcriptome_quant_stage_validates_before_reuse_and_before_publish():
         "gg_artifact_prepare_stage quant_needs_update run_amalgkit_quant"
     )
     assert text.index(validator, text.index(validator) + 1) < text.index(
-        'mv_out_replace_dir "./quant" "${dir_amalgkit_quant}/${sp_ub}"'
+        'pack --raw "${quant_species_output_dir}" --source "./quant"'
     )
     assert "quant_outputs=(./quant/*)" not in text
+
+
+def test_zip_migration_preserves_identity_and_only_stages_selected_merge_inputs(tmp_path: Path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    from archive_transcriptome_quant import pack_quant, stage_merge
+    from artifact_provenance import sha256_path
+    from validate_transcriptome_quant_outputs import validate_quant_outputs
+
+    raw = tmp_path / "output" / "transcriptome_quantification" / "amalgkit_quant" / "Test_species"
+    metadata = tmp_path / "metadata.tsv"
+    write_metadata(metadata, [
+        {"run": "R1", "scientific_name": "Test species"},
+        {"run": "R1-old", "scientific_name": "Test species"},
+    ])
+    for run in ("R1", "R1-old", "excluded"):
+        write_run(raw, run)
+        (raw / run / f"{run}_abundance.h5").write_bytes(b"binary-hdf5-" + run.encode())
+    (raw / "transcript_gene.tsv").write_text("tx1\tg1\n")
+    expected = sha256_path(raw)
+    manifest = tmp_path / "Test_species.quant.json"
+    payload = {
+        "schema_version": 1, "step": "transcriptome_quant", "family_id": raw.name,
+        "outputs": [{
+            "artifact_type": "directory", "label": "quant_directory", "path": str(raw),
+            "sha256": expected[0], "size_bytes": expected[1],
+        }],
+    }
+    manifest.write_text(json.dumps(payload))
+    archive = pack_quant(raw, raw, manifest)
+    assert not raw.exists()
+    assert sha256_path(raw) == expected
+    assert validate_quant_outputs(metadata, raw, require_transcript_map=True)["run_count"] == 2
+
+    destination = tmp_path / "quant"
+    stage_merge(raw, metadata, destination)
+    assert {path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()} == {
+        f"{run}/{run}_{suffix}"
+        for run in ("R1", "R1-old") for suffix in ("abundance.tsv", "run_info.json")
+    }
+    with zipfile.ZipFile(archive) as reader:
+        for path in destination.rglob("*"):
+            if path.is_file():
+                assert path.read_bytes() == reader.read(raw.name + "/" + path.relative_to(destination).as_posix())
+        assert len(reader.namelist()) == 10
+
+
+def test_pack_refuses_unverified_migration_and_validator_rejects_unsafe_zip(tmp_path: Path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import pytest
+    from archive_transcriptome_quant import pack_quant
+
+    raw = tmp_path / "output" / "transcriptome_quantification" / "amalgkit_quant" / "Test_species"
+    write_run(raw, "R1")
+    manifest = tmp_path / "Test_species.quant.json"
+    manifest.write_text(json.dumps({
+        "schema_version": 1, "step": "transcriptome_quant", "family_id": raw.name,
+        "outputs": [{
+            "artifact_type": "directory", "label": "quant_directory", "path": str(raw),
+            "sha256": "0" * 64, "size_bytes": 0,
+        }],
+    }))
+    archive = raw.with_suffix(".zip")
+    with pytest.raises(ValueError, match="differs from recorded"):
+        pack_quant(raw, raw, manifest)
+    assert raw.is_dir()
+    assert not archive.exists()
+
+    raw.rename(tmp_path / "retained")
+    metadata = tmp_path / "selected.tsv"
+    write_metadata(metadata, [{"run": "R1", "scientific_name": "Test species"}])
+    with zipfile.ZipFile(archive, "w") as writer:
+        writer.writestr(f"{raw.name}/../outside", "bad")
+    result = run_validator(metadata, raw)
+    assert result.returncode == 1
+    assert "Unsafe or unexpected ZIP member" in result.stderr

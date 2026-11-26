@@ -877,6 +877,7 @@ run_longestcds_fx2tab
 run_longestcds_mmseqs2taxonomy
 run_multispecies_summary
 quantification_only
+amalgkit_quant_storage
 EOF
       ;;
     *)

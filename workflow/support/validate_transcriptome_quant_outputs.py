@@ -5,13 +5,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
 import os
 import re
 import sys
+import zipfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, TextIO
+
+from directory_storage_policy import is_transcriptome_quant_species
+from safe_zip_extract import validated_members
 
 REQUIRED_ABUNDANCE_COLUMNS = (
     "target_id",
@@ -101,70 +106,61 @@ def selected_runs(metadata_path: Path) -> list[str]:
     return selected
 
 
-def validate_abundance(path: Path, run_id: str) -> None:
-    if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0:
-        raise QuantOutputValidationError(
-            f"missing or empty regular abundance table for run: {run_id}"
-        )
+def validate_abundance_stream(handle: TextIO, run_id: str) -> None:
     try:
-        with path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.reader(handle, delimiter="\t")
-            positions = {name: index for index, name in enumerate(next(reader, ()))}
-            missing = [name for name in REQUIRED_ABUNDANCE_COLUMNS if name not in positions]
-            if missing:
+        reader = csv.reader(handle, delimiter="\t")
+        positions = {name: index for index, name in enumerate(next(reader, ()))}
+        missing = [name for name in REQUIRED_ABUNDANCE_COLUMNS if name not in positions]
+        if missing:
+            raise QuantOutputValidationError(
+                f"abundance table for {run_id} is missing column(s): "
+                + ", ".join(missing)
+            )
+        target_position = positions["target_id"]
+        numeric_positions = [(column, positions[column]) for column in NUMERIC_ABUNDANCE_COLUMNS]
+        required_width = max(positions[column] for column in REQUIRED_ABUNDANCE_COLUMNS) + 1
+        seen_targets: set[str] = set()
+        for row in reader:
+            if not row:
+                continue
+            # Match DictReader's blank defaults for omitted trailing fields.
+            if len(row) < required_width:
+                row.extend([""] * (required_width - len(row)))
+            target_id = row[target_position].strip()
+            if not target_id:
                 raise QuantOutputValidationError(
-                    f"abundance table for {run_id} is missing column(s): "
-                    + ", ".join(missing)
+                    f"abundance table for {run_id} contains an empty target_id"
                 )
-            target_position = positions["target_id"]
-            numeric_positions = [(column, positions[column]) for column in NUMERIC_ABUNDANCE_COLUMNS]
-            required_width = max(positions[column] for column in REQUIRED_ABUNDANCE_COLUMNS) + 1
-            seen_targets: set[str] = set()
-            for row in reader:
-                if not row:
-                    continue
-                # Match DictReader's blank defaults for omitted trailing fields.
-                if len(row) < required_width:
-                    row.extend([""] * (required_width - len(row)))
-                target_id = row[target_position].strip()
-                if not target_id:
-                    raise QuantOutputValidationError(
-                        f"abundance table for {run_id} contains an empty target_id"
-                    )
-                if target_id in seen_targets:
-                    raise QuantOutputValidationError(
-                        f"abundance table for {run_id} contains duplicate target_id: {target_id}"
-                    )
-                seen_targets.add(target_id)
-                for column, position in numeric_positions:
-                    raw_value = row[position].strip()
-                    try:
-                        value = float(raw_value)
-                    except ValueError as exc:
-                        raise QuantOutputValidationError(
-                            f"abundance table for {run_id} has invalid {column}"
-                        ) from exc
-                    if not math.isfinite(value) or value < 0:
-                        raise QuantOutputValidationError(
-                            f"abundance table for {run_id} has invalid {column}"
-                        )
-            if not seen_targets:
+            if target_id in seen_targets:
                 raise QuantOutputValidationError(
-                    f"abundance table for {run_id} contains no data rows"
+                    f"abundance table for {run_id} contains duplicate target_id: {target_id}"
                 )
+            seen_targets.add(target_id)
+            for column, position in numeric_positions:
+                raw_value = row[position].strip()
+                try:
+                    value = float(raw_value)
+                except ValueError as exc:
+                    raise QuantOutputValidationError(
+                        f"abundance table for {run_id} has invalid {column}"
+                    ) from exc
+                if not math.isfinite(value) or value < 0:
+                    raise QuantOutputValidationError(
+                        f"abundance table for {run_id} has invalid {column}"
+                    )
+        if not seen_targets:
+            raise QuantOutputValidationError(
+                f"abundance table for {run_id} contains no data rows"
+            )
     except (OSError, csv.Error) as exc:
         raise QuantOutputValidationError(
             f"failed to read abundance table for {run_id}: {exc}"
         ) from exc
 
 
-def validate_run_info(path: Path, run_id: str) -> None:
-    if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0:
-        raise QuantOutputValidationError(
-            f"missing or empty regular run-info JSON for run: {run_id}"
-        )
+def validate_run_info_stream(handle: TextIO, run_id: str) -> None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise QuantOutputValidationError(
             f"failed to read run-info JSON for {run_id}: {exc}"
@@ -185,18 +181,46 @@ def validate_run_info(path: Path, run_id: str) -> None:
         )
 
 
-def validate_quant_outputs(metadata: Path, quant_root: Path) -> dict[str, object]:
+def validate_quant_outputs(
+    metadata: Path, quant_root: Path, *, require_transcript_map: bool = False,
+) -> dict[str, object]:
     runs = selected_runs(metadata)
-    if not quant_root.is_dir() or quant_root.is_symlink():
-        raise QuantOutputValidationError("quant output root is not a regular directory")
-    for run_id in runs:
-        run_directory = quant_root / run_id
-        if not run_directory.is_dir() or run_directory.is_symlink():
-            raise QuantOutputValidationError(
-                f"quant output directory is missing for run: {run_id}"
-            )
-        validate_abundance(run_directory / f"{run_id}_abundance.tsv", run_id)
-        validate_run_info(run_directory / f"{run_id}_run_info.json", run_id)
+    archive_path = quant_root.with_name(quant_root.name + ".zip")
+    required = [
+        (f"{run}/{run}_{suffix}", validator, run)
+        for run in runs
+        for suffix, validator in (
+            ("abundance.tsv", validate_abundance_stream),
+            ("run_info.json", validate_run_info_stream),
+        )
+    ]
+    if require_transcript_map:
+        required.append(("transcript_gene.tsv", None, ""))
+    if is_transcriptome_quant_species(quant_root) and os.path.lexists(archive_path):
+        if os.path.lexists(quant_root) or archive_path.is_symlink() or not archive_path.is_file():
+            raise QuantOutputValidationError("quantification ZIP has an unsafe or ambiguous path")
+        with zipfile.ZipFile(archive_path) as archive:
+            infos, _ = validated_members(archive, archive_path, quant_root.name)
+            members = {info.filename: info for info in infos}
+            for relative, validator, run in required:
+                member = members.get(f"{quant_root.name}/{relative}")
+                if member is None or member.file_size <= 0:
+                    raise QuantOutputValidationError(f"missing or empty quantification file: {relative}")
+                if validator is not None:
+                    with io.TextIOWrapper(archive.open(member), encoding="utf-8", newline="") as handle:
+                        validator(handle, run)
+    else:
+        if not quant_root.is_dir() or quant_root.is_symlink():
+            raise QuantOutputValidationError("quant output root is not a regular directory")
+        for relative, validator, run in required:
+            path = quant_root / relative
+            if path.parent.is_symlink() or not path.parent.is_dir():
+                raise QuantOutputValidationError(f"quant output directory is missing for run: {run}")
+            if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0:
+                raise QuantOutputValidationError(f"missing or empty regular quantification file: {relative}")
+            if validator is not None:
+                with path.open(encoding="utf-8", newline="") as handle:
+                    validator(handle, run)
     return {"status": "valid", "run_count": len(runs), "runs": runs}
 
 
@@ -204,14 +228,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metadata", required=True, type=Path)
     parser.add_argument("--quant-root", required=True, type=Path)
+    parser.add_argument("--require-transcript-map", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = validate_quant_outputs(args.metadata, args.quant_root)
-    except QuantOutputValidationError as exc:
+        result = validate_quant_outputs(
+            args.metadata, args.quant_root, require_transcript_map=args.require_transcript_map,
+        )
+    except (RuntimeError, OSError, UnicodeError, zipfile.BadZipFile) as exc:
         print(f"quant output validation error: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

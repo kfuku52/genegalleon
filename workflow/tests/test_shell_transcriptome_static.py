@@ -254,7 +254,8 @@ def test_transcriptome_core_delegates_ncbi_parallelism_to_amalgkit():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
     normalize_body = _function_body(text, "normalize_amalgkit_download_limit_value")
-    require_body = _function_body(text, "require_amalgkit_supported_options")
+    runtime = _read_text(WORKFLOW_DIR / "support" / "gg_amalgkit_runtime.sh")
+    require_body = _function_body(runtime, "require_amalgkit_supported_options")
     metadata_body = _function_body(text, "run_amalgkit_metadata_query")
     getfastq_body = _function_body(text, "run_amalgkit_getfastq_attempt")
 

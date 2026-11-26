@@ -293,6 +293,14 @@ is mounted read-only. Paths below are under
 | `amalgkit_getfastq/<species>/` | Read-acquisition receipt and diagnostics |
 | `artifact_provenance/` | Per-species read-acquisition, quantification and merge provenance |
 
+Set `GG_TRANSCRIPTOME_AMALGKIT_QUANT_STORAGE=zip` to publish a ZIP per species
+at `amalgkit_quant/<species>.zip`, containing the same `<species>/` directory
+tree. Existing provenance and merge TSVs keep their paths. A successful retry
+converts an existing directory after its archived bytes match the recorded
+quantification. When merge needs to rerun, only selected abundance TSVs and
+run-info JSON files are read from the archive. Runs with a published ZIP
+continue to use ZIP storage.
+
 Raw downloads use task scratch. Generated FASTQs live under
 `amalgkit_getfastq/<species>/` until the job verifies quantification and merge.
 Successful jobs remove their generated reads and retain the acquisition
@@ -333,6 +341,14 @@ quantification.
 The same profile is also available through
 `GG_TRANSCRIPTOME_QUANTIFICATION_ONLY=1` on the transcriptome-generation
 entrypoint.
+
+#### Check the quantification runtime
+
+Run `bash /script/support/gg_amalgkit_runtime.sh quantification` inside the
+selected container with the same `/script` bind and package environment the
+jobs will use. The check exercises the installed Amalgkit CLI and verifies the
+short- and long-read backend executables without opening any study data. On
+SHIROKANE, run it on a compute node before submitting the quantification array.
 
 #### Plot compact quantification QC
 
