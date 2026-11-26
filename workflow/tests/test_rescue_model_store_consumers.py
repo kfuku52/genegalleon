@@ -3,13 +3,17 @@ import copy
 import json
 import shutil
 import sqlite3
+import zipfile
 from pathlib import Path
 
 import pytest
 
+from workflow.support import rescue_gene_models as rescue
 from workflow.support import rescue_model_evidence as evidence
 from workflow.support import rescue_model_store as model_store
+from workflow.support.archive_rescue_model_store import move_receipted_shards
 from workflow.support.input_generation_array_state import digest
+from workflow.support.rescue_model_store_patch import copy_legacy_model_archive
 from workflow.support.rescue_prediction_cache import frozen_prediction_cache_key, verify_prediction_cache
 from workflow.tests.test_rescue_additional_candidates import PARAMS, cache_fixture
 from workflow.tests.test_rescue_model_evidence import fixture as evidence_fixture
@@ -46,6 +50,64 @@ def publish(directory, models, *, revisions=(), sharded=True, key=None, archive_
                              ('revision_candidates.json', list(revisions))):
             (directory / name).write_text(json.dumps(values))
     receipt(directory, key or {})
+
+
+def test_archived_legacy_shards_preserve_frozen_consumers(tmp_path):
+    old, new, plan, region = cache_fixture(tmp_path)
+    worker = old / 'rescued/T'
+    store = worker / 'model_store'
+    receipt_path = worker / 'receipt.json'
+    producer_key = json.loads(receipt_path.read_bytes())['key']
+    models = json.loads((worker / 'models.json').read_bytes())
+    (worker / 'models.json').unlink()
+    manifest = model_store.write_model_store(worker, models, partial_models=models, revisions=models,
+                                             archive_shards=False, shard_bytes=1024)
+    receipt(worker, producer_key)
+    keys = {kind: model_store.frozen_model_store_key(worker, kind=kind) for kind in model_store.KINDS}
+    frozen = frozen_prediction_cache_key(old)
+    revision = {'revision_model_stores': {'T': {'directory': str(worker), 'key': keys['revision']}}}
+
+    def consume():
+        predictions = verify_prediction_cache(old, new, plan, 'T', [region], PARAMS, frozen=frozen)
+        return (list(predictions.iter_models()), list(refinement.revision_models(revision, 'T')),
+                list(model_store.iter_partial_models(worker, frozen_key=keys['partial'])),
+                list(model_store.iter_accepted_models(worker, frozen_key=keys['accepted'])))
+
+    before = consume()
+    original = receipt_path.read_bytes(), (store / 'manifest.json').read_bytes()
+    archive = store / model_store.LEGACY_SHARD_ARCHIVE
+    names = [shard['path'] for shard in manifest['shards']]
+    pin = keys['models']['producer_receipt_sha256']
+    assert move_receipted_shards(worker, pin)['removed'] == len(names)
+    assert move_receipted_shards(worker, pin)['removed'] == 0
+    assert not any((store / name).exists() for name in names)
+
+    assert consume() == before
+    assert rescue.verified(worker, producer_key)
+    assert frozen_prediction_cache_key(old) == frozen
+    assert all(model_store.verify_model_store_key(worker, key) for key in keys.values())
+    assert (receipt_path.read_bytes(), (store / 'manifest.json').read_bytes()) == original
+    copied = tmp_path / 'copied'
+    copied.mkdir()
+    assert copy_legacy_model_archive(worker, copied, keys['models'])
+    copied_store = copied / 'model_store'
+    assert (copied_store / 'models.zip').read_bytes() == archive.read_bytes()
+    assert all((copied_store / name).read_bytes() == (store / name).read_bytes()
+               for name in ('bodies.sqlite', 'accepted.sqlite', 'partial.sqlite', 'revision.sqlite'))
+    receipt(copied, producer_key)
+    assert rescue.verified(copied, producer_key)
+    assert list(model_store.iter_models(copied)) == list(model_store.iter_models(worker))
+    assert move_receipted_shards(worker, pin, restore=True)['restored'] == len(names)
+    assert not archive.exists() and consume() == before
+    assert move_receipted_shards(worker, pin)['removed'] == len(names)
+
+    with zipfile.ZipFile(archive, 'w') as handle:
+        for name in names:
+            handle.writestr(name, b'wrong content with valid ZIP CRC')
+    assert not rescue.verified(worker, producer_key)
+    with pytest.raises(ValueError, match='checksum changed'):
+        model_store.verify_model_store_key(worker, keys['models'])
+    assert list(refinement.revision_models(revision, 'T')) == before[1]
 
 
 @pytest.mark.parametrize('sharded', [False, True])

@@ -64,6 +64,7 @@ try:
         export_legacy_models,
         frozen_model_store_key,
         iter_accepted_models,
+        verified_legacy_shards,
         write_model_store,
     )
     from rescue_prediction_cache import (
@@ -125,6 +126,7 @@ except ImportError:
         export_legacy_models,
         frozen_model_store_key,
         iter_accepted_models,
+        verified_legacy_shards,
         write_model_store,
     )
     from .rescue_prediction_cache import (
@@ -634,10 +636,11 @@ def verified(directory, key, hash_workers=1):
                 and all(isinstance(p, str) and isinstance(value, str)
                         for p, value in receipt["files"].items())):
             return False
-        paths = [directory / p for p in receipt["files"]]
-        # digest itself refuses nonregular files and fences content reads with
-        # before/after stat identities. Every listed file is still read in full.
-        return hash_paths(directory, paths, workers=hash_workers, hash_function=digest) == receipt["files"]
+        with verified_legacy_shards(directory, receipt["files"]) as archived:
+            files = {name: sha for name, sha in receipt["files"].items() if name not in archived}
+            # digest fences physical files; ZIP members use the same receipt hashes.
+            paths = (directory / name for name in files)
+            return hash_paths(directory, paths, workers=hash_workers, hash_function=digest) == files
     except (OSError, ValueError):
         return False
 

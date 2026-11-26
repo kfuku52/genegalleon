@@ -35,6 +35,7 @@ else:
 
 FORMAT = "gg_rescue_model_store_v1"
 SHARD_ARCHIVE = "models.zip"
+LEGACY_SHARD_ARCHIVE = "legacy-models.zip"
 KINDS = {"models", "accepted", "partial", "revision"}
 BODY_FIELDS = frozenset({
     "seqid", "strand", "cds", "sequence", "assembly_ambiguous_bases",
@@ -678,19 +679,37 @@ def _physical_files(manifest, names=None):
     return {name: files[name] for name in (archive if name in shards else name for name in names)}
 
 
+def _legacy_archive(store, manifest):
+    if "shard_archive" in manifest or not manifest["shards"]:
+        return None
+    path = store / LEGACY_SHARD_ARCHIVE
+    if not os.path.lexists(path):
+        return None
+    return _member(store, LEGACY_SHARD_ARCHIVE)
+
+
+def _legacy_members(root, store, manifest, files):
+    prefix = store.relative_to(root).as_posix()
+    names = (shard["path"] for shard in manifest["shards"])
+    return {f"{prefix}/{name}": name for name in names if f"{prefix}/{name}" in files}
+
+
 @contextmanager
-def _open_shards(store, manifest):
-    archive = manifest.get("shard_archive")
+def _open_shards(store, manifest, *, legacy_archive=None):
+    archive = manifest.get("shard_archive") or (legacy_archive.name if legacy_archive else None)
     if archive is None:
         yield store
         return
-    with zipfile.ZipFile(_member(store, archive)) as handle:
-        members = handle.infolist()
-        names = {item["path"] for item in manifest["shards"]}
-        if (len(members) != len(names) or {member.filename for member in members} != names
-                or any(member.compress_type != zipfile.ZIP_STORED or member.flag_bits & 1 for member in members)):
-            raise ValueError("Model-store ZIP membership or encoding changed")
-        yield zipfile.Path(handle)
+    try:
+        with zipfile.ZipFile(_member(store, archive)) as handle:
+            members = handle.infolist()
+            names = {item["path"] for item in manifest["shards"]}
+            if (len(members) != len(names) or {member.filename for member in members} != names
+                    or any(member.compress_type != zipfile.ZIP_STORED or member.flag_bits & 1 for member in members)):
+                raise ValueError("Model-store ZIP membership or encoding changed")
+            yield zipfile.Path(handle)
+    except zipfile.BadZipFile as error:
+        raise ValueError("Invalid model-store ZIP") from error
 
 
 def _copy_zip_member(source, archive, name, expected):
@@ -823,13 +842,45 @@ def _check_key(directory, key, kind=None):
         raise ValueError("Model-store publication generation changed")
 
 
+@contextmanager
+def verified_legacy_shards(directory, files):
+    """Verify selected archived receipt members and fence their ZIP through the caller's read."""
+    root, store = _layout(directory)
+    if not os.path.lexists(store / LEGACY_SHARD_ARCHIVE):
+        yield {}
+        return
+    manifest, manifest_sha = _manifest(store)
+    archive = _legacy_archive(store, manifest)
+    members = _legacy_members(root, store, manifest, files) if archive else {}
+    if not members:
+        yield {}
+        return
+    receipt, receipt_sha = _receipt(root)
+    manifest_member = f"{store.relative_to(root).as_posix()}/manifest.json"
+    if (receipt["files"].get(manifest_member) != manifest_sha
+            or any(files[member] != manifest["files"][name]
+                   or files[member] != receipt["files"].get(member) for member, name in members.items())):
+        raise ValueError("Archived model-store shards are not bound to producer receipt")
+    identity = _stat(archive)
+    with _open_shards(store, manifest, legacy_archive=archive) as shards:
+        for member, name in members.items():
+            with (shards / name).open("rb") as source:
+                if hashlib.file_digest(source, "sha256").hexdigest() != files[member]:
+                    raise ValueError(f"Model-store checksum changed: {member}")
+    yield members
+    if (_stat(_member(store, archive.name)) != identity or _receipt(root)[1] != receipt_sha
+            or _manifest(store)[1] != manifest_sha):
+        raise ValueError("Archived model-store generation changed")
+
+
 def verify_model_store_key(directory, key):
     """Return True after hashing every consumed member; reject changed generations."""
     _check_key(directory, key)
     root, _ = _layout(directory)
-    for member, expected in key["files"].items():
-        if _digest(_member(root, member)) != expected:
-            raise ValueError(f"Model-store checksum changed: {member}")
+    with verified_legacy_shards(directory, key["files"]) as archived:
+        for member, expected in key["files"].items():
+            if member not in archived and _digest(_member(root, member)) != expected:
+                raise ValueError(f"Model-store checksum changed: {member}")
     _check_key(directory, key)
     return True
 
@@ -1062,14 +1113,15 @@ def _filter_shard(member, codec, expected, first, count, predicate, destination)
         raise ValueError("Model-store shard count changed")
 
 
-def _selected_shard_rows(store, manifest, verify_shards, predicate, workers):
+def _selected_shard_rows(store, manifest, verify_shards, predicate, workers, *, legacy_archive=None):
     """Verify each complete shard and consume its selected lines in source order."""
     codec = manifest["codec"]
+    archive = manifest.get("shard_archive") or (legacy_archive.name if legacy_archive else None)
     pending = deque()
     with tempfile.TemporaryDirectory(prefix="gg-model-selection-") as directory, \
             ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"),
                                 initializer=_initialize_worker_shards,
-                                initargs=(store, manifest.get("shard_archive"))) as pool:
+                                initargs=(store, archive)) as pool:
         def consume():
             path, future = pending.popleft()
             future.result()
@@ -1109,14 +1161,19 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
     key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify or verification is not None else None)
     if frozen_key:
         _check_key(directory, key, kind)
-    paths = {p: _member(root, p) for p in key["files"]} if key is not None else {}
+    manifest = _manifest(store)[0] if (store / "manifest.json").is_file() else None
+    legacy_archive = _legacy_archive(store, manifest) if manifest and kind in {"models", "partial"} else None
+    files = key["files"] if key is not None else {}
+    archived = _legacy_members(root, store, manifest, files) if legacy_archive else {}
+    archive_identity = _stat(legacy_archive) if key is not None and legacy_archive else None
+    paths = {p: _member(root, p) for p in files if p not in archived}
     stats = {p: _stat(path) for p, path in paths.items()} if verification is None else {}
     if verification is not None:
         expected = {str(path): key["files"][member] for member, path in paths.items()}
         expected[str(root / "receipt.json")] = key["producer_receipt_sha256"]
         if verification.read(expected) != expected:
             raise ValueError("Model-store checksum changed within verification boundary")
-    if not (store / "manifest.json").is_file():
+    if manifest is None:
         # Lazy import avoids a cycle with prediction-cache's new-store reader.
         try:
             from rescue_prediction_cache import stream_json_array
@@ -1137,7 +1194,6 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
             if key is not None and hasher is not None and hasher.hexdigest() != key["files"][member]:
                 raise ValueError("Legacy model checksum changed")
     else:
-        manifest, _ = _manifest(store)
         prefix = store.relative_to(root).as_posix()
         revision_member = f"{prefix}/revision.sqlite" if kind == "revision" else None
         archive_member = f"{prefix}/{manifest['shard_archive']}" if "shard_archive" in manifest else None
@@ -1172,28 +1228,32 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 if count != manifest["counts"][kind]:
                     raise ValueError("Model-store overlay count changed")
         elif kind == "partial":
-            shard_reader = _open_shards(store, manifest) if manifest["counts"]["partial"] else nullcontext(store)
+            shard_reader = (_open_shards(store, manifest, legacy_archive=legacy_archive)
+                            if manifest["counts"]["partial"] else nullcontext(store))
             with shard_reader as shards:
                 yield from _partials(store, manifest, key, shards)
         elif (scan_workers > 1 and context_filter is not None and model_ids is None and key is not None
               and len(manifest["shards"]) >= scan_workers * 2):
-            with _open_shards(store, manifest), \
+            with _open_shards(store, manifest, legacy_archive=legacy_archive), \
                     _open_body_database(store / "bodies.sqlite", key["files"][f"{prefix}/bodies.sqlite"]) as db:
                 bodies = _DecodedBodies(db, manifest["body_codec"])
-                for envelope in _selected_shard_rows(store, manifest, verification is None, context_filter, scan_workers):
+                for envelope in _selected_shard_rows(store, manifest, verification is None or bool(legacy_archive),
+                                                     context_filter, scan_workers, legacy_archive=legacy_archive):
                     record = bodies.unpack(envelope, context_owned=True)
                     if statuses is None or record.get("status") in statuses:
                         yield (envelope["ordinal"], record) if with_ordinals else record
         else:
             stage_bodies = context_filter is not None or verification is not None
             checksum = key["files"][f"{prefix}/bodies.sqlite"] if key is not None and stage_bodies else None
-            with _open_shards(store, manifest) as shards, _open_body_database(store / "bodies.sqlite", checksum) as db:
+            with _open_shards(store, manifest, legacy_archive=legacy_archive) as shards, \
+                    _open_body_database(store / "bodies.sqlite", checksum) as db:
                 bodies, ordinal = _DecodedBodies(db, manifest["body_codec"]), 0
                 for shard in manifest["shards"]:
                     count = 0
                     name = shard["path"]
-                    path = _member(store, name) if archive_member is None else shards / name
-                    expected = manifest["files"][name] if key is not None and verification is None else None
+                    path = _member(store, name) if shards is store else shards / name
+                    expected = (manifest["files"][name]
+                                if key is not None and (verification is None or legacy_archive) else None)
                     if shard["first"] != ordinal:
                         raise ValueError("Model-store shard order changed")
                     for envelope in _lines(path, manifest["codec"], expected):
@@ -1220,7 +1280,8 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                     raise ValueError("Model-store candidate count changed")
     if key is not None:
         _check_key(directory, key, kind)
-        if any(_stat(paths[member]) != identity for member, identity in stats.items()):
+        if (any(_stat(paths[member]) != identity for member, identity in stats.items())
+                or (archive_identity is not None and _stat(_member(store, legacy_archive.name)) != archive_identity)):
             raise ValueError("Model-store member changed during consumption")
     if verification is not None:
         verification.check()
@@ -1273,7 +1334,7 @@ def _partial_entries(store, manifest, key, refs, shards):
         if type(shard_index) is not int or not 0 <= shard_index < len(manifest["shards"]):
             raise ValueError("Malformed model-store partial shard reference")
         shard = manifest["shards"][shard_index]["path"]
-        path = shards / shard if "shard_archive" in manifest else _member(store, shard)
+        path = _member(store, shard) if shards is store else shards / shard
         expected = manifest["files"][shard] if key is not None else None
         if key is not None and shard not in manifest["scopes"]["partial"]:
             raise ValueError("Model-store partial shard is not in the producer scope")

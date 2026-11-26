@@ -107,7 +107,7 @@ def extend_worker(root, plan, species, cpus, dependencies):
     import rescue_gene_models as rescue
     import rescue_model_store as store
     from gene_model_catalog import indexed_genome
-    from rescue_model_store_patch import patch_model_store
+    from rescue_model_store_patch import copy_legacy_model_archive, patch_model_store
 
     previous, prior = replay.previous_context(root, plan)
     cached = plan["request"]["admission_cache"]
@@ -148,6 +148,7 @@ def extend_worker(root, plan, species, cpus, dependencies):
                 model["quality_evidence"] = rescue.model_quality(model, source["genetic_code"])
             patch_model_store(producer, tmp, {}, appended=additions, frozen_key=frozen,
                               revisions=store.iter_revision_models(producer), publication_workers=min(cpus, 4))
+        copy_store = bool(additions) or copy_legacy_model_archive(producer, tmp, frozen)
 
         mutable = {"search_inputs.json", diagnostics.SUMMARY, "audit.tsv", "audit.tsv.gz",
                    "quality_flags.tsv", "quality_flags.tsv.gz"}
@@ -160,7 +161,7 @@ def extend_worker(root, plan, species, cpus, dependencies):
             rescue.require_same_key(receipt["files"][relative], rescue.digest(target))
 
         rescue.hash_paths(producer, (store._member(producer, name) for name in receipt["files"]
-                                    if name not in mutable and not (additions and name.startswith("model_store/"))),
+                                    if name not in mutable and not (copy_store and name.startswith("model_store/"))),
                           workers=min(cpus, 4), hash_function=copy_member)
 
         def read_sidecar(name):

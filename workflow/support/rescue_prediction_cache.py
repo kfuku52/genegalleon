@@ -18,13 +18,13 @@ from pathlib import Path, PurePosixPath
 try:
     from fasta_sequence_store import fasta_records
     from input_generation_array_state import FreshDigestBatch
-    from rescue_model_store import frozen_model_store_key
+    from rescue_model_store import frozen_model_store_key, verified_legacy_shards
     from rescue_model_store import iter_models as iter_stored_models
     from rescue_source_verification import RescueSourceBatch
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .input_generation_array_state import FreshDigestBatch
-    from .rescue_model_store import frozen_model_store_key
+    from .rescue_model_store import frozen_model_store_key, verified_legacy_shards
     from .rescue_model_store import iter_models as iter_stored_models
     from .rescue_source_verification import RescueSourceBatch
 
@@ -575,8 +575,9 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
             or any(receipt["files"].get(p) != v for p, v in worker["files"].items())):
         raise ValueError("Cached worker is not bound to frozen plan/results")
     _verify_model_metadata(directory, worker)
-    expect_many((_safe_member(directory, member), expected)
-                for member, expected in worker["files"].items())
+    with verified_legacy_shards(directory, worker["files"]) as archived:
+        expect_many((_safe_member(directory, member), expected)
+                    for member, expected in worker["files"].items() if member not in archived)
     for tool in ("miniprot", "miniprot_sha256"):
         if not old_plan["request"]["tools"].get(tool) or old_plan["request"]["tools"][tool] != plan["request"]["tools"].get(tool):
             raise ValueError("Prediction cache miniprot identity changed")

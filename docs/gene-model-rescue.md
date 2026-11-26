@@ -649,6 +649,16 @@ loose members from `models.zip`, then restore the exact `manifest` and `receipt`
 bytes (base64) saved in `model_store/.model-store-loose-layout.json`. Existing
 dependent publications require their original receipt generation.
 
+For a pinned historical worker, stop writers and readers using an older
+runtime, then run the same command with `--preserve-receipt RECEIPT_SHA256`.
+The command verifies every ZIP member against the original receipt and stores
+the shards in `model_store/legacy-models.zip`. The original receipt, manifest
+and frozen scope keys stay byte-identical. A compatible reader verifies the
+contents directly in the ZIP. To use the original runtime again, add
+`--restore-loose-shards` to the same command to restore the exact shard bytes
+before restarting it. OrionGeno admission can reuse that ZIP without
+expanding its shards, including when no models are admitted.
+
 Successful predictor input FASTAs and expanded genome GFF are omitted by
 default. Small records retain coordinates, input-sequence hashes, donor/query
 mappings and search flags. Compact rescue writes interval GFF and logs into

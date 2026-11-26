@@ -33,6 +33,38 @@ def _copy(source, destination, expected, *, verify_destination=True):
         raise ValueError('Model-store changed during immutable copying')
 
 
+def copy_legacy_model_archive(source, destination, frozen_key):
+    """Copy a migrated legacy store into a new publication in native ZIP layout."""
+    root, source_store = store._layout(source)
+    if not os.path.lexists(source_store / store.LEGACY_SHARD_ARCHIVE):
+        return False
+    manifest, manifest_sha = store._manifest(source_store)
+    archive = store._legacy_archive(source_store, manifest)
+    if archive is None:
+        return False
+    store._check_key(source, frozen_key, 'models')
+    receipt, _ = store._receipt(root)
+    prefix = source_store.relative_to(root).as_posix()
+    members = {f'{prefix}/{name}': sha for name, sha in manifest['files'].items()}
+    if (receipt['files'].get(f'{prefix}/manifest.json') != manifest_sha
+            or any(receipt['files'].get(name) != sha for name, sha in members.items())):
+        raise ValueError('Copy input is not bound to its producer receipt')
+
+    target = Path(destination) / 'model_store'
+    target.mkdir()
+    with store.verified_legacy_shards(root, members) as archived:
+        for name, sha in members.items():
+            if name not in archived:
+                _copy(store._member(root, name), Path(destination) / name, sha)
+        hashes = manifest['files']
+        hashes[store.SHARD_ARCHIVE] = store._digest(archive)
+        _copy(archive, target / store.SHARD_ARCHIVE, hashes[store.SHARD_ARCHIVE])
+    manifest['shard_archive'] = store.SHARD_ARCHIVE
+    (target / 'manifest.json').write_bytes(store._json(manifest) + b'\n')
+    store._check_key(source, frozen_key, 'models')
+    return True
+
+
 def _same_json_value(a, b):
     """Compare immutable values before the final envelope's JSON validation.
 
@@ -107,7 +139,7 @@ def _initialize_patch_shards(source, archive):
     store._initialize_worker_shards(source, archive)
 
 
-def _patch_shards(source, output, shards, manifest, ordered_changes, changes, workers, shard_root):
+def _patch_shards(source, output, shards, manifest, ordered_changes, changes, workers, shard_root, archive):
     def args(shard, first, last):
         name = shard['path']
         return (source, output, shard, manifest['files'][name], manifest['codec'],
@@ -120,7 +152,7 @@ def _patch_shards(source, output, shards, manifest, ordered_changes, changes, wo
     pending = deque()
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn'),
                              initializer=_initialize_patch_shards,
-                             initargs=(source, manifest.get('shard_archive'))) as pool:
+                             initargs=(source, archive)) as pool:
         for shard, first, last in shards:
             pending.append(pool.submit(_patch_shard, *args(shard, first, last)))
             if len(pending) >= workers * 2:
@@ -208,7 +240,12 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
     members[f'{prefix}/manifest.json'] = manifest_sha
     if any(receipt['files'].get(name) != sha for name, sha in members.items()):
         raise ValueError('Patch input is not bound to its producer receipt')
-    stats = {name: store._stat(store._member(root, name)) for name in members}
+    legacy_archive = store._legacy_archive(source_store, manifest)
+    archived = store._legacy_members(root, source_store, manifest, members) if legacy_archive else {}
+    paths = {name: store._member(root, name) for name in members if name not in archived}
+    if legacy_archive:
+        paths[legacy_archive.name] = legacy_archive
+    stats = {name: store._stat(path) for name, path in paths.items()}
     count = manifest['counts']['models']
     if any(type(i) is not int or not 0 <= i < count for i in changes):
         raise ValueError('Patch ordinal outside the original model publication')
@@ -247,13 +284,14 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                 affected_shards.append((shard, first, last))
 
         archive = temporary / store.SHARD_ARCHIVE
-        with store._open_shards(source_store, manifest) as shard_root:
+        with store._open_shards(source_store, manifest, legacy_archive=legacy_archive) as shard_root:
             with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_STORED) as handle:
                 for path in unchanged:
                     name = str(path.relative_to(source_store))
                     store._copy_zip_member(shard_root / name, handle, name, manifest['files'][name])
             normalized.update(_patch_shards(source_store, temporary, affected_shards, manifest,
-                                            ordered_changes, changes, publication_workers, shard_root))
+                                            ordered_changes, changes, publication_workers, shard_root,
+                                            legacy_archive.name if legacy_archive else manifest.get('shard_archive')))
         deferred = {}
         _copy(source_store / 'bodies.sqlite', temporary / 'bodies.sqlite', manifest['files']['bodies.sqlite'])
         body_db = store.sqlite3.connect(temporary / 'bodies.sqlite')
@@ -339,7 +377,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         (temporary / 'manifest.json').write_bytes(store._json(output) + b'\n')
         store._check_key(source, key, 'models')
         if (store._receipt(root)[1] != receipt_sha
-                or any(store._stat(store._member(root, name)) != before for name, before in stats.items())):
+                or any(path.is_symlink() or store._stat(path) != stats[name] for name, path in paths.items())):
             raise ValueError('Patch source generation changed during publication')
         store._sync_files((p for p in temporary.rglob('*') if p.is_file()), publication_workers)
         os.rename(temporary, target)

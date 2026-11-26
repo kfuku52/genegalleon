@@ -6,9 +6,11 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import stat
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 if __package__:
@@ -68,6 +70,12 @@ def archive_closed_store(worker):
     A changed receipt is a new publication generation. The caller must exclude
     both writers and consumers that pin the previous receipt before proceeding.
     """
+    with _locked_store(worker) as (root, directory):
+        return _archive_locked(root, directory)
+
+
+@contextmanager
+def _locked_store(worker):
     logical = Path(worker)
     if logical.is_symlink():
         raise ValueError("The Rescue worker must be a real directory")
@@ -80,7 +88,7 @@ def archive_closed_store(worker):
         raise ValueError("Unsafe model-store maintenance lock")
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        return _archive_locked(root, directory)
+        yield root, directory
 
 
 def _archive_locked(root, directory):
@@ -88,6 +96,8 @@ def _archive_locked(root, directory):
     receipt_path = root / "receipt.json"
     saved = directory / RECOVERY
     archive = directory / store.SHARD_ARCHIVE
+    if os.path.lexists(directory / store.LEGACY_SHARD_ARCHIVE):
+        raise ValueError("Restore the receipt-preserving archive before replacing its generation")
     current_manifest, current_receipt = map(_file_bytes, (manifest_path, receipt_path))
     if saved.exists() or saved.is_symlink():
         recovery = json.loads(_file_bytes(saved))
@@ -168,12 +178,76 @@ def _archive_locked(root, directory):
             "original_receipt_sha256": _sha(original_receipt), "receipt_sha256": _sha(packed_receipt)}
 
 
+def move_receipted_shards(worker, expected_receipt, *, restore=False):
+    """Change storage for a pinned worker without changing its producer identity."""
+    with _locked_store(worker) as (root, directory):
+        receipt, receipt_sha = store._receipt(root)
+        manifest, manifest_sha = store._manifest(directory)
+        shards, files = manifest["shards"], manifest["files"]
+        if (receipt_sha != expected_receipt or "shard_archive" in manifest or not shards
+                or receipt["files"].get("model_store/manifest.json") != manifest_sha
+                or any(receipt["files"].get(f"model_store/{name}") != sha for name, sha in files.items())
+                or any("/" in item["path"] or not item["path"].endswith((".jsonl.gz", ".jsonl.zst"))
+                       for item in shards)):
+            raise ValueError("Expected the exact receipted loose-shard publication")
+        archive = store._legacy_archive(directory, manifest)
+        identities = {}
+        if archive is None:
+            if restore:
+                store.verify_model_store_key(root, store.frozen_model_store_key(root))
+                return {"worker": str(root), "restored": 0, "receipt_sha256": receipt_sha}
+            archive = directory / store.LEGACY_SHARD_ARCHIVE
+            identities = _build_archive(directory, archive, shards, files)
+        archive_identity = store._stat(archive)
+
+        with store.verified_legacy_shards(root, receipt["files"]), \
+                store._open_shards(directory, manifest, legacy_archive=archive) as zipped:
+            changed = 0
+            for shard in shards:
+                name = shard["path"]
+                path = directory / name
+                if store._stat(store._member(directory, archive.name)) != archive_identity:
+                    raise ValueError("Migration ZIP changed")
+                if os.path.lexists(path):
+                    path = store._member(directory, name)
+                    current = store._stat(path)
+                    if ((identities.get(name) != current and store._digest(path) != files[name])
+                            or store._stat(path) != current):
+                        raise ValueError(f"Loose shard changed: {name}")
+                    if not restore:
+                        path.unlink()
+                        changed += 1
+                elif restore:
+                    with tempfile.NamedTemporaryFile(dir=directory) as handle, (zipped / name).open("rb") as source:
+                        shutil.copyfileobj(source, handle, length=1024 * 1024)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                        if store._digest(handle.name) != files[name]:
+                            raise ValueError(f"Restored shard differs: {name}")
+                        os.link(handle.name, path)
+                    changed += 1
+                elif name in identities:
+                    raise ValueError(f"Loose shard disappeared during migration: {name}")
+            store._sync_directory(directory)
+        if restore:
+            archive.unlink()
+            store._sync_directory(directory)
+        return {"worker": str(root), "shards": len(shards), "restored" if restore else "removed": changed,
+                "receipt_sha256": receipt_sha, "manifest_sha256": manifest_sha}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("worker", type=Path)
     parser.add_argument("--writers-and-receipt-consumers-stopped", action="store_true", required=True)
+    parser.add_argument("--preserve-receipt", metavar="RECEIPT_SHA256")
+    parser.add_argument("--restore-loose-shards", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(archive_closed_store(args.worker), sort_keys=True))
+    if args.restore_loose_shards and args.preserve_receipt is None:
+        parser.error("--restore-loose-shards requires --preserve-receipt")
+    result = (archive_closed_store(args.worker) if args.preserve_receipt is None
+              else move_receipted_shards(args.worker, args.preserve_receipt, restore=args.restore_loose_shards))
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":
