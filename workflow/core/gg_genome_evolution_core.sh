@@ -6579,16 +6579,32 @@ if [[ ${run_cafe} -eq 1 ]]; then
     --optional-output "family_plots=${dir_cafe}/each_family_plot"
     --optional-output "summary_plots=$(dirname "${file_cafe_summary_all_pdf}")"
   )
+  cafe_family_plot_dir="${dir_cafe}/each_family_plot"
+  cafe_plot_storage_args=(--kind cafe_plots --root "${dir_cafe}"
+    --producer-lock-token "${genome_evolution_storage_lock_token}")
+  if [[ -d "${cafe_family_plot_dir}" && -e "${cafe_family_plot_dir}.zip" ]]; then
+    # Finish a conversion interrupted after publication of its recovery form.
+    cafe_plot_conversion=pack
+    if [[ "${genome_evolution_storage_mode}" != zip ]]; then
+      cafe_plot_conversion=materialize
+    fi
+    python "${gg_support_dir}/directory_output_store.py" "${cafe_plot_conversion}" "${cafe_plot_storage_args[@]}" || exit $?
+  fi
   gg_artifact_prepare_stage cafe_plots_needs_update run_cafe "${cafe_plot_provenance_args[@]}" || exit $?
+  # Resolve the previous ZIP before replacing a stale publication or requesting raw output.
+  if [[ -e "${cafe_family_plot_dir}.zip" || -L "${cafe_family_plot_dir}.zip" ]] && \
+      [[ ${cafe_plots_needs_update} -eq 1 || "${genome_evolution_storage_mode}" != zip ]]; then
+    python "${gg_support_dir}/directory_output_store.py" materialize "${cafe_plot_storage_args[@]}" || exit $?
+  fi
   if [[ ${cafe_plots_needs_update} -eq 1 ]]; then
-    if [[ -d "${dir_cafe}/each_family_plot" ]]; then
-      rm -rf -- "${dir_cafe}/each_family_plot"
+    if [[ -d "${cafe_family_plot_dir}" ]]; then
+      rm -rf -- "${cafe_family_plot_dir}"
     fi
     if ! Rscript "${gg_support_dir}/cafe_plot_each_family.r" \
       "${dir_cafe_output}/Gamma_asr.tre" \
       "${dir_cafe_output}/Gamma_count.tab" \
       "${dir_cafe_output}/Gamma_change.tab" \
-      "${dir_cafe}/each_family_plot" \
+      "${cafe_family_plot_dir}" \
       "${GG_TASK_CPUS}"; then
       echo "Error in Rscript cafe_plot_each_family.r. Exiting."
       exit 1
@@ -6603,9 +6619,14 @@ if [[ ${run_cafe} -eq 1 ]]; then
     Rscript "${gg_support_dir}/cafe_plot_branch_id.r" \
       "${dir_cafe_output}/Gamma_asr.tre" \
       "$(dirname "${file_cafe_summary_all_pdf}")"
-    gg_artifact_record "${cafe_plot_provenance_args[@]}"
   else
     echo "CAFE plots verified. Skipping rendering."
+  fi
+  if [[ "${genome_evolution_storage_mode}" == zip ]]; then
+    python "${gg_support_dir}/directory_output_store.py" pack "${cafe_plot_storage_args[@]}" || exit $?
+  fi
+  if [[ ${cafe_plots_needs_update} -eq 1 ]]; then
+    gg_artifact_record "${cafe_plot_provenance_args[@]}"
   fi
   if [[ ${cafe_needs_update} -eq 1 || ${cafe_inference_needs_update} -eq 1 || ${cafe_plots_needs_update} -eq 1 || ! -s "${genome_evolution_provenance_dir}/cafe.json" ]]; then
     gg_artifact_record "${cafe_provenance_args[@]}"

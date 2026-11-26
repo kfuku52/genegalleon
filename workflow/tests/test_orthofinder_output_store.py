@@ -161,7 +161,7 @@ def test_unsafe_sources_and_conflicts_never_delete_input(tmp_path, problem):
     assert source.exists() or source.is_symlink() or (source.parent / "new-empty-directory").exists()
 
 
-@pytest.mark.parametrize("problem", ["sha", "traversal", "duplicate"])
+@pytest.mark.parametrize("problem", ["sha", "traversal", "duplicate", "noncanonical", "missing-parent", "collision"])
 def test_zip_payload_and_manifest_validation(tmp_path, problem):
     root = result(tmp_path)
     STORE.convert(root, directories=["Orthogroup_Sequences"])
@@ -173,8 +173,16 @@ def test_zip_payload_and_manifest_validation(tmp_path, problem):
         data["files"][0]["sha256"] = "0" * 64
     elif problem == "traversal":
         data["files"][0]["path"] = "../escape"
-    else:
+    elif problem == "duplicate":
         data["files"].append(data["files"][0])
+    elif problem == "collision":
+        row = data["files"][0]
+        data["directories"].append({key: row[key] for key in ("path", "mode", "mtime_ns")})
+    else:
+        row = data["files"][0]
+        original = row["path"]
+        row["path"] = ("empty//" if problem == "noncanonical" else "empty/missing/") + original
+        values["Orthogroup_Sequences/" + row["path"]] = values.pop("Orthogroup_Sequences/" + original)
     values[STORE.MANIFEST] = json.dumps(data).encode()
     with zipfile.ZipFile(path, "w") as archive:
         for name, value in values.items():

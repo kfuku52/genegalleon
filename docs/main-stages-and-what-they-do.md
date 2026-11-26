@@ -731,6 +731,10 @@ Notable defaults:
   plots while reusing the verified fit. The existing `cafe.json` aggregate
   contract is retained. Complete older fits follow `artifact_legacy_policy`;
   changed inputs or incomplete fits still obey the normal strict stale policy.
+  The default genome-evolution ZIP storage mode groups the family PDF and SVG
+  plots in `cafe/each_family_plot.zip`. Summary plots and the inference tables
+  remain directly accessible. Use the existing raw storage mode to work with
+  individual files at their original paths.
 - `orthogroup_copy_number/orthogroup_copy_number.tsv` is a shared
   species-by-orthogroup copy-number matrix used by CAFE and by trait PGLS,
 - `run_orthogroup_copy_number_trait_selection=1` optionally runs exploratory joint

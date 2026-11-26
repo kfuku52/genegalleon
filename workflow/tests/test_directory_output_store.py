@@ -104,6 +104,20 @@ def test_generic_pack_conflict_keeps_both_forms_and_rejects_unmanaged_scope(tmp_
         DIRECTORY.convert(root, kind="hgt", directories=["busco_mafft"])
 
 
+def test_cafe_family_plots_share_the_genome_evolution_producer_lock(tmp_path):
+    genome_evolution = tmp_path / "genome_evolution"
+    root = genome_evolution / "cafe"
+    _fixture(root, ["each_family_plot"])
+    lock = STORE.lock_path(genome_evolution, "genome_evolution")
+    assert STORE.lock_path(root, "cafe_plots") == lock
+    # The wrong token must neither publish an archive nor remove a plot.
+    with namespace_lock(lock, exclusive=True):
+        with pytest.raises(STORE.OrthoFinderStorageError, match="Invalid parent producer lock ownership"):
+            DIRECTORY.convert(root, kind="cafe_plots", producer_lock_token="0" * 32)
+    assert (root / "each_family_plot/result.tsv").is_file()
+    assert not (root / "each_family_plot.zip").exists()
+
+
 def _function(core, name):
     text = (REPO / "workflow/core" / core).read_text()
     return name + "() {" + text.split(name + "() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"

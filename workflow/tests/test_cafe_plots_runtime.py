@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ stopifnot(identical(norm_key(character()), character()), identical(get_species(c
     assert p.returncode == 0, p.stdout + p.stderr
 
 
-def run_cafe_stage(tmp_path):
+def run_cafe_stage(tmp_path, *, storage=None):
     core = (ROOT / "workflow/core/gg_genome_evolution_core.sh").read_text()
     stage = "task='CAFE analysis'" + core.split("task='CAFE analysis'", 1)[1].split('task="Orthogroup copy-number trait PGLS"', 1)[0]
     cafe = tmp_path / "output/cafe"
@@ -79,8 +80,16 @@ def run_cafe_stage(tmp_path):
            "file_cafe_summary_all_pdf": str(cafe / "summary_plot/summary_all.pdf"),
            "file_cafe_summary_significant_pdf": str(cafe / "summary_plot/summary_significant.pdf"),
            "n_gamma_cats_cafe": "4", "GG_TASK_CPUS": "2", "run_cafe": "1"}
+    env.pop("GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE", None)
+    if storage is not None:
+        env["GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE"] = storage
     prelude = f'''set -euo pipefail
+source {shlex.quote(str(ROOT / "workflow/gg_common_params.sh"))}
 source {shlex.quote(str(SUPPORT / "gg_util/06_workspace_validation.sh"))}
+genome_evolution_storage_mode="$GG_COMMON_GENOME_EVOLUTION_OUTPUT_STORAGE"
+lock_file={shlex.quote(str(tmp_path / ".gg_output_directory_storage.lock"))}
+genome_evolution_storage_lock_token=$(python "$gg_support_dir/shared_namespace_lock.py" acquire-exclusive "$lock_file" --owner-pid "$$")
+trap 'python "$gg_support_dir/shared_namespace_lock.py" release-exclusive "$lock_file" --token "$genome_evolution_storage_lock_token"' EXIT
 # Only transport/logging are isolated; use the real contract builder and validator.
 gg_artifact_server_request() {{ local script=$1; shift; python "$script" "$@"; }}
 gg_step_start() {{ :; }}
@@ -104,12 +113,27 @@ def test_native_stage_reuses_completed_fit_and_checks_contract_on_replay(tmp_pat
     inference = json.loads((tmp_path / "provenance/cafe.inference.json").read_text())
     assert inference["parameters"] == {"gamma_categories": "4", "pvalue": "0.05"}
     assert inference["diagnostics"]["provenance_state"] == "adopted_legacy_output_without_rebuild"
+    family_plots = native.parent / "each_family_plot"
+    archive = family_plots.with_suffix(".zip")
+    assert not family_plots.exists()
+    with zipfile.ZipFile(archive) as packed:
+        pdf = packed.read("each_family_plot/OG000001.pdf")
+        assert pdf.startswith(b"%PDF")
     saved = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file() and not p.name.endswith(".lock")}
     replay = run_cafe_stage(tmp_path)
     assert replay.returncode == 0, replay.stdout + replay.stderr
     assert "Skipping CAFE run" in replay.stdout and "Skipping rendering" in replay.stdout
     assert '"validated": true' not in replay.stdout
     assert all(p.read_bytes() == data for p, data in saved.items())
+
+    raw = run_cafe_stage(tmp_path, storage="raw")
+    assert raw.returncode == 0, raw.stdout + raw.stderr
+    assert "Skipping rendering" in raw.stdout
+    assert (family_plots / "OG000001.pdf").read_bytes() == pdf and not archive.exists()
+    repacked = run_cafe_stage(tmp_path)
+    assert repacked.returncode == 0, repacked.stdout + repacked.stderr
+    assert "Skipping rendering" in repacked.stdout
+    assert archive.is_file() and not family_plots.exists()
 
     # A changed input remains a hard stop, with the saved inference untouched.
     copies = tmp_path / "copies.tsv"

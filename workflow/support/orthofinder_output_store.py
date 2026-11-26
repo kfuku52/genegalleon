@@ -66,6 +66,8 @@ def _physical(path):
 def lock_path(root, namespace="orthofinder"):
     if namespace == "orthofinder":
         return root.parent / ".gg_orthofinder_storage.lock"
+    if namespace == "cafe_plots":
+        return lock_path(root.parent, "genome_evolution")
     _require(namespace in DIRECTORY_SCOPES, "Invalid storage namespace")
     return root.parent / (".gg_" + root.name + "_directory_storage.lock")
 
@@ -186,6 +188,12 @@ def require_completed(root):
     )
 
 
+def _canonical_member_path(value):
+    return isinstance(value, str) and "\\" not in value and all(
+        part not in ("", ".", "..") for part in value.split("/")
+    )
+
+
 def _manifest(archive, path, name):
     marker, manifest_name = _format(name)
     _require(archive.comment == marker + name.encode(), f"Unmarked directory archive: {path}")
@@ -207,16 +215,13 @@ def _manifest(archive, path, name):
             type(row.get("mode")) is int and 0 <= row["mode"] <= 0o7777 and type(row.get("mtime_ns")) is int,
             "Invalid member metadata",
         )
+    files = set()
     expected = {manifest_name}
     prefix = Path(name).name
     for record in records:
-        relative = PurePosixPath(record["path"])
+        relative = record["path"]
         _require(
-            relative.parts
-            and not relative.is_absolute()
-            and ".." not in relative.parts
-            and relative.as_posix() == record["path"]
-            and "\\" not in record["path"],
+            _canonical_member_path(relative),
             f"Unsafe manifest path: {record['path']}",
         )
         _require(
@@ -227,9 +232,10 @@ def _manifest(archive, path, name):
             "Invalid manifest content",
         )
         bytes.fromhex(record["sha256"])
-        full = prefix + "/" + record["path"]
+        full = prefix + "/" + relative
         _require(full not in expected, f"Duplicate manifest member: {full}")
         expected.add(full)
+        files.add(relative)
         info = archive.getinfo(full)
         _require(
             not info.is_dir()
@@ -239,24 +245,18 @@ def _manifest(archive, path, name):
         )
     directory_names = set()
     for record in data["directories"]:
-        relative = PurePosixPath(record["path"])
+        relative = record["path"]
         _require(
-            not relative.is_absolute()
-            and ".." not in relative.parts
-            and relative.as_posix() == record["path"]
-            and "\\" not in record["path"],
+            relative == "." or _canonical_member_path(relative),
             "Unsafe directory metadata",
         )
-        _require(record["path"] not in directory_names, "Duplicate directory metadata")
-        directory_names.add(record["path"])
+        _require(relative not in directory_names, "Duplicate directory metadata")
+        directory_names.add(relative)
     _require("." in directory_names, "Missing root directory metadata")
-    files = {record["path"] for record in records}
-    for relative in [PurePosixPath(value) for value in files | directory_names]:
-        _require(
-            relative.as_posix() not in files or relative.as_posix() not in directory_names, "File/directory collision"
-        )
-        for parent in relative.parents:
-            _require(parent.as_posix() in directory_names, "Missing parent directory metadata")
+    _require(files.isdisjoint(directory_names), "File/directory collision")
+    # Checking the immediate parent of every directory also checks the full ancestor chain.
+    for relative in files | directory_names:
+        _require((relative.rpartition("/")[0] or ".") in directory_names, "Missing parent directory metadata")
     _require({info.filename for info in infos} == expected, f"Unexpected ZIP members: {path}")
     return data
 
@@ -268,17 +268,19 @@ def archive_records(root, name, *, deep=False, progress_callback=None):
     try:
         with zipfile.ZipFile(path) as archive:
             data = _manifest(archive, path, name)
-            for index, record in enumerate(data["files"]):
-                if deep:
-                    with archive.open(Path(name).name + "/" + record["path"]) as handle:
-                        actual = _hash(handle)
-                    _require(
-                        actual == (record["sha256"], record["size"]), f"SHA256 mismatch in {path}: {record['path']}"
-                    )
-                if progress_callback is not None:
-                    progress_callback(
-                        phase="verifying", directory=name, files_completed=index + 1, files_total=len(data["files"])
-                    )
+            if deep or progress_callback is not None:
+                prefix = Path(name).name + "/"
+                for index, record in enumerate(data["files"]):
+                    if deep:
+                        with archive.open(prefix + record["path"]) as handle:
+                            actual = _hash(handle)
+                        _require(
+                            actual == (record["sha256"], record["size"]), f"SHA256 mismatch in {path}: {record['path']}"
+                        )
+                    if progress_callback is not None:
+                        progress_callback(
+                            phase="verifying", directory=name, files_completed=index + 1, files_total=len(data["files"])
+                        )
     except (KeyError, ValueError, TypeError, OSError, zipfile.BadZipFile) as exc:
         raise OrthoFinderStorageError(f"Invalid OrthoFinder archive {path}: {exc}") from exc
     _require(before == _signature(path.stat()), f"Archive changed during read: {path}")
@@ -627,15 +629,17 @@ def _logical_members(archive, path, name):
     data = _manifest(archive, path, name)
     rows = []
     directories = {record["path"] for record in data["directories"]}
+    member_prefix = Path(name).name + "/"
     for record in data["files"]:
-        relative = PurePosixPath(record["path"])
-        member = Path(name).name + "/" + record["path"]
-        if relative.name not in ARCHIVE_BASENAMES:
+        relative = record["path"]
+        member = member_prefix + relative
+        if relative.rpartition("/")[2] not in ARCHIVE_BASENAMES:
             with archive.open(member) as handle:
                 actual = _hash(handle)
             _require(actual == (record["sha256"], record["size"]), f"SHA256 mismatch in {path}: {relative}")
             rows.append(record)
             continue
+        relative = PurePosixPath(relative)
         # Nested ZIPs need seeking. Spool only these members, with a bounded
         # in-memory buffer; large nested archives spill into caller-local scratch.
         with tempfile.SpooledTemporaryFile(max_size=8 * CHUNK) as spool:

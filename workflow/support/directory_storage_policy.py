@@ -18,6 +18,7 @@ DIRECTORY_SCOPES = {
         "busco_reconciliation_dna", "busco_reconciliation_pep", "busco_rooted_txt_dna",
         "busco_rooted_txt_pep", "busco_rooted_nwk_dna", "busco_rooted_nwk_pep",
     ),
+    "cafe_plots": ("each_family_plot",),
     "hgt": ("tree_plot", "tree_plot_input", "artifact_provenance", "trait_focus"),
     "analyses": (
         "inputs/families", "rendered_global/families", "rendered_gall/families",
