@@ -43,8 +43,16 @@ read_plot_input = function(path, kind) {
   }
   value = if (kind == 'domain') {
     read.table(path, sep='\t', header=TRUE, stringsAsFactors=FALSE, comment.char='', quote='', check.name=FALSE)
+  } else if (kind == 'clipkit_mask') {
+    log = read.table(path, header=FALSE, colClasses=c('integer', 'character', 'NULL', 'NULL'),
+                     comment.char='', quote='', fill=FALSE)
+    if (!identical(log[[1]], seq_len(nrow(log))) || anyNA(log[[2]]) ||
+        any(!log[[2]] %in% c('keep', 'trim'))) {
+      stop('Invalid ClipKIT keep/trim log: ', path)
+    }
+    log[[2]] == 'keep'
   } else {
-    ape::read.FASTA(path, type='DNA')
+    ape::read.FASTA(path, type=if (kind == 'protein_alignment') 'AA' else 'DNA')
   }
   if (!identical(before, plot_input_signature(path))) stop('Plot input changed while reading: ', path)
   assign(key, list(path=path, signature=before, value=value), envir=plot_input_cache)
@@ -206,7 +214,8 @@ cat('long_branch_display settings:',
 # domain: protein domains. format = domain,INFILE,SHOW_INTRONS (yes|no; default no)
 # INFILE: rpsblast output tsv. When running rpsblast, please specify -outfmt "6 std qlen slen stitle"
 
-# alignment: nucleotide or amino acid alignment. format = alignment,INFILE
+# alignment: nucleotide or amino acid alignment.
+# format = alignment,INFILE,UNTRIMMED,cds|protein,CLIPKIT_LOG
 # INFILE: alignment fasta file. This can be trimmed or untrimmed alignment.
 
 # fimo: promoter cis-element plot. format = fimo,PROMOTER_BP,QVALUE
@@ -415,17 +424,27 @@ for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
     alignment_params = strsplit(col, ',')[[1]]
     path_seqs = alignment_params[2]
     path_seqs_untrim = ifelse(length(alignment_params) >= 3, alignment_params[3], NA)
+    sequence_mode = if (length(alignment_params) >= 4L) alignment_params[4] else 'cds'
+    sequence_mode = match.arg(sequence_mode, c('cds', 'protein'))
+    alignment_kind = if (sequence_mode == 'protein') 'protein_alignment' else 'alignment'
+    clipkit_log = if (length(alignment_params) >= 5L) alignment_params[5] else ''
+    clipkit_mask = NULL
+    if (nzchar(clipkit_log)) {
+      if (!file.exists(clipkit_log)) stop('ClipKIT log not found: ', clipkit_log)
+      clipkit_mask = read_plot_input(clipkit_log, 'clipkit_mask')
+    }
     if (file.exists(path_seqs)) {
-      seqs = read_plot_input(path_seqs, 'alignment')
+      seqs = read_plot_input(path_seqs, alignment_kind)
     } else {
       seqs = NULL
     }
     if (!is.na(path_seqs_untrim) && file.exists(path_seqs_untrim)) {
-      seqs_untrim = read_plot_input(path_seqs_untrim, 'alignment')
+      seqs_untrim = read_plot_input(path_seqs_untrim, alignment_kind)
     } else {
       seqs_untrim = NULL
     }
-    g = add_alignment_column(g, args, seqs, df_rpsblast = df_rpsblast, seqs_untrim = seqs_untrim)
+    g = add_alignment_column(g, args, seqs, df_rpsblast = df_rpsblast, seqs_untrim = seqs_untrim,
+                             sequence_mode=sequence_mode, clipkit_mask=clipkit_mask)
   } else if (grepl('^fimo', col)) {
     xmax = as.integer(strsplit(col, ',')[[1]][2])
     qvalue = as.numeric(strsplit(col, ',')[[1]][3])

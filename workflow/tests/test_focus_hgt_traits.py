@@ -1079,6 +1079,52 @@ def test_renderer_argument_record_roundtrip_and_exact_alignment_tip_validation(t
     assert (tmp_path/'materialized/rpsblast/OG1_rpsblast.tsv').read_bytes() == domain.read_bytes()
 
 
+@pytest.mark.parametrize("valid_log", [True, False])
+def test_legacy_alignment_replay_uses_verified_clipkit_coordinates(tmp_path, valid_log):
+    import gzip
+    import hashlib
+    import json
+
+    from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+    from gene_tree_plot_config import record, replay
+
+    root = tmp_path / "families"
+    trimmed = "clipkit/OG1_cds.clipkit.fa.gz"
+    untrimmed = "mafft/OG1_cds.aln.fa.gz"
+    log = "clipkit_log/OG1_cds.clipkit.log"
+    evidence = root / "artifact_provenance"
+    record(evidence / "OG1.tree_plot.args.json", root,
+           [f"--panel1=alignment,{root / trimmed},{root / untrimmed}"], "taxonomic")
+    for path, raw in ((trimmed, gzip.compress(b">A_gene\nFA\n")),
+                      (untrimmed, gzip.compress(b">A_gene\nFAFA\n")),
+                      (log, b"1 trim x 0\n2 trim x 0\n3 keep x 0\n4 keep x 0\n")):
+        (root / path).parent.mkdir(exist_ok=True)
+        (root / path).write_bytes(raw)
+
+    def entry(label, path):
+        return dict(label=label, scope="logical", path=path,
+                    sha256=hashlib.sha256((root / path).read_bytes()).hexdigest())
+
+    (evidence / "OG1.tree_plot.json").write_text(json.dumps({
+        "parameters": {"sequence_similarity_mode": "protein"},
+    }))
+    log_entry = dict(entry("clipkit_log", log), state="present")
+    if not valid_log:
+        log_entry["sha256"] = "0" * 64
+    (evidence / "OG1.clipkit.json").write_text(json.dumps({
+        "family_id": "OG1", "step": "clipkit",
+        "inputs": [entry("untrimmed_alignment", untrimmed)],
+        "outputs": [entry("clipkit", trimmed)],
+        "optional_outputs": [log_entry],
+    }))
+    dest = tmp_path / "render"
+    store = GeneFamilyOutputStore(root)
+    with read_only_observation(), store.read_snapshot():
+        result = replay(store, "OG1", [], dest, {})
+    expected = str(dest / log) if valid_log else ""
+    assert result["arguments"][0] == f"--panel1=alignment,{dest / trimmed},{dest / untrimmed},protein,{expected}"
+
+
 def test_context_page_has_shared_scale_and_preserves_missing_coordinates(tmp_path):
     from focus_hgt_context import GenomeCoordinates, render_context
     from pypdf import PdfReader

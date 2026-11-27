@@ -849,6 +849,11 @@ Practical interpretation:
   expansions or expression shifts,
 - structural panels summarize domains, introns, signal peptides, and membrane
   predictions on the same row order as the tree tips,
+- the alignment panel uses amino-acid columns in protein mode and nucleotide
+  columns in CDS mode. Domain hits are projected through the retained columns
+  in the ClipKIT log. If an exact column map is unavailable for a changed
+  alignment, for example after `cdskit hammer` removes additional CDS columns,
+  the affected rows show alignment coverage without domain colors,
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
 

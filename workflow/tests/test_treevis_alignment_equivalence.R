@@ -6,7 +6,7 @@ pdf(NULL)
 # searching or a sweep. Keep the public plot constructor and its private helper
 # independently testable without exporting a new API.
 pointwise_keys <- function(is_atgc, mapped_untrim_nt, df_seq_rps,
-                           domain_rank, non_domain_fill, key_sep) {
+                           domain_rank, non_domain_fill, key_sep, sites_per_residue = 3L) {
   active <- vector('list', length(is_atgc))
   if (nrow(df_seq_rps)) {
     qlen <- suppressWarnings(as.integer(df_seq_rps[1, 'qlen']))
@@ -19,8 +19,8 @@ pointwise_keys <- function(is_atgc, mapped_untrim_nt, df_seq_rps,
         first <- suppressWarnings(as.integer(df_seq_rps[k, 'qstart']))
         last <- suppressWarnings(as.integer(df_seq_rps[k, 'qend']))
         if (!is.finite(first) || !is.finite(last)) next
-        first <- max(1L, (first - 1L) * 3L + 1L)
-        last <- min(qlen * 3L, last * 3L)
+        first <- max(1L, (first - 1L) * sites_per_residue + 1L)
+        last <- min(qlen * sites_per_residue, last * sites_per_residue)
         if (first > last) next
         hit <- which(is_atgc & !is.na(mapped_untrim_nt) &
                        mapped_untrim_nt >= first & mapped_untrim_nt <= last)
@@ -115,7 +115,7 @@ g <- list(tree = ggtree::ggtree(ape::read.tree(text = '((a:1,b:1):1,c:2,d:2);'))
 args <- list(font_size = 6, margins = rep(0, 4))
 seqs <- list(a = c(rep('aa', 3), '04', rep('aa', 6)), b = rep('04', 10),
              c = c(rep('cc', 9), '04'))
-untrim <- list(a = rep('aa', 9), b = rep('04', 12), c = rep('aa', 9))
+untrim <- seqs
 rps <- data.frame(qacc = c('a', 'a', 'a', 'a', 'a', 'c', 'absent'),
                   sacc = paste0('PF', 1:7),
                   stitle = c('entry,A', 'entry,B', 'entry,A', 'entry,Z', 'entry,',
@@ -150,10 +150,49 @@ check_plot(list(a = character(0), b = rep('04', 10)), untrim, rps)
 p <- check_plot(seqs, untrim, rps[1:2, ])$alignment
 rect <- p$layers[[2]]$data
 a <- rect[as.character(rect$label) == 'a', ]
-stopifnot(identical(a$xmin, c(0, 4, 4, 7)), identical(a$xmax, c(2, 6, 6, 9)),
+stopifnot(identical(a$xmin, c(0, 4, 4, 7)), identical(a$xmax, c(3, 7, 7, 10)),
           identical(as.character(a$fill), c('A', 'A', 'B', 'B')),
           identical(a$split_index, c(1L, 1L, 2L, 1L)),
           identical(a$split_total, c(1L, 2L, 2L, 1L)),
           identical(a$ymax[2], a$ymin[3]),
           identical(levels(rect$label), as.character(get_df_tip(g$tree)$label)))
+
+# With repeated residues, the kept columns distinguish the actual source
+# positions from an equally valid-looking subsequence match.
+protein <- charToRaw('FAFA-YQ')
+protein_mask <- c(FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE)
+aa <- list(a = protein[protein_mask])
+protein_hit <- data.frame(qacc='a', sacc='PF1', stitle='entry,Kinase',
+                          qstart=5L, qend=5L, qlen=6L, slen=6L)
+protein_plot <- alignment_add(g, args, aa, protein_hit, list(a=protein),
+                              sequence_mode='protein', clipkit_mask=protein_mask)$alignment
+aa_rect <- protein_plot$layers[[2]]$data
+domain_rect <- aa_rect[aa_rect$fill == 'Kinase', , drop=FALSE]
+stopifnot(identical(protein_plot$labels$x, 'Alignment position (aa)'),
+          nrow(domain_rect) == 1L, domain_rect$xmin == 3, domain_rect$xmax == 4,
+          all(aa_rect$xmax > aa_rect$xmin))
+arranged <- treevis_layout_mm(list(alignment=protein_plot), height_mm=85)$plots$alignment
+axis_title <- arranged$grobs[[match('xlab-b', arranged$layout$name)]]
+stopifnot(any(vapply(axis_title$children,
+                    function(child) identical(child$label, 'Alignment\nposition (aa)'), logical(1))))
+without_map <- alignment_add(g, args, aa, protein_hit, list(a=protein),
+                             sequence_mode='protein')$alignment
+stopifnot(!any(without_map$layers[[2]]$data$fill == 'Kinase'))
+cds <- list(a = rep('aa', 9))
+cds_hit <- transform(protein_hit, qstart=1L, qend=1L, qlen=3L)
+cds_after_clipkit <- alignment_add(g, args, list(a=cds$a[1:3]), cds_hit, cds,
+                                   clipkit_mask=c(rep(TRUE, 6), rep(FALSE, 3)))$alignment
+cds_rect <- cds_after_clipkit$layers[[2]]$data
+stopifnot(identical(cds_after_clipkit$labels$x, 'Alignment position (nt)'),
+          nrow(cds_rect) == 1L, cds_rect$xmin == 0, cds_rect$xmax == 3,
+          as.character(cds_rect$fill) == '__non_domain__')
+bad_mask <- c(TRUE, TRUE, FALSE, TRUE, TRUE, FALSE, TRUE)
+stopifnot(inherits(try(alignment_add(g, args, aa, protein_hit, list(a=protein),
+                                   sequence_mode='protein', clipkit_mask=bad_mask), silent=TRUE), 'try-error'))
+
+kept_columns <- if (nzchar(source_path)) implementation$clipkit_kept_columns else
+  getFromNamespace('clipkit_kept_columns', 'genegalleon.treevis')
+stopifnot(identical(kept_columns(rep(c(TRUE,FALSE,TRUE),each=3L), 9, 6), c(1:3,7:9)),
+          identical(kept_columns(c(TRUE,FALSE,TRUE), 3, 2), c(1L,3L)),
+          inherits(try(kept_columns(c(TRUE,FALSE,TRUE), 9, 6), silent=TRUE), 'try-error'))
 cat('Alignment interval, point-membership and complete ggplot layer equivalence tests passed.\n')

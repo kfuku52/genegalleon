@@ -201,6 +201,36 @@ def replay(store, family, rows, destination, sources):
         ]
         parser = p("species_label_parser", "taxonomic")
         source = "saved_gg_gene_evolution_parameter_provenance"
+    for i, arg in enumerate(arguments):
+        if not re.match(r"--panel\d+=alignment,", arg):
+            continue
+        option, panel = arg.split("=", 1)
+        fields = panel.split(",")
+        if len(fields) >= 4:
+            continue
+        fields += [""] * (3 - len(fields))
+        mode = parameters.get("sequence_similarity_mode", "cds")
+        log_path = ""
+        # An older argument snapshot did not record the column map. Reuse a
+        # ClipKIT log only if its producer receipt describes these exact bytes.
+        if fields[1].startswith(str(destination / "clipkit") + "/"):
+            saved = read("artifact_provenance", family + ".clipkit.json")
+            if saved:
+                clipkit = json.loads(saved)
+                entries = {item["label"]: item for key in ("inputs", "outputs", "optional_outputs")
+                           for item in clipkit.get(key, []) if item.get("scope") == "logical"}
+                pair = [entries.get(label, {}) for label in ("clipkit", "untrimmed_alignment")]
+                log = entries.get("clipkit_log", {})
+                if (clipkit.get("step") == "clipkit" and clipkit.get("family_id") == family
+                        and all(str(destination / item.get("path", "")) == path
+                                and sources.get(item.get("path")) == item.get("sha256")
+                                and bool(item.get("sha256"))
+                                for item, path in zip(pair, fields[1:3], strict=True))
+                        and log.get("state") == "present"):
+                    candidate = materialize(log["path"])
+                    if sources.get(log["path"]) == log.get("sha256"):
+                        log_path = candidate
+        arguments[i] = option + "=" + ",".join([*fields, mode, log_path])
     disabled_panels = ('synteny_similarity', 'sequence_similarity')
     arguments = [arg for arg in arguments if not arg.startswith("--stat_branch=")
                  and not (re.match(r"--panel\d+=", arg) and arg.split('=', 1)[1].split(',', 1)[0] in disabled_panels)]

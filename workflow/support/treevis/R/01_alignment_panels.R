@@ -1,5 +1,6 @@
 .alignment_domain_keys <- function(is_atgc, mapped_untrim_nt, df_seq_rps,
-                                   domain_rank, non_domain_fill, key_sep) {
+                                   domain_rank, non_domain_fill, key_sep,
+                                   sites_per_residue = 3L) {
   key_vec <- rep(NA_character_, length(is_atgc))
   valid_idx <- which(is_atgc)
   key_vec[valid_idx] <- non_domain_fill
@@ -8,15 +9,14 @@
   seq_aa_len <- suppressWarnings(as.integer(df_seq_rps[1, 'qlen']))
   if (is.na(seq_aa_len) || seq_aa_len <= 0) return(key_vec)
 
-  # The existing trimmed-to-untrimmed mapper yields strictly increasing
-  # non-gap nucleotide indices. Find the inclusive hit endpoints in that
-  # vector, then update domain sets only at interval boundaries.
+  # RPS-BLAST reports amino acid coordinates. Project their inclusive
+  # endpoints in the units of the untrimmed alignment before the interval sweep.
   qstart <- suppressWarnings(as.integer(df_seq_rps[['qstart']]))
   qend <- suppressWarnings(as.integer(df_seq_rps[['qend']]))
   keep <- which(is.finite(qstart) & is.finite(qend))
   if (!length(keep)) return(key_vec)
-  nt_start <- pmax(1L, (qstart[keep] - 1L) * 3L + 1L)
-  nt_end <- pmin(seq_aa_len * 3L, qend[keep] * 3L)
+  nt_start <- pmax(1L, (qstart[keep] - 1L) * sites_per_residue + 1L)
+  nt_end <- pmin(seq_aa_len * sites_per_residue, qend[keep] * sites_per_residue)
   # As in the pointwise implementation, overflowing integer coordinates are
   # invalid input, rather than domain-free sequence positions.
   if (anyNA(nt_start) || anyNA(nt_end)) stop('missing value where TRUE/FALSE needed')
@@ -69,13 +69,53 @@
   key_vec
 }
 
-add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_untrim = NULL) {
+alignment_gap <- function(sequence, mode) {
+  if (is.raw(sequence)) {
+    if (mode == 'protein') charToRaw('-') else as.raw(4L)
+  } else {
+    if (mode == 'protein') '-' else '04'
+  }
+}
+
+alignment_residue_map <- function(sequence, untrimmed, kept, gap) {
+  if (is.null(untrimmed)) return(NULL)
+  if (is.null(kept)) {
+    if (!identical(sequence, untrimmed)) return(NULL)
+    # The cumulative count is only needed over the displayed alignment.
+    mapping <- cumsum(sequence != gap)
+    mapping[sequence == gap] <- NA_integer_
+    return(mapping)
+  }
+  if (!identical(sequence, untrimmed[kept])) {
+    stop('ClipKIT keep columns do not reproduce the trimmed alignment')
+  }
+  nongap <- which(sequence != gap)
+  mapping <- rep(NA_integer_, length(sequence))
+  # Search for kept residues in the original nongap positions. Their index
+  # gives the original residue coordinate without a full-width integer scan.
+  mapping[nongap] <- match(kept[nongap], which(untrimmed != gap))
+  mapping
+}
+
+clipkit_kept_columns <- function(mask, untrimmed_width, trimmed_width) {
+  if (is.null(mask)) return(NULL)
+  if (length(mask) != untrimmed_width || sum(mask) != trimmed_width) {
+    stop('ClipKIT log dimensions do not match the alignments')
+  }
+  which(mask)
+}
+
+add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_untrim = NULL,
+                                 sequence_mode = 'cds', clipkit_mask = NULL) {
   cat(as.character(Sys.time()), 'Adding alignment column.\n')
   
   if (is.null(seqs)) {
     cat('Input alignment is empty. Alignment column will not be added.\n')
     return(g)
   }
+  sequence_mode <- match.arg(sequence_mode, c('cds', 'protein'))
+  sites_per_residue <- if (sequence_mode == 'protein') 1L else 3L
+  axis_unit <- if (sequence_mode == 'protein') 'aa' else 'nt'
   
   df_tip <- get_df_tip(g[['tree']])
   seq_names <- names(seqs)
@@ -89,6 +129,22 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
   }
   df_rps = prepare_df_rps_for_plot(df_rpsblast, df_tip)
   has_untrimmed_alignment = !is.null(seqs_untrim) && length(seqs_untrim) > 0
+  kept <- NULL
+  if (!is.null(clipkit_mask)) {
+    trimmed_width <- unique(lengths(seqs))
+    untrimmed_width <- unique(lengths(seqs_untrim))
+    if (length(trimmed_width) != 1L || length(untrimmed_width) != 1L) {
+      stop('ClipKIT mapping requires rectangular trimmed and untrimmed alignments')
+    }
+    # In CDS mode the workflow may drop more codons with cdskit after
+    # ClipKIT. That log alone cannot establish coordinates for the final MSA.
+    if (sequence_mode == 'cds' && length(clipkit_mask) == untrimmed_width &&
+        sum(clipkit_mask) > trimmed_width) {
+      cat('The CDS alignment was shortened after ClipKIT. Its log does not map the final alignment.\n')
+    } else {
+      kept <- clipkit_kept_columns(clipkit_mask, untrimmed_width, trimmed_width)
+    }
+  }
   domain_fill_colors = c()
   if (nrow(df_rps) > 0 && has_untrimmed_alignment) {
     df_domain = get_df_domain(df_rps)
@@ -101,36 +157,39 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
   domain_rank = setNames(seq_along(names(domain_fill_colors)), names(domain_fill_colors))
   
   key_sep <- ':::DOMAINSEP:::'
-  rps_rows <- split(seq_len(nrow(df_rps)), as.character(df_rps[['qacc']]))
+  hit_rows <- which(is.finite(df_rps[['qstart']]) & is.finite(df_rps[['qend']]) &
+                      !is.na(df_rps[['sacc']]) & nzchar(df_rps[['sacc']]))
+  rps_rows <- split(hit_rows, as.character(df_rps[['qacc']][hit_rows]))
 
   # We'll accumulate data frames for each tip in a list (faster than rbind in a loop)
   out_list <- vector("list", length(df_tip[['label']]))
   idx <- 1
   xmax_val <- 0
+  unmapped_domains <- 0L
   
   for (seqname in df_tip[['label']]) {
     seqname <- as.character(seqname)
     # Get the sequence associated with this tip
-    seq_vec <- as.character(seqs[[seqname]])
+    seq_vec <- seqs[[seqname]]
     if (length(seq_vec) == 0) next
-    xmax_val <- max(xmax_val, length(seq_vec) - 1)
+    xmax_val <- max(xmax_val, length(seq_vec))
     
-    # Convert to a logical vector: TRUE if not '04', FALSE if '04'
-    is_atgc <- (seq_vec != '04')
-    mapped_untrim_nt = rep(NA_integer_, length(seq_vec))
-    if (!is.null(seqs_untrim) && !is.null(seqs_untrim[[seqname]])) {
-      seq_untrim_vec = as.character(seqs_untrim[[seqname]])
-      if (length(seq_untrim_vec) > 0) {
-        mapped_untrim_nt <- map_trimmed_to_untrimmed_nongap_index(seq_vec, seq_untrim_vec)
-      }
-    }
+    gap <- alignment_gap(seq_vec, sequence_mode)
+    is_atgc <- seq_vec != gap
 
     df_seq_rps <- df_rps[integer(0), , drop = FALSE]
-    if (nrow(df_rps) > 0 && has_untrimmed_alignment) {
-      df_seq_rps <- df_rps[rps_rows[[seqname]], c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
+    mapped_untrim_nt <- NULL
+    if (has_untrimmed_alignment && length(rps_rows[[seqname]])) {
+      mapped_untrim_nt <- alignment_residue_map(seq_vec, seqs_untrim[[seqname]], kept, gap)
+      if (!is.null(mapped_untrim_nt)) {
+        df_seq_rps <- df_rps[rps_rows[[seqname]], c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
+      } else {
+        unmapped_domains <- unmapped_domains + 1L
+      }
     }
+    if (is.null(mapped_untrim_nt)) mapped_untrim_nt <- rep(NA_integer_, length(seq_vec))
     key_vec <- .alignment_domain_keys(is_atgc, mapped_untrim_nt, df_seq_rps,
-                                      domain_rank, non_domain_fill, key_sep)
+                                      domain_rank, non_domain_fill, key_sep, sites_per_residue)
 
     # Run-length encode
     runs <- rle(key_vec)
@@ -149,7 +208,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
       n_split <- lengths(labels_run)
       df_local <- data.frame(
         xmin = rep(run_starts[keep_idx] - 1, n_split),
-        xmax = rep(run_ends[keep_idx] - 1, n_split),
+        xmax = rep(as.numeric(run_ends[keep_idx]), n_split),
         label = rep(seqname, sum(n_split)),
         fill = unlist(labels_run, use.names = FALSE),
         split_index = sequence(n_split),
@@ -163,6 +222,10 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     
     out_list[[idx]] <- df_local
     idx <- idx + 1
+  }
+  if (unmapped_domains) {
+    cat('Exact alignment columns unavailable for', unmapped_domains,
+        'tip(s) with domain records. Showing alignment coverage without their domain colors.\n')
   }
   
   # Combine all individual tip data frames
@@ -199,7 +262,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     ) +
     scale_fill_manual(values = fill_colors, guide = 'none') +
     xlim(0, xmax_val) +
-    xlab('Alignment position (nt)') +
+    xlab(paste0('Alignment position (', axis_unit, ')')) +
     theme_minimal(base_size = args[['font_size']]) +
     theme(
       axis.title.y        = element_blank(),

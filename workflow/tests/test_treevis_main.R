@@ -1169,7 +1169,7 @@ seqs_trim_map <- list(
   g1 = c("04", "04", "04", "03", "03", "03", "01", "02", "03")
 )
 seqs_untrim_map <- list(
-  g1 = c("01", "01", "01", "02", "02", "02", "03", "03", "03", "01", "02", "03")
+  g1 = c("04", "04", "04", "01", "01", "01", "02", "02", "02", "03", "03", "03", "01", "02", "03")
 )
 df_rps_map <- data.frame(
   qacc = c("g1"),
@@ -1190,7 +1190,9 @@ fills_no_map <- as.character(g_no_map$alignment$layers[[2]]$data$fill)
 if (any(fills_no_map == "Domain_X")) {
   stop("add_alignment_column should not color domains when seqs_untrim is unavailable.")
 }
-g_with_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map, df_rpsblast = df_rps_map, seqs_untrim = seqs_untrim_map)
+g_with_map <- add_alignment_column(g_align_map_in, args_align, seqs_trim_map,
+                                   df_rpsblast = df_rps_map, seqs_untrim = seqs_untrim_map,
+                                   clipkit_mask = c(rep(TRUE, 3), rep(FALSE, 6), rep(TRUE, 6)))
 fills_with_map <- as.character(g_with_map$alignment$layers[[2]]$data$fill)
 if (any(fills_with_map == "Domain_X")) {
   stop("add_alignment_column should not color a domain if the domain codon was removed during trimming.")
@@ -1212,7 +1214,7 @@ df_rps_overlap <- data.frame(
 )
 g_overlap <- add_alignment_column(g_align_map_in, args_align, seqs_overlap, df_rpsblast = df_rps_overlap, seqs_untrim = seqs_overlap)
 rect_overlap <- g_overlap$alignment$layers[[2]]$data
-overlap_block <- rect_overlap[rect_overlap$xmin == 3 & rect_overlap$xmax == 5, , drop = FALSE]
+overlap_block <- rect_overlap[rect_overlap$xmin == 3 & rect_overlap$xmax == 6, , drop = FALSE]
 if (nrow(overlap_block) != 2) {
   stop("add_alignment_column should create two stacked rectangles for an overlap block.")
 }
@@ -1252,7 +1254,7 @@ gap_plot <- add_alignment_column(gap_tree,args_align,gap_sequences,
 gap_rectangles <- gap_plot$layers[[2]]$data
 focal_rectangles <- gap_rectangles[gap_rectangles$label == 'g1',,drop=FALSE]
 stopifnot(identical(focal_rectangles$xmin,c(0,3,4,4,6,6,9)),
-          identical(focal_rectangles$xmax,c(1,3,4,4,7,7,11)),
+          identical(focal_rectangles$xmax,c(2,4,5,5,8,8,12)),
           identical(as.character(focal_rectangles$fill),
                     c('Domain_A','Domain_A','Domain_A','Domain_B','Domain_A','Domain_B','Domain_B')),
           identical(focal_rectangles$split_index,c(1L,1L,1L,2L,1L,2L,1L)),

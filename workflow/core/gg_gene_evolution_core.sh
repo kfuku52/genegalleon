@@ -6932,6 +6932,7 @@ tree_plot_provenance_args=(
   --output "tree_plot_arguments=${file_og_tree_plot_args}"
   --input "tree_plot_argument_recorder=${gg_support_dir}/gene_tree_plot_config.py"
   --parameter "renderer_argument_contract=1"
+  --parameter "alignment_panel_coordinates=typed-clipkit-v1"
   --parameter "column_layout=physical-mm-v3-square-expression"
   --parameter "tip_label_layout=compact-species-v1"
   --parameter "localization_layout=multilabel-vector-heatmap-v5-legacy-squares"
@@ -6995,6 +6996,7 @@ tree_plot_input_files=(
   "${file_og_fimo}"
   "${file_og_promoter_fasta}"
 )
+gg_artifact_add_input_if_present tree_plot_provenance_args "alignment_clipkit_log" "${file_og_clipkit_log}"
 for ((i = 2; i <= csubst_max_arity; i++)); do
   csubst_cb_varname="file_og_csubst_cb_${i}"
   if [[ -n "${!csubst_cb_varname:-}" ]]; then
@@ -7105,8 +7107,14 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     "--panel${panel_index}=domain,${file_og_rpsblast}"
   )
   panel_index=$((panel_index + 1))
+  alignment_clipkit_log=""
+  if [[ "${panel11_trimmed_aln}" == "${file_og_clipkit}" &&
+        "${panel11_untrimmed_aln}" == "${file_og_untrimmed_aln_analysis}" &&
+        -s "${file_og_clipkit_log}" ]]; then
+    alignment_clipkit_log="${file_og_clipkit_log}"
+  fi
   tree_plot_panel_args+=(
-    "--panel${panel_index}=alignment,${panel11_trimmed_aln},${panel11_untrimmed_aln}"
+    "--panel${panel_index}=alignment,${panel11_trimmed_aln},${panel11_untrimmed_aln},${input_sequence_mode},${alignment_clipkit_log}"
   )
   panel_index=$((panel_index + 1))
   tree_plot_panel_args+=(

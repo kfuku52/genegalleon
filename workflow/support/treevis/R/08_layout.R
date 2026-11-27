@@ -81,8 +81,11 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
     if ('domain' %in% names(g) && !is.null(attr(g[['domain']], 'treevis_width_mm'))) {
         domain_width = max(domain_width, attr(g[['domain']], 'treevis_width_mm'))
     }
-    annotation_titles = c(domain='Amino acid\nposition (aa)',
-        alignment='Alignment\nposition (nt)', fimo='Promoter motif\nposition (kb)')
+    annotation_titles = c(domain='Amino acid\nposition (aa)', fimo='Promoter motif\nposition (kb)')
+    alignment_title = g[['alignment']]$labels$x
+    if (is.character(alignment_title) && length(alignment_title) == 1L) {
+        annotation_titles['alignment'] = sub('^Alignment ', 'Alignment\n', alignment_title)
+    }
     for (name in intersect(names(annotation_titles), names(g))) {
         g[[name]] = g[[name]] + ggplot2::labs(x=annotation_titles[[name]]) +
             ggplot2::guides(x=ggplot2::guide_axis(check.overlap=TRUE))
