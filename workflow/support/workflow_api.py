@@ -465,7 +465,10 @@ def verify_many(requests, *, producer_support_root=None):
     identities = [(str(item.root.resolve()), item.family_id) for item in requests]
     if len(set(identities)) != len(identities):
         raise ValueError("duplicate family in verification batch")
-    with provenance.digest_observation() as memo:
+    verify_modes = {_archive_verification(item) for item in requests}
+    if len(verify_modes) != 1:
+        raise ValueError("verification batch must use one archive verification mode")
+    with provenance.digest_observation(trust_published_zip=verify_modes == {"tracked"}) as memo:
         results = []
         options = {"producer_support_root": producer_support_root} if producer_support_root is not None else {}
         for item in requests:
@@ -531,6 +534,16 @@ def reuse_plan(args):
                     coverage="required-steps-only; unverified requires investigation, not automatic regeneration")
 
 
+ARCHIVE_VERIFICATION_MODES = ("tracked", "sha256")
+
+
+def _archive_verification(args):
+    mode = getattr(args, "archive_verification", "sha256")
+    if mode not in ARCHIVE_VERIFICATION_MODES:
+        raise ValueError("invalid archive verification mode")
+    return mode
+
+
 def verify(args, *, producer_support_root=None):
     if producer_support_root is not None and not args.attempt:
         raise ValueError("Historical producer support requires an exact recorded attempt")
@@ -547,7 +560,7 @@ def verify(args, *, producer_support_root=None):
     observation = argparse.Namespace(logical_root=root, family_id=args.family_id)
     with (provenance.runtime_support_root(producer_support_root or Path(__file__).resolve().parent),
           store.read_snapshot(), provenance.logical_observation(observation, store),
-          provenance.digest_observation() as memo):
+          provenance.digest_observation(trust_published_zip=_archive_verification(args) == "tracked") as memo):
         return _verify(args, store, memo, producer_support_root=producer_support_root)
 
 
@@ -701,6 +714,8 @@ def main(argv=None):
         verify_parser.add_argument("--require-step", action="append", required=True)
         verify_parser.add_argument("--manifest", action="append", default=[], metavar="STEP=FILENAME",
                                    help="override a required step's FAMILY.STEP.json name within artifact_provenance")
+        verify_parser.add_argument("--archive-verification", choices=ARCHIVE_VERIFICATION_MODES, default="sha256",
+                                   help="reuse publisher-verified ZIP digests for unchanged shards or read every member")
         verify_parser.add_argument("--include-queue", action="store_true", help="also inventory the root-wide archive queue")
         verify_parser.add_argument("--attempt", type=Path, help="require matching successful-attempt contract receipts")
         verify_parser.add_argument("--recorded-workspace-root", type=Path,

@@ -1332,3 +1332,47 @@ def test_frozen_family_statistics_verifies_retained_packed_manifest(tmp_path):
     assert provenance.dispatch([*audit, "--producer-support-dir", str(producer_support)]) == provenance.CURRENT
     producer_file.write_bytes(b"changed mounted producer\n")
     assert provenance.dispatch([*audit, "--producer-support-dir", str(producer_support)]) == provenance.STALE_STOP
+
+
+@pytest.mark.parametrize("change", [None, "old-index", "same-size-rewrite"])
+def test_tracked_zip_reuses_only_a_published_inode(tmp_path, monkeypatch, change):
+    family = "OG0000001"
+    logical = tmp_path / "families"
+    name = f"{family}.txt"
+    source = logical / "results" / name
+    source.parent.mkdir(parents=True)
+    data = b"published artifact\n" * 1024
+    source.write_bytes(data)
+    store_module.archive_completed_outputs(
+        logical, "orthogroup", {family}, lambda _: family,
+        include_incomplete=True, compression="store",
+    )
+    store = GeneFamilyOutputStore(logical, family_filter=family)
+    artifact = store.source_artifact("results", name)
+    assert artifact.zip_signature == store_module._stat_signature(artifact.zip_path)
+    if change == "old-index":
+        from dataclasses import replace
+        monkeypatch.setattr(store, "source_artifact", lambda *_: replace(artifact, zip_signature=None))
+    elif change == "same-size-rewrite":
+        path = artifact.zip_path
+        before = path.stat()
+        data_in_zip = path.read_bytes()
+        assert data in data_in_zip
+        path.write_bytes(data_in_zip.replace(data, b"?" * len(data), 1))
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert store_module._stat_signature(path) != artifact.zip_signature
+    entry = {"scope": "logical", "path": f"results/{name}"}
+    if change is None:
+        def disallow_open(*_, **__):
+            pytest.fail("tracked verification decompressed a verified ZIP member")
+        monkeypatch.setattr(store, "open_binary", disallow_open)
+    memo = AuditDigests(trust_published_zip=True)
+    if change == "same-size-rewrite":
+        from zipfile import BadZipFile
+        with pytest.raises(BadZipFile, match="Bad CRC"):
+            provenance.audit_entry_digest(entry, store, logical, tmp_path, memo)
+        return
+    result = provenance.audit_entry_digest(entry, store, logical, tmp_path, memo)
+    memo.validate()
+    assert result == (hashlib.sha256(data).hexdigest(), len(data))
+    assert memo.metrics()["digest_revalidation_reads"] == int(change == "old-index")

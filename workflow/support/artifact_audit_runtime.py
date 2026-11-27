@@ -127,11 +127,12 @@ class AuditDigests:
     """Reuse one hash per source, rehash unique sources before publication.
 
     File/ZIP identities are checked on every reuse; directory membership and all
-    source identities are rechecked before accepting the complete audit. No
-    digest from an earlier audit is accepted instead of reading a file here.
+    source identities are rechecked before accepting the complete audit.
+    Published ZIP evidence is opt-in and distinct from the transient hash cache.
     """
-    def __init__(self, limit=250000, *, spill_guards=False, spill_digests=False):
+    def __init__(self, limit=250000, *, spill_guards=False, spill_digests=False, trust_published_zip=False):
         self.limit = limit
+        self.trust_published_zip = trust_published_zip
         self.spill_guards = spill_guards
         self.spill_digests = spill_digests
         self.digest_memory_limit = min(limit, 16384) if spill_digests else limit

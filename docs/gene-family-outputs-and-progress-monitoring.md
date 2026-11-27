@@ -237,6 +237,14 @@ sources and changes during a read snapshot remain errors.
 
 ## ZIP-backed storage
 
+The workflow API's `verify --archive-verification tracked` accepts a member
+digest recorded by the archive publisher when the resolved ZIP has the same
+device, inode, size, modification time and change time. It still checks the
+logical member, producing attempt and live overrides, and revalidates the
+source identities before returning. Legacy ZIP indexes and a changed physical
+ZIP take the full content-read path. `--archive-verification sha256` requests
+full content reads and remains the standalone default.
+
 `workflow/gg_common_params.sh` defaults
 `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` to `zip`. The alternative value
 `files` preserves the historical one-file-per-artifact layout for newly

@@ -192,6 +192,7 @@ class Artifact:
     mtime_ns: Optional[int] = None
     family_id: Optional[str] = None
     metadata_path: Optional[Path] = None
+    zip_signature: Optional[Tuple[int, int, int, int, int]] = None
 
     @property
     def is_live(self) -> bool:
@@ -1193,12 +1194,17 @@ class GeneFamilyOutputStore:
         _safe_logical_path(subdir, name)
         zip_path = _indexed_zip_path(self.root, self.payload_root, subdir,
                                      str(record["zip_path"]), str(record.get("zip_location", "active")))
+        zip_signature = record.get("zip_signature")
+        if zip_signature is not None and (not isinstance(zip_signature, list) or len(zip_signature) != 5
+                                          or any(type(value) is not int for value in zip_signature)):
+            raise ArchiveStoreError(f"Archive index contains an invalid ZIP identity: {logical_path}")
         artifact = Artifact(
             logical_path=logical_path,
             subdir=subdir,
             name=name,
             generation=int(record["generation"]),
             zip_path=zip_path,
+            zip_signature=tuple(zip_signature) if zip_signature is not None else None,
             member_name=str(record["member_name"]),
             size=int(record["size"]),
             crc=int(record["crc"]),
@@ -2623,7 +2629,7 @@ class GeneFamilyOutputStore:
             zip_name = relative_zip.as_posix()
         else:
             zip_name, zip_location = _path_record
-        return {
+        result = {
             "zip_path": zip_name,
             "zip_location": zip_location,
             "member_name": artifact.member_name,
@@ -2634,6 +2640,9 @@ class GeneFamilyOutputStore:
             "mtime_ns": artifact.mtime_ns,
             "family_id": artifact.family_id,
         }
+        if artifact.zip_signature is not None:
+            result["zip_signature"] = list(artifact.zip_signature)
+        return result
 
     def _write_index(
         self,
@@ -3586,6 +3595,7 @@ def _archive_chunk(
     finally:
         if partial_path.exists():
             partial_path.unlink()
+    zip_signature = _stat_signature(final_path)
     artifacts = [
         Artifact(
             logical_path=str(member["logical_path"]),
@@ -3593,6 +3603,7 @@ def _archive_chunk(
             name=str(member["logical_path"]).split("/", 1)[1],
             generation=int(member["generation"]),
             zip_path=final_path,
+            zip_signature=zip_signature,
             member_name=str(member["member_name"]),
             size=int(member["size"]),
             crc=int(member["crc"]),
@@ -3731,6 +3742,7 @@ def _compact_artifact_chunk(
     finally:
         if partial_path.exists():
             partial_path.unlink()
+    zip_signature = _stat_signature(final_path)
     compacted = [
         Artifact(
             logical_path=str(member["logical_path"]),
@@ -3738,6 +3750,7 @@ def _compact_artifact_chunk(
             name=str(member["logical_path"]).split("/", 1)[1],
             generation=int(member["generation"]),
             zip_path=final_path,
+            zip_signature=zip_signature,
             member_name=str(member["member_name"]),
             size=int(member["size"]),
             crc=int(member["crc"]),
@@ -4222,8 +4235,12 @@ def drain_archive_queue(
                                 stats["zip_bytes"] += destination.stat().st_size
                                 if subdir not in updated:
                                     updated[subdir] = dict(store._load_subdir_artifacts(subdir))
-                                updated[subdir].update({artifact.logical_path: replace(artifact, zip_path=destination)
-                                                       for artifact in artifacts})
+                                zip_signature = _stat_signature(destination)
+                                updated[subdir].update({
+                                    artifact.logical_path: replace(artifact, zip_path=destination,
+                                                                   zip_signature=zip_signature)
+                                    for artifact in artifacts
+                                })
                                 signatures.update(source_signatures)
                             if updated:
                                 store._merge_index_subdirs_uncommitted(
@@ -6687,6 +6704,7 @@ def repair_archive_index(
             for zip_index, zip_path in enumerate(physical_paths):
                 if zip_path.is_symlink() or zip_path.parent.is_symlink():
                     raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {zip_path}")
+                zip_signature = _stat_signature(zip_path)
                 manifest = store._read_manifest(zip_path)
                 mode_by_path[zip_path.resolve()] = str(manifest["mode"])
                 manifest_generation = int(manifest["generation"])
@@ -6728,6 +6746,7 @@ def repair_archive_index(
                             name=name,
                             generation=int(member.get("generation", manifest["generation"])),
                             zip_path=zip_path,
+                            zip_signature=zip_signature,
                             member_name=member_name,
                             size=int(member["size"]),
                             crc=int(member["crc"]),
@@ -6744,6 +6763,8 @@ def repair_archive_index(
                         if previous is None or candidate_rank > rebuilt_ranks[logical_path]:
                             rebuilt[logical_path] = artifact
                             rebuilt_ranks[logical_path] = candidate_rank
+                if not _signature_matches(zip_path, zip_signature):
+                    raise ArchiveStoreError(f"ZIP changed while repairing the index: {zip_path}")
                 processed_zip_bytes += physical_sizes[zip_path]
                 if progress_callback is not None:
                     progress_callback(

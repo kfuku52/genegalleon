@@ -131,17 +131,19 @@ def _runtime_path(path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def digest_observation(*, workers=1, progress=None, spill_guards=False):
-    """Share content reads within one query, then rehash every unique source.
+def digest_observation(*, workers=1, progress=None, spill_guards=False, trust_published_zip=None):
+    """Share verification work and finish all content and source guards.
 
-    Never reuse persistent digests as read-only verification evidence. Nested
-    preflights share the outer query's final content fence, not an older result.
+    A tracked audit may trust only the digest published for the same ZIP inode
+    and timestamps. All other content is rehashed. An explicit strict audit
+    must retain its own digest scope inside a tracked audit.
     """
     existing = _DIGEST_OBSERVATION.get()
-    if existing is not None:
+    if existing is not None and (not existing.trust_published_zip or trust_published_zip is not False):
         yield existing
         return
-    memo = AuditDigests(spill_guards=spill_guards, spill_digests=spill_guards)
+    memo = AuditDigests(spill_guards=spill_guards, spill_digests=spill_guards,
+                        trust_published_zip=trust_published_zip is True)
     previous = digest_cache()
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
@@ -1657,7 +1659,17 @@ def _audit_artifact_identity(artifact):
     if artifact is None:
         return None
     path = artifact.live_path or artifact.zip_path or artifact.metadata_path
-    return (str(path), audit_signature(path), artifact.member_name, artifact.generation)
+    return (str(path), audit_signature(path), artifact.member_name, artifact.generation,
+            artifact.sha256, artifact.size, artifact.zip_signature)
+
+
+def _published_zip_digest(artifact, identity):
+    if artifact.zip_signature is None or artifact.zip_path is None or artifact.sha256 is None:
+        return None
+    dev, inode, mode, size, mtime, ctime = identity[1]
+    if stat.S_ISREG(mode) and (dev, inode, size, mtime, ctime) == artifact.zip_signature:
+        return artifact.sha256, artifact.size
+    return None
 
 
 def _audit_manifest_identity(store, name):
@@ -1692,6 +1704,8 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
                        scoped_digest_reader(lambda: _audit_artifact_identity(store.source_artifact(*pure.parts))))
             if artifact is None:
                 raise FileNotFoundError(logical_root / raw)
+            if memo.trust_published_zip and (published := _published_zip_digest(artifact, identity)) is not None:
+                return published
             return memo.read(artifact.live_path or artifact.zip_path or artifact.metadata_path,
                              scoped_digest_reader(lambda: audit_entry_digest(entry, store, logical_root, workspace_root)),
                              member=artifact.member_name)
