@@ -47,7 +47,7 @@ amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-
 amalgkit_gsa_download_max_concurrency="${amalgkit_gsa_download_max_concurrency:-2}"
 amalgkit_use_prefetched_reads="${amalgkit_use_prefetched_reads:-0}"
 amalgkit_read_source_format="${amalgkit_read_source_format:-auto}"
-amalgkit_allow_read_format_fallback="${amalgkit_allow_read_format_fallback:-no}"
+amalgkit_allow_read_format_fallback="${amalgkit_allow_read_format_fallback:-auto}"
 amalgkit_quant_backend="${amalgkit_quant_backend:-auto}"
 amalgkit_oarfish_seq_tech="${amalgkit_oarfish_seq_tech:-auto}"
 amalgkit_oarfish_options="${amalgkit_oarfish_options:-}"
@@ -2355,7 +2355,7 @@ run_amalgkit_getfastq_attempt() {
     --ncbi yes
     --ena yes
     --read_source_format "${amalgkit_read_source_format:-auto}"
-    --allow_read_format_fallback "${amalgkit_allow_read_format_fallback:-no}"
+    --allow_read_format_fallback "${amalgkit_allow_read_format_fallback:-auto}"
     --redo no
   )
   if [[ -n "${amalgkit_gsa_download_max_concurrency:-}" ]]; then
@@ -3940,9 +3940,13 @@ case "${amalgkit_read_source_format}" in
   *) echo "amalgkit_read_source_format must be auto, fastq, or sra." >&2; exit 1 ;;
 esac
 case "${amalgkit_allow_read_format_fallback}" in
-  yes|no) ;;
-  *) echo "amalgkit_allow_read_format_fallback must be yes or no." >&2; exit 1 ;;
+  auto|yes|no) ;;
+  *) echo "amalgkit_allow_read_format_fallback must be auto, yes, or no." >&2; exit 1 ;;
 esac
+if [[ "${amalgkit_read_source_format}" != auto && "${amalgkit_allow_read_format_fallback}" == auto ]]; then
+  # Explicit format selections use the same acquisition and cache policy as no.
+  amalgkit_allow_read_format_fallback=no
+fi
 if [[ "${amalgkit_use_prefetched_reads}" != 0 && "${amalgkit_use_prefetched_reads}" != 1 ]]; then
   echo "amalgkit_use_prefetched_reads must be 0 or 1." >&2
   exit 1

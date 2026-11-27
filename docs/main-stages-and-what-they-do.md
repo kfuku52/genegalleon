@@ -332,6 +332,12 @@ missing inputs so the relevant download can be retried independently. Retain
 the raw cache until the matching work has passed verification. Pass
 `--read_source_format` and `--allow_read_format_fallback` directly to
 AMALGKIT in the download job to select the same acquisition policy.
+GeneGalleon defaults to `auto` for both options. When a full-quality SRA
+archive is definitively unavailable, AMALGKIT can use the matching ENA FASTQ
+after checking the run layout, file sizes, and checksums. Verified runs remain
+reusable on retry. Set `GG_TRANSCRIPTOME_AMALGKIT_ALLOW_READ_FORMAT_FALLBACK=no`
+to retain the initial acquisition policy or `yes` to allow broader format
+switching before processing.
 GeneGalleon passes the verified digests to AMALGKIT after freshly binding its
 getfastq outputs or revalidating them on a retry. If publishing the FASTQs
 changes their file identities, GeneGalleon checks the published bytes before

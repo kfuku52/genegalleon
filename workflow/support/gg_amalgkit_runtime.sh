@@ -33,6 +33,9 @@ gg_amalgkit_getfastq_options() {
     --rrna_filter_jobs --rrna_filter_chunk_spots --rrna_filter_memory_limit
     --read_source_format --allow_read_format_fallback
   )
+  if [[ ${amalgkit_allow_read_format_fallback:-auto} == auto ]]; then
+    options+=('--allow_read_format_fallback auto|yes|no')
+  fi
   if [[ -n ${amalgkit_gsa_download_max_concurrency:-} ]]; then
     options+=(--gsa_download_max_concurrency)
   fi

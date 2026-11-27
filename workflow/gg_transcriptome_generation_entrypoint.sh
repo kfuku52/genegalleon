@@ -145,7 +145,7 @@ amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-
 amalgkit_gsa_download_max_concurrency="${amalgkit_gsa_download_max_concurrency:-2}" # Concurrent GSA transfers sharing the workspace downloads lock directory. Set 0 or auto to disable throttling.
 amalgkit_use_prefetched_reads=0 # Set 1 to process an existing amalgkit raw-read cache in the workspace downloads directory.
 amalgkit_read_source_format="${amalgkit_read_source_format:-auto}" # {auto,fastq,sra}; initial public read format.
-amalgkit_allow_read_format_fallback="${amalgkit_allow_read_format_fallback:-no}" # {yes,no}; allow AMALGKIT to switch formats for a run before processing it.
+amalgkit_allow_read_format_fallback="${amalgkit_allow_read_format_fallback:-auto}" # {auto,yes,no}; auto uses verified ENA FASTQ when normal SRA is unavailable.
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 

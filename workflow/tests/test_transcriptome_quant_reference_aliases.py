@@ -1052,3 +1052,30 @@ fi
     )
     assert result.returncode == (1 if substitute else 0), result.stderr
     assert counts.read_text().splitlines() == ["getfastq --help"]
+
+
+@pytest.mark.parametrize(("mode", "choices", "expected"), [
+    ("auto", "auto|yes|no", 0),
+    ("auto", "yes|no", 1),
+    ("no", "yes|no", 0),
+])
+def test_amalgkit_option_probe_requires_auto_fallback_support(mode, choices, expected):
+    command = r'''
+source "$1"
+amalgkit_allow_read_format_fallback=$2
+choices=$3
+required=()
+gg_amalgkit_getfastq_options required
+amalgkit() {
+    printf '%s\n' --download_lock_dir --ncbi_metadata_max_concurrency --ncbi_download_max_concurrency \
+        --aws_download_max_concurrency --gcp_download_max_concurrency --ena --rrna_filter_jobs \
+        --rrna_filter_chunk_spots --rrna_filter_memory_limit --read_source_format
+    printf '%s %s\n' --allow_read_format_fallback "$choices"
+}
+require_amalgkit_supported_options getfastq "${required[@]}"
+'''
+    result = subprocess.run(
+        ["bash", "-euc", command, "_", str(SUPPORT_DIR / "gg_amalgkit_runtime.sh"), mode, choices],
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == expected, result.stderr
