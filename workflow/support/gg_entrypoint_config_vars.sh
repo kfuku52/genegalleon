@@ -290,6 +290,8 @@ run_hyphy_relax_reversed
 run_iqtree
 run_iqtree_anc
 run_mafft
+mafft_strategy
+mafft_backbone_size
 run_native_ou
 run_mapdnds
 run_mapdnds_parameter_estimation

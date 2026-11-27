@@ -125,6 +125,8 @@ run_cdskit_localize=1 # Predict targeting-peptide and peroxisome localization si
 
 # Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
+mafft_strategy="standard" # standard|query_backbone; select and align representatives before adding query2family candidates.
+mafft_backbone_size=100 # Maximum representatives including matching query sequences in query_backbone mode.
 run_alignment_stats_original=1 # Alignment statistics before MaxAlign and TrimAl using cdskit stats.
 run_maxalign=0 # Remove anomalous sequences by cdskit maxalign.
 run_trimal=0 # Remove less-alignable codon sites.

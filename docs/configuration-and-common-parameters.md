@@ -419,6 +419,31 @@ GG_GENE_EVOLUTION_MODE_GENE_EVOLUTION=orthogroup \
 bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
+For a domain-informed two-stage alignment in `query2family`, set
+`mafft_strategy=query_backbone` or use the entrypoint override:
+
+```bash
+GG_GENE_EVOLUTION_MAFFT_STRATEGY=query_backbone \
+GG_GENE_EVOLUTION_MAFFT_BACKBONE_SIZE=100 \
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+The maximum backbone size includes all query sequences present in the family.
+GeneGalleon ranks candidates by available Swiss-Prot family evidence and how
+much of the query's RPS-BLAST domain profile they cover in the same order.
+It prefers one representative per species before taking additional copies.
+It uses the saved family RPS-BLAST results and searches the same database
+for any external query that needs its own domain annotation. If no query
+domains are detected, family evidence and species still guide selection.
+The default `mafft_strategy=standard` uses a single MAFFT alignment.
+
+MAFFT adds every remaining candidate to the backbone. Insertion columns
+retain original protein residues and allow the existing CDS back-alignment
+and domain-coordinate projection to consume the result. ClipKIT and any
+other configured filters run afterwards. The selection and column mapping
+are saved under `mafft_backbone/`. Use `artifact_stale_policy=rebuild` to
+change the strategy for an existing tracked alignment.
+
 Gene-family protein and codon alignments use ClipKIT `gappy` with
 `clipkit_gaps=0.90` by default. Sites with at least 90% missing data are
 removed. Set `GG_GENE_EVOLUTION_CLIPKIT_GAPS` to change the fixed cutoff or

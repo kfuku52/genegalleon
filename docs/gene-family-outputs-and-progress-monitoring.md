@@ -43,6 +43,15 @@ typically written under `workspace/output/query2family/` as:
 - `query_aa_fasta/2_WOX_query.aa.fa.gz`
 - `cds_fasta/2_WOX_cds.fa.gz`
 - `mafft/`, `clipkit/`, and/or `trimal/` alignment products depending on the enabled cleaning steps
+- `mafft_backbone/` contains the per-candidate representative decisions and
+  the one-based final-to-backbone amino-acid column map when
+  `mafft_strategy=query_backbone` is enabled. An empty backbone column marks
+  an insertion from the added sequences. In codon mode one mapped column
+  corresponds to three alignment bases.
+- With the protein backbone strategy, `clipkit_log/<family>_clipkit_empty_rows.tsv`
+  lists sequences whose trimmed alignment contains only gaps or missing data.
+  Those rows remain in the original MAFFT alignment and are excluded from the
+  trimmed alignment used for tree inference.
 - `iqtree_tree/2_WOX_iqtree.nwk`
 - `rooted_tree/2_WOX_root.nwk`
 - `dated_tree/2_WOX_dated.nwk` and `dated_tree_log/2_WOX_dated.log.txt` when `run_tree_dating=1`
