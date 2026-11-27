@@ -25,6 +25,7 @@ native_ou_convergence=1
 native_ou_calibration_replicates=199
 native_ou_calibration_level="0.05"
 native_ou_bootstrap=0
+native_ou_bootstrap_workers=1
 native_ou_seed=1
 native_ou_bootstrap_seed=2
 native_ou_root_model="OUfixedRoot"
@@ -62,6 +63,11 @@ The last uses the experimental sequential plug-in bootstrap with
 error guarantee. Positive `native_ou_bootstrap` repeats the entire selected
 procedure for stability frequencies, including inner calibration when
 `native_ou_criterion="bootstrap"`.
+
+Use `native_ou_bootstrap_workers` with NWKIT 0.47.7 or later to run calibration
+or support refits concurrently. It accepts a positive integer bounded by the
+task's CPU allocation, or `auto` to use that allocation. Each worker needs
+memory for its own refit.
 
 ### Evolutionary covariance across traits
 

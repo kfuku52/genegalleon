@@ -132,8 +132,8 @@ def test_adapter_full_covariance_with_sampling_errors_and_resume(tmp_path, alpha
         main(resumed)
 
 
-@pytest.mark.parametrize("use_defaults", [False, True])
-def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(tmp_path, use_defaults):
+@pytest.mark.parametrize("use_defaults,bootstrap", [(False, False), (True, False), (False, True)])
+def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(tmp_path, use_defaults, bootstrap):
     inputs(tmp_path)
     core = (SUPPORT.parent / "core" / "gg_gene_evolution_core.sh").read_text()
     defaults = core.split('run_native_ou="${run_native_ou:-0}"', 1)[1].split("treevis_query_marker=", 1)[0]
@@ -153,6 +153,10 @@ def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(t
         "gg_workspace_dir": str(tmp_path),
         "og_id": "family",
     }
+    if bootstrap:
+        variables.update(
+            GG_TASK_CPUS="2", native_ou_bootstrap="2", native_ou_bootstrap_workers="auto"
+        )
     if use_defaults:
         # A small complete space checks default dispatch/publication; the large
         # convergence workload is measured separately in the budget benchmark.
@@ -164,8 +168,11 @@ def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(t
         table.to_csv(tmp_path / "traits.tsv", sep="\t", index=False)
         variables.pop("native_ou_max_shifts")
         variables.pop("native_ou_convergence")
-    script = "set -euo pipefail\n" + "\n".join(f"{name}={shlex.quote(value)}" for name, value in variables.items())
+    script = "set -euo pipefail\nsource " + shlex.quote(str(SUPPORT / "gg_util.sh")) + "\n"
+    script += "\n".join(f"{name}={shlex.quote(value)}" for name, value in variables.items())
     script += "\n" + defaults + "\n"
+    if bootstrap:
+        script += "set -x\n"
     script += """
 disable_if_no_input_file() { :; }
 gg_artifact_prepare_stage() { printf -v "$1" '%s' 1; }
@@ -190,6 +197,9 @@ task="native test"
         assert any(len(row["groups"]) < len(row["shift_branch_ids"]) + 1 for row in model["candidates"])
     else:
         assert model["shift_branch_ids"] == []
+    if bootstrap:
+        assert "--bootstrap-workers 2" in completed.stderr
+        assert model["selection_support"]["replicates"] == 2
     assert len(list((tmp_path / "published").glob("family.*"))) == 8
     manifest = (tmp_path / "manifest-arguments.txt").read_text()
     assert "nwkit_implementation=" + model["implementation_sha256"] in manifest

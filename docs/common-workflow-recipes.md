@@ -333,6 +333,10 @@ GeneGalleon's RSC responses are continuous expression values, so
 `rsc_inference` accepts `wald` or `parametric-bootstrap`. Likelihood-ratio and
 profile-likelihood options used by other NWKIT response families are not valid
 for this integration. Bootstrap inference requires at least two replicates.
+With NWKIT 0.47.7 or later, use `rsc_bootstrap_workers` (default `1`) for
+parametric bootstrap in `rsc` or `species-nwkit`, including lineage tests
+in `rsc`. A positive integer is capped at the task's CPU allocation.
+`auto` uses that allocation. Each worker needs memory for its own refit.
 GeneGalleon invokes the current `nwkit regress` interface for RSC. The
 `rsc_event_weighting` values are `event` (the default, equal total weight per
 species-tree event) and `contrast` (equal weight per gene contrast).

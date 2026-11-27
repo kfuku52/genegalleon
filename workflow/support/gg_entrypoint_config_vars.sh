@@ -176,6 +176,7 @@ max_num_gene_blast_hit_retrieval
 mode_gene_evolution
 native_ou_bootstrap
 native_ou_bootstrap_seed
+native_ou_bootstrap_workers
 native_ou_calibration_level
 native_ou_calibration_replicates
 native_ou_convergence
@@ -208,6 +209,7 @@ radte_gamma_categories
 radte_inference
 radte_likelihood
 radte_uncertainty
+radte_bootstrap_workers
 radte_interval_level
 radte_rate_sd
 radte_maxiter
@@ -216,6 +218,7 @@ radte_species_intervals_tsv
 retain_query_in_maxalign
 retrotransposition_rate
 rsc_bootstrap_replicates
+rsc_bootstrap_workers
 rsc_categorical_origin_diagnostics
 rsc_categorical_replicate_policy
 rsc_categorical_predictors

@@ -161,6 +161,7 @@ def main(argv=None):
     parser.add_argument("--calibration-replicates", type=int, default=199)
     parser.add_argument("--calibration-level", type=float, default=0.05)
     parser.add_argument("--bootstrap", type=int, default=0)
+    parser.add_argument("--bootstrap-workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--bootstrap-seed", type=int, default=2)
     parser.add_argument("--convergence", action="store_true")
@@ -174,6 +175,8 @@ def main(argv=None):
     parser.add_argument("--alpha")
     parser.add_argument("--process-tip-variance")
     args = parser.parse_args(argv)
+    if args.bootstrap_workers < 1:
+        parser.error("--bootstrap-workers must be a positive integer")
     from nwkit.cli import main as nwkit_main
     from nwkit.file_paths import validate_outputs_do_not_replace_inputs
     from nwkit.output_transaction import output_transaction, validate_output_targets
@@ -269,6 +272,8 @@ def main(argv=None):
                 command.extend(["--" + name.replace("_", "-"), str(value)])
         if args.criterion != "bootstrap":
             command.extend(["--criterion", args.criterion])
+        if args.bootstrap_workers > 1 and (args.criterion == "bootstrap" or args.bootstrap > 0):
+            command.extend(["--bootstrap-workers", str(args.bootstrap_workers)])
         if args.convergence:
             command.append("--convergence")
         if args.estimate_measurement_error == "yes":

@@ -57,11 +57,17 @@ export GG_GENE_EVOLUTION_RADTE_CODON_FREQUENCIES=f
 | `radte_inference` | `auto` | `auto`, `marginal`, `joint-map` |
 | `radte_likelihood` | `auto` | `auto`, `exact`, `quadratic` |
 | `radte_uncertainty` | `profile` | `profile`, `laplace`, `bootstrap`, `none` |
+| `radte_bootstrap_workers` | `1` | Concurrent bootstrap refits with NWKIT 0.47.7 or later. Use a positive integer or `auto` for the task's CPU allocation. |
 | `radte_interval_level` | `0.95` | Nominal conditional interval level; general coverage is unvalidated |
 | `radte_rate_sd` | empty | Estimate log-rate SD; a number fixes it |
 | `radte_max_age` | `1000` | Upper age limit for above-root duplications, in the species tree's time units |
 | `radte_maxiter`, `radte_seed` | `1000`, `1` | Optimizer iterations and random seed |
 | `radte_species_intervals_tsv` | empty | Workspace-relative or absolute external interval table |
+
+Worker counts are capped at the task's CPU allocation. When bootstrap workers
+run concurrently, IQ-TREE receives the task CPU count divided by the worker
+count, rounded down, as its threads per refit. Each worker needs memory for
+its own refit.
 
 Codon models currently require standard genetic code 1 for every represented
 species, including per-species overrides. Complete in-frame codon gaps and IUPAC

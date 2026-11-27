@@ -1153,6 +1153,9 @@ def _run_staged(args: argparse.Namespace) -> int:
 
                 if "species-nwkit" not in methods:
                     continue
+                bootstrap_options = {}
+                if args.inference == "parametric-bootstrap" and args.bootstrap_workers > 1:
+                    bootstrap_options["bootstrap_workers"] = args.bootstrap_workers
                 try:
                     result = fit_ordinary_regression(
                         tree,
@@ -1179,6 +1182,7 @@ def _run_staged(args: argparse.Namespace) -> int:
                         factor_references=_references(str(plan_row.get("factor_reference", "."))),
                         factor_coding=args.factor_coding,
                         allow_large_dense=args.allow_large_dense == "yes",
+                        **bootstrap_options,
                     )
                     result.insert(0, "analysis_id", analysis_id)
                     result["tree_id"] = args.tree_id
@@ -1338,6 +1342,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--predictor-branch-length", choices=["original", "unit"], default="original")
     parser.add_argument("--inference", choices=["wald", "parametric-bootstrap"], default="wald")
     parser.add_argument("--bootstrap-replicates", type=int, default=1000)
+    parser.add_argument("--bootstrap-workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--reml", choices=["yes", "no"], default="yes")
@@ -1364,6 +1369,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.bootstrap_replicates < 2:
         parser.error("--bootstrap-replicates must be at least 2")
+    if args.bootstrap_workers < 1:
+        parser.error("--bootstrap-workers must be a positive integer")
     if args.seed < 0:
         parser.error("--seed must be non-negative")
     if not 0.0 < args.confidence_level < 1.0:

@@ -320,8 +320,12 @@ def test_reconciled_speciation_contrast_end_to_end_with_nwkit(tmp_path: Path):
     assert set(predictor_summary["variance_method"]) == {"known-se"}
 
 
-@pytest.mark.parametrize("model,parameter", [("brownian", "auto"), ("lambda", "0.6"), ("eb", "-0.1")])
-def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path, model, parameter):
+@pytest.mark.parametrize(
+    "model,parameter,bootstrap",
+    [("brownian", "auto", False), ("lambda", "0.6", False), ("eb", "-0.1", False),
+     ("brownian", "auto", True)],
+)
+def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path, model, parameter, bootstrap):
     species = [f"Genus_{letter}" for letter in "abcde"]
     outgroup = "Genus_f"
     species_tree = tmp_path / "species.nwk"
@@ -457,11 +461,19 @@ def test_species_tree_comparators_use_matched_species_inputs(tmp_path: Path, mod
         f"{prefix}.predictor-summary.tsv",
         "--predictor-sampling-covariance-out",
         f"{prefix}.predictor-covariance.tsv",
+        *(
+            ["--inference", "parametric-bootstrap", "--bootstrap-replicates", "2", "--bootstrap-workers", "2"]
+            if bootstrap else []
+        ),
     )
     native = pandas.read_csv(f"{prefix}.native.tsv", sep="\t")
     comparison = pandas.read_csv(f"{prefix}.comparison.tsv", sep="\t")
     status = pandas.read_csv(f"{prefix}.status.tsv", sep="\t")
     assert set(native["evolution_model"]) == {model}
+    if bootstrap:
+        assert set(native.query("term_test == 'coefficient'")["inference_method"]) == {
+            "parametric-bootstrap"
+        }
     if parameter != "auto":
         assert native["evolution_parameter"].iloc[0] == pytest.approx(float(parameter))
     assert "body_size" in set(native["term"])

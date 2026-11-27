@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ from scipy.linalg import expm
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine="native", iqtree_model="", iqtree_interface="auto"):
+def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine="native", iqtree_model="", iqtree_interface="auto", bootstrap_probe=False):
 
     from nwkit.radte_codon import CODONS, codon_matrix
 
@@ -110,6 +111,23 @@ def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine
         )
     if iqtree_model:
         defaults.update(radte_codon_frequencies="", radte_kappa="", radte_omega="", radte_gamma_shape="")
+    env = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
+    if bootstrap_probe:
+        defaults.update(GG_TASK_CPUS="5", radte_bootstrap_workers="2", radte_uncertainty="bootstrap")
+        # Stop at the RADTE boundary after the real stage builds the command.
+        executable = shutil.which("nwkit")
+        assert executable
+        probe = tmp_path / "nwkit"
+        probe.write_text(
+            '#!/usr/bin/env bash\n'
+            'if [[ "$1" == radte ]]; then\n'
+            '  printf "%s\\n" "$@" "BLAS=$OPENBLAS_NUM_THREADS" "OMP=$OMP_NUM_THREADS"\n'
+            '  exit 27\n'
+            'fi\n'
+            f'exec {shlex.quote(executable)} "$@"\n'
+        )
+        probe.chmod(0o755)
+        env.update(PATH=f"{tmp_path}:{env['PATH']}", OPENBLAS_NUM_THREADS="5", OMP_NUM_THREADS="5")
     core = (ROOT / "workflow/core/gg_gene_evolution_core.sh").read_text()
     start = core.index('task="Species-tree-guided divergence time estimation"')
     end = core.index('task="Expression matrix preparation"', start)
@@ -131,11 +149,21 @@ gg_artifact_record() { printf '%s\\n' "$@" > recorded-provenance.txt; }
         cwd=tmp_path,
         text=True,
         capture_output=True,
-        env={**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+        env=env,
         timeout=300,
     )
     (tmp_path / "stage_wall_seconds.txt").write_text(str(time.monotonic() - started))
     return result
+
+
+def test_iqtree_bootstrap_divides_the_task_cpu_budget(tmp_path):
+    result = _fixture(
+        tmp_path, "gy94", "generax", engine="iqtree", iqtree_interface="cli", bootstrap_probe=True
+    )
+    assert result.returncode == 27, result.stdout + result.stderr
+    assert {"--bootstrap-workers=2", "--iqtree-threads=2", "BLAS=1", "OMP=1"}.issubset(
+        result.stdout.splitlines()
+    )
 
 
 @pytest.mark.parametrize("model,route", [("gy94", "generax"), ("ecmk07", "generax"), ("ecmrest", "lca")])

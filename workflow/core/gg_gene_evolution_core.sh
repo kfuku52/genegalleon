@@ -51,6 +51,7 @@ native_ou_max_shifts="${native_ou_max_shifts:-auto}"
 native_ou_calibration_replicates="${native_ou_calibration_replicates:-199}"
 native_ou_calibration_level="${native_ou_calibration_level:-0.05}"
 native_ou_bootstrap="${native_ou_bootstrap:-0}"
+native_ou_bootstrap_workers="${native_ou_bootstrap_workers:-1}"
 native_ou_seed="${native_ou_seed:-1}"
 native_ou_bootstrap_seed="${native_ou_bootstrap_seed:-2}"
 native_ou_convergence="${native_ou_convergence:-1}"
@@ -93,6 +94,7 @@ radte_gamma_categories="${radte_gamma_categories:-4}"
 radte_inference="${radte_inference:-auto}"
 radte_likelihood="${radte_likelihood:-auto}"
 radte_uncertainty="${radte_uncertainty:-profile}"
+radte_bootstrap_workers="${radte_bootstrap_workers:-1}"
 radte_interval_level="${radte_interval_level:-0.95}"
 radte_rate_sd="${radte_rate_sd:-}"
 radte_maxiter="${radte_maxiter:-1000}"
@@ -120,6 +122,7 @@ rsc_species_evolution_model="${rsc_species_evolution_model:-brownian}"
 rsc_species_evolution_parameter="${rsc_species_evolution_parameter:-auto}"
 rsc_inference="${rsc_inference:-wald}"
 rsc_bootstrap_replicates="${rsc_bootstrap_replicates:-1000}"
+rsc_bootstrap_workers="${rsc_bootstrap_workers:-1}"
 rsc_seed="${rsc_seed:-1}"
 rsc_confidence_level="${rsc_confidence_level:-0.95}"
 rsc_reml="${rsc_reml:-yes}"
@@ -4428,6 +4431,13 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
     exit 1
   fi
   radte_args=("--species-tree=${species_tree_pruned}")
+  radte_workers=1
+  if [[ "${radte_uncertainty}" == "bootstrap" ]]; then
+    radte_workers=$(gg_resolve_bootstrap_workers radte_bootstrap_workers "${radte_bootstrap_workers:-1}") || exit $?
+    if (( radte_workers > 1 )); then
+      radte_args+=("--bootstrap-workers=${radte_workers}")
+    fi
+  fi
   if [[ ${run_generax} -eq 1 ]]; then
     radte_args+=("--reconciliation-species-tree=${species_tree_generax}")
     radte_args+=("--generax-nhx=${file_og_generax_nhx}")
@@ -4474,7 +4484,7 @@ PY
   esac
   radte_args+=("--sequence-engine=${radte_sequence_engine}")
   if [[ "${radte_sequence_engine}" == "iqtree" ]]; then
-    radte_args+=("--iqtree-threads=${GG_TASK_CPUS}" "--iqtree-interface=${radte_iqtree_interface}")
+    radte_args+=("--iqtree-threads=$((GG_TASK_CPUS / radte_workers))" "--iqtree-interface=${radte_iqtree_interface}")
     if [[ -n "${radte_iqtree_worker}" ]]; then
       radte_args+=("--iqtree-worker=${radte_iqtree_worker}")
     fi
@@ -4485,7 +4495,7 @@ PY
     radte_args+=("--gamma-categories=${radte_gamma_categories}")
   fi
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file radte.alignment.fasta
-  nwkit radte \
+  gg_run_with_bootstrap_threads "${radte_workers}" nwkit radte \
     "${radte_args[@]}" \
     --backend native \
     --alignment radte.alignment.fasta \
@@ -5361,7 +5371,11 @@ fi
 task="NWKIT OU shift detection"
 disable_if_no_input_file "run_native_ou" "${file_og_expression}" "${file_og_dated_tree_analysis}"
 if [[ ${run_native_ou} -eq 1 ]]; then
-  native_ou_identity=$(python -c 'from nwkit.shift_native_provenance import native_implementation_sha256; print(native_implementation_sha256())') || exit $?
+  native_ou_workers=1
+  if [[ "${native_ou_criterion}" == "bootstrap" || "${native_ou_bootstrap}" =~ ^[+]?0*[1-9][0-9]*$ ]]; then
+    native_ou_workers=$(gg_resolve_bootstrap_workers native_ou_bootstrap_workers "${native_ou_bootstrap_workers:-1}") || exit $?
+  fi
+  native_ou_identity=$(gg_run_with_bootstrap_threads "${native_ou_workers}" python -c 'from nwkit.shift_native_provenance import native_implementation_sha256; print(native_implementation_sha256())') || exit $?
   native_ou_provenance_args=(
     --manifest "${dir_output_active}/artifact_provenance/${og_id}.ou_native.json"
     --step "ou_native" --family-id "${og_id}"
@@ -5374,6 +5388,9 @@ if [[ ${run_native_ou} -eq 1 ]]; then
     --tree "${file_og_dated_tree_analysis}" --traits "${file_og_expression}"
     --output-prefix "native_ou"
   )
+  if (( native_ou_workers > 1 )); then
+    native_ou_cmd+=(--bootstrap-workers "${native_ou_workers}")
+  fi
   for native_ou_option in criterion max_shifts calibration_replicates calibration_level bootstrap seed bootstrap_seed root_model trait_covariance alpha_model estimate_measurement_error search_strategy replicate_separator; do
     native_ou_variable="native_ou_${native_ou_option}"
     native_ou_cmd+=("--${native_ou_option//_/-}" "${!native_ou_variable}")
@@ -5391,7 +5408,7 @@ if [[ ${run_native_ou} -eq 1 ]]; then
   gg_artifact_prepare_stage native_ou_needs_update run_native_ou "${native_ou_provenance_args[@]}" || exit $?
   if [[ ${native_ou_needs_update} -eq 1 && ${run_native_ou} -eq 1 ]]; then
     gg_step_start "${task}"
-    "${native_ou_cmd[@]}" || exit $?
+    gg_run_with_bootstrap_threads "${native_ou_workers}" "${native_ou_cmd[@]}" || exit $?
     native_ou_bundle=()
     for native_ou_suffix in "${native_ou_outputs[@]}"; do
       native_ou_bundle+=("native_ou.${native_ou_suffix}" "${file_og_native_ou_prefix}.${native_ou_suffix}")
@@ -5611,6 +5628,14 @@ fi
 gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_check_args[@]}" || exit $?
 if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
+  rsc_workers=1
+  species_pgls_workers=1
+  if [[ "${rsc_inference}" == "parametric-bootstrap" || ( ${pgls_run_rsc} -eq 1 && "${rsc_lineage_inference}" == "parametric-bootstrap" ) ]]; then
+    rsc_workers=$(gg_resolve_bootstrap_workers rsc_bootstrap_workers "${rsc_bootstrap_workers:-1}") || exit $?
+    if [[ "${rsc_inference}" == "parametric-bootstrap" && ",${pgls_methods}," == *,species-nwkit,* ]]; then
+      species_pgls_workers=${rsc_workers}
+    fi
+  fi
   rsc_work_dir="${og_id}.rsc"
   expression_trait_audit_tmp="${og_id}.expression_trait_audit.zip"
   rsc_prepared_expression="${rsc_work_dir}/expression.tsv"
@@ -5813,6 +5838,9 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
         --lineage-leave-one-out "${rsc_lineage_leave_one_out}"
         --allow-large-dense "${rsc_allow_large_dense}"
       )
+      if (( rsc_workers > 1 )); then
+        rsc_regress_args+=(--bootstrap-workers "${rsc_workers}")
+      fi
       if [[ ! "${rsc_gene_evolution_model}" =~ ^(brownian|independent)$ ]]; then
         rsc_regress_args+=(--gene-evolution-parameter "${rsc_gene_evolution_parameter}")
       fi
@@ -5887,7 +5915,7 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
       else
         rsc_regress_args+=(--categorical-origin-diagnostics none)
       fi
-      if nwkit "${rsc_regress_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"; then
+      if gg_run_with_bootstrap_threads "${rsc_workers}" nwkit "${rsc_regress_args[@]}" 2>&1 | tee -a "${rsc_log_tmp}"; then
         rsc_analysis_result="ready"
       else
         rsc_nwkit_status=${PIPESTATUS[0]}
@@ -5979,7 +6007,10 @@ if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   if [[ "${rsc_preparation_status}" != "ready" || ! -s "${rsc_preflight_reconciliation}" ]]; then
     species_pgls_args+=(--empty-reason "${rsc_not_estimable_reason:-expression_trait_inputs_not_estimable}")
   fi
-  python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}" \
+  if (( species_pgls_workers > 1 )); then
+    species_pgls_args+=(--bootstrap-workers "${species_pgls_workers}")
+  fi
+  gg_run_with_bootstrap_threads "${species_pgls_workers}" python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}" \
     2>&1 | tee -a "${pgls_log_tmp}"
 
   python "${gg_support_dir}/diagnostic_archive.py" pack \

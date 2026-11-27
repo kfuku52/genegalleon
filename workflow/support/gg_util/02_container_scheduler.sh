@@ -335,6 +335,34 @@ gg_is_nonnegative_integer() {
 	[[ "${1:-}" =~ ^[0-9]+$ ]]
 }
 
+gg_resolve_bootstrap_workers() {
+	local name=$1 requested=$2 cpus=${GG_TASK_CPUS:-1}
+	if [[ "${requested}" == "auto" ]]; then
+		printf '%s\n' "${cpus}"
+		return
+	fi
+	if [[ ! "${requested}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s must be auto or a positive integer: %s\n' "${name}" "${requested}" >&2
+		return 1
+	fi
+	# Compare lengths first to avoid overflowing shell arithmetic on large input.
+	if (( ${#requested} > ${#cpus} || requested > cpus )); then
+		requested=${cpus}
+	fi
+	printf '%s\n' "${requested}"
+}
+
+gg_run_with_bootstrap_threads() {
+	local workers=$1
+	shift
+	if (( workers > 1 )); then
+		env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+			BLIS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 "$@"
+	else
+		"$@"
+	fi
+}
+
 gg_default_tool_memory_reserve_gb() {
 	local total_gb=${1:-1}
 	local reserve_gb=0
