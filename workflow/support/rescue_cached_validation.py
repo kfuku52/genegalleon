@@ -8,6 +8,7 @@ import time
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack
+from functools import lru_cache
 from itertools import batched, chain, islice
 from multiprocessing import get_context
 from threading import Condition
@@ -63,6 +64,17 @@ def _batch(rows):
             del raw['evidence']
         results.append(result)
     return results, os.getpid(), memo.diagnostics()
+
+
+def share_validated_sequences(models):
+    """Share exact CDS strings across batches while retaining every model and its provenance."""
+    @lru_cache(maxsize=32768)
+    def shared(sequence):
+        return sequence
+
+    for model in models:
+        model["sequence"] = shared(model["sequence"])
+        yield model
 
 
 def validate_cached(models, genome, code, params, proteins, cpus, serial, audit):

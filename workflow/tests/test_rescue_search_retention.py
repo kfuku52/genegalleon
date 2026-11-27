@@ -206,6 +206,41 @@ def test_streamed_alias_expansion_preserves_full_legacy_gff_and_model_order(tmp_
     assert [m["id"] for m in actual] == ["MP000001", "MP000002"]
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_expansion_preserves_disjoint_paf_blocks_and_multibyte_offsets(tmp_path, newline):
+    from workflow.support import rescue_gene_models as rescue
+
+    def aligned(query, model, comment=""):
+        return (f"##PAF\t{query}\t2\t0\t2\t+\tchrα\t9\t0\t6\t2\t2\t60\tcg:Z:2M\n"
+                f"chrα\tminiprot\tmRNA\t1\t6\t.\t+\t.\tID={model};Target={query} 1 2;Identity=1\n"
+                f"chrα\tminiprot\tCDS\t1\t6\t.\t+\t0\tParent={model}\n"
+                + comment)
+
+    source = tmp_path / "unique.gff"
+    header = "##gff-version 3\n# 入力\n"
+    unmapped = "##PAF\tother\t2\t0\t0\t*\t*\t0\t0\t0\t0\t0\t0\n"
+    original = header + aligned("q", "MP000001", "# 前\n") + unmapped + aligned("q", "MP000002")
+    source.write_bytes(original.replace("\n", newline).encode())
+    aliases = {"o": "other", "a": "q", "b": "q"}
+    expected = (header + unmapped.replace("other", "o") +
+                aligned("a", "MP000001", "# 前\n") + aligned("a", "MP000002") +
+                aligned("b", "MP000003", "# 前\n") + aligned("b", "MP000004"))
+    assert "".join(rescue.expand_miniprot_lines(source, aliases)) == expected
+
+
+def test_expansion_rejects_input_mutation_after_indexing(tmp_path):
+    from workflow.support import rescue_gene_models as rescue
+
+    source = tmp_path / "unique.gff"
+    source.write_text("##gff-version 3\n##PAF\tq\t2\t0\t0\t*\t*\t0\t0\t0\t0\t0\t0\n")
+    stream = rescue.expand_miniprot_lines(source, {"q": "q"})
+    assert next(stream) == "##gff-version 3\n"
+    with source.open("a") as output:
+        output.write("# modified\n")
+    with pytest.raises(OSError, match="changed during expansion"):
+        list(stream)
+
+
 @pytest.mark.parametrize("value", [None, [], {}, {"format": "future", "retain_search_inputs": False},
                                   {"format": [], "retain_search_inputs": False},
                                   {"format": "compact", "retain_search_inputs": 0},

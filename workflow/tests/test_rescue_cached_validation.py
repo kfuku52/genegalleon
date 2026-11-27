@@ -79,6 +79,20 @@ def test_spawn_reuses_original_candidate_evidence_across_batches(tmp_path):
         assert row['raw_prediction']['evidence'] is not evidence
 
 
+def test_retained_cds_pool_shares_bytes_without_changing_records():
+    cds = b"ATGGAATAA" * 200
+    rows = [{"sequence": cds.decode(), "evidence": {"donor": str(i)}} for i in range(3)]
+    rows[1]["sequence"] = "T" + rows[1]["sequence"][1:]
+    expected = copy.deepcopy(rows)
+    assert rows[0]["sequence"] is not rows[2]["sequence"]
+
+    shared = list(parallel.share_validated_sequences(iter(rows)))
+
+    assert shared == expected
+    assert shared[0]["sequence"] is shared[2]["sequence"]
+    assert shared[0]["evidence"] is not shared[2]["evidence"]
+
+
 def test_small_replay_keeps_in_process_callback_without_opening_genome_or_pool():
     rows=[{'q':i} for i in range(20)]
     seen=[]

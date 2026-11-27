@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from itertools import chain
@@ -1442,68 +1442,101 @@ def expand_miniprot_queries(source, destination, representatives):
         out.writelines(lines)
 
 
-def expand_miniprot_lines(source, representatives):
-    """Restore the legacy GFF stream without an expanded persistent GFF copy."""
-    blocks, headers = defaultdict(list), []
-    query, lines = None, []
-    known = set(representatives.values())
-    with source.open() as handle:
-        for line in handle:
-            if line.startswith("##PAF\t"):
+def _index_miniprot_blocks(handle, known):
+    """Record exact byte ranges, coalescing adjacent PAF records of the same query."""
+    spans, headers = defaultdict(list), []
+    position, start, query = 0, 0, None
+    for line in handle:
+        offset = position
+        position += len(line) if line.isascii() else len(line.encode("utf-8"))
+        if line.startswith("##PAF\t"):
+            fields = line.rstrip("\r\n").split("\t", 12)
+            if len(fields) < 13 or fields[1] not in known:
+                raise ValueError("Genome search returned an invalid/unknown representative")
+            if query != fields[1] or offset - start >= 1024 * 1024:
                 if query is not None:
-                    blocks[query].append("".join(lines))
-                fields = line.rstrip("\n").split("\t")
-                if len(fields) < 13 or fields[1] not in known:
-                    raise ValueError("Genome search returned an invalid/unknown representative")
-                query, lines = fields[1], [line]
-            elif query is None:
-                if not line.startswith("#") and line.strip():
-                    raise ValueError("Genome search GFF lacks embedded PAF")
-                headers.append(line)
-            else:
-                lines.append(line)
+                    spans[query].append((start, offset))
+                start, query = offset, fields[1]
+        elif query is None:
+            if not line.startswith("#") and line.strip():
+                raise ValueError("Genome search GFF lacks embedded PAF")
+            headers.append(line.replace("\r\n", "\n").replace("\r", "\n"))
     if query is not None:
-        blocks[query].append("".join(lines))
-    if set(blocks) != known:
+        spans[query].append((start, position))
+    if spans.keys() != known:
         raise ValueError("Genome search did not report every representative with -u")
-    number = 0
-    yield from headers
-    for original, representative in representatives.items():
-        for block in blocks[representative]:
-            identifiers = {}
-            for line in block.splitlines(keepends=True):
-                if line.startswith("##PAF\t"):
-                    _, _, suffix = line.rstrip("\n").split("\t", 2)
-                    yield "##PAF\t" + original + "\t" + suffix + "\n"
-                elif not line.startswith("#") and line.strip():
-                    fields = line.rstrip("\n").split("\t", 8)
-                    if len(fields) != 9 or "\t" in fields[8]:
-                        raise ValueError("Invalid representative miniprot GFF row")
-                    values = fields[8].split(";")
-                    if fields[2] == "mRNA":
-                        old = attributes(fields[8])["ID"]
-                        match = re.fullmatch(r"MP(\d+)", old)
-                        if not match:
-                            raise ValueError("Unexpected miniprot model ID")
-                        number += 1
-                        identifiers[old] = "MP" + str(number).zfill(len(match[1]))
-                    rewritten = []
-                    for value in values:
-                        if value.startswith(("ID=", "Parent=")):
-                            key, token = value.split("=", 1)
-                            if token not in identifiers:
-                                raise ValueError("Unbound representative miniprot feature")
-                            value = key + "=" + identifiers[token]
-                        elif value.startswith("Target="):
-                            target = value[len("Target="):].split(" ", 1)
-                            if target[0] != representative or len(target) != 2:
-                                raise ValueError("Inconsistent representative miniprot Target")
-                            value = "Target=" + original + " " + target[1]
-                        rewritten.append(value)
-                    fields[8] = ";".join(rewritten)
-                    yield "\t".join(fields) + "\n"
+    return headers, spans
+
+
+def expand_miniprot_lines(source, representatives):
+    """Restore legacy GFF bytes from the original file with a bounded block cache."""
+    with source.open(encoding="utf-8", newline="") as handle:
+        fd = handle.fileno()
+        before = os.fstat(fd)
+        headers, spans = _index_miniprot_blocks(handle, set(representatives.values()))
+        number = 0
+        yield from headers
+        cache, cache_bytes = OrderedDict(), 0
+        max_cache_bytes = 16 * 1024 * 1024
+        for original, representative in representatives.items():
+            for span in spans[representative]:
+                if span in cache:
+                    block, _ = cache[span]
+                    cache.move_to_end(span)
                 else:
-                    yield line
+                    start, end = span
+                    # Read only this span from the indexed file descriptor.
+                    raw = os.pread(fd, end - start, start)
+                    if len(raw) != end - start:
+                        raise OSError("Representative miniprot GFF changed during expansion")
+                    block = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+                    weight = sys.getsizeof(block) + 128
+                    if weight <= max_cache_bytes:
+                        while cache_bytes + weight > max_cache_bytes:
+                            _, (_, removed) = cache.popitem(last=False)
+                            cache_bytes -= removed
+                        cache[span] = block, weight
+                        cache_bytes += weight
+                identifiers = {}
+                for line in block.splitlines(keepends=True):
+                    if line.startswith("##PAF\t"):
+                        identifiers = {}
+                        _, _, suffix = line.rstrip("\n").split("\t", 2)
+                        yield "##PAF\t" + original + "\t" + suffix + "\n"
+                    elif not line.startswith("#") and line.strip():
+                        fields = line.rstrip("\n").split("\t", 8)
+                        if len(fields) != 9 or "\t" in fields[8]:
+                            raise ValueError("Invalid representative miniprot GFF row")
+                        values = fields[8].split(";")
+                        if fields[2] == "mRNA":
+                            old = attributes(fields[8])["ID"]
+                            match = re.fullmatch(r"MP(\d+)", old)
+                            if not match:
+                                raise ValueError("Unexpected miniprot model ID")
+                            number += 1
+                            identifiers[old] = "MP" + str(number).zfill(len(match[1]))
+                        rewritten = []
+                        for value in values:
+                            if value.startswith(("ID=", "Parent=")):
+                                key, token = value.split("=", 1)
+                                if token not in identifiers:
+                                    raise ValueError("Unbound representative miniprot feature")
+                                value = key + "=" + identifiers[token]
+                            elif value.startswith("Target="):
+                                target = value[len("Target="):].split(" ", 1)
+                                if target[0] != representative or len(target) != 2:
+                                    raise ValueError("Inconsistent representative miniprot Target")
+                                value = "Target=" + original + " " + target[1]
+                            rewritten.append(value)
+                        fields[8] = ";".join(rewritten)
+                        yield "\t".join(fields) + "\n"
+                    else:
+                        yield line
+
+        after = os.fstat(fd)
+        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise OSError("Representative miniprot GFF changed during expansion")
 
 
 def output_storage(plan):
@@ -1869,7 +1902,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                         model["evidence"] = by_id[model["query"]]
                         model["search"] = "genome_fallback"
                         yield model
-                validated.extend(check_predictions(genome_predictions(), "genome_fallback"))
+                checked = check_predictions(genome_predictions(), "genome_fallback")
+                validated.extend(rescue_cached_validation.share_validated_sequences(checked))
                 expanded_genome_sha256 = expanded_digest.hexdigest()
                 # Only optional GeMoMa consumes unresolved after genome search;
                 # final placement and coding-path admission still run below.
