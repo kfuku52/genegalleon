@@ -4320,3 +4320,124 @@ def test_referenced_zip_paths_resolve_distinct_names_fresh_each_time(tmp_path, m
     alias.symlink_to(second)
     assert _referenced_zip_paths(artifacts) == {second}
     assert len(calls) == 2
+
+
+def _publish_versioned_artifact(root, name, content):
+    path = root / "results" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(content)
+    family = orthogroup_id_from_name(name)
+    archive_completed_outputs(root, "orthogroup", [family], orthogroup_id_from_name, include_incomplete=True)
+    return GeneFamilyOutputStore(root).source_artifact("results", name)
+
+
+def test_archive_version_is_rebound_without_retaining_an_identical_zip(tmp_path):
+    from workflow.support.gene_family_output_store import ArchiveVersionReferences, MemberVersion
+
+    original = _publish_versioned_artifact(tmp_path, "OG0000001.txt", b"first")
+    store = GeneFamilyOutputStore(tmp_path)
+    version = MemberVersion(original.logical_path, original.generation, original.sha256)
+    selection = store.reserve_archive_versions("reader-same-version", [version], max_bytes=100)
+    _publish_versioned_artifact(tmp_path, "OG0000002.txt", b"other")
+    compact_archives(tmp_path, "orthogroup")
+
+    refs = ArchiveVersionReferences(store.archive_root)
+    new_location = refs.member("reader-same-version", selection, version)
+    assert new_location.zip_path != str(original.zip_path)
+    assert not original.zip_path.exists()
+    assert not refs.retained.exists()
+    with store.open_archive_version("reader-same-version", selection, version) as stream:
+        assert stream.read() == b"first"
+    store.release_archive_versions("reader-same-version", selection)
+    store.release_archive_versions("reader-same-version", selection)
+    assert Path(new_location.zip_path).is_file()
+
+
+@pytest.mark.parametrize("maintenance", ["compact", "repair"])
+def test_archive_version_retains_only_displaced_pinned_members_until_last_reader(tmp_path, monkeypatch, maintenance):
+    from workflow.support.gene_family_output_store import (
+        ArchiveReferenceError,
+        ArchiveVersionReferences,
+        MemberVersion,
+    )
+
+    old_name, sibling = "OG0000001.txt", "OG0000002.txt"
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / old_name).write_bytes(b"old")
+    (out / sibling).write_bytes(b"not pinned")
+    archive_completed_outputs(
+        tmp_path, "orthogroup", ["OG0000001", "OG0000002"], orthogroup_id_from_name, include_incomplete=True,
+    )
+    store = GeneFamilyOutputStore(tmp_path)
+    original = store.source_artifact("results", old_name)
+    version = MemberVersion(original.logical_path, original.generation, original.sha256)
+    first = store.reserve_archive_versions("reader-version-one", [version], max_bytes=3)
+    second = store.reserve_archive_versions("reader-version-two", [version], max_bytes=3)
+    with pytest.raises(ArchiveReferenceError, match="capacity exceeded"):
+        another = store.source_artifact("results", sibling)
+        another_version = MemberVersion(another.logical_path, another.generation, another.sha256)
+        store.reserve_archive_versions("reader-over-capacity", [another_version], max_bytes=3)
+
+    _publish_versioned_artifact(tmp_path, old_name, b"new")
+    if maintenance == "compact":
+        compact_archives(tmp_path, "orthogroup")
+    else:
+        _publish_versioned_artifact(tmp_path, sibling, b"new sibling")
+        repair_archive_index(tmp_path, remove_orphans=True)
+
+    refs = ArchiveVersionReferences(store.archive_root)
+    location = refs.member("reader-version-one", first, version)
+    pack = Path(location.zip_path)
+    assert pack.is_relative_to(refs.retained)
+    assert not original.zip_path.exists()
+    with zipfile.ZipFile(pack) as archive:
+        assert set(archive.namelist()) == {original.logical_path, MANIFEST_MEMBER}
+    with store.open_archive_version("reader-version-two", second, version) as stream:
+        assert stream.read() == b"old"
+    with store.open_binary("results", old_name) as stream:
+        assert stream.read() == b"new"
+    store.release_archive_versions("reader-version-one", first)
+    assert pack.exists()
+    unlink = Path.unlink
+
+    def fail_retained_removal(path, *args, **kwargs):
+        if path == pack:
+            raise OSError("simulated interruption before retained ZIP removal")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail_retained_removal)
+        with pytest.raises(OSError, match="simulated interruption"):
+            store.release_archive_versions("reader-version-two", second)
+    assert pack.exists()
+    store.release_archive_versions("reader-version-two", second)
+    assert not pack.exists()
+    with pytest.raises(ArchiveReferenceError, match="No held reference"):
+        with store.open_archive_version("reader-version-two", second, version):
+            pass
+
+
+def test_archive_reference_failed_first_registration_keeps_valid_catalogue(tmp_path):
+    from workflow.support.gene_family_output_store import (
+        ArchiveReferenceError,
+        ArchiveVersionReferences,
+        MemberVersion,
+    )
+
+    artifact = _publish_versioned_artifact(tmp_path, "OG0000001.txt", b"payload")
+    store = GeneFamilyOutputStore(tmp_path)
+    refs = ArchiveVersionReferences(store.archive_root)
+    version = MemberVersion(artifact.logical_path, artifact.generation, artifact.sha256)
+    with pytest.raises(ArchiveReferenceError, match="No archive reference catalogue"):
+        store.release_archive_versions("missing-reader-id", "a" * 64)
+    assert not refs.path.exists()
+    with pytest.raises(ArchiveReferenceError, match="capacity exceeded"):
+        store.reserve_archive_versions("reader-small-quota", [version], max_bytes=1)
+    assert not refs.has_references()
+    selection = store.reserve_archive_versions("reader-large-quota", [version], max_bytes=7)
+    assert store.reserve_archive_versions("reader-large-quota", [version], max_bytes=7) == selection
+    with pytest.raises(ArchiveReferenceError, match="releasing active version references"):
+        purge_archives(tmp_path, "orthogroup")
+    store.release_archive_versions("reader-large-quota", selection)
+    assert not refs.has_references()

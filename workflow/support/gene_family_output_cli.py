@@ -84,6 +84,23 @@ def build_parser(
     queue_status_parser = subparsers.add_parser("queue-status")
     add_root(queue_status_parser)
 
+    reserve = subparsers.add_parser("reserve-archive-versions", help="Hold explicit, publisher-verified ZIP members.")
+    add_root(reserve)
+    reserve.add_argument("--consumer", required=True)
+    reserve.add_argument("--versions-jsonl", type=Path, required=True)
+    reserve.add_argument("--max-bytes", type=int, required=True)
+    pinned = subparsers.add_parser("read-archive-version", help="Stream one reserved archive member to stdout.")
+    add_root(pinned)
+    pinned.add_argument("--consumer", required=True)
+    pinned.add_argument("--selection", required=True)
+    pinned.add_argument("--logical-path", required=True)
+    pinned.add_argument("--generation", type=int, required=True)
+    pinned.add_argument("--sha256", required=True)
+    release = subparsers.add_parser("release-archive-versions", help="Release the exact finished consumer's references.")
+    add_root(release)
+    release.add_argument("--consumer", required=True)
+    release.add_argument("--selection", required=True)
+
     convert_parser = subparsers.add_parser(
         "convert-storage",
         help="Convert a gene-family output root between raw files and ZIP storage.",

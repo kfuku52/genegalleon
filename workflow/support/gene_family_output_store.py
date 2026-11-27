@@ -37,13 +37,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from archive_version_references import ArchiveReferenceError, ArchiveVersionReferences, MemberVersion, VersionLocation
 from content_digest_cache import cached_sha256_file
 from metadata_store import DATABASE as METADATA_DATABASE
 from metadata_store import archived_bytes, archived_children, archived_info, journal_paths, maximum_generation
 from metadata_store import pack as pack_metadata
 from metadata_store import read_bytes as metadata_read_bytes
 from shared_namespace_lock import NamespaceLockError, namespace_lock
-from workflow_observation import observe_files, observe_path
+from workflow_observation import observe_files, observe_path, strict_json_loads
 
 STORE_DIR_NAME = ".gg_store"
 _OBSERVATION_STORES = contextvars.ContextVar("genegalleon_observation_stores", default=None)
@@ -1186,14 +1187,23 @@ class GeneFamilyOutputStore:
         self._states_loaded = True
         self._cache_epoch = self._read_index_epoch()
 
-    def _artifact_from_index_record(self, logical_path: str, record: dict) -> Artifact:
+    def _artifact_from_index_record(
+        self, logical_path: str, record: dict, *, allow_retained: bool = False,
+    ) -> Artifact:
         try:
             subdir, name = logical_path.split("/", 1)
         except ValueError as exc:
             raise ArchiveStoreError(f"Archive index contains an invalid logical path: {logical_path!r}") from exc
         _safe_logical_path(subdir, name)
-        zip_path = _indexed_zip_path(self.root, self.payload_root, subdir,
-                                     str(record["zip_path"]), str(record.get("zip_location", "active")))
+        location = str(record.get("zip_location", "active"))
+        if allow_retained and location == "retained":
+            relative = Path(record["zip_path"])
+            if relative.parts != (subdir, relative.name) or not re.fullmatch(
+                    re.escape(subdir) + r"[.]pack-[0-9]+[.]zip", relative.name):
+                raise ArchiveStoreError("Invalid retained archive location")
+            zip_path = ArchiveVersionReferences(self.archive_root).retained / relative
+        else:
+            zip_path = _indexed_zip_path(self.root, self.payload_root, subdir, str(record["zip_path"]), location)
         zip_signature = record.get("zip_signature")
         if zip_signature is not None and (not isinstance(zip_signature, list) or len(zip_signature) != 5
                                           or any(type(value) is not int for value in zip_signature)):
@@ -2178,6 +2188,70 @@ class GeneFamilyOutputStore:
         with self._read_lock():
             self._refresh_if_index_changed()
             return self._artifact_unchecked(subdir, name, include_digest=False)
+
+    def reserve_archive_versions(
+        self, consumer: str, versions: Sequence[MemberVersion], *, max_bytes: int,
+    ) -> str:
+        """Pin explicitly selected, publisher-verified archive members."""
+        if not self.archive_root.is_dir():
+            raise ArchiveReferenceError("Archive store is not published")
+        with (_bucket_lock(self.archive_root / STORAGE_CONVERSION_LOCK_FILE, exclusive=False),
+              producer_read_lock(self.archive_root), archive_lock(self.archive_root)):
+            if _read_storage_conversion_marker(self.root) is not None:
+                raise ArchiveReferenceError("Archive layout conversion is pending")
+            self._refresh_if_index_changed()
+            locations = []
+            for version in versions:
+                artifact = self._artifact_unchecked(*version.logical_path.split("/", 1), include_digest=False)
+                if (artifact is None or artifact.zip_path is None
+                        or (artifact.generation, artifact.sha256) != (version.generation, version.sha256)):
+                    raise ArchiveReferenceError(f"Archive member version changed: {version.logical_path}")
+                locations.append(self._version_location(artifact))
+            return ArchiveVersionReferences(self.archive_root).reserve(consumer, locations, max_bytes=max_bytes)
+
+    def _version_location(self, artifact: Artifact) -> VersionLocation:
+        path = artifact.zip_path
+        if (path is None or artifact.sha256 is None or artifact.zip_signature is None
+                or path.is_symlink() or path.parent.is_symlink()
+                or not _signature_matches(path, artifact.zip_signature)):
+            raise ArchiveReferenceError(f"Archive publication identity unavailable: {artifact.logical_path}")
+        retained = ArchiveVersionReferences(self.archive_root).retained
+        path_record = (path.relative_to(retained).as_posix(), "retained") if path.is_relative_to(retained) else None
+        version = MemberVersion(artifact.logical_path, artifact.generation, artifact.sha256)
+        return VersionLocation(version, str(path.resolve()), self._index_record(artifact, _path_record=path_record))
+
+    def _reserved_artifact(self, location: VersionLocation) -> Artifact:
+        artifact = self._artifact_from_index_record(location.version.logical_path, dict(location.record),
+                                                    allow_retained=True)
+        if self._version_location(artifact) != location:
+            raise ArchiveReferenceError(f"Reserved archive metadata changed: {location.version.logical_path}")
+        return artifact
+
+    @contextlib.contextmanager
+    def open_archive_version(self, consumer: str, selection: str, version: MemberVersion) -> Iterator[BinaryIO]:
+        """Read the reserved version, independent of the current logical winner."""
+        with producer_read_lock(self.archive_root):
+            references = ArchiveVersionReferences(self.archive_root)
+            artifact = self._reserved_artifact(references.member(consumer, selection, version))
+            with self._cached_zip_reader(artifact.zip_path) as archive:
+                info = archive.getinfo(artifact.member_name)
+                if (info.file_size, info.CRC) != (artifact.size, artifact.crc):
+                    raise ArchiveReferenceError(f"Reserved ZIP member metadata changed: {version.logical_path}")
+                with archive.open(info) as source:
+                    yield source
+
+    def release_archive_versions(self, consumer: str, selection: str) -> None:
+        references = ArchiveVersionReferences(self.archive_root)
+        if not references.path.is_file():
+            raise ArchiveReferenceError("No archive reference catalogue has been created")
+        with producer_quiescence_lock(self.archive_root), archive_lock(self.archive_root):
+            for path in references.release(consumer, selection):
+                if path.is_relative_to(references.retained) and path.parent.parent == references.retained:
+                    if path.parent.is_symlink() or references.retained.is_symlink():
+                        raise ArchiveReferenceError("Symlinked retained archive directory")
+                    path.unlink(missing_ok=True)
+                    _fsync_directory(path.parent)
+                    references.record_removal(consumer, path)
 
     def _physical_file_names_unlocked(
         self,
@@ -4363,7 +4437,8 @@ def archive_completed_outputs(
                     candidates = sorted(entry for entry, family_id in potential if family_id in eligible_family_ids)
                     if len(candidates) < min_files:
                         continue
-                    if store._load_subdir_artifacts(subdir):
+                    if (store._load_subdir_artifacts(subdir)
+                            or _has_archive_version_references(store, _final_archive_path(root, subdir))):
                         continue
                     if (
                         direct_final_max_bytes > 0
@@ -4690,7 +4765,7 @@ def archive_completed_outputs(
                     keep_final_archive = final_archive.resolve() in {
                         path.resolve() for path in referenced_shards
                     } and not (retain_named_parts)
-                    if keep_final_archive:
+                    if keep_final_archive and not _has_archive_version_references(store, final_archive):
                         generation = store._next_generation()
                         zip_path, compacted = _compact_artifact_chunk(
                             payload_root,
@@ -5068,6 +5143,8 @@ def storage_conversion_session(
         with _bucket_lock(archive_root / "collector.lock", exclusive=True, nonblocking=True) as collector_idle:
             if not collector_idle:
                 raise ArchiveStoreError("An archive collector is active; retry conversion after it finishes")
+            if ArchiveVersionReferences(archive_root).has_references():
+                raise ArchiveReferenceError("Archive layout conversion requires releasing active version references")
             existing = _read_storage_conversion_marker(root)
             if require_resume and existing is None:
                 raise ArchiveStoreError("--resume was requested, but no interrupted storage conversion exists")
@@ -6129,7 +6206,7 @@ def compact_archives(
                     max_bytes_per_shard > 0 and logical_bytes > max_bytes_per_shard
                 )
                 retain_named_parts = max_bytes_per_shard > 0 and logical_bytes > max_bytes_per_shard
-                if keep_final_archive:
+                if keep_final_archive and not _has_archive_version_references(store, final_archive):
                     generation = store._next_generation()
                     zip_path, compacted = _compact_artifact_chunk(
                         payload_root,
@@ -6243,6 +6320,35 @@ def _write_archive_status(
     return status_path
 
 
+def _has_archive_version_references(store: GeneFamilyOutputStore, path: Path) -> bool:
+    return bool(ArchiveVersionReferences(store.archive_root).locations_for_archive(path.resolve()))
+
+
+def _preserve_referenced_members(store: GeneFamilyOutputStore, subdir: str, path: Path) -> None:
+    references = ArchiveVersionReferences(store.archive_root)
+    locations = references.locations_for_archive(path.resolve())
+    if not locations:
+        return
+    current = store._load_subdir_artifacts(subdir)
+    relocated = []
+    displaced = []
+    for location in locations:
+        version = location.version
+        latest = current.get(version.logical_path)
+        if (latest is not None and latest.zip_path.resolve() != path.resolve()
+                and (latest.generation, latest.sha256) == (version.generation, version.sha256)):
+            relocated.append(store._version_location(latest))
+        else:
+            displaced.append(store._reserved_artifact(location))
+    if displaced:
+        mode = str(store._read_manifest(path)["mode"])
+        _, retained = _compact_artifact_chunk(
+            references.retained, subdir, displaced, mode, store._next_generation(),
+        )
+        relocated.extend(store._version_location(artifact) for artifact in retained)
+    references.relocate(relocated)
+
+
 def _remove_unreferenced_subdir_archives(
     root: Path,
     payload_root: Path,
@@ -6253,8 +6359,12 @@ def _remove_unreferenced_subdir_archives(
     final_path = _final_archive_path(root, subdir)
     if final_path.is_file() and _zip_has_genegalleon_manifest(final_path):
         candidates.append(final_path)
+    references = ArchiveVersionReferences(_archive_state_root(root))
+    store = GeneFamilyOutputStore(root) if references.has_references() else None
     for path in sorted(set(candidates)):
         if path.resolve() not in referenced:
+            if store is not None:
+                _preserve_referenced_members(store, subdir, path)
             path.unlink()
     shard_dir = payload_root / subdir
     try:
@@ -6378,6 +6488,10 @@ def _finalize_subdirs_locked(
                     verify_bytes_total=0,
                     current_zip_bytes=final_path.stat().st_size,
                 )
+            continue
+        if _has_archive_version_references(store, final_path):
+            # The regular compactor can publish a separate generation and
+            # rebind readers without replacing this pathname in place.
             continue
         generation = store._next_generation()
 
@@ -6525,6 +6639,15 @@ def finalize_archives(
 
 
 def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
+    root = Path(root).resolve()
+    archive_root = _archive_state_root(root)
+    if not archive_root.is_dir():
+        return _migrate_archive_layout(root)
+    with _bucket_lock(archive_root / STORAGE_CONVERSION_LOCK_FILE, exclusive=True):
+        return _migrate_archive_layout(root)
+
+
+def _migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
     """Move legacy mixed metadata/payload stores into the visible layout."""
 
     root = Path(root).resolve()
@@ -6543,10 +6666,14 @@ def migrate_archive_layout(root: Path) -> List[Tuple[Path, Path]]:
             if not readers_idle:
                 raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
             with archive_lock(legacy_root):
+                if ArchiveVersionReferences(legacy_root).has_references():
+                    raise ArchiveReferenceError("Archive layout migration requires releasing active version references")
                 os.replace(legacy_root, state_root)
                 _fsync_directory(root)
     if not state_root.is_dir():
         return []
+    if ArchiveVersionReferences(state_root).has_references():
+        raise ArchiveReferenceError("Archive layout migration requires releasing active version references")
 
     embedded_zip_paths = [
         path
@@ -6818,6 +6945,10 @@ def repair_archive_index(
                 )
             if remove_orphans:
                 for path in orphaned:
+                    if _has_archive_version_references(store, path):
+                        subdir = str(store._read_manifest(path)["subdir"])
+                        _safe_logical_path(subdir, "__archive__")
+                        _preserve_referenced_members(store, subdir, path)
                     path.unlink()
             return orphaned
 
@@ -6852,6 +6983,8 @@ def purge_archives(
         if not readers_idle:
             raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
         with archive_lock(archive_root):
+            if ArchiveVersionReferences(archive_root).has_references():
+                raise ArchiveReferenceError("Archive purge requires releasing active version references")
             store = GeneFamilyOutputStore(root)
             _assert_archive_mode(store, mode)
             store._load_tombstones()
@@ -7220,6 +7353,29 @@ def run_cli(args: argparse.Namespace) -> int:
         return 0
 
     root = args.root.resolve()
+    if args.command == "reserve-archive-versions":
+        store = GeneFamilyOutputStore(root)
+        versions = []
+        with args.versions_jsonl.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                row = strict_json_loads(line)
+                if not isinstance(row, dict) or set(row) != {"logical_path", "generation", "sha256"}:
+                    raise ArchiveReferenceError("Archive version selection has an invalid row")
+                versions.append(MemberVersion(**row))
+        selection = store.reserve_archive_versions(args.consumer, versions, max_bytes=args.max_bytes)
+        print(json.dumps({"consumer": args.consumer, "selection": selection}, sort_keys=True))
+        return 0
+    if args.command == "read-archive-version":
+        store = GeneFamilyOutputStore(root)
+        version = MemberVersion(args.logical_path, args.generation, args.sha256)
+        with store.open_archive_version(args.consumer, args.selection, version) as stream:
+            shutil.copyfileobj(stream, sys.stdout.buffer)
+        return 0
+    if args.command == "release-archive-versions":
+        GeneFamilyOutputStore(root).release_archive_versions(args.consumer, args.selection)
+        return 0
     if args.command == "inventory-path":
         print(family_inventory_path(root, args.family_id))
         return 0
@@ -7869,7 +8025,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         exit_code = run_cli(args)
-    except (ArchiveStoreError, OSError, ValueError) as exc:
+    except (ArchiveReferenceError, ArchiveStoreError, OSError, ValueError) as exc:
         print(f"gene_family_output_store: {exc}", file=sys.stderr)
         exit_code = 2
     raise SystemExit(exit_code)

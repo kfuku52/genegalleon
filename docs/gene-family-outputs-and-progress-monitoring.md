@@ -245,6 +245,21 @@ source identities before returning. Legacy ZIP indexes and a changed physical
 ZIP take the full content-read path. `--archive-verification sha256` requests
 full content reads and remains the standalone default.
 
+An external job controller can reserve exact, publisher-verified members with
+`reserve-archive-versions --consumer ID --versions-jsonl FILE --max-bytes N`.
+Each JSONL record contains `logical_path`, `generation` and `sha256` from the
+published member. The command returns the digest of the selection. The
+controller records this digest with its job and supplies it with the same
+consumer ID to `read-archive-version` and `release-archive-versions`. Release
+requires the controller to establish that every consuming task has terminated.
+
+Registration stores references in the archive metadata and counts each active
+version once against the limit on logical bytes. Compaction rebinds a reference
+when it has moved the same member version. When compaction retires an archive
+containing an older referenced member, it copies just that member into retained
+storage. The last release removes unreferenced retained ZIPs. Destructive store
+conversions and purges require active references to be released first.
+
 `workflow/gg_common_params.sh` defaults
 `GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE` to `zip`. The alternative value
 `files` preserves the historical one-file-per-artifact layout for newly
