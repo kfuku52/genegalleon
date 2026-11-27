@@ -1588,7 +1588,7 @@ def test_fixed_refinement_reuses_exact_real_miniprot_search(tmp_path, monkeypatc
         assert (cold / member).read_bytes() == (warm / member).read_bytes()
 
 
-def test_posthoc_omark_mixed_cohort_reuses_final_proteomes(tmp_path):
+def test_default_and_posthoc_omark_mixed_cohort_reuse_final_proteomes(tmp_path):
     """Real rescue/refinement publications, stubbed external OMArk tools."""
     genome = import_module("test_genome_evolution_protein_mode")
     generation = import_module("test_gg_input_generation_end_to_end")
@@ -1627,8 +1627,13 @@ def test_posthoc_omark_mixed_cohort_reuses_final_proteomes(tmp_path):
         assert len(captured.read_text().splitlines()) == index
     assert not report.exists()
     (root / "pending").rename(effective)
-    for _ in range(2):
-        result = subprocess.run(["bash", generation.CORE_PATH], env=env, cwd=tmp_path, text=True, capture_output=True)
+    formatted_cds = tmp_path / "formatted_cds"
+    formatted_cds.mkdir()
+    finalize_env = dict(env, input_generation_mode="refinement_finalize", run_species_busco="0",
+                        gene_model_refinement_rescue_dir=str(anchor), run_gene_model_rescue_swissprot="0",
+                        species_cds_dir=str(formatted_cds))
+    for run_env in (finalize_env, env):
+        result = subprocess.run(["bash", generation.CORE_PATH], env=run_env, cwd=tmp_path, text=True, capture_output=True)
         assert result.returncode == 0, result.stdout + result.stderr
         rows = {(r["species"], r["stage"]): r for r in refinement.read_table(report)}
         assert len(rows) == 3 * len(names) + 2

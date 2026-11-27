@@ -32,7 +32,8 @@ Notable defaults:
   parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
 - `run_gene_model_rescue=1` optionally adds [sparse multi-species/self-synteny gene-model rescue](gene-model-rescue.md), with five common references, nearest donors, augmented CDS/GFF and post-rescue BUSCO,
-- `run_species_omark=1` compares representative proteomes at refinement finalization.
+- `run_species_omark=auto` compares representative proteomes at refinement
+  finalization when the runtime provides OMArk and OMAmer.
   For an existing publication use [the OMArk-only mode](gene-model-refinement.md#comparing-representative-proteomes-with-omark).
 - `run_gene_model_refinement=1` optionally preserves all coding isoforms, selects conserved representatives, and adds supported existing-locus repairs/isoforms; see [refinement stages, arrays and downstream inputs](gene-model-refinement.md),
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,

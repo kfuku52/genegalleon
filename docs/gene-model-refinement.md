@@ -1245,8 +1245,10 @@ and preserves the initial index for restart and inspection.
 
 ## Comparing representative proteomes with OMArk
 
-Set `run_species_omark=1` in input generation to evaluate the representatives
-after refinement finalization. For a completed publication, run only the comparison
+Input generation defaults to `run_species_omark=auto` and evaluates the
+representative proteomes at refinement finalization when its runtime provides
+both OMArk and OMAmer. Set `GG_INPUT_RUN_SPECIES_OMARK=0` to skip the assessment
+or `=1` to require it. For a completed publication, run only the comparison
 with the existing refinement directory and workspace:
 
 ```bash
