@@ -192,6 +192,12 @@ native_ou_seed
 pgls_methods
 promoter_bp
 query_blast_coverage
+query_blast_diamond_sensitivity
+query_family_filter
+query_family_interpro_targets
+query_family_interpro_entries
+query_family_interpro_tree
+query_family_swissprot_prefix
 query_blast_auto_evalue_maxlen_cutoffs
 query_blast_evalue
 query_blast_method

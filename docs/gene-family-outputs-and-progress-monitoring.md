@@ -64,6 +64,42 @@ then used as the GeneRax inputs in the same run when `run_generax=1`. A missing
 required extraction input is an error rather than a silently skipped
 refinement.
 
+### Optional Swiss-Prot/InterPro family screening
+
+For `query2family` with DIAMOND against supplied species protein FASTAs, set
+`query_family_filter=swissprot_interpro` to screen candidates before alignment.
+The default `off` uses the usual coverage and hit cap. Set
+`query_blast_coverage=0` to admit every discovery hit with valid coverage.
+`query_blast_diamond_sensitivity=ultra-sensitive` selects DIAMOND's more
+sensitive search mode independently of the coverage and E-value settings.
+In the enabled screening mode, use container-visible absolute input paths.
+
+| Setting | Input |
+| --- | --- |
+| `query_family_interpro_targets` | TSV with `query` and `interpro_family_id` columns, one `Family` ID or explicit `unmapped` value per query. Optional `broader_interpro_family_ids` lists semicolon-separated broader `Family` IDs missing from the explicit hierarchy. |
+| `query_family_interpro_entries` | InterPro `entry.list` |
+| `query_family_interpro_tree` | InterPro `ParentChildTreeFile.txt` from the same release |
+| `query_family_swissprot_prefix` | Optional prefix of a prepared Swiss-Prot MMseqs2 database (`.mmseqs`) with its matching metadata (`.meta.tsv.gz`). |
+
+The screen uses the existing Swiss-Prot MMseqs2 database and accession-to-InterPro
+metadata. InterPro descendants of the target family are compatible.
+Broader ancestors, domains and other entry types do not count as competing
+families. It uses up to 200 prefilter hits, an E-value limit of `1e-5`, at
+least 50% overlap with one discovery alignment segment on the candidate, and a
+near-best window of 90% of the best comparable bit score. Competing hits on a
+separate part of a protein do not decide the target-region assignment.
+
+Candidates supported only as another family are excluded. The hit cap first
+admits candidates supported as the target family, then candidates with
+insufficient or conflicting evidence. Each tier uses the original discovery
+rank. An explicitly unmapped query skips the secondary search and uses
+discovery rank up to the cap; every candidate is marked `unmapped_query`.
+The file
+`query_family_filter/<query>_query_family_filter.tsv` records the decision,
+matching accessions, IDs, coordinates and whether each candidate entered the
+analysis. Retention in this file is a candidate selection result. Use the
+rooted gene tree to assess orthology.
+
 When `run_expression_trait_pgls=1`, the same family receives the methods named
 by `pgls_methods` plus common comparison and audit files. RSC members are:
 

@@ -2202,6 +2202,22 @@ else
 fi
 
 task="In-frame query BLAST (${query_blast_method})"
+query_diamond_sensitivity="${query_blast_diamond_sensitivity:-default}"
+query_diamond_sensitivity_args=()
+case "${query_diamond_sensitivity}" in
+  default) ;;
+  ultra-sensitive)
+    if [[ "${query_blast_method}" != diamond ]]; then
+      echo 'query_blast_diamond_sensitivity=ultra-sensitive requires DIAMOND.' >&2
+      exit 1
+    fi
+    query_diamond_sensitivity_args+=(--ultra-sensitive)
+    ;;
+  *)
+    echo 'query_blast_diamond_sensitivity must be default or ultra-sensitive.' >&2
+    exit 1
+    ;;
+esac
 query_blast_needs_update=0
 query_blast_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.query_blast.json"
@@ -2216,6 +2232,9 @@ query_blast_provenance_args=(
   --parameter "evalue=${query_blast_evalue}"
   --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
 )
+if [[ "${query_diamond_sensitivity}" != default ]]; then
+  query_blast_provenance_args+=(--parameter "diamond_sensitivity=${query_diamond_sensitivity}")
+fi
 if [[ "${mode_gene_evolution}" == "query2family" ]]; then
   query_reference_kind=cds
   query_reference_dir="${dir_sp_cds}"
@@ -2568,7 +2587,7 @@ PY
       tmp_diamond_out="$(basename "${db_file}").diamond.out.tsv"
       wait_until_jobn_le "${diamond_search_jobs}"
       (
-        if ! diamond blastp \
+        if ! diamond blastp "${query_diamond_sensitivity_args[@]}" \
           --query "${query_aa_local}" \
           --db "${db_file}" \
           --out "${tmp_diamond_out}" \
@@ -2616,6 +2635,8 @@ fi
 
 task="Fasta generation"
 primary_fasta_needs_update=0
+query_family_filter="${query_family_filter:-off}"
+query_family_filter_report="${dir_output_active}/query_family_filter/${og_id}_query_family_filter.tsv"
 primary_fasta_provenance_args=(
   --manifest "${dir_output_active}/artifact_provenance/${og_id}.primary_fasta.json"
   --step "primary_fasta"
@@ -2635,6 +2656,45 @@ else
   primary_fasta_provenance_args+=(--input "query_blast=${file_og_query_blast}")
   primary_fasta_provenance_args+=(--parameter "query_subject_ids=literal")
 fi
+case "${query_family_filter}" in
+  off) ;;
+  swissprot_interpro)
+    if [[ "${mode_gene_evolution}" != query2family || "${input_sequence_mode}" != protein ||
+          "${query_blast_method}" != diamond ]] || ! species_protein_input_has_files; then
+      echo 'Swiss-Prot family screening requires query2family DIAMOND blastp against species protein FASTAs.' >&2
+      exit 1
+    fi
+    for interpro_input in "${query_family_interpro_entries:-}" "${query_family_interpro_tree:-}" "${query_family_interpro_targets:-}"; do
+      if [[ ! -s "${interpro_input}" ]]; then
+        echo "Missing InterPro family screening input: ${interpro_input}" >&2
+        exit 1
+      fi
+    done
+    family_swissprot_prefix="${query_family_swissprot_prefix:-}"
+    if [[ -n "${family_swissprot_prefix}" ]]; then
+      family_swissprot_meta="${family_swissprot_prefix}.meta.tsv.gz"
+    else
+      family_swissprot_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}") || exit $?
+      family_swissprot_meta=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${family_swissprot_prefix}") || exit $?
+    fi
+    primary_fasta_provenance_args+=(
+      --parameter "query_family_filter=swissprot_interpro"
+      --input "query_family_filter_implementation=${gg_support_dir}/query_family_filter.py"
+      --input "query_family_swissprot_metadata=${family_swissprot_meta}"
+      --input "query_family_interpro_entries=${query_family_interpro_entries}"
+      --input "query_family_interpro_tree=${query_family_interpro_tree}"
+      --input "query_family_interpro_targets=${query_family_interpro_targets}"
+      --output "query_family_filter=${query_family_filter_report}"
+    )
+    for mmseqs_suffix in .mmseqs .mmseqs.dbtype .mmseqs.index .mmseqs_h .mmseqs_h.dbtype .mmseqs_h.index; do
+      primary_fasta_provenance_args+=(--input "query_family_swissprot${mmseqs_suffix}=${family_swissprot_prefix}${mmseqs_suffix}")
+    done
+    ;;
+  *)
+    echo 'query_family_filter must be off or swissprot_interpro.' >&2
+    exit 1
+    ;;
+esac
 if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
   ensure_species_fasta_sequence_store protein || exit 1
   primary_fasta_provenance_args+=(--input "species_protein_index=${file_species_protein_store_manifest}")
@@ -2657,11 +2717,31 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
     genes=()
     read -r -a genes <<< "$(awk -v og="${og_id}" '$1==og {$1=""; sub(/^[[:space:]]+/, "", $0); gsub(",", "", $0); gsub(/\t/, " ", $0); sub(/[[:space:]]*$/, "", $0); gsub(/\047|"/, "", $0); print; exit}' "${file_og}")"
   elif [[ "${mode_gene_evolution}" == "query2family" ]]; then
+    query_family_hit_args=(--max_num_gene_blast_hit_retrieval "${max_num_gene_blast_hit_retrieval}")
+    if [[ "${query_family_filter}" == swissprot_interpro ]]; then
+      query_family_hit_args=(--all-hits)
+    fi
     python "${gg_support_dir}/extract_gene_id_from_blast_table.py" \
       --infile "${file_og_query_blast}" \
       --outfile gene_id_list.txt \
       --min_query_blast_coverage "${query_blast_coverage}" \
-      --max_num_gene_blast_hit_retrieval "${max_num_gene_blast_hit_retrieval}"
+      "${query_family_hit_args[@]}"
+    if [[ "${query_family_filter}" == swissprot_interpro ]]; then
+      python "${gg_support_dir}/query_family_filter.py" \
+        --entries "${query_family_interpro_entries}" --tree "${query_family_interpro_tree}" \
+        --mapping "${query_family_interpro_targets}" --query "${og_id}" \
+        --metadata "${family_swissprot_meta}" --swissprot-db "${family_swissprot_prefix}.mmseqs" \
+        --genes gene_id_list.txt --discovery "${file_og_query_blast}" --sequence-store "${file_species_protein_store_db}" \
+        --min-coverage "${query_blast_coverage}" --cap "${max_num_gene_blast_hit_retrieval}" \
+        --memory-limit "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB:-3}" 3 4)G" \
+        --threads "${GG_TASK_CPUS}" --audit query_family_filter.tsv --selected query_family_selected.txt
+      if [[ ! -s query_family_selected.txt ]]; then
+        cp_out query_family_filter.tsv "${query_family_filter_report}"
+        echo "No candidates remain after Swiss-Prot/InterPro screening for ${og_id}. See the screening report." >&2
+        exit 1
+      fi
+      mv -- query_family_selected.txt gene_id_list.txt
+    fi
     mapfile -t genes < gene_id_list.txt
   fi
   if [[ -e pattern.txt ]]; then
@@ -2753,6 +2833,9 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
       gg_prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"
       translate_orthogroup_cds_to_protein_fasta "${file_og_cds_fasta}" "${file_og_pep_fasta}" "${file_species_genetic_code_resolved}"
     fi
+  fi
+  if [[ "${query_family_filter}" == swissprot_interpro ]]; then
+    cp_out query_family_filter.tsv "${query_family_filter_report}"
   fi
   gg_artifact_record "${primary_fasta_provenance_args[@]}"
 else

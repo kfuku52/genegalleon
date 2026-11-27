@@ -29,6 +29,8 @@ def build_arg_parser():
         type=int,
         help="Integer value for --max_num_gene_blast_hit_retrieval.",
     )
+    parser.add_argument("--all-hits", action="store_true",
+                        help="Keep all ranked subjects for subsequent family screening.")
     return parser
 
 
@@ -125,7 +127,7 @@ def main():
     ).reset_index(drop=True)
     df2.columns = ["gene_id", "min_evalue", "qjointcov"]
     print(f"Number of BLAST-hit gene IDs before filtering: {df2.shape[0]}", flush=True)
-    df3 = df2.head(args.max_num_gene_blast_hit_retrieval).reset_index(drop=True)
+    df3 = df2 if args.all_hits else df2.head(args.max_num_gene_blast_hit_retrieval)
     gene_ids = df3.loc[:, "gene_id"]
     gene_ids.to_csv(args.outfile, sep="\t", header=False, index=False)
     print(f"Number of BLAST-hit gene IDs after filtering: {gene_ids.shape[0]}", flush=True)

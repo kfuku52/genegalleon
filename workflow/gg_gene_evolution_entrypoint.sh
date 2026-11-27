@@ -189,9 +189,15 @@ run_tree_plot=1 # Tree visualization pdf.
 
 # Query2family parameters
 query_blast_method="diamond" # diamond|tblastn; diamond translates species CDS and runs protein BLASTP-style searches, while tblastn searches protein queries against nucleotide CDS databases.
+query_blast_diamond_sensitivity="default" # default|ultra-sensitive.
 query_blast_evalue="auto" # BLAST E-value threshold. Set "auto" to choose by query max AA length.
 query_blast_auto_evalue_maxlen_cutoffs="40:1000,80:100,150:10,300:1,inf:0.01" # Auto E-value table: max_query_aa_length:evalue.
-query_blast_coverage="0.25" # BLAST coverage threshold.
+query_blast_coverage="0.25" # Minimum query coverage fraction. 0 retains every hit with valid coverage.
+query_family_filter="off" # off|swissprot_interpro; screen ranked query2family hits before applying the hit cap.
+query_family_interpro_targets="" # TSV with query and interpro_family_id columns.
+query_family_interpro_entries="" # InterPro entry.list from the selected release.
+query_family_interpro_tree="" # InterPro ParentChildTreeFile.txt from the same release.
+query_family_swissprot_prefix="" # Optional absolute prefix for a matched Swiss-Prot MMseqs2 database and .meta.tsv.gz.
 max_num_gene_blast_hit_retrieval=5000 # Maximum number of genes to retrieve.
 retain_query_in_maxalign=1 # Keep query sequences during MaxAlign filtering in query2family mode so seed genes are not removed as alignment outliers.
 
