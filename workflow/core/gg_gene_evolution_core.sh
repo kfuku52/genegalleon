@@ -2607,7 +2607,9 @@ PY
     echo "No query BLAST hits were detected after in-frame filtering. Exiting."
     exit 1
   fi
-  gg_artifact_record "${query_blast_provenance_args[@]}"
+  gg_artifact_record "${query_blast_provenance_args[@]}" \
+    --diagnostic "effective_evalue=${effective_query_blast_evalue}" \
+    --diagnostic "max_query_aa_length=${query_blast_query_max_aa_len}"
 else
   gg_step_skip "${task}"
 fi

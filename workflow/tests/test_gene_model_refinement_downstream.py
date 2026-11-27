@@ -599,6 +599,7 @@ cd "${dir_tmp}"
         assert f'tblastn_database_size={total_nt}' in (active / 'provenance.txt').read_text()
     assert 'species_protein_index=' in (active / 'provenance.txt').read_text()
     assert 'fasta_sequence_store_schema=2' in (active / 'provenance.txt').read_text()
+    assert 'effective_evalue=1e-3' in (active / 'provenance.txt').read_text()
     # Identical selected inputs must reuse the same real DB after build locks release.
     again = subprocess.run(['bash', '-c', script], env=environment, text=True,
                            capture_output=True, timeout=45)

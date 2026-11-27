@@ -1164,6 +1164,17 @@ statistics when `alignment_stats_original` or `alignment_stats_cleaned` outputs 
 See [alignment statistics](alignment-statistics.md) for the cdskit migration,
 updated output names, and DNA/protein semantics.
 
+`gg gene summary` also writes
+`workspace/output/gene_summary/query2family/query2family_search_settings.tsv`
+with one row per query, in the same array order. It records the search method,
+DIAMOND sensitivity, requested and effective E-value, maximum query length
+used for automatic E-values, cutoff table, minimum joint query coverage and
+hit cap. The settings come from the saved search and FASTA-generation
+provenance. For older searches, the effective value is reconstructed only
+when the recorded fixed value or the matching original query FASTA is
+available. Unavailable settings are `NA`; `evalue_source` identifies how the
+effective value was obtained. The report reads both raw and archived results.
+
 For large query2family runs, inspect late-stage completion markers such as
 `tree_plot`, `stat_branch`, or `stat_tree`.
 

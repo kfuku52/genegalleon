@@ -570,6 +570,7 @@ run_family_completion_summary_for_source() {
       --dir_query2family "${dir_gene_family}" \
       --dir_query_gene "${dir_query_gene}" \
       --ncpu "${GG_TASK_CPUS:-1}" \
+      --out_search_settings "${summary_output_dir}/query2family_search_settings.tsv" \
       --out "${summary_output_dir}/query2family_summary.tsv"
   else
     echo "Generating orthogroup completion summary."
