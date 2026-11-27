@@ -401,11 +401,10 @@ def make_plan(args):
             path = resolve(value, "")
             inputs[str(path)] = digest(path)
             count_inputs[f"count_{kind}_tsv"] = str(path)
-    checkpoint = getattr(args, "count_bootstrap_checkpoint", "")
-    if checkpoint:
-        if not args.count_bootstrap or tree_archive is not None:
-            raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
-        checkpoint = str(resolve(checkpoint, ""))
+    checkpoints = {
+        key: str(resolve(path, "")) for key in ("count_bootstrap_checkpoint", "count_fit_checkpoint")
+        if (path := getattr(args, key, ""))
+    }
     parameters["max_ks_quartets"] = getattr(args, "max_ks_quartets", 0)
     if getattr(args, "ks_rooted_copies", 0):
         if parameters["max_ks_quartets"] < 1 or not cross_ks_sources:
@@ -484,15 +483,15 @@ def make_plan(args):
         managed_output = workspace / "output/genome_evolution/wgd_ssd"
         protect_output(managed_output, hashes)
         inputs.update(hashes)
-    if checkpoint:
-        protect_checkpoint(checkpoint, inputs | {str(args.outfile.resolve()): ""}, workspace)
+    validate_count_checkpoints(checkpoints, tree_archive is not None, args.count_bootstrap,
+                               inputs | {str(args.outfile.resolve()): ""}, workspace)
     protect_output(args.outfile, inputs, workspace)
     return {"schema_version": 1, "workspace": str(workspace), "species_tree": str(tree_path),
             "counts": str(counts), "members": str(members), "gene_trees": str(tree_archive) if tree_archive else "",
             "cross_pairs": cross_pairs, "cross_ks_sources": cross_ks_sources, "cross_tree_support": support_archive,
             "alignment_identity": alignment, "reused_cross_ks_alignments": reused_alignments,
             **({"cross_ks_likelihood_identity": likelihood, "reused_cross_ks_likelihood": reused_reports} if likelihood else {}),
-            "count_bootstrap_checkpoint": checkpoint, **count_inputs, **overlay_paths,
+            "count_bootstrap_checkpoint": "", **checkpoints, **count_inputs, **overlay_paths,
             "genomes": genomes, "species": names,
             "parameters": parameters, "tools": tools, "input_hashes": inputs,
             "absent_inputs": ([str(genomes_path)] if not genomes_path.is_file() and not args.genomes else [])
@@ -528,10 +527,26 @@ def protect_checkpoint(path, inputs, workspace):
                  workspace / "output/artifact_provenance", workspace / "output/.gg_global_artifacts"]
     checkpoint = Path(path).resolve()
     if not checkpoint.parent.is_dir():
-        raise ValueError("WGD bootstrap checkpoint needs an existing parent directory")
+        raise ValueError("WGD checkpoint needs an existing parent directory")
     if any(parent == checkpoint or parent in checkpoint.parents for parent in protected):
-        raise ValueError("WGD bootstrap checkpoint must be outside managed WGD outputs and task scratch")
+        raise ValueError("WGD checkpoint must be outside managed WGD outputs and task scratch")
     protect_output(checkpoint, inputs, workspace)
+
+
+def validate_count_checkpoints(checkpoints, tree_mode, bootstrap, inputs, workspace, *, bundle=None):
+    if not checkpoints:
+        return
+    if tree_mode:
+        raise ValueError("WGD count checkpoints require gene-count mode")
+    if checkpoints.get("count_bootstrap_checkpoint") and not bootstrap:
+        raise ValueError("A bootstrap checkpoint requires positive --count-bootstrap")
+    paths = [Path(path).resolve() for path in checkpoints.values()]
+    if len(set(paths)) != len(paths):
+        raise ValueError("WGD fit and bootstrap checkpoints need distinct paths")
+    for path in paths:
+        if bundle in path.parents:
+            raise ValueError("WGD checkpoint must be outside the output bundle")
+        protect_checkpoint(path, inputs, workspace)
 
 
 def validated_members(plan):
@@ -1386,13 +1401,12 @@ def run_analysis(plan, output, cpus):
         raise ValueError("WGD bootstrap workers exceed the allocated CPUs")
     verify(plan)
     protect_output(output, plan["input_hashes"], Path(plan["workspace"]))
-    checkpoint = plan.get("count_bootstrap_checkpoint", "")
-    if checkpoint:
-        if tree_mode or not p["count_bootstrap"]:
-            raise ValueError("A bootstrap checkpoint requires gene-count mode and positive --count-bootstrap")
-        protect_checkpoint(checkpoint, plan["input_hashes"] | {str(output.resolve()): ""}, Path(plan["workspace"]))
-        if output.resolve() in Path(checkpoint).resolve().parents:
-            raise ValueError("WGD bootstrap checkpoint must be outside the output bundle")
+    checkpoints = {
+        key: plan[key] for key in ("count_bootstrap_checkpoint", "count_fit_checkpoint") if plan.get(key)
+    }
+    bundle = output.resolve()
+    validate_count_checkpoints(checkpoints, tree_mode, p["count_bootstrap"],
+                               plan["input_hashes"] | {str(bundle): ""}, Path(plan["workspace"]), bundle=bundle)
     family_tables = _validated_family_tables(plan)
     members, family_key, count_rows = family_tables
     validate_annotation_counts(plan, members)
@@ -1574,8 +1588,8 @@ def run_analysis(plan, output, cpus):
         worker_args = ["--bootstrap-workers", str(bootstrap_workers)] if p["count_bootstrap"] and bootstrap_workers > 1 else []
         if scan_workers > 1:
             worker_args.extend(("--scan-workers", str(scan_workers)))
-        if checkpoint:
-            worker_args.extend(("--bootstrap-checkpoint", checkpoint))
+        for key, path in checkpoints.items():
+            worker_args.extend(("--" + key.removeprefix("count_").replace("_", "-"), path))
         run_tool([sys.executable, "-m", "nwkit", "wgd-count", "--infile", plan["species_tree"],
                   "--input-rooted", "auto", "--counts", output / "counts.tsv", "--ascertainment", "root-clades",
                   "--bootstrap", p["count_bootstrap"], "--seed", p["seed"], "--alpha", p["alpha"],
@@ -1928,7 +1942,7 @@ def main():
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True, type=Path)
     for field in ("species-tree", "counts", "members", "genomes", "gene-trees", "cross-synteny", "cross-ks-cds",
-                  "cross-tree-support", "count-bootstrap-checkpoint", "count-detection-tsv",
+                  "cross-tree-support", "count-bootstrap-checkpoint", "count-fit-checkpoint", "count-detection-tsv",
                   "count-rate-groups-tsv", "count-fixed-events-tsv", "count-event-fractions", "count-family-gamma-shape",
                   "count-overlay-table", "count-overlay-model"):
         plan.add_argument("--" + field, default="")

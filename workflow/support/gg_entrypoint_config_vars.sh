@@ -432,6 +432,7 @@ wgd_members_file
 wgd_count_bootstrap
 wgd_count_bootstrap_workers
 wgd_count_bootstrap_checkpoint
+wgd_count_fit_checkpoint
 wgd_count_scan_workers
 wgd_count_background_adequacy_draws
 wgd_count_detection_tsv

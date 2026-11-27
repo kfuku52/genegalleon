@@ -30,6 +30,7 @@ wgd_members_file="${wgd_members_file:-}"
 wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
 wgd_count_bootstrap_workers="${wgd_count_bootstrap_workers:-1}"
 wgd_count_bootstrap_checkpoint="${wgd_count_bootstrap_checkpoint:-}"
+wgd_count_fit_checkpoint="${wgd_count_fit_checkpoint:-}"
 wgd_count_scan_workers="${wgd_count_scan_workers:-1}"
 wgd_count_background_adequacy_draws="${wgd_count_background_adequacy_draws:-0}"
 wgd_count_detection_tsv="${wgd_count_detection_tsv:-}"
@@ -449,6 +450,7 @@ run_wgd_ssd_stage() (
     --count-bootstrap "${wgd_count_bootstrap}" --alpha "${wgd_alpha}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
     --count-bootstrap-workers "${wgd_count_bootstrap_workers}" \
     --count-bootstrap-checkpoint "${wgd_count_bootstrap_checkpoint}" \
+    --count-fit-checkpoint "${wgd_count_fit_checkpoint}" \
     --count-scan-workers "${wgd_count_scan_workers}" \
     --count-background-adequacy-draws "${wgd_count_background_adequacy_draws}" \
     --count-detection-tsv "${wgd_count_detection_tsv}" --count-rate-groups-tsv "${wgd_count_rate_groups_tsv}" \

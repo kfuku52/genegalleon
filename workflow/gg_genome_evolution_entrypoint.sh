@@ -136,6 +136,7 @@ wgd_members_file="" # Default: matching unfiltered OrthoFinder membership table.
 wgd_count_bootstrap=199 # Refit null simulations and calibrate the maximum over searched branches/times.
 wgd_count_bootstrap_workers=1 # Optional NWKIT parallel null refits; each worker needs fit memory and one CPU.
 wgd_count_bootstrap_checkpoint="" # Optional file outside stage outputs to resume interrupted null refits.
+wgd_count_fit_checkpoint="" # Optional persistent file to resume the observed background and branch fits.
 wgd_count_scan_workers=1 # Optional NWKIT parallel fits across candidate branches before bootstrapping.
 wgd_count_background_adequacy_draws=0 # Optional count-mode model checks, 0 or >=4; independent of WGD P-values.
 wgd_count_detection_tsv="" # Optional known per-species copy detection probabilities for count mode.

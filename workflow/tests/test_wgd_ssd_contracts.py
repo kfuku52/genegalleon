@@ -69,6 +69,19 @@ def test_wgd_bootstrap_checkpoint_protects_managed_paths(tmp_path, relpath):
     wgd_ssd.protect_checkpoint(tmp_path / "bootstrap.json", {source: ""}, tmp_path)
 
 
+def test_wgd_checkpoints_reject_aliases_and_result_bundle(tmp_path):
+    checkpoint = tmp_path / "checkpoint.json"
+    with pytest.raises(ValueError, match="distinct paths"):
+        wgd_ssd.validate_count_checkpoints(
+            {"count_fit_checkpoint": checkpoint, "count_bootstrap_checkpoint": checkpoint}, False, 1, {}, tmp_path,
+        )
+    bundle = tmp_path / "new-results"
+    with pytest.raises(ValueError, match="outside the output bundle"):
+        wgd_ssd.validate_count_checkpoints(
+            {"count_fit_checkpoint": bundle / "observed.json"}, False, 0, {}, tmp_path, bundle=bundle,
+        )
+
+
 @pytest.mark.parametrize("observability,reverse_windows,status,b_support", [
     ("assessed", 1, "orientation_dependent_support", 0),
     ("insufficient_cross_anchors", 1, "orientation_dependent_observability", "NA"),

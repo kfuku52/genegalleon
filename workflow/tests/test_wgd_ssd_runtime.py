@@ -153,6 +153,7 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
                       wgd_count_bootstrap="2", wgd_count_bootstrap_workers="2",
                       wgd_count_event_fractions="0.5", wgd_count_family_gamma_shape="none",
                       wgd_count_background_adequacy_draws="9",
+                      wgd_count_fit_checkpoint="observed.json",
                       wgd_count_bootstrap_checkpoint="bootstrap.json")
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/wgd_ssd"
@@ -165,6 +166,11 @@ def test_wgd_stage_forwards_observed_and_bootstrap_worker_counts(tmp_path):
     assert json.loads(checkpoint.read_text())["statistics"] == model["bootstrap_max_statistics"]
     assert summary["plan"]["count_bootstrap_checkpoint"] == str(checkpoint)
     assert "bootstrap.json" not in summary["output_hashes"]
+    fit_checkpoint = workspace / "observed.json"
+    observed = json.loads(fit_checkpoint.read_text())["data"]
+    assert observed["complete"] and len(observed["candidates"]) == 4
+    assert summary["plan"]["count_fit_checkpoint"] == str(fit_checkpoint)
+    assert "observed.json" not in summary["output_hashes"]
     assert len(model["bootstrap_max_statistics"]) == 2
     assert model["background_adequacy"]["num_draws"] == 9
     assert "count_model.json" in summary["output_hashes"]
