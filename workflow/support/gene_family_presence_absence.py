@@ -154,28 +154,31 @@ def read_newick_tip_labels(path):
 
 
 def _copy_numbers_from_handle(handle, label):
-    counts = {}
-    reader = csv.reader(handle, delimiter="\t")
-    # The last occurrence of a duplicate header wins, as in DictReader.
-    columns = {name: index for index, name in enumerate(next(reader, ()))}
-    species_column = columns.get("spnode_coverage")
-    if species_column is None:
-        raise ValueError(f"stat_branch is missing spnode_coverage: {label}")
-    event_column = columns.get("so_event")
-    leaf_count_column = columns.get("num_leaf")
-    for row in reader:
-        width = len(row)
-        if species_column >= width:
-            continue
-        if not (
-            (event_column is not None and event_column < width and row[event_column] == "L")
-            or (leaf_count_column is not None and leaf_count_column < width and row[leaf_count_column] == "1")
-        ):
-            continue
-        species = row[species_column].strip()
-        if species:
-            counts[species] = counts.get(species, 0) + 1
-    return counts
+    from terminal_artifact_validation import statistics_field_limit
+
+    with statistics_field_limit():
+        counts = {}
+        reader = csv.reader(handle, delimiter="\t")
+        # The last occurrence of a duplicate header wins, as in DictReader.
+        columns = {name: index for index, name in enumerate(next(reader, ()))}
+        species_column = columns.get("spnode_coverage")
+        if species_column is None:
+            raise ValueError(f"stat_branch is missing spnode_coverage: {label}")
+        event_column = columns.get("so_event")
+        leaf_count_column = columns.get("num_leaf")
+        for row in reader:
+            width = len(row)
+            if species_column >= width:
+                continue
+            if not (
+                (event_column is not None and event_column < width and row[event_column] == "L")
+                or (leaf_count_column is not None and leaf_count_column < width and row[leaf_count_column] == "1")
+            ):
+                continue
+            species = row[species_column].strip()
+            if species:
+                counts[species] = counts.get(species, 0) + 1
+        return counts
 
 
 def read_stat_branch_copy_numbers(path, store=None, family_id=None):

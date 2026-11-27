@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+from contextlib import contextmanager
 
 CHUNK_BYTES = 1024 * 1024
 MAX_RECORD_BYTES = 16 * 1024 * 1024
@@ -37,11 +38,20 @@ class StatisticsLines:
         return raw.decode("utf-8")
 
 
+@contextmanager
+def statistics_field_limit():
+    """Allow branch statistics fields up to the native record-size limit."""
+    previous_limit = csv.field_size_limit()
+    csv.field_size_limit(MAX_RECORD_BYTES)
+    try:
+        yield
+    finally:
+        csv.field_size_limit(previous_limit)
+
+
 def verify_statistics(handle, branch):
     lines = StatisticsLines(handle)
-    previous_limit = csv.field_size_limit()
-    try:
-        csv.field_size_limit(MAX_RECORD_BYTES)
+    with statistics_field_limit():
         reader = csv.DictReader(lines, delimiter="\t", strict=True)
         fields = reader.fieldnames
         if not fields or len(set(fields)) != len(fields):
@@ -66,8 +76,6 @@ def verify_statistics(handle, branch):
         if not count:
             raise ValueError("malformed terminal statistics")
         return lines.digest.hexdigest(), lines.size
-    finally:
-        csv.field_size_limit(previous_limit)
 
 
 def verify_pdf(handle):

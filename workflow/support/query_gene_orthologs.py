@@ -144,6 +144,7 @@ class SpeciesInputs:
     def __init__(self):
         self.proof = FreshDigestBatch()
         self.trees, self.ranks = {}, {}
+        self.plot_mappings = {}
 
     def read(self, path):
         from Bio import Phylo
@@ -155,6 +156,17 @@ class SpeciesInputs:
             self.trees[key] = Phylo.read(path, 'newick')
         self.proof.check()
         return self.trees[key]
+
+    def plot_mapping(self, path):
+        from presence_absence_mapping import SpeciesBranchMapping
+
+        key = str(Path(path).absolute())
+        observe_summary_input(path)
+        self.proof.read([key])
+        if key not in self.plot_mappings:
+            self.plot_mappings[key] = SpeciesBranchMapping(path)
+        self.proof.check()
+        return self.plot_mappings[key]
 
 
 @contextlib.contextmanager
@@ -397,6 +409,7 @@ def build_arg_parser():
                                            "Inputs are shared one family at a time; all tables publish together.")
     parser.add_argument("--dir_gene_family", metavar="PATH", required=True)
     parser.add_argument("--dir_query_gene", metavar="PATH", default="")
+    parser.add_argument("--species_mapping_tree", metavar="PATH", default="")
     parser.add_argument("--family_file", metavar="PATH", default="")
     parser.add_argument("--family_manifest", metavar="TSV", default="",
                         help="Ordered saved-family sources; see docs/presence-absence.md")
@@ -914,7 +927,9 @@ def _read_stat_branch(store, family_id):
         inputs.observe(artifact)
     if artifact is None or not artifact.size:
         return []
-    with store.open_binary("stat_branch", name) as binary_handle:
+    from terminal_artifact_validation import statistics_field_limit
+
+    with statistics_field_limit(), store.open_binary("stat_branch", name) as binary_handle:
         with io.TextIOWrapper(binary_handle, encoding="utf-8", errors="replace", newline="") as handle:
             return list(csv.DictReader(handle, delimiter="\t"))
 
@@ -2701,10 +2716,11 @@ def read_family_reconciliation(store, family_id):
 class FamilyEvidence:
     """Finish all evidence while one family's input context is still live."""
 
-    def __init__(self, threshold, require_one_branch_per_glyph, loss_species):
+    def __init__(self, threshold, require_one_branch_per_glyph, loss_species, species_mapping=None):
         self.threshold = threshold
         self.require_one_branch_per_glyph = require_one_branch_per_glyph
         self.loss_species = loss_species
+        self.species_mapping = species_mapping
         self.terminal_losses = []
         self.duplications, self.synteny, self.ufboot = [], [], []
 
@@ -2738,6 +2754,14 @@ class FamilyEvidence:
         glyphs, evidence = add_weak_duplication_candidates(store, columns, glyphs, self.threshold)
         if evidence:
             refresh_displayed_duplications(store, glyphs, tree_nodes)
+        if self.species_mapping is not None and self.species_mapping.requires_coverage and tree_nodes:
+            inputs = _FAMILY_INPUTS.get()
+            branches, children, root = build_tree_index(read_stat_branch(store, tree_nodes[0]["family_id"]))
+            coverage = inputs.get(
+                ("species-node-coverage", self.species_mapping),
+                lambda: self.species_mapping.coverage_by_branch(branches, children, root),
+            )
+            self.species_mapping.use_coverage(tree_nodes, branches, coverage)
         self.duplications.extend(evidence)
         self.synteny.extend(collect_reference_synteny_evidence(store, columns, glyphs))
         self.ufboot.extend(collect_reference_ufboot_evidence(
@@ -2775,7 +2799,7 @@ def run_many(jobs):
             if value:
                 outputs.append((name, Path(value)))
         inputs.extend((name, getattr(args, name, '')) for name in
-                      ('family_file', 'family_manifest', 'query_metadata', 'species_tree'))
+                      ('family_file', 'family_manifest', 'query_metadata', 'species_tree', 'species_mapping_tree'))
     validate_distinct_output_paths(outputs)
     validate_outputs_do_not_replace_inputs(inputs, outputs)
     with contextlib.ExitStack() as publication:
@@ -2847,7 +2871,9 @@ def _iter_run(args, write):
         if not args.species_tree:
             raise ValueError("--out_terminal_losses requires --species_tree")
         loss_species = {normalize_species_label(tip.name) for tip in read_species_tree(args.species_tree).get_terminals()}
-    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species', loss_species)
+    mapping_path = getattr(args, "species_mapping_tree", "")
+    species_mapping = _SPECIES_INPUTS.get().plot_mapping(mapping_path) if mapping_path else None
+    evidence = FamilyEvidence(dup_threshold, basis == 'reference_species', loss_species, species_mapping)
     if basis == "reference_species":
         if manifest_records or getattr(args, "query_selection", "all") != "all":
             raise ValueError("Family manifests and query selection require --basis=query_gene")

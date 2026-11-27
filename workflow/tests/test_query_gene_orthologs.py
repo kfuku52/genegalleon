@@ -1440,7 +1440,10 @@ def batch_arguments(fixture, out_dir, basis):
     )
 
 
-def test_related_views_share_one_family_and_match_separate_publication(weak_duplication_fixture, tmp_path, monkeypatch):
+@pytest.mark.parametrize("numeric_support", [False, True])
+def test_related_views_share_one_family_and_match_separate_publication(
+    weak_duplication_fixture, tmp_path, monkeypatch, numeric_support,
+):
     fixture = weak_duplication_fixture
     # The cache must be released between families, while both views retain their own ordering.
     for subdir, suffix in [('stat_branch', '_stat.branch.tsv'), ('cds_fasta', '_cds.fasta')]:
@@ -1450,6 +1453,11 @@ def test_related_views_share_one_family_and_match_separate_publication(weak_dupl
     mod = load_module('query_gene_orthologs.py')
     bases = ('reference_species', 'query_gene')
     expected = [batch_arguments(fixture, tmp_path / ('separate_' + basis), basis) for basis in bases]
+    mapping_tree = fixture["species_tree"]
+    if numeric_support:
+        mapping_tree.write_text(mapping_tree.read_text().replace(")n0;", ")100;"))
+        for args in expected:
+            args.species_mapping_tree = str(mapping_tree)
     for args in expected:
         mod.run(args)
     counts = {}
@@ -1462,9 +1470,15 @@ def test_related_views_share_one_family_and_match_separate_publication(weak_dupl
 
         monkeypatch.setattr(mod, name, counted)
     actual = [batch_arguments(fixture, tmp_path / ('batch_' + basis), basis) for basis in bases]
+    if numeric_support:
+        for args in actual:
+            args.species_mapping_tree = str(mapping_tree)
     mod.run_many(actual)
     assert counts == dict.fromkeys(counts, 2)
     assert mod._FAMILY_INPUTS.get() is None
+    if numeric_support:
+        for args in actual:
+            assert "clade_" in Path(args.out_tree).read_text()
     for before, after in zip(expected, actual, strict=True):
         for name, path in vars(before).items():
             if name.startswith('out_') and Path(path).exists():
@@ -1501,3 +1515,68 @@ def test_batch_rejects_output_alias_between_views(weak_duplication_fixture, tmp_
     jobs[1].out_columns = jobs[0].out_columns
     with pytest.raises(ValueError):
         mod.run_many(jobs)
+
+
+def test_species_mapping_recovers_distinct_clades_with_identical_support(tmp_path):
+    from Bio import Phylo
+    from presence_absence_mapping import SpeciesBranchMapping
+    from reconciliation_database import branch_id
+
+    tree = tmp_path / "support.nwk"
+    tree.write_text("((A_a:1,B_b:1)100:1,(C_c:1,D_d:1)100:1);\n")
+    mapper = SpeciesBranchMapping(tree)
+    normalized = tmp_path / "mapping.nwk"
+    mapper.write(normalized)
+    mapped_tree = Phylo.read(normalized, "newick")
+    assert {node.name for node in mapped_tree.get_nonterminals()} == {
+        branch_id(("A_a", "B_b", "C_c", "D_d")),
+        branch_id(("A_a", "B_b")),
+        branch_id(("C_c", "D_d")),
+    }
+    assert [node.confidence for node in Phylo.read(tree, "newick").get_nonterminals()].count(100) == 2
+
+    source = {0: {}, 1: {}, 2: {}, 3: {"spnode_coverage": "A_a"}, 4: {"spnode_coverage": "B_b"},
+              5: {"spnode_coverage": "C_c"}, 6: {"spnode_coverage": "D_d"}}
+    children = {0: [1, 2], 1: [3, 4], 2: [5, 6]}
+    rows = [dict(node_id=node, event="D", mapped_species_node="100") for node in (1, 2)]
+    coverage = mapper.coverage_by_branch(source, children, root=0)
+    mapper.use_coverage(rows, source, coverage)
+    assert [row["mapped_species_node"] for row in rows] == [
+        branch_id(("A_a", "B_b")), branch_id(("C_c", "D_d")),
+    ]
+
+    source[6]["spnode_coverage"] = "Absent_species"
+    coverage = mapper.coverage_by_branch(source, children, root=0)
+    mapper.use_coverage(rows, source, coverage)
+    assert rows[1]["mapped_species_node"] == ""
+    assert coverage[0] is None
+
+
+def test_species_mapping_preserves_explicit_generax_ids(tmp_path):
+    from presence_absence_mapping import SpeciesBranchMapping
+
+    tree = tmp_path / "mixed.nwk"
+    tree.write_text("((A_a:1,B_b:1)sp1:1,(C_c:1,D_d:1)100:1);\n")
+    mapper = SpeciesBranchMapping(tree)
+    rows = [dict(node_id=0, event="D", mapped_species_node="sp1")]
+    mapper.use_coverage(rows, {0: {"spnode_generax": "sp1"}}, {0: None})
+    assert rows[0]["mapped_species_node"] == "sp1"
+    with pytest.raises(ValueError, match="GeneRax species-node identity"):
+        mapper.use_coverage(rows, {0: {"spnode_generax": "100"}}, {0: None})
+
+
+def test_native_summary_reads_branch_fields_over_csv_default(tmp_path):
+    import csv
+
+    orthologs = load_module("query_gene_orthologs.py")
+    presence = load_module("gene_family_presence_absence.py")
+    branch = tmp_path / "stat_branch/FAM_stat.branch.tsv"
+    branch.parent.mkdir()
+    limit = csv.field_size_limit()
+    gene_labels = "X" * (limit + 1)
+    branch.write_text("branch_id\tnode_name\tspnode_coverage\tso_event\tgene_labels\n"
+                      f"0\tGene\tA_a\tL\t{gene_labels}\n")
+    rows = orthologs.read_stat_branch(orthologs.GeneFamilyOutputStore(tmp_path), "FAM")
+    assert rows[0]["gene_labels"] == gene_labels
+    assert presence.read_stat_branch_copy_numbers(branch) == {"A_a": 1}
+    assert csv.field_size_limit() == limit

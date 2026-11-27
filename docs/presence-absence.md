@@ -352,3 +352,10 @@ of two distinct shared neighbor groups; one shared group is separate evidence.
 Unavailable neighborhoods/topology support remain unavailable rather than zero.
 Self-anchor comparisons are separate from evaluated pair evidence. None of the
 selection or display settings changes these scientific thresholds.
+
+For ortholog plots, `gg gene summary` writes a separate
+`query2family_species_mapping.nwk` for duplication placement. Unique named
+species nodes are retained. Unnamed or ambiguous internal nodes receive IDs
+based on their descendant species. With such a tree, legacy LCA placements are
+recovered from the complete gene-tree clade in branch statistics. The plot tree
+continues to provide branch support labels.

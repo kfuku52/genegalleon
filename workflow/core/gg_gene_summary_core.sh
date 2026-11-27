@@ -772,6 +772,7 @@ run_presence_absence_summary_for_source() {
       ortholog_jobs+=(
         --basis reference_species
         --dir_gene_family "${dir_gene_family}"
+        --species_mapping_tree "${file_species_mapping_tree}"
         --dir_query_gene "${dir_query_gene}"
         --family_file "${file_selection}"
         --reference_species "${reference_species_resolved}"
@@ -823,6 +824,7 @@ run_presence_absence_summary_for_source() {
       ortholog_jobs+=(
         --basis query_gene
         --dir_gene_family "${dir_gene_family}"
+        --species_mapping_tree "${file_species_mapping_tree}"
         --dir_query_gene "${dir_query_gene:-}"
         --family_file "${file_selection}"
         --out_columns "${file_query_columns}"
@@ -843,6 +845,10 @@ run_presence_absence_summary_for_source() {
     fi
     if [[ ${#ortholog_jobs[@]} -gt 0 ]]; then
       python "${gg_support_dir}/query_gene_orthologs.py" --batch "${ortholog_jobs[@]}"
+      local file_labelled_mapping_tree="${summary_output_dir}/query2family_species_mapping.nwk"
+      python "${gg_support_dir}/presence_absence_mapping.py" \
+        "${file_species_mapping_tree}" "${file_labelled_mapping_tree}"
+      file_species_mapping_tree="${file_labelled_mapping_tree}"
     fi
     if [[ ${render_reference} -eq 1 ]]; then
       if [[ $(wc -l < "${file_reference_columns}") -gt 1 && $(wc -l < "${file_reference_glyphs}") -gt 1 ]]; then
