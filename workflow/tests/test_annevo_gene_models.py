@@ -55,6 +55,39 @@ def native_fixture(tmp_path, *, strand='+'):
     return genome, gff, receipt, table, sources, coding, blocks
 
 
+def test_freeze_hashes_each_input_once(tmp_path, monkeypatch):
+    genome, gff, receipt, table, sources, *_ = native_fixture(tmp_path)
+    state = importlib.import_module('input_generation_array_state')
+    original = state.digest
+    hashed = []
+
+    def track(path):
+        hashed.append(Path(path))
+        return original(path)
+
+    monkeypatch.setattr(state, 'digest', track)
+    annevo.freeze_inputs(table, sources)
+    assert hashed == [table, genome, receipt, gff]
+
+
+@pytest.mark.parametrize('role', ['genome', 'gff', 'receipt', 'table'])
+def test_freeze_rejects_replacement_after_prediction_verification(tmp_path, monkeypatch, role):
+    genome, gff, receipt, table, sources, *_ = native_fixture(tmp_path)
+    path = dict(genome=genome, gff=gff, receipt=receipt, table=table)[role]
+    original = annevo.prediction_identity
+
+    def replace_after_verification(*args, **kwargs):
+        identity = original(*args, **kwargs)
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        return identity
+
+    monkeypatch.setattr(annevo, 'prediction_identity', replace_after_verification)
+    with pytest.raises(ValueError, match='inputs changed during planning'):
+        annevo.freeze_inputs(table, sources)
+
+
 @pytest.mark.parametrize('changed', [None, 'sequence', 'prediction', 'parent'])
 def test_scope_oriongeno_to_exact_haplotype(tmp_path, changed):
     parent, parent_gff, receipt, table, sources, _, blocks = native_fixture(tmp_path)

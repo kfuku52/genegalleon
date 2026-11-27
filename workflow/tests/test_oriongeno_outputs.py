@@ -186,8 +186,9 @@ def test_bundle_publication_failure_restores_every_existing_file(tmp_path, monke
     assert not list(tmp_path.glob('*.backup-*')) and not list(tmp_path.glob('*.staging-*'))
 
 
-@pytest.mark.parametrize('damage', ['missing', 'changed', 'symlink', 'contract'])
-def test_companions_are_required_for_new_receipts_but_not_invented_for_old_ones(tmp_path, damage):
+@pytest.mark.parametrize('require_repeat', [True, False])
+@pytest.mark.parametrize('damage', ['missing', 'changed', 'symlink', 'dangling', 'contract', 'metadata', 'native_missing'])
+def test_companions_are_required_for_new_receipts_but_not_invented_for_old_ones(tmp_path, damage, require_repeat):
     gff = tmp_path / 'gene.gff3'
     paths = outputs.companion_paths(gff)
     paths = {key: paths[key] for key in ('native_gff', 'repeat_gff')}
@@ -202,13 +203,21 @@ def test_companions_are_required_for_new_receipts_but_not_invented_for_old_ones(
         paths['repeat_gff'].unlink()
     elif damage == 'changed':
         paths['repeat_gff'].write_text('changed')
-    elif damage == 'symlink':
+    elif damage in {'symlink', 'dangling'}:
         paths['repeat_gff'].unlink()
-        paths['repeat_gff'].symlink_to(paths['native_gff'])
+        paths['repeat_gff'].symlink_to(paths['native_gff'] if damage == 'symlink' else tmp_path / 'absent')
+    elif damage == 'metadata':
+        paths['repeat_gff'].unlink()
+        value['annotation_outputs']['files']['repeat_gff']['sha256'] = 'invalid'
+    elif damage == 'native_missing':
+        paths['native_gff'].unlink()
     else:
         value['annotation_outputs']['files'].pop('repeat_gff')
-    with pytest.raises(ValueError, match='companion'):
-        outputs.verify_companions(value, gff)
+    if damage == 'missing' and not require_repeat:
+        outputs.verify_companions(value, gff, require_repeat=False)
+    else:
+        with pytest.raises(ValueError, match='companion'):
+            outputs.verify_companions(value, gff, require_repeat=require_repeat)
     outputs.verify_companions({}, gff)
 
 

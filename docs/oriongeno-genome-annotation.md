@@ -207,11 +207,14 @@ hashes/sizes and record counts. Version-1 receipts remain readable with their
 original output scope; new runs require both audits.
 
 Gene GFF, native GFF, enabled repeat GFF, both audit logs and receipt publish
-together, with the receipt last and restoration of the previous complete set on failure. Missing
-or modified declared companions invalidate reuse and candidate import. Repeat
-files with zero predictions are valid GFF3 files containing their header.
-Companion verification fences the complete file set before and after hashing,
-so a file changed while another companion is read cannot pass verification.
+together, with the receipt last and restoration of the previous complete set
+on failure. Prediction reuse requires every declared companion. Rescue,
+refinement and UTR reassessment can import a prediction with its repeat GFF
+stored separately because they use the gene annotation. The receipt retains
+the repeat GFF checksum. Import verifies all required companions and any local
+repeat GFF. Repeat files with zero predictions are valid GFF3 files containing
+their header. Companion verification checks each local file's identity before
+and after hashing.
 
 Historical receipts retain their historical scope. Earlier GG predictions did
 not request/save repeats, and did not add explicit UTR rows. Their exon/CDS paths

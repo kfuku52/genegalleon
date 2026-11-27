@@ -267,7 +267,13 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     from oriongeno_outputs import verify_companions
     verify_companions(value, gff)
     from annevo_gene_models import prediction_identity
-    assert prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno')['GFF_sha256'] == value['GFF_sha256']
+    identity = prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno')
+    assert identity['GFF_sha256'] == value['GFF_sha256']
+    native.companion_paths(gff)['repeat_gff'].unlink()
+    assert prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno') == identity
+    native.companion_paths(gff)['hmm_boundaries'].unlink()
+    with pytest.raises(ValueError, match='hmm_boundaries'):
+        prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno')
     assert value['argv'][value['argv'].index('--species-name')+1] == ''
     if auto_selected:
         assert value['model_selection'] == record

@@ -207,8 +207,8 @@ def artifact_record(staged, destination):
             'bytes': Path(staged).stat().st_size}
 
 
-def verify_companions(value, gff):
-    """New receipts bind companions; historical receipts retain their old scope."""
+def verify_companions(value, gff, *, require_repeat=True):
+    """Verify the receipt and local companions needed by the caller."""
     outputs = value.get('annotation_outputs')
     if outputs is None:
         if any(key in value.get('inference_settings', {}) for key in ('output_utrs', 'output_repeat')):
@@ -232,16 +232,24 @@ def verify_companions(value, gff):
     if not isinstance(outputs.get('files'), dict) or set(outputs['files']) != names:
         raise ValueError('OrionGeno annotation companions are incomplete')
     generations = {}
-    for name in outputs['files']:
-        path = paths[name]
-        if not path.is_file() or path.is_symlink():
-            raise ValueError('OrionGeno annotation companion changed: ' + name)
-        generations[name] = stable_signature(path)
     for name, record in outputs['files'].items():
         path = paths[name]
         if (not isinstance(record, dict) or record.get('path') != path.name
-                or not path.is_file() or path.is_symlink() or record.get('bytes') != path.stat().st_size
-                or record.get('sha256') != file_sha(path)):
+                or type(record.get('bytes')) is not int or record['bytes'] < 0
+                or not re.fullmatch('[0-9a-f]{64}', str(record.get('sha256')))):
+            raise ValueError('Invalid OrionGeno annotation companion metadata: ' + name)
+        if name == 'repeat_gff' and not require_repeat:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+        if not path.is_file() or path.is_symlink():
+            raise ValueError('OrionGeno annotation companion changed: ' + name)
+        generations[name] = stable_signature(path)
+    for name in generations:
+        path, record = paths[name], outputs['files'][name]
+        if (not path.is_file() or path.is_symlink() or record['bytes'] != path.stat().st_size
+                or record['sha256'] != file_sha(path)):
             raise ValueError('OrionGeno annotation companion changed: ' + name)
         if name in AUDIT_SUFFIXES and (
                 record.get('compression') != 'gzip'
