@@ -432,9 +432,12 @@ The maximum backbone size includes all query sequences present in the family.
 GeneGalleon ranks candidates by available Swiss-Prot family evidence and how
 much of the query's RPS-BLAST domain profile they cover in the same order.
 It prefers one representative per species before taking additional copies.
-It uses the saved family RPS-BLAST results and searches the same database
-for any external query that needs its own domain annotation. If no query
-domains are detected, family evidence and species still guide selection.
+CDSKIT handles the two-stage alignment. It reuses the saved family RPS-BLAST
+results and searches for any external query that needs its own domain
+annotation. If no query domains are detected, family evidence and species
+still guide selection. Complete saved annotations allow alignment without
+opening the Pfam database. When a search manifest is available, CDSKIT
+checks that any additional queries use its recorded database.
 The default `mafft_strategy=standard` uses a single MAFFT alignment.
 
 MAFFT adds every remaining candidate to the backbone. Insertion columns
@@ -442,7 +445,8 @@ retain original protein residues and allow the existing CDS back-alignment
 and domain-coordinate projection to consume the result. ClipKIT and any
 other configured filters run afterwards. The selection and column mapping
 are saved under `mafft_backbone/`. Use `artifact_stale_policy=rebuild` to
-change the strategy for an existing tracked alignment.
+change the strategy for an existing tracked alignment or regenerate a
+tracked backbone produced before the switch to CDSKIT.
 
 Gene-family protein and codon alignments use ClipKIT `gappy` with
 `clipkit_gaps=0.90` by default. Sites with at least 90% missing data are

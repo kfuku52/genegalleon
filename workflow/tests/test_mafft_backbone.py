@@ -11,8 +11,8 @@ import pytest
 from Bio import SeqIO
 from Bio.Data.CodonTable import unambiguous_dna_by_id
 from Bio.Seq import Seq
+from cdskit.alignment_io import write_fasta
 
-from workflow.support import mafft_backbone as backbone
 from workflow.support.filter_empty_protein_alignment import filter_alignment
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
@@ -20,10 +20,6 @@ QUERY, DUPLICATE, PARTIAL, REPRESENTATIVE, CONFLICT = (
     "Homo_sapiens_query", "Homo_sapiens_copy", "Danio_rerio_partial",
     "Xenopus_laevis_full", "Arabidopsis_thaliana_alternate",
 )
-
-
-def domain(model, start, first=1, last=10, score=50):
-    return backbone.Domain(model, start, start + last - first, first, last, score)
 
 
 def read_tsv(path):
@@ -42,80 +38,9 @@ def test_protein_trimming_filter_preserves_coordinates_and_partial_ambiguities(t
     assert read_tsv(excluded) == [{"gene_id": "missing", "reason": "no_usable_residues_after_trimming"}]
 
 
-def test_sparse_backbone_columns_preserve_candidate_order_and_reject_shifted_residues(tmp_path):
-    core = tmp_path / "core.fa"
-    aligned = tmp_path / "mafft.fa"
-    output = tmp_path / "validated.fa"
-    columns = tmp_path / "columns.tsv"
-    candidates = {"fragment": "GHI", "query": "AC", "representative": "DF"}
-    selected = dict.fromkeys(("query", "representative"))
-    core.write_text(">query\nA-.C\n>representative\n-D.F\n")
-    aligned.write_bytes(b">query description\r\na--\r\n.-c\r\n>representative\r\n--d.-f\r\n>fragment\r\n-gh\r\n--i\r\n")
-
-    backbone.validate_and_write(core, aligned, candidates, selected, output, columns)
-    assert output.read_text() == ">fragment\n-GH--I\n>query\nA--.-C\n>representative\n--D.-F\n"
-    assert columns.read_text().splitlines()[1:] == ["1\t1", "2\t", "3\t2", "4\t", "5\t", "6\t4"]
-
-    aligned.write_text(aligned.read_text().replace("a--\n.-c", "a-.\n--c"))
-    with pytest.raises(ValueError, match="changed the backbone alignment for query"):
-        backbone.validate_and_write(core, aligned, candidates, selected, output, columns)
-
-
-def test_domain_ranking_uses_order_profile_coverage_and_species():
-    query = [domain("A", 1), domain("B", 15)]
-    sequences = dict.fromkeys([QUERY, DUPLICATE, PARTIAL, REPRESENTATIVE, CONFLICT], "M" * 30)
-    domains = {
-        QUERY: query,
-        DUPLICATE: query,
-        PARTIAL: [domain("A", 1, 5, 10), domain("B", 15)],
-        REPRESENTATIVE: [*query, domain("A-variant", 2, 1, 9, 25)],
-        CONFLICT: query,
-    }
-    labels = backbone.get_species_parser(species_parser="extended-taxonomic")
-    statuses = {gene: "target_supported" for gene in (DUPLICATE, PARTIAL, REPRESENTATIVE)}
-    statuses[CONFLICT] = "competing_families"
-    chosen, evidence, profiles = backbone.select_backbone(
-        sequences, {QUERY: query}, {QUERY}, domains, statuses, labels, 3
-    )
-    assert list(chosen) == [QUERY, REPRESENTATIVE, PARTIAL]
-    assert evidence[REPRESENTATIVE][1] == 1
-    assert evidence[PARTIAL][1] == pytest.approx(0.8)
-    assert backbone.architecture_match(profiles[QUERY], [domain("B", 1), domain("A", 15)]) == 10
-    assert backbone.architecture_match(
-        [domain("A", 1), domain("A", 15)], [domain("A", 1)]
-    ) == 10
-
-
-def test_only_unrepresented_queries_are_searched(tmp_path, monkeypatch):
-    reports = {QUERY: [], CONFLICT: [domain("A", 1)]}
-    stale_id = {QUERY: "MD", CONFLICT: "MF"}
-    queries = {QUERY: "MD", CONFLICT: "MG", "external": "MS"}
-    calls = []
-
-    def search(command, *, check):
-        assert command[0] == "rpsblast" and check
-        calls.append(command)
-        fasta = Path(command[command.index("-query") + 1])
-        assert backbone.read_fasta(fasta) == {CONFLICT: "MG", "external": "MS"}
-        path = Path(command[command.index("-out") + 1])
-        path.write_text("external\tB\t1\t2\t1\t2\t50\n")
-
-    monkeypatch.setattr(backbone.subprocess, "run", search)
-    shared, evidence = backbone.annotate_queries(
-        queries, stale_id, reports, tmp_path / "Pfam", 1, tmp_path
-    )
-    assert len(calls) == 1
-    assert shared == {QUERY}
-    assert not evidence[QUERY] and not evidence[CONFLICT]
-    assert evidence["external"] == [domain("B", 1, 1, 2)]
-
-
 @pytest.mark.parametrize("mode", ("protein", "cds"))
 def test_native_backbone_stage_recovers_all_residues_and_reuses_verified_alignment(tmp_path, mode):
     output = tmp_path / "output"
-    database = tmp_path / "pfam"
-    database.mkdir()
-    (database / "Pfam.pal").write_text("not searched because all queries have an RPS row")
     common = "MKTFFVALKQLISEAISQLDRDLAETFGWVKL"
     sequences = {
         PARTIAL: common[:15] + "GGWV" + common[15:],
@@ -128,14 +53,14 @@ def test_native_backbone_stage_recovers_all_residues_and_reuses_verified_alignme
     with gzip.open(protein, "wt") as handle:
         for gene, sequence in sequences.items():
             handle.write(f">{gene}\n{sequence}\n")
-    backbone.write_fasta(query, sequences, [QUERY])
+    write_fasta(query, sequences, [QUERY])
     inverse = {aa: codon for codon, aa in sorted(unambiguous_dna_by_id[1].forward_table.items())}
     cds = tmp_path / "cds.fa"
-    backbone.write_fasta(cds, {g: "".join(inverse[a] for a in s) for g, s in sequences.items()}, sequences)
+    write_fasta(cds, {g: "".join(inverse[a] for a in s) for g, s in sequences.items()}, sequences)
     rps = tmp_path / "rps.tsv"
     with rps.open("w") as h:
         w = csv.writer(h, delimiter="\t", lineterminator="\n")
-        w.writerow(backbone.RPS_FIELDS)
+        w.writerow(("qacc", "sacc", "qstart", "qend", "sstart", "send", "bitscore"))
         for gene in sequences:
             end = 4 if gene == PARTIAL else 10
             w.writerow((gene, "A", 1, end, 1, end, 50))
@@ -148,7 +73,7 @@ def test_native_backbone_stage_recovers_all_residues_and_reuses_verified_alignme
                      dir_output_active=str(output), og_id="TEST", mode_gene_evolution="query2family",
                      input_sequence_mode=mode, file_og_primary_fasta=str(protein if mode == "protein" else cds),
                      file_og_pep_fasta=str(protein), file_og_cds_fasta=str(cds), file_og_mafft=str(alignment),
-                     file_og_query_aa_fasta=str(query), file_og_rpsblast=str(rps), db_rpsblast=str(database / "Pfam"),
+                     file_og_query_aa_fasta=str(query), file_og_rpsblast=str(rps),
                      genetic_code="1", run_mafft="1", mafft_strategy="query_backbone", mafft_backbone_size="2",
                      query_family_filter="swissprot_interpro", query_family_filter_report=str(screen),
                      species_label_parser="extended-taxonomic", species_label_regex="", species_label_map_tsv="",
@@ -162,7 +87,7 @@ source "${gg_support_dir}/gg_util.sh"
 gg_artifact_server_request() { local program=$1; shift; python "${program}" "$@"; }
 gg_step_start() { printf 'started=%s\n' "$1"; }
 gg_step_skip() { printf 'skipped=%s\n' "$1"; }
-""" + source[start:end]
+""" + source[source.index("prepare_gene_family_rpsblast_options()"):source.index('task="Protein RPS-BLAST"')] + source[start:end]
     first = subprocess.run(["bash", "-c", script], env=variables, cwd=tmp_path,
                            text=True, capture_output=True, timeout=90)
     assert first.returncode == 0, first.stdout + first.stderr
@@ -176,6 +101,8 @@ gg_step_skip() { printf 'skipped=%s\n' "$1"; }
     audit = read_tsv(output / "mafft_backbone/TEST_mafft_backbone.tsv")
     assert {row["gene_id"] for row in audit if row["backbone_reason"] != "added"} == {QUERY, REPRESENTATIVE}
     columns = read_tsv(output / "mafft_backbone/TEST_mafft_backbone_columns.tsv")
+    assert audit[1]["family_screen"] == ""
+    assert not (tmp_path / "downloads/pfam/cdskit").exists()
     assert len(columns) == len(rows[QUERY]) // (3 if mode == "cds" else 1)
     assert any(not row["backbone_column"] for row in columns)
     manifest = output / "artifact_provenance/TEST.mafft.json"
@@ -183,7 +110,6 @@ gg_step_skip() { printf 'skipped=%s\n' "$1"; }
     assert receipt["parameters"]["mafft_strategy"] == "query_backbone"
     assert {row["label"] for row in receipt["outputs"]} == {"mafft", "backbone_selection", "backbone_columns"}
     before = alignment.read_bytes()
-    (database / ".pfam_le.ready").write_text("ready\n")
     again = subprocess.run(["bash", "-c", script], env=variables, cwd=tmp_path,
                            text=True, capture_output=True, timeout=90)
     assert again.returncode == 0, again.stdout + again.stderr

@@ -2009,49 +2009,6 @@ def test_workspace_layout_no_longer_honors_legacy_override(tmp_path):
     assert (project_dir / "downloads").is_dir()
 
 
-def test_ensure_pfam_le_db_uses_new_workspace_layout_without_migrating_legacy_dir(tmp_path):
-    project_dir = tmp_path / "project"
-    legacy_dir = project_dir / "downloads" / "Pfam_LE"
-    new_dir = project_dir / "downloads" / "pfam" / "Pfam_LE"
-    legacy_dir.mkdir(parents=True)
-    new_dir.mkdir(parents=True)
-    (legacy_dir / "Pfam.pal").write_text("dummy\n")
-    (new_dir / "Pfam.pal").write_text("dummy\n")
-
-    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; ensure_pfam_le_db {shlex.quote(str(project_dir))}"
-    completed = run_bash(command, cwd=tmp_path)
-
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == str(new_dir)
-    assert (new_dir / "Pfam.pal").is_file()
-    assert legacy_dir.is_dir()
-
-
-def test_ensure_pfam_le_db_backfills_nonempty_ready_marker(tmp_path):
-    project_dir = tmp_path / "project"
-    new_dir = project_dir / "downloads" / "pfam" / "Pfam_LE"
-    ready_file = new_dir / ".pfam_le.ready"
-    new_dir.mkdir(parents=True)
-    (new_dir / "Pfam.pal").write_text("dummy\n")
-
-    command = (
-        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
-        f"runtime_dir=$(ensure_pfam_le_db {shlex.quote(str(project_dir))}); "
-        "status=$?; "
-        'printf "%s\\n%s\\n" "$status" "$runtime_dir"; '
-        f"wc -c < {shlex.quote(str(ready_file))}; "
-        f"cat {shlex.quote(str(ready_file))}"
-    )
-    completed = run_bash(command, cwd=tmp_path)
-
-    assert completed.returncode == 0, completed.stderr
-    lines = completed.stdout.strip().splitlines()
-    assert lines[0] == "0"
-    assert lines[1] == str(new_dir)
-    assert int(lines[2]) > 0
-    assert lines[3] == "ready"
-
-
 def test_mv_out_accepts_pipe_input(tmp_path):
     outfile = tmp_path / "nested" / "out.txt"
     command = f"source {shlex.quote(str(GG_UTIL_PATH))}; printf 'hello\\n' | mv_out {shlex.quote(str(outfile))}"

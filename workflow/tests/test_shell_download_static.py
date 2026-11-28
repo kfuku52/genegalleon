@@ -18,13 +18,13 @@ from shell_static_helpers import (
 )
 
 
-def test_download_pfam_helper_guards_output_dir_before_recursive_delete():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "_download_pfam_le_to_dir")
-    assert 'if [[ -z "${output_dir}" || "${output_dir}" == "/" ]]; then' in body
-    assert 'rm -rf -- "${output_dir}.tmp"' in body
-    assert 'rm -rf -- "${output_dir}"' in body
+def test_gene_family_domain_search_delegates_database_management_to_cdskit():
+    core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    body = _function_body(core, "prepare_gene_family_rpsblast_options")
+    assert '--db_cache "${cache_dir}/cdskit"' in body
+    assert '--db_preferred "$(workspace_pfam_le_dir "${gg_workspace_dir}")/Pfam"' in body
+    assert 'cdskit rpsblast --seq_file' in core
+    assert '--db_url "${GG_PFAM_LE_URL}"' in body
 
 
 def test_download_helpers_use_set_e_safe_command_guards():
@@ -35,9 +35,6 @@ def test_download_helpers_use_set_e_safe_command_guards():
     assert 'if ! curl -fsSL "${uniprot_url}" | gzip -dc > "${pep_tmp}"; then' in uniprot_body
     assert 'if ! diamond makedb --in "${pep_tmp}" --db "${dmnd_tmp_prefix}"; then' in uniprot_body
 
-    pfam_body = _function_body(text, "_download_pfam_le_to_dir")
-    assert 'if ! curl -fsSL "${url}" -o "${archive_path}"; then' in pfam_body
-    assert 'if ! tar -xzf "${archive_path}" -C "${tmp_dir}"; then' in pfam_body
 
 
 def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():

@@ -2001,15 +2001,6 @@ def test_core_scripts_quote_is_output_older_than_inputs_target_path():
         )
 
 
-def test_gene_evolution_core_uses_exact_qacc_match_for_rpsblast_hit_presence():
-    script = CORE_DIR / "gg_gene_evolution_core.sh"
-    text = _read_text(script)
-    assert 'if ! grep -F -q -- "${gene}" "${og_id}.rpsblast.tmp.tsv"; then' not in text
-    assert "FILENAME == ARGV[1] {seen[$1]=1; next}" in text
-    assert "if (!(gene in seen))" in text
-    assert 'qlen=($1 == gene ? $NF : "")' in text
-
-
 def test_gene_evolution_core_tree_pruning_uses_awk_id_match_instead_of_python_split_filter():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
@@ -2294,9 +2285,6 @@ def test_gg_util_direct_cp_mv_calls_use_option_separator():
     banned_tokens = [
         'mv "${pep_tmp}" "${output_prefix}.pep"',
         'mv "${dmnd_tmp_prefix}.dmnd" "${output_prefix}.dmnd"',
-        'cp "${f}" "${staged_dir}/"',
-        'mv "${staged_dir}" "${output_dir}.tmp"',
-        'mv "${output_dir}.tmp" "${output_dir}"',
         'mv "${tmp_file}" "${output_file}"',
         'mv "${latest_marker}.tmp" "${latest_marker}"',
     ]
@@ -2305,9 +2293,6 @@ def test_gg_util_direct_cp_mv_calls_use_option_separator():
         expected_tokens = [
             'mv -- "${pep_tmp}" "${output_prefix}.pep"',
             'mv -- "${dmnd_tmp_prefix}.dmnd" "${output_prefix}.dmnd"',
-            'cp -- "${f}" "${staged_dir}/"',
-            'mv -- "${staged_dir}" "${output_dir}.tmp"',
-            'mv -- "${output_dir}.tmp" "${output_dir}"',
             'mv -- "${tmp_file}" "${output_file}"',
             'mv -- "${latest_marker}.tmp" "${latest_marker}"',
         ]

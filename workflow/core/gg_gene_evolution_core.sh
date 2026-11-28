@@ -2844,23 +2844,14 @@ fi
 # shellcheck shell=bash
 # Sourced by gg_gene_evolution_core.sh.
 
-resolve_gene_family_rpsblast_db() {
-  local directory
-  directory=$(ensure_pfam_le_db "${gg_workspace_dir}") || return $?
-  if [[ -s "${directory}/Pfam.pal" ]]; then
-    printf '%s\n' "${directory}/Pfam"
-    return
+prepare_gene_family_rpsblast_options() {
+  local cache_dir
+  cache_dir=$(workspace_pfam_root "${gg_workspace_dir}") || return $?
+  rpsblast_database_args=(--db_cache "${cache_dir}/cdskit"
+    --db_preferred "$(workspace_pfam_le_dir "${gg_workspace_dir}")/Pfam")
+  if [[ -n "${GG_PFAM_LE_URL:-}" ]]; then
+    rpsblast_database_args+=(--db_url "${GG_PFAM_LE_URL}")
   fi
-  local candidates=()
-  mapfile -t candidates < <(find "${directory}" -maxdepth 1 -type f -name '*.loo' | sort)
-  if [[ ${#candidates[@]} -eq 0 ]]; then
-    echo "No RPS-BLAST DB index (*.loo) was found in: ${directory}." >&2
-    return 1
-  fi
-  if [[ ${#candidates[@]} -gt 1 ]]; then
-    echo "Multiple RPS-BLAST DB indices were found. Using the first sorted entry: ${candidates[0]}" >&2
-  fi
-  printf '%s\n' "${candidates[0]%.loo}"
 }
 
 task="Protein RPS-BLAST"
@@ -2881,63 +2872,22 @@ rpsblast_provenance_args=(
 gg_artifact_prepare_stage rpsblast_needs_update run_rps_blast "${rpsblast_provenance_args[@]}" || exit $?
 if [[ ${rpsblast_needs_update} -eq 1 && ${run_rps_blast} -eq 1 ]]; then
   gg_step_start "${task}"
-  db_rpsblast=$(resolve_gene_family_rpsblast_db) || exit $?
-  echo "db_rpsblast: ${db_rpsblast}"
-
-  if [[ -e "${og_id}.rpsblast.tmp.tsv" ]]; then
-    rm -f -- "${og_id}.rpsblast.tmp.tsv"
+  prepare_gene_family_rpsblast_options || exit $?
+  rpsblast_input="${file_og_primary_fasta}"
+  if [[ "${input_sequence_mode}" == cds ]]; then
+    # Retain the historical interpretation of preexisting CDS inputs for search.
+    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${rpsblast_input}" |
+      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" \
+        --threads "${GG_TASK_CPUS}" > "${og_id}.rpsblast.pep.fa"
+    rpsblast_input="${og_id}.rpsblast.pep.fa"
   fi
-
-  if [[ "${input_sequence_mode}" == "protein" ]]; then
-    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" > ungapped_translated_cds.fas
-  else
-    seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" |
-      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" \
-        > ungapped_translated_cds.fas
-  fi
-
-  if [[ "$(head -c 1 ungapped_translated_cds.fas)" != '>' ]]; then
-    sed -e "1d" ungapped_translated_cds.fas > ungapped_translated_cds2.fas
-    mv_out ungapped_translated_cds2.fas ungapped_translated_cds.fas
-  fi
-
-  outfmt="qacc sacc pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen stitle"
-
-  if ! rpsblast \
-    -query ungapped_translated_cds.fas \
-    -db "${db_rpsblast}" \
-    -out "${og_id}.rpsblast.tmp.tsv" \
-    -evalue 0.01 \
-    -outfmt "6 ${outfmt}" \
-    -num_threads "${GG_TASK_CPUS}"; then
-    echo "RPS-BLAST failed. Exiting."
-    exit 1
-  fi
-
-  # Complete query coverage with one FASTA conversion and one hit-table scan.
-  seqkit fx2tab --length ungapped_translated_cds.fas > "${og_id}.rpsblast.lengths.tsv"
-  awk -F '\t' -v output="${og_id}.rpsblast.tmp.tsv" '
-    FILENAME == ARGV[1] {seen[$1]=1; next}
-    {
-      gene=$1
-      sub(/^[[:space:]]*/, "", gene)
-      sub(/[[:space:]].*$/, "", gene)
-      if (!(gene in seen)) {
-        print gene ": no hit in RPS-BLAST. Appending qlen to output tsv."
-        qlen=($1 == gene ? $NF : "")
-        printf "%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t\t\n", gene, qlen >> output
-        seen[gene]=1
-      } else {
-        print gene ": RPS-BLAST hit found."
-      }
-    }
-  ' "${og_id}.rpsblast.tmp.tsv" "${og_id}.rpsblast.lengths.tsv"
-  {
-    printf '%s\n' "${outfmt}" | tr ' ' '\t'
-    cat "${og_id}.rpsblast.tmp.tsv"
-  } > "${og_id}.rpsblast.tsv"
-
-  cp_out "${og_id}.rpsblast.tsv" "${file_og_rpsblast}"
+  cdskit rpsblast --seq_file "${rpsblast_input}" --seq_type aa \
+    --codon_table "${genetic_code}" --threads "${GG_TASK_CPUS}" --evalue 0.01 \
+    "${rpsblast_database_args[@]}" --out_file "${og_id}.rpsblast.tsv" \
+    --manifest "${og_id}.rpsblast.search.json"
+  mv_out "${og_id}.rpsblast.tsv" "${file_og_rpsblast}"
+  mv_out "${og_id}.rpsblast.search.json" "${dir_output_active}/rpsblast/${og_id}_rpsblast.search.json"
+  rm -f -- "${og_id}.rpsblast.pep.fa"
   gg_artifact_record "${rpsblast_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -3150,47 +3100,37 @@ case "${mafft_strategy}" in
         echo 'mafft_strategy=query_backbone requires the query protein FASTA and family RPS-BLAST results.' >&2
         exit 1
       fi
-      if [[ -z "${db_rpsblast:-}" ]]; then
-        db_rpsblast=$(resolve_gene_family_rpsblast_db) || exit $?
-      fi
       backbone_report="${dir_output_active}/mafft_backbone/${og_id}_mafft_backbone.tsv"
       backbone_columns="${dir_output_active}/mafft_backbone/${og_id}_mafft_backbone_columns.tsv"
-      backbone_args=(
-        --query "${file_og_query_aa_fasta}" --domains "${file_og_rpsblast}" --rps-db "${db_rpsblast}"
-        --size "${mafft_backbone_size}" --threads "${GG_TASK_CPUS}" --threadit "${mafft_threadit}"
-        --species-parser "${species_label_parser}"
-      )
+      backbone_metadata_args=(--species-parser "${species_label_parser}")
       mafft_provenance_args+=(
         --parameter "mafft_strategy=${mafft_strategy}"
         --parameter "mafft_backbone_size=${mafft_backbone_size}"
         --parameter "backbone_species_parser=${species_label_parser}"
         --parameter "backbone_species_regex=${species_label_regex}"
+        --parameter "backbone_engine=cdskit"
         --input "backbone_query=${file_og_query_aa_fasta}"
         --input "backbone_domains=${file_og_rpsblast}"
-        --input "backbone_implementation=${gg_support_dir}/mafft_backbone.py"
+        --input "backbone_metadata_implementation=${gg_support_dir}/gene_backbone_metadata.py"
         --output "backbone_selection=${backbone_report}"
         --output "backbone_columns=${backbone_columns}"
       )
-      mapfile -t backbone_db_files < <(
-        find "$(dirname -- "${db_rpsblast}")" -maxdepth 1 -type f \
-          -name "${db_rpsblast##*/}.*" | sort
-      )
-      if [[ ${#backbone_db_files[@]} -eq 0 ]]; then
-        echo "No RPS-BLAST database files to verify for ${db_rpsblast}." >&2
-        exit 1
+      backbone_search_manifest="${dir_output_active}/rpsblast/${og_id}_rpsblast.search.json"
+      backbone_manifest_args=()
+      # CDS search and alignment can use different ambiguity/stop masking.
+      if [[ "${input_sequence_mode}" == protein && -s "${backbone_search_manifest}" ]]; then
+        backbone_manifest_args=(--domain_manifest "${backbone_search_manifest}")
+        mafft_provenance_args+=(--input "backbone_search_manifest=${backbone_search_manifest}")
       fi
-      for backbone_db_file in "${backbone_db_files[@]}"; do
-        mafft_provenance_args+=(--input "backbone_rps_database_${backbone_db_file##*/}=${backbone_db_file}")
-      done
       if [[ -n "${species_label_regex}" ]]; then
-        backbone_args+=(--species-regex "${species_label_regex}")
+        backbone_metadata_args+=(--species-regex "${species_label_regex}")
       fi
       if [[ -n "${species_label_map_tsv}" ]]; then
-        backbone_args+=(--species-map-tsv "${species_label_map_tsv}")
+        backbone_metadata_args+=(--species-map-tsv "${species_label_map_tsv}")
         mafft_provenance_args+=(--input "backbone_species_map=${species_label_map_tsv}")
       fi
       if [[ "${query_family_filter}" == swissprot_interpro ]]; then
-        backbone_args+=(--family-screen "${query_family_filter_report}")
+        backbone_metadata_args+=(--family-screen "${query_family_filter_report}")
         mafft_provenance_args+=(--input "backbone_family_screen=${query_family_filter_report}")
       fi
       if [[ "${mafft_legacy_policy}" == adopt ]]; then mafft_legacy_policy=stop; fi
@@ -3210,62 +3150,51 @@ artifact_legacy_policy="${mafft_legacy_policy}" gg_artifact_prepare_stage mafft_
 if [[ ${mafft_needs_update} -eq 1 && ${run_mafft} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  mafft_input_fasta=tmp.pep.fasta
-  if [[ "${input_sequence_mode}" == "protein" ]]; then
-    if [[ "${mafft_strategy}" == query_backbone ]]; then
-      mafft_input_fasta="${file_og_pep_fasta}"
-    else
-      seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" --out-file "${mafft_input_fasta}"
-    fi
-  else
-    seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
-    cdskit mask --seq_file tmp.cds.input.fasta --codon_table "${genetic_code}" --out_file tmp.cds.fasta
-
-    seqkit translate \
-      --allow-unknown-codon \
-      --transl-table "${genetic_code}" \
-      --threads "${GG_TASK_CPUS}" \
-      tmp.cds.fasta \
-      > "${mafft_input_fasta}"
-  fi
-
   mafft_output_gzip="${og_id}.cds.aln.out.fa.gz"
   if [[ "${mafft_strategy}" == query_backbone ]]; then
-    backbone_command=(python "${gg_support_dir}/mafft_backbone.py" "${backbone_args[@]}"
-      --input "${mafft_input_fasta}" --report tmp.mafft_backbone.tsv --column-map tmp.mafft_backbone_columns.tsv)
-    if [[ "${input_sequence_mode}" == protein ]]; then
-      "${backbone_command[@]}" --output - |
-        seqkit seq --threads "${GG_TASK_CPUS}" --out-file "${mafft_output_gzip}"
-    else
-      "${backbone_command[@]}" --output tmp.pep.aln.fasta
+    prepare_gene_family_rpsblast_options || exit $?
+    backbone_input="${file_og_pep_fasta}"
+    backbone_type=aa
+    if [[ "${input_sequence_mode}" == cds ]]; then
+      cdskit mask --seq_file "${file_og_cds_fasta}" --codon_table "${genetic_code}" --out_file tmp.cds.fasta
+      backbone_input=tmp.cds.fasta
+      backbone_type=codon
     fi
-  else
-    mafft \
-      --auto \
-      --amino \
-      --thread "${GG_TASK_CPUS}" \
-      --threadit "${mafft_threadit}" \
-      --quiet \
-      "${mafft_input_fasta}" \
-      > tmp.pep.aln.fasta
-  fi
-
-  if [[ "${input_sequence_mode}" == cds ]]; then
-    cdskit backalign \
-      --seq_file tmp.cds.fasta \
-      --aa_aln tmp.pep.aln.fasta \
-      --codon_table "${genetic_code}" \
-      --out_file "${og_id}.cds.aln.fasta"
-    seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${mafft_output_gzip}"
-  elif [[ "${mafft_strategy}" == standard ]]; then
-    seqkit seq --threads "${GG_TASK_CPUS}" tmp.pep.aln.fasta --out-file "${mafft_output_gzip}"
-  fi
-
-  mv_out "${mafft_output_gzip}" "${file_og_mafft}"
-  if [[ "${mafft_strategy}" == query_backbone ]]; then
+    python "${gg_support_dir}/gene_backbone_metadata.py" prepare \
+      --fasta "${backbone_input}" --output tmp.backbone_metadata.tsv "${backbone_metadata_args[@]}"
+    cdskit align --strategy query_backbone --seq_type "${backbone_type}" \
+      --codon_table "${genetic_code}" --seq_file "${backbone_input}" --query_type aa \
+      --query_file "${file_og_query_aa_fasta}" --rpsblast_tsv "${file_og_rpsblast}" --search_missing_domains \
+      "${backbone_manifest_args[@]}" "${rpsblast_database_args[@]}" \
+      --threads "${GG_TASK_CPUS}" --backbone_size "${mafft_backbone_size}" \
+      --priority_tsv tmp.backbone_metadata.tsv --species_tsv tmp.backbone_metadata.tsv \
+      --backbone_report tmp.cdskit_backbone.tsv --column_map tmp.mafft_backbone_columns.tsv \
+      --out_file "${mafft_output_gzip}"
+    python "${gg_support_dir}/gene_backbone_metadata.py" report \
+      --metadata tmp.backbone_metadata.tsv --report tmp.cdskit_backbone.tsv --output tmp.mafft_backbone.tsv
     mv_out tmp.mafft_backbone.tsv "${backbone_report}"
     mv_out tmp.mafft_backbone_columns.tsv "${backbone_columns}"
+    rm -f -- tmp.backbone_metadata.tsv tmp.cdskit_backbone.tsv
+  else
+    if [[ "${input_sequence_mode}" == protein ]]; then
+      seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_pep_fasta}" --out-file tmp.pep.fasta
+    else
+      seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_cds_fasta}" --out-file tmp.cds.input.fasta
+      cdskit mask --seq_file tmp.cds.input.fasta --codon_table "${genetic_code}" --out_file tmp.cds.fasta
+      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" \
+        --threads "${GG_TASK_CPUS}" tmp.cds.fasta > tmp.pep.fasta
+    fi
+    mafft --auto --amino --thread "${GG_TASK_CPUS}" --threadit "${mafft_threadit}" \
+      --quiet tmp.pep.fasta > tmp.pep.aln.fasta
+    if [[ "${input_sequence_mode}" == cds ]]; then
+      cdskit backalign --seq_file tmp.cds.fasta --aa_aln tmp.pep.aln.fasta \
+        --codon_table "${genetic_code}" --out_file "${og_id}.cds.aln.fasta"
+      seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.cds.aln.fasta" --out-file "${mafft_output_gzip}"
+    else
+      seqkit seq --threads "${GG_TASK_CPUS}" tmp.pep.aln.fasta --out-file "${mafft_output_gzip}"
+    fi
   fi
+  mv_out "${mafft_output_gzip}" "${file_og_mafft}"
   rm -f -- tmp.cds.input.fasta tmp.cds.fasta tmp.pep.fasta tmp.pep.aln.fasta
   gg_artifact_record "${mafft_provenance_args[@]}"
 else

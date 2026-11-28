@@ -79,7 +79,8 @@ def test_gene_evolution_serializes_only_mafft_iterative_refinement():
 
     assert "mafft_threadit=0" in mafft_block
     assert mafft_block.count('--thread "${GG_TASK_CPUS}"') == 1
-    assert mafft_block.count('--threadit "${mafft_threadit}"') == 2
-    assert '--threads "${GG_TASK_CPUS}" --threadit "${mafft_threadit}"' in mafft_block
+    assert mafft_block.count('--threadit "${mafft_threadit}"') == 1
+    assert 'cdskit align --strategy query_backbone' in mafft_block
+    assert '--threads "${GG_TASK_CPUS}" --backbone_size' in mafft_block
     assert '--parameter "mafft_threads=${GG_TASK_CPUS}"' in mafft_block
     assert '--parameter "mafft_threadit=${mafft_threadit}"' in mafft_block

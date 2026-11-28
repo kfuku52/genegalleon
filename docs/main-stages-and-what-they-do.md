@@ -699,8 +699,9 @@ Current behavior notes:
   never supplied as a fully resolved bootstrap constraint. The rooted GeneRax
   topology is also the branch-table topology, and mapped percentages are stored
   explicitly as `support_generax_ufboot`,
-- Pfam RPS-BLAST DB (`Pfam_LE`) is auto-prepared when missing, with lock-based
-  synchronization for array jobs,
+- CDSKIT runs RPS-BLAST and reuses an existing Pfam profile database when
+  available. A missing `Pfam_LE` is downloaded and validated once into the
+  workspace Pfam cache (`cdskit/`), with shared locking for array jobs,
 - expression-trait results are written to `rsc_regression`,
   `pgls_species_nwkit`, and `pgls_comparison`,
 - `run_expression_trait_pgls=1` runs the methods selected by `pgls_methods`

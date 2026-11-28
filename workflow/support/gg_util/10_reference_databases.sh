@@ -1,40 +1,6 @@
 # shellcheck shell=bash
 # Sourced by workflow/support/gg_util.sh.
 
-ensure_pfam_le_db() {
-  local gg_workspace_dir=$1
-  local sys_dir="/usr/local/db/Pfam_LE"
-  local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
-  local runtime_parent
-  runtime_parent=$(workspace_pfam_root "${gg_workspace_dir}")
-  local runtime_dir
-  runtime_dir=$(workspace_pfam_le_dir "${gg_workspace_dir}")
-  local ready_file="${runtime_dir}/.pfam_le.ready"
-  local lock_file="${runtime_root}/locks/pfam_le.lock"
-
-  if pfam_le_db_is_ready "${sys_dir}"; then
-    echo "${sys_dir}"
-    return 0
-  fi
-
-  if pfam_le_db_is_ready "${runtime_dir}"; then
-    gg_write_ready_marker "${ready_file}"
-    echo "${runtime_dir}"
-    return 0
-  fi
-
-  mkdir -p "${runtime_root}" "${runtime_parent}"
-  gg_array_download_once "${lock_file}" "${ready_file}" "Pfam_LE RPS-BLAST DB" \
-    _download_pfam_le_to_dir "${runtime_dir}" || return 1
-
-  if ! pfam_le_db_is_ready "${runtime_dir}"; then
-    echo "Pfam_LE DB download failed." >&2
-    return 1
-  fi
-  echo "${runtime_dir}"
-}
-
 _download_jaspar_meme_to_file() {
   local output_file=$1
   local output_dir
