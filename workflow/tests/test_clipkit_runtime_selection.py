@@ -26,6 +26,7 @@ genetic_code=1
 GG_TASK_CPUS=1
 run_clipkit=${TEST_RUN_CLIPKIT:-1}
 input_sequence_mode="$TEST_MODE"
+mafft_strategy=standard
 clipkit_binary="${TEST_BINARY:-clipkit}"
 clipkit_source_manifest="${TEST_MANIFEST:-}"
 disable_if_no_input_file() { :; }
@@ -100,6 +101,7 @@ def test_default_clipkit_preserves_existing_provenance_inputs(tmp_path):
     provenance = (tmp_path / "provenance.args").read_bytes()
     assert b"clipkit_executable=" not in provenance
     assert b"clipkit_source_manifest=" not in provenance
+    assert b"clipkit_empty_rows=" not in provenance
     assert (tmp_path / "legacy-policy.txt").read_text() == "stop"
 
 
