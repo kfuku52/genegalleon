@@ -84,124 +84,102 @@ ensure_parent_dir() {
 
 gg_species_name_from_path() {
   local path=$1
-  gg_species_name_from_path_or_dot "${path}"
+  gg_species_name_from_path_or_dot "${path}" "${2:-}"
 }
 
 _gg_species_rank_token_key() {
-  local token=${1:-}
+  local -n rank_token=$1
+  local LC_ALL=C
   local multiplication_sign=$'\303\227'
-  token=${token%.}
-  token=$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')
-  case "${token}" in
-    x|hybrid|"${multiplication_sign}")
-      printf '%s\n' "x"
-      ;;
-    spp)
-      printf '%s\n' "sp"
-      ;;
-    ssp|subspecies)
-      printf '%s\n' "subsp"
-      ;;
-    variety)
-      printf '%s\n' "var"
-      ;;
-    form)
-      printf '%s\n' "forma"
-      ;;
-    *)
-      printf '%s\n' "${token}"
-      ;;
+  rank_token=${rank_token%.}
+  rank_token=${rank_token,,}
+  case "${rank_token}" in
+    x|hybrid|"${multiplication_sign}") rank_token=x ;;
+    spp) rank_token=sp ;;
+    ssp|subspecies) rank_token=subsp ;;
+    variety) rank_token=var ;;
+    form) rank_token=forma ;;
   esac
 }
 
 _gg_species_prefix_token_count() {
+  local count_var=$1
+  shift
   local -a parts=("$@")
   local second=""
   local third=""
 
   if [[ ${#parts[@]} -lt 2 ]]; then
-    printf '0\n'
+    printf -v "${count_var}" '%s' 0
     return 0
   fi
 
-  second=$(_gg_species_rank_token_key "${parts[1]}")
+  second=${parts[1]}
+  _gg_species_rank_token_key second
   if [[ ${#parts[@]} -ge 3 ]]; then
-    third=$(_gg_species_rank_token_key "${parts[2]}")
+    third=${parts[2]}
+    _gg_species_rank_token_key third
   fi
 
   if [[ "${second}" == "sp" ]]; then
     if [[ ${#parts[@]} -ge 3 ]]; then
-      printf '3\n'
+      printf -v "${count_var}" '%s' 3
     else
-      printf '2\n'
+      printf -v "${count_var}" '%s' 2
     fi
     return 0
   fi
   if [[ "${second}" == "x" ]]; then
     if [[ ${#parts[@]} -ge 3 ]]; then
-      printf '3\n'
+      printf -v "${count_var}" '%s' 3
     else
-      printf '2\n'
+      printf -v "${count_var}" '%s' 2
     fi
     return 0
   fi
   if [[ "${second}" == "cf" || "${second}" == "aff" || "${second}" == "nr" ]]; then
     if [[ ${#parts[@]} -ge 3 ]]; then
-      printf '3\n'
+      printf -v "${count_var}" '%s' 3
     else
-      printf '2\n'
+      printf -v "${count_var}" '%s' 2
     fi
     return 0
   fi
   if [[ "${third}" == "x" && ${#parts[@]} -ge 5 && "${parts[3]}" =~ ^[[:upper:]] ]]; then
-    printf '5\n'
+    printf -v "${count_var}" '%s' 5
     return 0
   fi
   if [[ "${third}" == "cf" || "${third}" == "aff" || "${third}" == "nr" ]]; then
-    printf '3\n'
+    printf -v "${count_var}" '%s' 3
     return 0
   fi
   case "${third}" in
     subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
     if [[ ${#parts[@]} -ge 4 ]]; then
-      printf '4\n'
+      printf -v "${count_var}" '%s' 4
     else
-      printf '3\n'
+      printf -v "${count_var}" '%s' 3
     fi
     return 0
       ;;
   esac
-  printf '2\n'
-}
-
-_gg_species_is_rank_or_qualifier_token() {
-  local key
-  key=$(_gg_species_rank_token_key "${1:-}")
-  case "${key}" in
-    x|sp|cf|aff|nr|subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed)
-      return 0
-      ;;
-  esac
-  return 1
+  printf -v "${count_var}" '%s' 2
 }
 
 _gg_species_label_prefix_part() {
-  local part=${1:-}
-  local key
-  if _gg_species_is_rank_or_qualifier_token "${part}"; then
-    key=$(_gg_species_rank_token_key "${part}")
-    if [[ "${key}" == "x" ]]; then
-      printf '%s\n' "x"
-      return 0
-    fi
-    printf '%s\n' "${part}"
-    return 0
-  fi
-  printf '%s\n' "${part%%.*}"
+  local -n label_part=$1
+  local key=${label_part}
+  _gg_species_rank_token_key key
+  case "${key}" in
+    x) label_part=x ;;
+    sp|cf|aff|nr|subsp|var|forma|f|strain|substrain|serovar|serotype|serogroup|pathovar|pv|biovar|biotype|chemovar|morphovar|cultivar|cv|isolate|group|subgroup|complex|clade|lineage|section|series|ecotype|breed) ;;
+    *) label_part=${label_part%%.*} ;;
+  esac
 }
 
 _gg_strip_species_terminal_suffixes() {
-  local stem=${1:-}
+  local -n suffix_stem=$1
+  local LC_ALL=C
   local stem_lc
   local suffix
   local -a suffixes=(
@@ -227,19 +205,18 @@ _gg_strip_species_terminal_suffixes() {
     ".gff3" ".gff" ".gtf" ".tsv" ".txt" ".csv"
   )
 
-  stem_lc=$(printf '%s' "${stem}" | tr '[:upper:]' '[:lower:]')
+  stem_lc=${suffix_stem,,}
   for suffix in "${suffixes[@]}"; do
     if [[ "${stem_lc}" == *"${suffix}" ]]; then
-      stem="${stem:0:${#stem}-${#suffix}}"
+      suffix_stem=${suffix_stem:0:${#suffix_stem}-${#suffix}}
       break
     fi
   done
-  printf '%s\n' "${stem}"
 }
 
 gg_species_name_from_path_or_dot() {
   local path=$1
-  local basename_path
+  local output_var=${2:-}
   local stem
   local prefix_count
   local -a parts=()
@@ -247,26 +224,28 @@ gg_species_name_from_path_or_dot() {
   local species_name=""
   local part=""
 
-  basename_path=$(basename "${path}")
-  stem=$(_gg_strip_species_terminal_suffixes "${basename_path}")
+  case "${path}" in
+    -*|*/) stem=$(basename "${path}") || return $? ;;
+    *) stem=${path##*/} ;;
+  esac
+  _gg_strip_species_terminal_suffixes stem
   IFS='_' read -r -a parts <<< "${stem}"
-  prefix_count=$(_gg_species_prefix_token_count "${parts[@]}")
-  if [[ "${prefix_count}" -eq 0 ]]; then
-    printf '%s\n' ""
-    return 0
-  fi
-
+  _gg_species_prefix_token_count prefix_count "${parts[@]}"
   selected=("${parts[@]:0:${prefix_count}}")
   for part in "${selected[@]}"; do
     [[ -n "${part}" ]] || continue
-    part=$(_gg_species_label_prefix_part "${part}")
+    _gg_species_label_prefix_part part
     [[ -n "${part}" ]] || continue
     if [[ -n "${species_name}" ]]; then
       species_name+="_"
     fi
     species_name+="${part}"
   done
-  printf '%s\n' "${species_name}"
+  if [[ -n "${output_var}" ]]; then
+    printf -v "${output_var}" '%s' "${species_name}"
+  else
+    printf '%s\n' "${species_name}"
+  fi
 }
 
 gg_species_file_matches_label() {

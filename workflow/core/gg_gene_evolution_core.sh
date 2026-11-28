@@ -3704,22 +3704,31 @@ if [[ ${iqtree_needs_update} -eq 1 && ${run_iqtree} -eq 1 ]]; then
   fi
   echo "IQ-TREE starting..."
 
-  iqtree_model_string=${generax_model}
   build_iqtree_mem_args
+  iqtree_search_args=(
+    -m "${generax_model}" -T AUTO --threads-max "${GG_TASK_CPUS}"
+    "${IQTREE_MEM_ARGS[@]}" --seed 12345 "${other_iqtree_params[@]}"
+  )
 
-  iqtree \
-    -s iqtree_input.fa \
-    -m "${iqtree_model_string}" \
-    -T AUTO \
-    --threads-max "${GG_TASK_CPUS}" \
-    --prefix "${og_id}" \
-    "${IQTREE_MEM_ARGS[@]}" \
-    --seed 12345 \
-    --redo \
-    "${other_iqtree_params[@]}"
+  iqtree_checkpoint_dir=""
+  if [[ ${num_seq} -gt ${iqtree_fast_mode_gt} && ${gg_debug_mode:-0} -eq 0 ]]; then
+    # Task indices and node-local scratch may change on a retry. Index 0 is
+    # reserved here so the existing family tmp retention applies by family ID.
+    iqtree_checkpoint_dir="${dir_output_active}/tmp/0_${og_id}/iqtree"
+    python "${gg_support_dir}/resume_iqtree_search.py" \
+      --state "${iqtree_checkpoint_dir}" --alignment iqtree_input.fa \
+      -- "${iqtree_search_args[@]}" || exit $?
+    file_tree="${iqtree_checkpoint_dir}/search.treefile"
+  else
+    iqtree -s iqtree_input.fa --prefix "${og_id}" --redo "${iqtree_search_args[@]}" || exit $?
+  fi
 
-  cp_out "${file_tree}" "${file_og_iqtree_tree}"
-  gg_artifact_record "${iqtree_provenance_args[@]}"
+  cp_out "${file_tree}" "${file_og_iqtree_tree}" || exit $?
+  gg_artifact_record "${iqtree_provenance_args[@]}" || exit $?
+  if [[ -n "${iqtree_checkpoint_dir}" ]]; then
+    rm -rf -- "${iqtree_checkpoint_dir}"
+    rmdir -- "${iqtree_checkpoint_dir%/*}" 2>/dev/null || true
+  fi
 else
   gg_step_skip "${task}"
 fi
@@ -4192,13 +4201,14 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
 
   generate_generax_mapfile() {
     # https://github.com/BenoitMorel/GeneRax/wiki/Gene-to-species-mapping
-    my_aln_file=$1
-    awk '/^>/ {sub(/^>/, "", $0); print}' "${my_aln_file}" > tmp.gene_names.txt
-    while IFS= read -r gene_name; do gg_species_name_from_path "${gene_name}"; done < tmp.gene_names.txt > tmp.species_names.txt
-    paste tmp.gene_names.txt tmp.species_names.txt > generax_map.txt
-    rm -f -- tmp.gene_names.txt tmp.species_names.txt
+    local gene_name species
+    awk '/^>/ {print substr($0, 2)}' "$1" |
+      while IFS= read -r gene_name; do
+        gg_species_name_from_path "${gene_name}" species || return $?
+        printf '%s\t%s\n' "${gene_name}" "${species}" || return $?
+      done > generax_map.txt
   }
-  generate_generax_mapfile generax_input_alignment.fas
+  generate_generax_mapfile generax_input_alignment.fas || exit $?
 
   printf '%s\n' \
     '[FAMILIES]' \

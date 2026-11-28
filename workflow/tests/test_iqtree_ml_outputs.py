@@ -1,4 +1,5 @@
 """Run the actual inference stages and verify ML topology publication and reuse."""
+import gzip
 import os
 import random
 import subprocess
@@ -138,7 +139,12 @@ def test_native_stages_publish_ml_tree_and_invalidate_consensus_contract(
     if not source.is_absolute():
         source = (tmp_path if stage == 'gene' else iqtree_dir) / source
     assert source.suffix == '.treefile'
-    assert published.read_bytes() == source.read_bytes()
+    large_gene_search = stage == 'gene' and ntaxa > fast_threshold
+    if large_gene_search:
+        assert source == output_dir / 'tmp/0_OG0001/iqtree/search.treefile'
+        assert not source.parent.exists()
+    else:
+        assert published.read_bytes() == source.read_bytes()
     assert (tmp_path / 'legacy-policy.txt').read_text().strip() == 'rebuild'
     tree = ete4.Tree(published.read_text(), parser=0)
     assert set(tree.leaf_names()) == set('ABCDEF'[:ntaxa])
@@ -146,7 +152,7 @@ def test_native_stages_publish_ml_tree_and_invalidate_consensus_contract(
     if bootstrap:
         assert internal and all(node.support is not None and 0 <= node.support <= 100 for node in internal)
         assert source.with_suffix('.contree').is_file()
-    log = source.with_suffix('.log').read_text()
+    log = completed.stdout if large_gene_search else source.with_suffix('.log').read_text()
     assert ('--ufboot 1000' in log) == bootstrap
     assert ('--fast' in log) == (stage == 'gene' and ntaxa > fast_threshold)
 
@@ -155,6 +161,50 @@ def test_native_stages_publish_ml_tree_and_invalidate_consensus_contract(
     previous = published.read_bytes()
     assert_contract_requires_regeneration(tmp_path, 'tree_output=treefile')
     assert published.read_bytes() == previous
+
+
+@pytest.mark.parametrize("retry", ["matching", "input_changed", "options_changed", "binary_changed",
+                                   "truncated", "finished"])
+def test_large_search_only_resumes_an_intact_matching_native_checkpoint(tmp_path, retry):
+    fake_iqtree = tmp_path / "iqtree"
+    fake_iqtree.write_text("""#!/bin/sh
+set -eu
+test -s alignment.fa
+if [ -f search.ckp.gz ]; then
+  printf resumed > search.treefile
+else
+  printf fresh > search.treefile
+fi
+""")
+    fake_iqtree.chmod(0o700)
+    first_input = tmp_path / "first.fa"
+    retry_input = tmp_path / "retry.fa"
+    first_input.write_text(">one\nACGT\n")
+    retry_input.write_text(">one\nACGA\n" if retry == "input_changed" else first_input.read_text())
+    state = tmp_path / "output" / "tmp" / "0_OG0001" / "iqtree"
+    options = ["-m", "LG", "--fast"]
+
+    def search(path):
+        return subprocess.run([sys.executable, str(SUPPORT / "resume_iqtree_search.py"),
+                               "--state", str(state), "--alignment", str(path),
+                               "--executable", str(fake_iqtree), "--", *options],
+                              capture_output=True, text=True, check=True)
+
+    search(first_input)
+    (state / "complete.json").unlink()
+    checkpoint = gzip.compress(b"--- # IQ-TREE Checkpoint ver >= 1.6\nfinished: "
+                               + (b"true\n" if retry == "finished" else b"false\n"))
+    (state / "search.ckp.gz").write_bytes(checkpoint[:-3] if retry == "truncated" else checkpoint)
+    if retry == "options_changed":
+        options += ["--seed", "22"]
+    if retry == "binary_changed":
+        with fake_iqtree.open("a") as stream:
+            stream.write("# changed executable\n")
+    search(retry_input)
+    expected = "resumed" if retry == "matching" else "fresh"
+    assert (state / "search.treefile").read_text() == expected
+    assert "interrupted publication" in search(retry_input).stdout
+    assert (state / "search.treefile").read_text() == expected
 
 
 def test_summary_contract_invalidates_older_statistics(tmp_path):

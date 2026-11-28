@@ -215,7 +215,7 @@ check_species_cds_dir() {
 
   export -f check_single_species_cds
   export -f gg_mktemp gg_tmp_root
-  export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
+  export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
     parallel --jobs "${GG_TASK_CPUS}" check_single_species_cds ::: "${species_cds_fasta[@]}"

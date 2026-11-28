@@ -34,6 +34,18 @@ lockfiles cannot abort a selected family's restoration. Archived records retain
 their explicit family identity; corruption or unreadability of a selected
 artifact remains an error rather than being silently skipped.
 
+## Resuming a large gene-tree search
+
+For an initial gene-tree search above `iqtree_fast_mode_gt`, a normal run
+keeps IQ-TREE's native checkpoint in `tmp/0_<family>/iqtree` under the active
+gene-family output directory. Submit the same family through the usual entry
+point after an interruption. GeneGalleon checks the prepared alignment,
+IQ-TREE executable and search arguments before reusing the checkpoint. This
+works across task indices and local scratch directories when the search inputs
+and arguments match. The workflow removes the checkpoint after publishing the
+ML tree and its provenance. Existing family temporary-file retention limits
+also apply to interrupted searches.
+
 ## Main per-family outputs
 
 If the input file is `workspace/input/query_gene/2_WOX`, the main outputs are

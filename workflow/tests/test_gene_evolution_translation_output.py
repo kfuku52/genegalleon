@@ -251,3 +251,27 @@ def test_translation_keeps_gzip_suffix_on_staging_file(tmp_path):
     with gzip.open(protein_out, "rt", encoding="utf-8") as handle:
         assert handle.read() == ">sp1_gene1\nATG\n"
     assert not list(protein_out.parent.glob("OG0001_pep.fa.gz.partial.*"))
+
+
+def test_generax_mapping_preserves_header_order_and_taxonomic_qualifiers(tmp_path):
+    headers = [
+        ("Genus_species.2_gene1 description", "Genus_species"),
+        ("Genus_sp._isolate_gene2", "Genus_sp._isolate"),
+        ("Genus_species_subsp._subspecies_gene3", "Genus_species_subsp._subspecies"),
+        ("Genus_species_×_Other_species_gene4", "Genus_species_x_Other_species"),
+        ("single", ""),
+    ]
+    alignment = tmp_path / "alignment.fa"
+    alignment.write_text("".join(f">{gene}\nATG\n" for gene, _ in headers))
+    source = CORE_PATH.read_text()
+    mapping_start = source.index("  generate_generax_mapfile() {")
+    mapping_end = source.index("\n  }", mapping_start) + len("\n  }")
+    shell = 'set -euo pipefail\nsource "$1"\n' + source[mapping_start:mapping_end]
+    shell += '\ngenerate_generax_mapfile "$2"\n'
+    support = CORE_PATH.parents[1] / "support"
+    result = subprocess.run(["bash", "-c", shell, "bash", str(support / "gg_util.sh"), str(alignment)],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "generax_map.txt").read_text() == "".join(
+        f"{gene}\t{species}\n" for gene, species in headers
+    )
