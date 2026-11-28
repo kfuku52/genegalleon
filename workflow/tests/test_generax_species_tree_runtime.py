@@ -160,6 +160,30 @@ def test_concurrent_pruning_uses_shared_source_contract(tmp_path):
     assert not Path(str(pruned) + ".lock").exists()
 
 
+def test_parallel_current_pruned_tree_never_needs_the_writer_lock(tmp_path):
+    script, source, pruned = pruning_harness(tmp_path)
+    result = run("bash", script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = Path(str(pruned) + ".provenance.json")
+    cache = pruned.read_bytes(), manifest.read_bytes(), pruned.stat().st_mtime_ns, manifest.stat().st_mtime_ns
+
+    script.write_text(script.read_text().removesuffix("prepare_species_tree_pruned\n") + """
+gg_shared_lock_acquire() { echo 'Writer lock required' >&2; return 71; }
+prepare_species_tree_pruned
+""")
+    processes = [subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for _ in range(4)]
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stdout + stderr
+
+    source.write_text(source.read_text().replace("1.2345678901234567", "2.0"))
+    for policy in ("stop", "rebuild", "reuse"):
+        result = run("bash", script, policy)
+        assert result.returncode == 71 and "Writer lock required" in result.stderr
+    assert (pruned.read_bytes(), manifest.read_bytes(), pruned.stat().st_mtime_ns, manifest.stat().st_mtime_ns) == cache
+
+
 def test_generax_shared_species_cache_refreshes_when_source_root_changes(tmp_path):
     text = CORE.read_text()
     begin = text.index('  generax_out_sptree="')

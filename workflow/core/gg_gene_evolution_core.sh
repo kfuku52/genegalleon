@@ -778,36 +778,23 @@ prepare_species_tree_pruned() (
     return 0
   fi
 
-  ensure_parent_dir "${species_tree_pruned}" || return $?
-  local lock_file="${species_tree_pruned}.lock"
-  gg_shared_lock_acquire "${lock_file}" "Species tree pruning" || return $?
-  trap 'gg_shared_lock_release "${lock_file}"' EXIT
-
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     species_sequence_dir="${dir_sp_protein_input}"
   fi
 
-  local sequence_files=()
-  mapfile -t sequence_files < <(gg_find_fasta_files "${species_sequence_dir}" 1)
-  local cds_spp=()
-  local sequence_file
-  for sequence_file in "${sequence_files[@]}"; do
-    cds_spp+=("$(gg_species_name_from_path "${sequence_file}")")
-  done
-  if [[ ${#cds_spp[@]} -gt 0 ]]; then
-    mapfile -t cds_spp < <(printf '%s\n' "${cds_spp[@]}" | sed -e '/^[[:space:]]*$/d' | sort -u)
-  fi
-  local keep_pattern=""
-  if [[ ${#cds_spp[@]} -gt 0 ]]; then
-    keep_pattern=$(
-      printf '%s\n' "${cds_spp[@]}" |
-        sed -e 's/[][(){}.^$+*?|\\-]/\\&/g' |
-        paste -sd'|' -
-    )
-  fi
+  selected_tip_pattern() {
+    local sequence_files=()
+    local sequence_file
+    mapfile -t sequence_files < <(gg_find_fasta_files "${species_sequence_dir}" 1)
+    for sequence_file in "${sequence_files[@]}"; do
+      gg_species_name_from_path "${sequence_file}" || return $?
+    done | sed -e '/^[[:space:]]*$/d' | sort -u |
+      sed -e 's/[][(){}.^$+*?|\\-]/\\&/g' | paste -sd'|' -
+  }
 
   # Sequence contents do not affect pruning; the selected tip labels do.
   # Never adopt a legacy cache whose source root/tip selection is unknown.
+  local keep_pattern
   local artifact_legacy_policy=rebuild
   local pruned_needs_update=0
   local pruned_provenance_args=(
@@ -818,9 +805,32 @@ prepare_species_tree_pruned() (
     --workspace-root "${gg_workspace_dir}"
     --input "source_tree=${species_tree}"
     --output "pruned_tree=${species_tree_pruned}"
-    --parameter "keep_pattern=${keep_pattern}"
     --parameter "input_sequence_mode=${input_sequence_mode}"
   )
+  # A matching source, tip selection and output can be read concurrently.
+  # Dry-run forbids provenance writes, and the probe must never accept stale
+  # artifacts even when the caller's write-path policy is reuse.
+  case "${artifact_stale_policy:-stop}" in
+    stop|rebuild|reuse)
+      if [[ -s "${species_tree_pruned}" && -s "${species_tree_pruned}.provenance.json" ]] &&
+        keep_pattern=$(selected_tip_pattern) &&
+        artifact_stale_policy=rebuild gg_artifact_set_needs_update pruned_needs_update \
+          --dry-run "${pruned_provenance_args[@]}" \
+          --parameter "keep_pattern=${keep_pattern}" >/dev/null 2>&1 &&
+        [[ ${pruned_needs_update} -eq 0 ]]; then
+        return 0
+      fi
+      ;;
+  esac
+
+  ensure_parent_dir "${species_tree_pruned}" || return $?
+  local lock_file="${species_tree_pruned}.lock"
+  gg_shared_lock_acquire "${lock_file}" "Species tree pruning" || return $?
+  trap 'gg_shared_lock_release "${lock_file}"' EXIT
+
+  # A writer may have refreshed the cache while this process waited.
+  keep_pattern=$(selected_tip_pattern) || return $?
+  pruned_provenance_args+=(--parameter "keep_pattern=${keep_pattern}")
   gg_artifact_set_needs_update pruned_needs_update "${pruned_provenance_args[@]}" || return $?
   if [[ ${pruned_needs_update} -eq 0 ]]; then
     return 0

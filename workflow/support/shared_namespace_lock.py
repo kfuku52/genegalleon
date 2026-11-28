@@ -17,6 +17,7 @@ import random
 import re
 import socket
 import stat
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -60,13 +61,25 @@ def _root(path: Path) -> Path:
     return root
 
 
-def _write_owner(path: Path, token: str, owner_pid: int) -> None:
-    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump({"token": token, "pid": owner_pid, "host": socket.gethostname(),
-                   "created_ns": time.time_ns(),
-                   "job_id": os.environ.get("GG_JOB_ID", os.environ.get("SLURM_JOB_ID", os.environ.get("JOB_ID", ""))),
-                   "array_task_id": os.environ.get("GG_ARRAY_TASK_ID", os.environ.get("SLURM_ARRAY_TASK_ID", os.environ.get("SGE_TASK_ID", "")))}, handle)
+def _write_owner(root: Path, path: Path, token: str, owner_pid: int) -> None:
+    owner = {
+        "token": token,
+        "pid": owner_pid,
+        "host": socket.gethostname(),
+        "created_ns": time.time_ns(),
+        "job_id": os.environ.get("GG_JOB_ID", os.environ.get("SLURM_JOB_ID", os.environ.get("JOB_ID", ""))),
+        "array_task_id": os.environ.get("GG_ARRAY_TASK_ID",
+                                        os.environ.get("SLURM_ARRAY_TASK_ID", os.environ.get("SGE_TASK_ID", ""))),
+    }
+    # Stage outside gate and readers so a failed write never creates an owner.
+    # Linking publishes the complete record without replacing another owner.
+    fd, pending = tempfile.mkstemp(prefix=".owner-", dir=root)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(owner, handle)
+        os.link(pending, path, follow_symlinks=False)
+    finally:
+        os.unlink(pending)
 
 
 def _remove_owned(path: Path, token: str) -> None:
@@ -101,7 +114,7 @@ def acquire(path: Path, *, exclusive: bool, nonblocking: bool = False,
             keep_gate = False
             owner_written = False
             try:
-                _write_owner(gate / "owner.json", token, owner_pid or os.getpid())
+                _write_owner(root, gate / "owner.json", token, owner_pid or os.getpid())
                 owner_written = True
                 if exclusive:
                     # Do not wait while holding the gate: an existing reader
@@ -110,7 +123,7 @@ def acquire(path: Path, *, exclusive: bool, nonblocking: bool = False,
                         keep_gate = True
                         return token
                 else:
-                    _write_owner(root / "readers" / token, token, owner_pid or os.getpid())
+                    _write_owner(root, root / "readers" / token, token, owner_pid or os.getpid())
                     return token
             finally:
                 if not keep_gate:

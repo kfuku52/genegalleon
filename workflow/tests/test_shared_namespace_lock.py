@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import shlex
@@ -16,6 +17,33 @@ from workflow.support.shared_namespace_lock import (
 
 HELPER = Path(__file__).resolve().parents[1] / "support" / "shared_namespace_lock.py"
 SHELL = HELPER.with_name("gg_shared_lock.sh")
+
+
+@pytest.mark.parametrize(("exclusive", "failed_write"), [(True, 1), (False, 2)])
+def test_quota_error_does_not_create_an_owner(tmp_path, monkeypatch, exclusive, failed_write):
+    path = tmp_path / "family.lock"
+    root = tmp_path / "family.lock.namespace-v1"
+    original = json.dump
+    writes = 0
+
+    def quota_error(owner, stream):
+        nonlocal writes
+        writes += 1
+        if writes == failed_write:
+            stream.write('{"token":')
+            stream.flush()
+            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+        original(owner, stream)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(json, "dump", quota_error)
+        with pytest.raises(OSError) as caught:
+            acquire(path, exclusive=exclusive)
+    assert caught.value.errno == errno.EDQUOT
+    assert list(root.iterdir()) == [root / "readers"]
+    assert list((root / "readers").iterdir()) == []
+    with namespace_lock(path, exclusive=True, nonblocking=True) as acquired:
+        assert acquired
 
 
 def test_namespace_privacy_survives_inherited_nfs_modes_without_changing_workspace(tmp_path, monkeypatch):
