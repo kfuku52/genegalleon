@@ -1,12 +1,13 @@
 """Nearby boundaries must recover actual genomic ORFs, not hide defects."""
 import copy
+import json
 
 import pytest
 from Bio.Seq import Seq
 
 from workflow.support import rescue_boundary_revalidation as boundaries
 from workflow.support.rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
-from workflow.support.rescue_gene_models import validate_model
+from workflow.support.rescue_gene_models import CandidateAuditStore, validate_model
 from workflow.support.rescue_terminal_completion import complete_terminals
 
 PARAMS = {"minimum_coverage": .95, "minimum_identity": .5, "max_intron": 1000}
@@ -175,7 +176,8 @@ def test_distinct_complete_start_paths_remain_ambiguous():
 
 
 @pytest.mark.parametrize('strand', ['+', '-'])
-def test_complete_boundary_alternatives_enter_final_selection_without_rewriting_source(strand):
+@pytest.mark.parametrize('compact', [False, True])
+def test_complete_boundary_alternatives_enter_final_selection_without_rewriting_source(strand, compact):
     from workflow.support.rescue_gene_models import consolidate
     donor = 'M' + 'A' * 90
     core = 'GCT' * 90 + 'TAA'
@@ -183,14 +185,46 @@ def test_complete_boundary_alternatives_enter_final_selection_without_rewriting_
     source = recheck(model, genome, donor)
     original = copy.deepcopy(source)
     source['query'] = 'region'
-    candidates = validated_boundary_candidates(source, genome, 1, PARAMS, donor, validate_model)
+    store = CandidateAuditStore()
+    if compact:
+        store.compact(source)
+        boundary_source = store.boundary_source(source)
+    else:
+        boundary_source = source
+    candidates = validated_boundary_candidates(boundary_source, genome, 1, PARAMS, donor, validate_model)
     assert len(candidates) > 1 and all(not row['problems'] for row in candidates)
+    if compact:
+        candidates = [store.compact(row) for row in candidates]
     consolidate(candidates, [], 'Target')
     primary, = [row for row in candidates if row['status'] == 'accepted']
     assert primary['path_selection']['representative_status'] == 'ambiguous'
     assert len(primary['alternative_coding_paths']) == len(candidates) - 1
-    assert source == {**original, 'query': 'region'}
+    assert store.restore_model(source) == {**original, 'query': 'region'}
     assert all(row['boundary_candidate']['representative_status'] == 'ambiguous' for row in candidates)
+    serialized = json.loads(json.dumps(store.restore_model(primary)))
+    assert all(row['boundary_revalidation']['status'] == 'ambiguous' for row in serialized['alternative_coding_paths'])
+
+
+def test_compact_audits_restore_in_order_and_skip_nonambiguous_boundaries():
+    model = {'raw_prediction': {'evidence': {'donor': '日本語'}, 'cds': [[3, 9, 0]]},
+             'cds': [[0, 9, 0]], 'terminal_completion': {'start': [0, 3]},
+             'boundary_revalidation': {'status': 'rejected'}, 'evidence': {'donor': '日本語'}}
+    expected = json.dumps(model, ensure_ascii=False)
+    store = CandidateAuditStore()
+    store.compact(model)
+    assert model['cds'] == [[0, 9, 0]]
+    assert model['evidence'] == {'donor': '日本語'}
+    assert store.boundary_source(model) is None
+    assert json.dumps(store.restore_model(model), ensure_ascii=False) == expected
+
+
+def test_local_checkpoint_shares_field_names_across_records():
+    store = CandidateAuditStore()
+    records = ['{"evidence":{"long_checkpoint_field":"first"}}\n',
+               '{"evidence":{"long_checkpoint_field":"second"}}\n']
+    first, second = store.read_local_checkpoint(records)
+    assert [first, second] == [json.loads(row) for row in records]
+    assert next(iter(first['evidence'])) is next(iter(second['evidence']))
 
 
 @pytest.mark.parametrize('failure', ['budget', 'changed_source', 'disruption', 'missing_donor'])

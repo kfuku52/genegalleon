@@ -24,9 +24,11 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -1555,8 +1557,74 @@ LOCAL_VALIDATED = "local_validated.jsonl.gz"
 TARGETED_VALIDATED = "targeted_validated.json"
 
 
+@dataclass(frozen=True, slots=True)
+class _PackedCandidateAudit:
+    payload: bytes
+    may_have_boundary_alternatives: bool
+
+
+class CandidateAuditStore:
+    """Keep Miniprot audit payloads compressed until decisions or publication need them."""
+
+    _FIELDS = ("terminal_completion", "boundary_revalidation")
+
+    def __init__(self):
+        self._encode = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode
+        try:
+            import zstandard
+        except ImportError:
+            self._compress = lambda data: zlib.compress(data, level=1)
+            self._decompress = zlib.decompress
+        else:
+            self._compress = zstandard.ZstdCompressor(level=1).compress
+            self._decompress = zstandard.ZstdDecompressor().decompress
+
+    def compact(self, model):
+        for field in self._FIELDS:
+            value = model.get(field)
+            if type(value) is dict:
+                model[field] = _PackedCandidateAudit(
+                    self._compress(self._encode(value).encode("utf-8")),
+                    field == "boundary_revalidation" and value.get("status") == "ambiguous",
+                )
+        return model
+
+    def read_local_checkpoint(self, lines):
+        # Each JSON line normally allocates a new copy of its field names.
+        # Share those keys across the retained records and nested evidence.
+        decoder = json.JSONDecoder(object_pairs_hook=lambda pairs: {sys.intern(key): value for key, value in pairs})
+        for line in lines:
+            yield self.compact(decoder.decode(line))
+
+    def boundary_source(self, model):
+        """Expose a full boundary audit only for possibly ambiguous paths."""
+        audit = model.get("boundary_revalidation")
+        if not isinstance(audit, _PackedCandidateAudit):
+            return model
+        if audit.may_have_boundary_alternatives:
+            return {**model, "boundary_revalidation": json.loads(self._decompress(audit.payload))}
+        return None
+
+    def _restore_fields(self, model):
+        for field in self._FIELDS:
+            value = model.get(field)
+            if isinstance(value, _PackedCandidateAudit):
+                model[field] = json.loads(self._decompress(value.payload))
+
+    def restore_model(self, model):
+        """Restore the standard audit dictionaries in the original field order."""
+        self._restore_fields(model)
+        if (alternatives := model.get("alternative_coding_paths")):
+            # A refinement candidate may still share these packed paths.
+            restored = [alternative.copy() for alternative in alternatives]
+            for alternative in restored:
+                self._restore_fields(alternative)
+            model["alternative_coding_paths"] = restored
+        return model
+
+
 def write_rescue_models(directory, models, genetic_code, *, compact, publication_workers=1, packing_workers=None,
-                        diagnostics="legacy", unresolved_count=0):
+                        diagnostics="legacy", unresolved_count=0, candidate_audits=None):
     """Write candidate quality and revision views in original model order."""
     if packing_workers is None:
         packing_workers = publication_workers
@@ -1581,7 +1649,14 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
                 rescue_diagnostics.update(counts, model)
             else:
                 quality_writer.writerow(rescue_diagnostics.quality_row(model))
-            yield model
+            yield candidate_audits.restore_model(model) if candidate_audits is not None else model
+
+    def revision_models():
+        # Release the packed revision bodies after the main model stream.
+        shapes = list(revisions)
+        for shape in shapes:
+            model = revisions.pop(shape)
+            yield candidate_audits.restore_model(model) if candidate_audits is not None else model
 
     detail = directory / rescue_diagnostics.detail_name("quality_flags.tsv", diagnostics)
     context = (contextlib.nullcontext() if diagnostics == "summary" else rescue_diagnostics.text_open(detail, "w"))
@@ -1593,7 +1668,7 @@ def write_rescue_models(directory, models, genetic_code, *, compact, publication
         enriched = with_quality(writer)
         if compact:
             # The store consumes revisions after the main model stream.
-            write_model_store(directory, enriched, revisions=revisions.values(), publication_workers=publication_workers,
+            write_model_store(directory, enriched, revisions=revision_models(), publication_workers=publication_workers,
                               packing_workers=packing_workers)
         else:
             for _ in enriched:
@@ -1790,6 +1865,11 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                     windows[(region["seqid"], region["start"], region["end"])].append(region)
             by_id = {r["id"]: r for r in candidate_regions}
             validated = []
+            candidate_audits = CandidateAuditStore() if storage["format"] == "compact" and phase != "predict" else None
+
+            def retain(model):
+                return candidate_audits.compact(model) if candidate_audits is not None else model
+
             raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params,
                                                candidate_homology=homology_problems)
             import rescue_cached_validation
@@ -1818,8 +1898,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 old_models = (model for model in cached.iter_models()
                               if not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')))
                 cached_validation = {}
-                validated.extend(rescue_cached_validation.validate_cached(old_models, genome,
-                    source['genetic_code'], params, proteins, cpus, checked_prediction, cached_validation))
+                validated.extend(map(retain, rescue_cached_validation.validate_cached(old_models, genome,
+                    source['genetic_code'], params, proteins, cpus, checked_prediction, cached_validation)))
                 if revalidation_reason:
                     cached_validation.update(reuse='raw_prediction_cache', reason=revalidation_reason,
                                              source_receipt_sha256=cached.frozen['receipt_sha256'])
@@ -1830,13 +1910,16 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                 model["cds"] = [[s + region["start"], e + region["start"], p] for s, e, p in model["cds"]]
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
-                validated.append(checked_prediction(model))
+                validated.append(retain(checked_prediction(model)))
             del predictions
             searched_local_windows = len(windows) if checkpoint is None else state["searched_local_windows"]
             del windows
             if checkpoint is not None:
                 with gzip.open(tmp / LOCAL_VALIDATED, "rt") as handle:
-                    validated.extend(json.loads(line) for line in handle)
+                    if candidate_audits is None:
+                        validated.extend(json.loads(line) for line in handle)
+                    else:
+                        validated.extend(candidate_audits.read_local_checkpoint(handle))
                 (tmp / LOCAL_VALIDATED).unlink()
             def unresolved_regions():
                 preview = [{**m, "problems": list(m["problems"])} for m in validated]
@@ -1903,7 +1986,7 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
                         model["search"] = "genome_fallback"
                         yield model
                 checked = check_predictions(genome_predictions(), "genome_fallback")
-                validated.extend(rescue_cached_validation.share_validated_sequences(checked))
+                validated.extend(map(retain, rescue_cached_validation.share_validated_sequences(checked)))
                 expanded_genome_sha256 = expanded_digest.hexdigest()
                 # Only optional GeMoMa consumes unresolved after genome search;
                 # final placement and coding-path admission still run below.
@@ -1929,8 +2012,12 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
             # choose a reproducible representative while retaining all paths.
             boundary_models = []
             for model in validated:
+                if candidate_audits is not None:
+                    model = candidate_audits.boundary_source(model)
+                    if model is None:
+                        continue
                 evidence = model['evidence']
-                boundary_models.extend(check_interval(candidate) for candidate in validated_boundary_candidates(
+                boundary_models.extend(retain(check_interval(candidate)) for candidate in validated_boundary_candidates(
                     model, genome, source['genetic_code'], params,
                     proteins[evidence['donor']][evidence['query']], validate_model))
             validated.extend(boundary_models)
@@ -2104,7 +2191,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
 
             write_rescue_models(tmp, release_models(), source["genetic_code"], compact=True,
                                 publication_workers=min(cpus, 4), packing_workers=packing_workers,
-                                diagnostics=diagnostics, unresolved_count=unresolved_count)
+                                diagnostics=diagnostics, unresolved_count=unresolved_count,
+                                candidate_audits=candidate_audits)
         else:
             write_rescue_models(tmp, models, source["genetic_code"], compact=False,
                                 diagnostics=diagnostics, unresolved_count=unresolved_count)
