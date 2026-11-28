@@ -43,7 +43,7 @@ def _initialise(genome_path, code, params):
     global _CONTEXT
     import pysam
     r = _r()
-    genome = pysam.FastaFile(genome_path)
+    genome = r.GapCachedGenome(pysam.FastaFile(genome_path))
     memo = r.RawValidationMemo(r.validate_model, genome, code, params,
                                candidate_homology=r.homology_problems)
     _CONTEXT = genome, code, params, memo

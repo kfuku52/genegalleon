@@ -79,7 +79,7 @@ try:
     from rescue_prediction_cache import (
         stream_json_array as stream_json_array,
     )
-    from rescue_raw_validation import RawValidationMemo
+    from rescue_raw_validation import GapCachedGenome, RawValidationMemo, span_gap_count
     from rescue_search_inputs import (
         LOCAL_RECORDS,
         export_inputs,
@@ -141,7 +141,7 @@ except ImportError:
     from .rescue_prediction_cache import (
         stream_json_array as stream_json_array,
     )
-    from .rescue_raw_validation import RawValidationMemo
+    from .rescue_raw_validation import GapCachedGenome, RawValidationMemo, span_gap_count
     from .rescue_search_inputs import (
         LOCAL_RECORDS,
         export_inputs,
@@ -1223,8 +1223,7 @@ def validate_model(model, genome, code, params):
     ambiguous_sequence = set(seq) - set("ACGT")
     if ambiguous_sequence:
         problems.append("assembly_gap_or_ambiguity")
-    span = genome.fetch(model["seqid"], min(e[0] for e in exons), max(e[1] for e in exons)).upper()
-    gap_bases = len(span) - span.count("A") - span.count("C") - span.count("G") - span.count("T")
+    gap_bases = span_gap_count(genome, model["seqid"], min(e[0] for e in exons), max(e[1] for e in exons))
     if gap_bases:
         problems.append("assembly_gap_within_model_span")
     if len(seq) % 3:
@@ -1760,7 +1759,8 @@ def _rescue(root, plan, name, cpus, interval_workers, phase, dependencies):
         placement_ownership = OwnershipIndex(existing)
         frozen_cache = plan["request"].get("prediction_cache")
         retained_paths = {}
-        with indexed_genome(source["genome"]) as genome:
+        with indexed_genome(source["genome"]) as indexed:
+            genome = GapCachedGenome(indexed)
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
             for feature in chain(existing, positions):

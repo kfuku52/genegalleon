@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import struct
 import sys
+from array import array
+from bisect import bisect_left
 from collections import OrderedDict
 
 DNA_FIELDS = ("cds", "sequence", "genetic_code", "assembly_ambiguous_bases", "problems")
@@ -94,6 +97,86 @@ def _retained_size(value):
     if isinstance(value, (tuple, list)):
         return size + sum(_retained_size(v) for v in value)
     return size
+
+
+def _ambiguous_bases(sequence):
+    if sequence.isascii():
+        return len(sequence.encode("ascii").translate(None, b"ACGTacgt"))
+    sequence = sequence.upper()
+    return len(sequence) - sequence.count("A") - sequence.count("C") - sequence.count("G") - sequence.count("T")
+
+
+_CANONICAL_BASE = re.compile("[ACGT]")
+_AMBIGUOUS_BASE = re.compile("[^ACGT]")
+
+
+class GapCachedGenome:
+    """Reuse gap counts across overlapping spans on one frozen indexed genome."""
+
+    _TILE_BASES = 65536  # Largest 0-based position fits in an unsigned short.
+    _DIRECT_BASES = _TILE_BASES // 2
+    _CACHE_BYTES = 8 * 1024 * 1024
+    _CACHE_ENTRIES = 4096
+
+    def __init__(self, genome):
+        self._genome = genome
+        self.fetch = genome.fetch
+        self.get_reference_length = genome.get_reference_length
+        self._tiles = OrderedDict()
+        self._bytes = 0
+
+    def __getattr__(self, name):
+        return getattr(self._genome, name)
+
+    def _tile(self, seqid, offset):
+        key = seqid, offset
+        cached = self._tiles.get(key)
+        if cached is not None:
+            self._tiles.move_to_end(key)
+            return cached
+        width = min(self._TILE_BASES, self.get_reference_length(seqid) - offset)
+        sequence = self.fetch(seqid, offset, offset + width)
+        if not sequence.isascii() or len(sequence) != width:
+            return None
+        sequence = sequence.upper()
+        gaps = len(sequence) - sum(sequence.count(base) for base in "ACGT")
+        # Most tiles need no array. Otherwise index the less frequent class.
+        inverted = gaps > len(sequence) // 2
+        positions = ()
+        if 0 < gaps < len(sequence):
+            pattern = _CANONICAL_BASE if inverted else _AMBIGUOUS_BASE
+            positions = array("H", (match.start() for match in pattern.finditer(sequence)))
+        weight = sys.getsizeof(positions) + 384
+        tile = positions, inverted, width, weight
+        if weight <= self._CACHE_BYTES:
+            while self._tiles and (self._bytes + weight > self._CACHE_BYTES
+                                   or len(self._tiles) >= self._CACHE_ENTRIES):
+                _, (_, _, _, removed) = self._tiles.popitem(last=False)
+                self._bytes -= removed
+            self._tiles[key] = tile
+            self._bytes += weight
+        return tile
+
+    def count_span_gaps(self, seqid, start, end):
+        if end - start <= self._DIRECT_BASES:
+            # Reading a full tile for a short one-off span costs more than scanning it.
+            return _ambiguous_bases(self.fetch(seqid, start, end))
+        count = 0
+        for offset in range(start // self._TILE_BASES * self._TILE_BASES, end, self._TILE_BASES):
+            left, right = max(start - offset, 0), min(end - offset, self._TILE_BASES)
+            tile = self._tile(seqid, offset)
+            if tile is None or right > tile[2]:
+                return _ambiguous_bases(self.fetch(seqid, start, end))
+            positions, inverted, _, _ = tile
+            matches = bisect_left(positions, right) - bisect_left(positions, left) if positions else 0
+            count += (right - left - matches) if inverted else matches
+        return count
+
+
+def span_gap_count(genome, seqid, start, end):
+    if isinstance(genome, GapCachedGenome):
+        return genome.count_span_gaps(seqid, start, end)
+    return _ambiguous_bases(genome.fetch(seqid, start, end))
 
 
 class RawValidationMemo:

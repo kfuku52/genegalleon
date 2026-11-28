@@ -7,7 +7,7 @@ from Bio.Seq import Seq
 
 from workflow.support.rescue_gene_models import validate_model
 from workflow.support.rescue_homology_policy import homology_problems
-from workflow.support.rescue_raw_validation import RawValidationMemo, copy_validation_data
+from workflow.support.rescue_raw_validation import GapCachedGenome, RawValidationMemo, copy_validation_data
 
 
 class Genome:
@@ -23,7 +23,71 @@ class Genome:
         return len(self.sequence)
 
 
+def test_short_gap_span_reads_only_the_requested_range(monkeypatch):
+    reference = Genome("aNgT" * 32000)
+    requests = []
+    original = reference.fetch
+    def track(seqid, start, end):
+        requests.append((start, end))
+        return original(seqid, start, end)
+    monkeypatch.setattr(reference, "fetch", track)
+    genome = GapCachedGenome(reference)
+    assert genome.count_span_gaps("chr", 65000, 66000) == 250
+    assert requests == [(65000, 66000)]
+    assert not genome._tiles
+
+
 PARAMS = {"minimum_coverage": .95, "minimum_identity": .5, "max_intron": 20000}
+
+
+def test_genome_gap_tiles_count_exactly_and_reuse_overlapping_intervals():
+    block = GapCachedGenome._TILE_BASES
+    sequence = ("aCgT" * (block // 4) + "n" * block
+                + ("nY" + "a" * 30) * (block // 32)
+                + ("N" * 30 + "cT") * (block // 32) + "rGnT" * 100)
+    reference = Genome(sequence)
+    genome = GapCachedGenome(reference)
+    spans = [
+        (0, 40000), (block - 20000, block + 20000), (block + 10, block + 40000),
+        (2 * block + 17, 3 * block + 900), (17, len(sequence)),
+        (4 * block - 36000, len(sequence)),
+    ]
+    for start, end in spans:
+        expected = sum(base.upper() not in "ACGT" for base in sequence[start:end])
+        assert genome.count_span_gaps("chr", start, end) == expected
+    assert reference.fetches == 5
+    assert genome.count_span_gaps("chr", 2 * block + 100, 4 * block + 17) == sum(
+        base.upper() not in "ACGT" for base in sequence[2 * block + 100:4 * block + 17])
+    assert reference.fetches == 5
+
+
+def test_gap_tile_cache_has_hard_bounds_and_matches_validation(monkeypatch):
+    block = GapCachedGenome._TILE_BASES
+    sequence = "ATG" + "a" * (block - 3) + "N" * block + "c" * block + "TAATAA"
+    reference = Genome(sequence)
+    genome = GapCachedGenome(reference)
+    monkeypatch.setattr(genome, "_CACHE_ENTRIES", 2)
+    monkeypatch.setattr(genome, "_CACHE_BYTES", 650)
+    for start, end in ((0, block), (block, 2 * block), (2 * block, 3 * block)):
+        assert genome.count_span_gaps("chr", start, end) == (end - start if start == block else 0)
+        assert len(genome._tiles) <= 2 and genome._bytes <= 650
+    row = model(cds=[[0, 6, 0], [3 * block, 3 * block + 6, 0]])
+    uncached = validate_model(row, reference, 1, {**PARAMS, "max_intron": len(sequence)})
+    cached = validate_model(row, genome, 1, {**PARAMS, "max_intron": len(sequence)})
+    assert cached == uncached
+    assert cached["assembly_ambiguous_bases"] == block
+    assert "assembly_gap_within_model_span" in cached["problems"]
+
+
+def test_gap_tile_fallback_preserves_non_ascii_input_count():
+    sequence = "aCgTNß" * 11000
+    genome = GapCachedGenome(Genome(sequence))
+    upper = sequence[5:45000].upper()
+    assert genome.count_span_gaps("chr", 5, 45000) == sum(base not in "ACGT" for base in upper)
+    assert not genome._tiles
+
+
+
 
 
 def model(**changes):
