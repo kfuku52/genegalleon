@@ -41,6 +41,7 @@
     "test_species_tree_constraint.py",
     "test_scaffold_taxonomy.py",
     "test_alignment_stats_runtime.py",
+    "test_mafft_backbone.py",
     "test_cafe_branch_flags_runtime.py",
     "test_cafe_plots_runtime.py",
     "test_validate_cafe_outputs.py",

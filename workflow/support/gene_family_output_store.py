@@ -1231,13 +1231,16 @@ class GeneFamilyOutputStore:
         return artifact
 
     @contextlib.contextmanager
-    def read_snapshot(self) -> Iterator[None]:
+    def read_snapshot(self, *, validate_changed=None) -> Iterator[None]:
         """Fence one complete read operation instead of checking each member.
 
         Maintenance remains excluded by the producer lock. Concurrent producer
         publication invalidates the operation at the final index fence; callers
-        must publish their result only after this context has exited.
+        must publish their result only after this context has exited. A complete
+        family-local audit can supply its exact dependency guard recheck.
         """
+        if validate_changed is not None and self.family_filter is None:
+            raise ArchiveStoreError("Selective publication requires one exact family")
         if self._read_snapshot_epoch is not None:
             raise ArchiveStoreError("Nested store read snapshots are unsupported")
         with producer_read_lock(self.archive_root):
@@ -1251,10 +1254,23 @@ class GeneFamilyOutputStore:
                 for archive, _users, _directory_bytes, _members in self._snapshot_zip_readers.values():
                     archive.close()
                 self._snapshot_zip_readers.clear()
-            self._assert_no_pending_index_update()
-            if self._read_index_epoch() != expected:
+            try:
+                self._assert_no_pending_index_update()
+                changed = self._read_index_epoch() != expected
+            except ArchiveStoreError:
+                if validate_changed is None:
+                    raise
+                changed = True
+            if changed:
                 self._reset_cache()
-                raise ArchiveStoreError("Archive changed during the full audit; retry the audit")
+                if validate_changed is None:
+                    raise ArchiveStoreError("Archive changed during the full audit; retry the audit")
+                # Re-resolve only guarded dependencies. The original content
+                # checks still apply and the lock covers this metadata recheck,
+                # rather than the full family audit.
+                with archive_lock(self.archive_root):
+                    self._assert_no_pending_index_update()
+                    validate_changed()
 
     def _read_lock(self):
         return (contextlib.nullcontext() if self._read_snapshot_epoch is not None
@@ -2189,12 +2205,42 @@ class GeneFamilyOutputStore:
             self._refresh_if_index_changed()
             return self._artifact_unchecked(subdir, name, include_digest=False)
 
+    def _verified_legacy_version(self, version: MemberVersion) -> Optional[Artifact]:
+        artifact = self.source_artifact(*version.logical_path.split("/", 1))
+        if (artifact is None or artifact.zip_path is None
+                or (artifact.generation, artifact.sha256) != (version.generation, version.sha256)):
+            raise ArchiveReferenceError(f"Archive member version changed: {version.logical_path}")
+        if artifact.zip_signature is not None:
+            return None
+        path = artifact.zip_path
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ArchiveReferenceError(f"Legacy archive is unsafe: {path}")
+        before = _stat_signature(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            identity = os.fstat(stream.fileno())
+            observed = (identity.st_dev, identity.st_ino, identity.st_size, identity.st_mtime_ns, identity.st_ctime_ns)
+            if not stat.S_ISREG(identity.st_mode) or observed != before:
+                raise ArchiveReferenceError(f"Legacy archive changed before opening: {path}")
+            with zipfile.ZipFile(stream) as archive:
+                info = archive.getinfo(version.logical_path)
+                if (info.file_size, info.CRC) != (artifact.size, artifact.crc):
+                    raise ArchiveReferenceError(f"Legacy archive member metadata changed: {version.logical_path}")
+                with archive.open(info) as member:
+                    observed = hashlib.sha256()
+                    for chunk in iter(lambda: member.read(1024 * 1024), b""):
+                        observed.update(chunk)
+        if observed.hexdigest() != version.sha256 or not _signature_matches(path, before):
+            raise ArchiveReferenceError(f"Legacy archive member content changed: {version.logical_path}")
+        return replace(artifact, zip_signature=before)
+
     def reserve_archive_versions(
-        self, consumer: str, versions: Sequence[MemberVersion], *, max_bytes: int,
+        self, consumer: str, versions: Sequence[MemberVersion], *, max_bytes: int, verify_legacy: bool = False,
     ) -> str:
-        """Pin explicitly selected, publisher-verified archive members."""
+        """Pin selected versions. A legacy index needs a full content read once."""
         if not self.archive_root.is_dir():
             raise ArchiveReferenceError("Archive store is not published")
+        legacy = {version: self._verified_legacy_version(version) for version in versions} if verify_legacy else {}
         with (_bucket_lock(self.archive_root / STORAGE_CONVERSION_LOCK_FILE, exclusive=False),
               producer_read_lock(self.archive_root), archive_lock(self.archive_root)):
             if _read_storage_conversion_marker(self.root) is not None:
@@ -2206,6 +2252,10 @@ class GeneFamilyOutputStore:
                 if (artifact is None or artifact.zip_path is None
                         or (artifact.generation, artifact.sha256) != (version.generation, version.sha256)):
                     raise ArchiveReferenceError(f"Archive member version changed: {version.logical_path}")
+                if artifact.zip_signature is None and (verified := legacy.get(version)) is not None:
+                    if replace(verified, zip_signature=None) != artifact:
+                        raise ArchiveReferenceError(f"Legacy archive location changed: {version.logical_path}")
+                    artifact = verified
                 locations.append(self._version_location(artifact))
             return ArchiveVersionReferences(self.archive_root).reserve(consumer, locations, max_bytes=max_bytes)
 

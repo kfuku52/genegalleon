@@ -1111,7 +1111,7 @@ def test_family_summary_keeps_long_rotated_labels_and_legend_inside_page(
     label_bottom = max(y + length for y, length in label_boxes)
     assert label_bottom < page_height - 3
     legend = next(element for element in root.iter()
-                  if element.tag.endswith("text") and element.text == "Ortholog")
+                  if element.tag.endswith("text") and element.text == "Gene family")
     legend_y = float(legend.attrib["y"])
     assert label_bottom + 6 < legend_y < page_height - 3
 

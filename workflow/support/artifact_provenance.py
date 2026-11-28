@@ -1400,7 +1400,9 @@ def frozen_family_summary_current(args: argparse.Namespace) -> int:
     store = GeneFamilyOutputStore(logical_root, family_filter=args.family_id)
     producer = (runtime_support_root(args.producer_support_dir) if args.producer_support_dir
                 else contextlib.nullcontext())
-    with producer, store.read_snapshot(), digest_observation() as memo:
+    consumer = os.environ.get("GG_FROZEN_PLOT_ARCHIVE_CONSUMER")
+    with (producer, digest_observation(trust_published_zip=bool(consumer)) as memo,
+          store.read_snapshot(validate_changed=memo.validate_guards)):
         artifact = store.source_artifact(MANIFEST_SUBDIR, name)
         recorded = read_manifest_from_store(store, name, artifact)
         identity = (_audit_artifact_identity(artifact),
@@ -1410,6 +1412,13 @@ def frozen_family_summary_current(args: argparse.Namespace) -> int:
         if (recorded.get("step") != args.step or recorded.get("family_id") != args.family_id
                 or not recorded.get("inputs")):
             raise ProvenanceError("Frozen family statistics lack their original input provenance")
+        if consumer:
+            from archive_version_references import ArchiveReferenceError
+            from frozen_plot_archives import verify_reserved_family
+            try:
+                verify_reserved_family(store, consumer, name, recorded, memo)
+            except ArchiveReferenceError as exc:
+                raise ProvenanceError(str(exc)) from exc
         declared = dict(parse_unique_pairs(args.output, "--output"))
         outputs = entries_by_label(recorded, "outputs")
         if set(declared) != {"stat_branch", "stat_tree"}:

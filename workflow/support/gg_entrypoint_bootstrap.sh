@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Contract capability for producers; older sealed releases remain unchanged.
 GG_LAUNCH_STORAGE_CAPABILITY=readonly-hardlinks-v1
+GG_NODE_RUNTIME_CACHE_CAPABILITY=verified-local-v1
 
 gg_search_workflow_dir_from_base() {
   local base_dir=${1:-}
@@ -50,12 +51,16 @@ gg_validate_explicit_runtime_release() {
   }
 
   "${GG_BOOTSTRAP_PYTHON:-python}" - "${release_root}" "${expected_workflow}" "${bootstrap_path}" "${snapshot_sha256}" <<'PY'
+import fcntl
 import hashlib
 import json
 import os
 import pathlib
+import shutil
 import stat
+import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from itertools import groupby
@@ -93,7 +98,8 @@ if bootstrap_path.resolve(strict=True) != expected_bootstrap.resolve(strict=True
 
 manifest_info = manifest_path.lstat()
 try:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
 except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
     fail("Explicit runtime release manifest is invalid: {}".format(exc))
 if manifest.get("kind") != "immutable-genegalleon-runtime-release-v1":
@@ -252,7 +258,13 @@ def file_identity_failure(before, after, message):
 # Descriptor-relative O_NOFOLLOW opens retain the exact directory even during
 # a rename; final path fences reject replacement before startup can continue.
 # Keep only the current ancestry open, independently of inventory width.
-def verify_inventory():
+def verify_inventory(root=release_root):
+    inventory_manifest = root / manifest_path.name
+    inventory_manifest_info = inventory_manifest.lstat()
+    if (not stat.S_ISREG(inventory_manifest_info.st_mode)
+            or inventory_manifest.read_bytes() != manifest_bytes
+            or root == release_root and fingerprint(inventory_manifest_info) != fingerprint(manifest_info)):
+        fail("Explicit runtime release manifest changed before verification.")
     verified_sha256 = {}
     directories = {}
     file_fences = {}
@@ -317,7 +329,7 @@ def verify_inventory():
 
 
     try:
-        root_fd = os.open(release_root, directory_flags)
+        root_fd = os.open(root, directory_flags)
         stack.append(((), root_fd))
         directories[()] = directory_identity(os.fstat(root_fd))
         for parents, members in groupby(sorted(inventory), lambda name: inventory[name]["parts"][:-1]):
@@ -354,10 +366,10 @@ def verify_inventory():
             for result in results:
                 remember(result)
         for parts, identity in directories.items():
-            if directory_identity(release_root.joinpath(*parts).lstat()) != identity:
+            if directory_identity(root.joinpath(*parts).lstat()) != identity:
                 fail("Explicit runtime release directory changed: {}".format("/".join(parts)))
         for parts, identity in file_fences.items():
-            current = fingerprint(release_root.joinpath(*parts).lstat())
+            current = fingerprint(root.joinpath(*parts).lstat())
             if current != identity:
                 if content_identity(current) != content_identity(identity):
                     file_identity_failure(identity, current, "Explicit runtime release file changed: {} (final path fence: {}).".format(
@@ -376,7 +388,7 @@ def verify_inventory():
                             "/".join(parts), identity_changes(identity, checked)))
                 finally:
                     os.close(descriptor)
-        if fingerprint(manifest_path.lstat()) != fingerprint(manifest_info):
+        if fingerprint(inventory_manifest.lstat()) != fingerprint(inventory_manifest_info):
             fail("Explicit runtime release manifest changed during verification.")
     except OSError as exc:
         fail("Explicit runtime release file is unsafe or unreadable: {}".format(exc))
@@ -388,35 +400,119 @@ def verify_inventory():
     return verified_sha256
 
 
-for observation in range(3):
-    try:
-        verified_sha256 = verify_inventory()
-        break
-    except MetadataObservationChanged as exc:
-        if observation == 2:
-            fail(str(exc))
-        print("Explicit runtime metadata observation was inconsistent; restarting complete verification ({}/3).".format(observation + 2), file=sys.stderr)
+def verify_snapshot(verified_sha256):
+    file_sha256 = {relative: verified_sha256[relative] for relative in sorted(snapshot_paths)}
 
-file_sha256 = {relative: verified_sha256[relative] for relative in sorted(snapshot_paths)}
-
-snapshot = {
-    "schema_version": 1,
-    "kind": "gridengine-runtime-release-snapshot-v1",
-    "project_root": manifest.get("project_root"),
-    "workflow": expected_workflow,
-    "release_root": manifest_release_root_text,
-    "target_ref": target_ref,
-    "release_contract_sha256": contract_sha256,
-    "file_sha256": file_sha256,
-}
-observed_snapshot = canonical_sha256(snapshot)
-if observed_snapshot != expected_snapshot:
-    fail(
-        "Explicit runtime release snapshot hash changed: expected={} observed={}".format(
-            expected_snapshot, observed_snapshot
+    snapshot = {
+        "schema_version": 1,
+        "kind": "gridengine-runtime-release-snapshot-v1",
+        "project_root": manifest.get("project_root"),
+        "workflow": expected_workflow,
+        "release_root": manifest_release_root_text,
+        "target_ref": target_ref,
+        "release_contract_sha256": contract_sha256,
+        "file_sha256": file_sha256,
+    }
+    observed_snapshot = canonical_sha256(snapshot)
+    if observed_snapshot != expected_snapshot:
+        fail(
+            "Explicit runtime release snapshot hash changed: expected={} observed={}".format(
+                expected_snapshot, observed_snapshot
+            )
         )
-    )
-print(workflow_dir)
+
+
+def verify_shared_inventory():
+    for observation in range(3):
+        try:
+            verified_sha256 = verify_inventory()
+            break
+        except MetadataObservationChanged as exc:
+            if observation == 2:
+                fail(str(exc))
+            print("Explicit runtime metadata observation was inconsistent; restarting complete verification ({}/3).".format(observation + 2), file=sys.stderr)
+    return verified_sha256
+
+
+def copy_runtime(destination):
+    """Copy exact expected bytes from descriptor-relative, non-writable sources."""
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_fd = os.open(release_root, directory_flags)
+    try:
+        for parents, members in groupby(sorted(inventory), lambda name: inventory[name]["parts"][:-1]):
+            parent_fd = os.dup(root_fd)
+            try:
+                for part in parents:
+                    child = os.open(part, directory_flags, dir_fd=parent_fd)
+                    os.close(parent_fd)
+                    parent_fd = child
+                (destination.joinpath(*parents)).mkdir(mode=0o700, parents=True, exist_ok=True)
+                for relative in members:
+                    expected = inventory[relative]
+                    leaf = expected["parts"][-1]
+                    fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+                    with os.fdopen(fd, "rb") as source:
+                        info = os.fstat(source.fileno())
+                        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                                or stat.S_IMODE(info.st_mode) != expected["mode"]):
+                            fail("Explicit runtime cache source is unsafe: " + relative)
+                        with (destination / relative).open("xb") as target:
+                            shutil.copyfileobj(source, target, length=1024 * 1024)
+                            os.fchmod(target.fileno(), expected["mode"])
+            finally:
+                os.close(parent_fd)
+        (destination / manifest_path.name).write_bytes(manifest_bytes)
+        (destination / manifest_path.name).chmod(0o400)
+    finally:
+        os.close(root_fd)
+
+
+def verified_node_runtime():
+    if not readonly_launch:
+        fail("Explicit node runtime cache requires readonly launch storage.")
+    local = pathlib.Path("/tmp").resolve(strict=True)
+    filesystem = subprocess.check_output(["stat", "-f", "-c", "%T", "--", str(local)], text=True).strip()
+    if filesystem not in {"tmpfs", "ext2/ext3", "xfs", "btrfs", "zfs", "overlayfs"}:
+        fail("Explicit node runtime cache requires a node-local filesystem: " + filesystem)
+    cache = local / (".genegalleon-runtime-cache-" + str(os.getuid()))
+    cache.mkdir(mode=0o700, exist_ok=True)
+    info = cache.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        fail("Explicit node runtime cache is not an owner-private directory.")
+    key = expected_snapshot + "-" + hashlib.sha256(manifest_bytes).hexdigest()
+    destination = cache / key
+    lock = os.open(cache / (key + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock, "rb") as guard:
+        info = os.fstat(guard.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            fail("Explicit node runtime cache lock is unsafe.")
+        fcntl.flock(guard.fileno(), fcntl.LOCK_SH)
+        if not os.path.lexists(destination):
+            fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+        if not os.path.lexists(destination):
+            with tempfile.TemporaryDirectory(prefix=key + ".", dir=cache) as temporary:
+                pending = pathlib.Path(temporary) / "runtime"
+                pending.mkdir(mode=0o700)
+                copy_runtime(pending)
+                verify_snapshot(verify_inventory(pending))
+                pending.rename(destination)
+        else:
+            details = destination.lstat()
+            if (not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid()
+                    or stat.S_IMODE(details.st_mode) != 0o700):
+                fail("Explicit node runtime cache contains an unsafe snapshot.")
+            fcntl.flock(guard.fileno(), fcntl.LOCK_SH)
+            verify_snapshot(verify_inventory(destination))
+    return destination / "workflow"
+
+
+if os.environ.get("KFAUTO_RUNTIME_NODE_CACHE") == "verified-local-v1":
+    print(verified_node_runtime())
+else:
+    verify_snapshot(verify_shared_inventory())
+    print(workflow_dir)
 PY
 }
 

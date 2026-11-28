@@ -233,6 +233,15 @@ class AuditDigests:
                     self.sources.popitem(last=False)
             return value
 
+    def validate_guards(self):
+        """Check the exact logically resolved sources against a fresh index."""
+        spilled = self.guard_spill is not None
+        guards = self.guard_spill.values() if spilled else self.guards.values()
+        for identity, reader in guards:
+            actual = reader()
+            if (encode_guard(actual) if spilled else actual) != identity:
+                raise ValueError("Logical audit source changed before publication")
+
     def validate(self, workers=1, progress=None):
         with self.lock:
             # Readers never add observations here. Stream the authoritative

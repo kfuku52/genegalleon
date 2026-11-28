@@ -1,7 +1,7 @@
 """Preserve complete genomic QC results while counting span ambiguities in C."""
 
 import copy
-import inspect
+from unittest.mock import patch
 
 import pytest
 
@@ -25,13 +25,14 @@ class Genome:
 def legacy_validator():
     # Freeze the former ambiguity count while exercising the complete validator,
     # including query metrics, raw phases, stop extension and splice checks.
-    source = inspect.getsource(rescue.validate_model)
-    current = 'len(span) - span.count("A") - span.count("C") - span.count("G") - span.count("T")'
-    assert source.count(current) == 1
-    namespace = dict(rescue.__dict__)
-    exec(compile(source.replace(current, 'sum(base not in "ACGT" for base in span)'),
-                 "legacy_rescue_validator", "exec"), namespace)
-    return namespace["validate_model"]
+    def legacy_count(genome, seqid, start, end):
+        return sum(base not in "ACGT" for base in genome.fetch(seqid, start, end).upper())
+
+    def validate(model, genome, code, params):
+        with patch.object(rescue, "span_gap_count", legacy_count):
+            return rescue.validate_model(model, genome, code, params)
+
+    return validate
 
 
 PARAMS = {"minimum_coverage": .95, "minimum_identity": .5, "max_intron": 20000}

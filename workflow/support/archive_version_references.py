@@ -141,6 +141,21 @@ class ArchiveVersionReferences:
             raise ArchiveReferenceError("No held reference for the exact archive version")
         return VersionLocation(version, row[0], json.loads(row[1]))
 
+    def consumer_family_versions(self, consumer: str, family_id: str) -> tuple[MemberVersion, ...]:
+        self._require_consumer(consumer)
+        with self._connection() as db:
+            if db is None or db.execute(
+                "SELECT 1 FROM consumers WHERE id=? AND released=0", (consumer,)
+            ).fetchone() is None:
+                raise ArchiveReferenceError("No active frozen plot archive selection")
+            rows = db.execute(
+                "SELECT v.logical_path,v.generation,v.sha256 FROM versions AS v "
+                "JOIN references_v1 AS r ON r.version=v.id "
+                "WHERE r.consumer=? AND json_extract(v.record,'$.family_id')=? "
+                "ORDER BY v.logical_path,v.generation", (consumer, family_id)
+            ).fetchall()
+        return tuple(MemberVersion(*row) for row in rows)
+
     def locations_for_archive(self, archive: Path) -> list[VersionLocation]:
         with self._connection() as db:
             rows = [] if db is None else db.execute("""

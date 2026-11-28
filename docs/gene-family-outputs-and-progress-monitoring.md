@@ -274,6 +274,12 @@ controller records this digest with its job and supplies it with the same
 consumer ID to `read-archive-version` and `release-archive-versions`. Release
 requires the controller to establish that every consuming task has terminated.
 
+For frozen plot retries the managed launcher can reserve only the archived
+dependencies declared in each retained summary provenance manifest. The action
+identity owns those references until the consuming jobs end. Family validation
+rechecks the exact source identities if another publication advances the
+archive index. The full-project audit retains its global snapshot fence.
+
 Registration stores references in the archive metadata and counts each active
 version once against the limit on logical bytes. Compaction rebinds a reference
 when it has moved the same member version. When compaction retires an archive

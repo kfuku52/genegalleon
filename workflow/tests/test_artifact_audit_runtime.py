@@ -1287,6 +1287,91 @@ def test_subdirectory_digest_rejects_invalid_allocated_cpu_count(tmp_path, monke
         provenance.gene_family_subdir_digest(logical, 'stat_tree')
 
 
+@pytest.mark.parametrize("change_selected", [False, True])
+def test_frozen_family_audit_rechecks_only_selected_sources_after_publication(tmp_path, monkeypatch, change_selected):
+    logical = tmp_path / "orthogroup"
+    family = "OG0000001"
+    manifest = logical / "artifact_provenance" / f"{family}.summary_statistics.json"
+    input_path = logical / "clipkit" / f"{family}_cds.clipkit.fa"
+    branch = logical / "stat_branch" / f"{family}_stat.branch.tsv"
+    tree = logical / "stat_tree" / f"{family}_stat.tree.tsv"
+    for path in (input_path, branch, tree):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"approved\n")
+    args = ["--logical-root", str(logical), "--workspace-root", str(tmp_path),
+            "--manifest", str(manifest), "--step", "summary_statistics", "--family-id", family,
+            "--output", f"stat_branch={branch}", "--output", f"stat_tree={tree}"]
+    assert provenance.dispatch(["record", *args, "--input", f"input={input_path}"]) == 0
+    original = provenance.GeneFamilyOutputStore._read_index_epoch
+    changed = False
+
+    def publish_after_initial_read(store):
+        nonlocal changed
+        return "after" if changed else original(store)
+
+    original_audit = provenance.audit_manifest
+
+    def audit(*args, **kwargs):
+        nonlocal changed
+        status = original_audit(*args, **kwargs)
+        changed = True
+        if change_selected:
+            replacement = input_path.with_name("replacement")
+            replacement.write_bytes(b"replaced\n")
+            replacement.replace(input_path)
+        return status
+
+    monkeypatch.setattr(provenance.GeneFamilyOutputStore, "_read_index_epoch", publish_after_initial_read)
+    monkeypatch.setattr(provenance, "audit_manifest", audit)
+    frozen = ["needs-run", *args, "--frozen-family-summary", "--legacy-policy", "stop", "--stale-policy", "stop"]
+    result = provenance.dispatch(frozen)
+    assert (result == provenance.CURRENT) is (not change_selected)
+    assert changed
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_frozen_plot_archive_reservation_retains_the_manifest_bound_members(tmp_path, monkeypatch, legacy):
+    from dataclasses import replace
+
+    from frozen_plot_archives import audited_family_versions
+
+    logical = tmp_path / "output/orthogroup"
+    family = "OG0000001"
+    manifest = logical / "artifact_provenance" / f"{family}.summary_statistics.json"
+    branch = logical / "stat_branch" / f"{family}_stat.branch.tsv"
+    tree = logical / "stat_tree" / f"{family}_stat.tree.tsv"
+    source = tmp_path / "catalog.tsv"
+    source.write_bytes(b"frozen input\n")
+    for path in (branch, tree):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"value\n1\n")
+    args = ["--logical-root", str(logical), "--workspace-root", str(tmp_path),
+            "--manifest", str(manifest), "--step", "summary_statistics", "--family-id", family,
+            "--output", f"stat_branch={branch}", "--output", f"stat_tree={tree}"]
+    assert provenance.dispatch(["record", *args, "--input", f"input={source}"]) == 0
+    recorded = provenance.load_manifest(manifest)
+    store_module.archive_completed_outputs(logical, "orthogroup", [family],
+                                           store_module.orthogroup_id_from_name, include_incomplete=True)
+    if legacy:
+        original = GeneFamilyOutputStore._artifact_unchecked
+
+        def read_legacy(self, *args, **kwargs):
+            artifact = original(self, *args, **kwargs)
+            return replace(artifact, zip_signature=None) if artifact and artifact.zip_path else artifact
+
+        monkeypatch.setattr(GeneFamilyOutputStore, "_artifact_unchecked", read_legacy)
+    store = GeneFamilyOutputStore(logical, family_filter=family)
+    versions = list(audited_family_versions(store, manifest.name, recorded))
+    assert {item.logical_path for item in versions} >= {str(branch.relative_to(logical)), str(tree.relative_to(logical))}
+    consumer = "ss-" + "f" * 32
+    selection = store.reserve_archive_versions(consumer, versions, max_bytes=1024 * 1024, verify_legacy=legacy)
+    monkeypatch.setenv("GG_FROZEN_PLOT_ARCHIVE_CONSUMER", consumer)
+    frozen = ["needs-run", *args, "--frozen-family-summary", "--legacy-policy", "stop", "--stale-policy", "stop"]
+    assert provenance.dispatch(frozen) == provenance.CURRENT
+    store.release_archive_versions(consumer, selection)
+    assert provenance.dispatch(frozen) != provenance.CURRENT
+
+
 def test_frozen_family_statistics_verifies_retained_packed_manifest(tmp_path):
     from metadata_store import pack
 

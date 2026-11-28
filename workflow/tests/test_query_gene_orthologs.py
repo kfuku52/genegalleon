@@ -1572,11 +1572,15 @@ def test_native_summary_reads_branch_fields_over_csv_default(tmp_path):
     presence = load_module("gene_family_presence_absence.py")
     branch = tmp_path / "stat_branch/FAM_stat.branch.tsv"
     branch.parent.mkdir()
-    limit = csv.field_size_limit()
-    gene_labels = "X" * (limit + 1)
-    branch.write_text("branch_id\tnode_name\tspnode_coverage\tso_event\tgene_labels\n"
-                      f"0\tGene\tA_a\tL\t{gene_labels}\n")
-    rows = orthologs.read_stat_branch(orthologs.GeneFamilyOutputStore(tmp_path), "FAM")
-    assert rows[0]["gene_labels"] == gene_labels
-    assert presence.read_stat_branch_copy_numbers(branch) == {"A_a": 1}
-    assert csv.field_size_limit() == limit
+    limit = 128 * 1024
+    previous_limit = csv.field_size_limit(limit)
+    try:
+        gene_labels = "X" * (limit + 1)
+        branch.write_text("branch_id\tnode_name\tspnode_coverage\tso_event\tgene_labels\n"
+                          f"0\tGene\tA_a\tL\t{gene_labels}\n")
+        rows = orthologs.read_stat_branch(orthologs.GeneFamilyOutputStore(tmp_path), "FAM")
+        assert rows[0]["gene_labels"] == gene_labels
+        assert presence.read_stat_branch_copy_numbers(branch) == {"A_a": 1}
+        assert csv.field_size_limit() == limit
+    finally:
+        csv.field_size_limit(previous_limit)

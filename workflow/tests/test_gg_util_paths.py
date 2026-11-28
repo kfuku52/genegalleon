@@ -3178,3 +3178,37 @@ def test_runtime_mtime_cache_disagreement_restarts_complete_observation(tmp_path
         assert 'restarting complete verification' not in result.stderr
     if expected:
         assert result.stdout.strip() == str(release / 'workflow')
+
+@pytest.mark.skipif(sys.platform != "linux", reason="node cache filesystem probe uses Linux stat")
+def test_explicit_node_runtime_cache_freezes_the_verified_copy(tmp_path):
+    release = tmp_path / "release"
+    snapshot = _write_runtime_release_contract(release, "gg_input_generation",
+                                               launch_storage="readonly-hardlinks-v1",
+                                               additional_files={"fixture.txt": b"approved"})
+    bootstrap = release / "workflow/support/gg_entrypoint_bootstrap.sh"
+    command = (f"source {shlex.quote(str(bootstrap))}; "
+               f"export KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256={snapshot}; "
+               "export KFAUTO_RUNTIME_NODE_CACHE=verified-local-v1; "
+               f"gg_validate_explicit_runtime_release {shlex.quote(str(release))} gg_input_generation")
+    first = run_bash(command, tmp_path)
+    assert first.returncode == 0, first.stderr
+    cached = Path(first.stdout.strip()).parent
+    assert cached != release and cached.parent.name == f".genegalleon-runtime-cache-{os.getuid()}"
+    try:
+        target = cached / "fixture.txt"
+        initial = target.stat()
+        original = release / "fixture.txt"
+        original.chmod(0o644)
+        original.write_bytes(b"changed!")
+        original.chmod(0o444)
+        second = run_bash(command, tmp_path)
+        assert second.returncode == 0 and second.stdout == first.stdout, second.stderr
+        assert target.read_bytes() == b"approved" and target.stat().st_ino == initial.st_ino
+        target.chmod(0o644)
+        target.write_bytes(b"changed!")
+        target.chmod(0o444)
+        blocked = run_bash(command, tmp_path)
+        assert blocked.returncode != 0 and "file changed: fixture.txt" in blocked.stderr
+    finally:
+        shutil.rmtree(cached)
+        cached.with_name(cached.name + ".lock").unlink()
