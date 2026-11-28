@@ -15,6 +15,7 @@ import importlib.util
 import inspect
 import io
 import json
+import marshal
 import math
 import os
 import re
@@ -24,7 +25,6 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-import zlib
 from collections import OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -1564,27 +1564,18 @@ class _PackedCandidateAudit:
 
 
 class CandidateAuditStore:
-    """Keep Miniprot audit payloads compressed until decisions or publication need them."""
+    """Keep Miniprot audit payloads packed until decisions or publication need them."""
 
     _FIELDS = ("terminal_completion", "boundary_revalidation")
-
-    def __init__(self):
-        self._encode = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode
-        try:
-            import zstandard
-        except ImportError:
-            self._compress = lambda data: zlib.compress(data, level=1)
-            self._decompress = zlib.decompress
-        else:
-            self._compress = zstandard.ZstdCompressor(level=1).compress
-            self._decompress = zstandard.ZstdDecompressor().decompress
 
     def compact(self, model):
         for field in self._FIELDS:
             value = model.get(field)
             if type(value) is dict:
+                # These snapshots are produced and read in the same process.
+                # Checkpoints and published records keep their existing format.
                 model[field] = _PackedCandidateAudit(
-                    self._compress(self._encode(value).encode("utf-8")),
+                    marshal.dumps(value),
                     field == "boundary_revalidation" and value.get("status") == "ambiguous",
                 )
         return model
@@ -1602,14 +1593,14 @@ class CandidateAuditStore:
         if not isinstance(audit, _PackedCandidateAudit):
             return model
         if audit.may_have_boundary_alternatives:
-            return {**model, "boundary_revalidation": json.loads(self._decompress(audit.payload))}
+            return {**model, "boundary_revalidation": marshal.loads(audit.payload)}
         return None
 
     def _restore_fields(self, model):
         for field in self._FIELDS:
             value = model.get(field)
             if isinstance(value, _PackedCandidateAudit):
-                model[field] = json.loads(self._decompress(value.payload))
+                model[field] = marshal.loads(value.payload)
 
     def restore_model(self, model):
         """Restore the standard audit dictionaries in the original field order."""
