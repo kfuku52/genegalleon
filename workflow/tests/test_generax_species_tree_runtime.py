@@ -184,6 +184,34 @@ prepare_species_tree_pruned
     assert (pruned.read_bytes(), manifest.read_bytes(), pruned.stat().st_mtime_ns, manifest.stat().st_mtime_ns) == cache
 
 
+def test_parameter_copy_only_locks_distinct_files(tmp_path):
+    text = CORE.read_text()
+    begin = text.index("# Copy parameter files and codes")
+    stage = text[begin:text.index('\ncd "${gg_workspace_dir}"', begin)]
+    parameters = tmp_path / "parameters"
+    parameters.mkdir()
+    source = tmp_path / "source.nwk"
+    source.write_text(ANNOTATED)
+    pruned = parameters / "pruned.nwk"
+    pruned.write_text(ANNOTATED)
+    script = f'''set -euo pipefail
+file_og_parameters_dir="$1"
+file_sp_trait="$2/missing.tsv"
+species_tree="$2/source.nwk"
+species_tree_pruned="$1/pruned.nwk"
+gg_shared_lock_acquire() {{ printf '%s\\n' "$1" >> {shlex.quote(str(tmp_path / "lock-events"))}; }}
+gg_shared_lock_start_heartbeat() {{ :; }}
+gg_shared_lock_stop_heartbeat() {{ :; }}
+gg_shared_lock_release() {{ :; }}
+cp_out() {{ cp -- "$@"; }}
+{stage}
+'''
+    result = run("bash", "-c", script, "parameter-copy", parameters, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "lock-events").read_text().splitlines() == [str(parameters / "source.nwk.lock")]
+    assert (parameters / "source.nwk").read_text() == pruned.read_text() == ANNOTATED
+
+
 def test_generax_shared_species_cache_refreshes_when_source_root_changes(tmp_path):
     text = CORE.read_text()
     begin = text.index('  generax_out_sptree="')

@@ -7330,7 +7330,7 @@ file_params=(
 )
 for file_from in "${file_params[@]}"; do
   file_to="${file_og_parameters_dir}/$(basename "${file_from}")"
-  if [[ ! -e "${file_from}" ]]; then
+  if [[ ! -e "${file_from}" || "${file_from}" -ef "${file_to}" ]]; then
     continue
   fi
   lock_file="${file_to}.lock"
