@@ -211,6 +211,33 @@ def test_admission_maps_genegalleon_provider_gene_identifiers(tmp_path, attribut
     assert len(prepare_rescue_genome(source, output, "explicit", 1.0)[0]) == 2
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_admission_uses_parent_for_reused_locus_tags(tmp_path, strand):
+    source, output = anchor_fixture(tmp_path, [
+        {"attributes": ";locus_tag=g0"},
+        {"attributes": ";locus_tag=g0", "strand": strand},
+    ])
+    gff = Path(source["gff"])
+    text = gff.read_text()
+    for identifier in ("g0", "g1"):
+        text = text.replace(f"ID={identifier}\n", f"ID=gene-{identifier}\n")
+        text = text.replace(f"Parent={identifier};", f"Parent=gene-{identifier};")
+    gff.write_text(text)
+    source.update(feature="", attribute="")
+    genes, metadata = prepare_rescue_genome(source, output, "automatic", 1.0)
+    assert metadata["feature"] == "mRNA" and metadata["attribute"] == "Parent"
+    assert [(gene.gene_id, gene.strand) for gene in genes] == [
+        ("Plant_example_g0", "+"), ("Plant_example_g1", strand),
+    ]
+    assert [(row["locus_id"], row["status"]) for row in rescue.table(output / "automatic.id_map.tsv")] == [
+        ("gene-g0", "selected"), ("gene-g1", "selected"),
+    ]
+    assert gff.read_text() == text
+    source.update(feature="mRNA", attribute="locus_tag")
+    with pytest.raises(ValueError, match="No unambiguous GFF-to-CDS mapping.*locus_tag.*'g0'"):
+        prepare_rescue_genome(source, output, "ambiguous", 1.0)
+
+
 def test_admission_source_phase_evidence_is_not_changed_by_new_rescued_models(tmp_path):
     source, output = anchor_fixture(tmp_path, [
         {"blocks": [("ATGA", 0), ("AATAA", 1)]},

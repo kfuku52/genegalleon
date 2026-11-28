@@ -194,9 +194,11 @@ If no usable anchors remain, preparation fails with its admission audit intact.
 New predictions still require the complete ORF and other checks below.
 
 Admission also recognises GeneGalleon's formatted NCBI `GeneID123` identifiers
-against `GeneID:123` in `Dbxref`, and GWH gene `Accession` identifiers. These
-exact aliases select the public annotation mapper's feature/attribute pair;
-full, unambiguous CDS-to-GFF mapping remains required. The general pairwise
+against `GeneID:123` in `Dbxref`, and GWH gene `Accession` identifiers. The
+rescue mapper can match a structural `Parent=gene-X` to CDS identifier `X`,
+while preserving exact identifier matches. Automatic selection excludes
+feature/attribute pairs whose matched identifiers span different parent loci,
+contigs or known strands. Full, unambiguous CDS-to-GFF mapping remains required. The general pairwise
 synteny command retains its existing strict translation and mapping behaviour.
 
 Admission JSON records the genomic transcript, phase decision, sequence hashes

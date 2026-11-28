@@ -146,22 +146,23 @@ class CdsModelNormaliser:
                 todo.extend(filter(None, row["attributes"].get("Parent", "").split(",")))
         return found
 
-    def configure(self, mapping):
+    def configure(self, mapping, *, feature_rows=None):
         aliases = defaultdict(set)
-        for row in self.features:
-            if row["feature"] != mapping.feature:
-                continue
+        if feature_rows is None:
+            feature_rows = (row for row in self.features if row["feature"] == mapping.feature)
+        for row in feature_rows:
             attr = row["attributes"]
             roots = (set(filter(None, attr.get("Parent", "").split(",")))
                      if mapping.attribute == "Parent" else
                      {attr["ID"]} if attr.get("ID") else set(filter(None, attr.get("Parent", "").split(","))))
             for alias in tokens(attr.get(mapping.attribute, "")):
                 aliases[alias].update(roots)
+        wanted = {root for roots in aliases.values() for root in roots}
         by_root = defaultdict(set)
         for key, blocks in self.models.items():
             members = self.ancestry([key])
             members.update(row["attributes"]["ID"] for row in blocks if row["attributes"].get("ID"))
-            for member in members:
+            for member in members & wanted:
                 by_root[member].add(key)
         self.lookup = {alias: set().union(*(by_root[root] for root in roots)) for alias, roots in aliases.items()}
 
