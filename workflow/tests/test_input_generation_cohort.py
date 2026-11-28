@@ -265,8 +265,11 @@ def test_prepare_hashes_each_physical_source_once_after_link_creation(tmp_path, 
 
 def test_failed_cross_filesystem_copy_cannot_publish_a_verified_view(tmp_path, monkeypatch):
     plan, workspace, _ = fixture(tmp_path)
-    def cross_device(*args, **kwargs):
-        raise OSError(errno.EXDEV, 'different filesystem')
+    original = cohort.os.link
+    def cross_device(source, target, **kwargs):
+        if workspace / 'input' in Path(target).parents:
+            raise OSError(errno.EXDEV, 'different filesystem')
+        return original(source, target, **kwargs)
     def corrupt_copy(source, destination, _buffer):
         destination.write(source.read() + b'corrupted')
     monkeypatch.setattr(cohort.os, 'link', cross_device)
@@ -289,9 +292,10 @@ def test_partial_view_with_an_extra_species_cannot_be_published(tmp_path):
 def test_cohort_plan_mutation_during_staging_prevents_publication(tmp_path, monkeypatch):
     plan, workspace, _ = fixture(tmp_path)
     original = cohort.os.link
-    def change_plan(*args, **kwargs):
-        plan.write_bytes(plan.read_bytes() + b' ')
-        return original(*args, **kwargs)
+    def change_plan(source, target, **kwargs):
+        if workspace / 'input' in Path(target).parents:
+            plan.write_bytes(plan.read_bytes() + b' ')
+        return original(source, target, **kwargs)
     monkeypatch.setattr(cohort.os, 'link', change_plan)
     with pytest.raises(OSError, match='changed'):
         cohort.prepare(workspace, plan)

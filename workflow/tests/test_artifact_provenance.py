@@ -1538,22 +1538,23 @@ def test_recovery_resumes_actual_partial_publication(tmp_path):
     args += ["--output", f"a={first}", "--output", f"b={second}",
              "--recover-output", f"a={output}", "--recover-output", f"b={output}"]
     worker = """
+from pathlib import Path
 import sys
 sys.path.insert(0, sys.argv.pop(1))
+second = Path(sys.argv.pop(1))
 import artifact_provenance as p
 original = p.os.link
-count = 0
-def interrupt(source, target):
-    global count
-    count += 1
-    if count == 2:
+def interrupt(source, target, **kwargs):
+    if Path(target) == second:
         raise OSError('simulated publication interruption')
-    return original(source, target)
+    return original(source, target, **kwargs)
 p.os.link = interrupt
 sys.exit(p.dispatch(sys.argv[1:]))
 """
-    result = subprocess.run([sys.executable, "-c", worker, str(SCRIPT.parent), "needs-run", *map(str, args)],
-                            capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", worker, str(SCRIPT.parent), str(second), "needs-run", *map(str, args)],
+        capture_output=True, text=True,
+    )
     assert result.returncode == 2, result.stdout + result.stderr
     assert first.read_bytes() == output.read_bytes()
     assert not second.exists()

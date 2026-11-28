@@ -415,10 +415,10 @@ def test_interrupted_restore_resumes_and_keeps_zip_until_full_verification(tmp_p
     STORE.convert(root, directories=[raw.name])
     link = os.link
 
-    def interrupt(source, target):
+    def interrupt(source, target, **kwargs):
         if Path(target).name == "OG9999999.fa":
             raise OSError("restore interrupted")
-        return link(source, target)
+        return link(source, target, **kwargs)
 
     with monkeypatch.context() as scoped:
         scoped.setattr(os, "link", interrupt)
